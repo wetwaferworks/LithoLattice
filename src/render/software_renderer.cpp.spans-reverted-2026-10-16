@@ -1,0 +1,1817 @@
+// Cortana 2026-10-15 1010-1116: RND-H4/H3/H2, GAME-H1, RND-MT band raster
+// Software renderer: full CPU rasterizer implementation.
+// Optimized for voxels: backface culling, depth buffer, scanline rasterization.
+// Shading: flat face colors, or per-pixel fragment shaders (basic / PBR tiers)
+// sampling the CPU texture array. For baseline testing and GPU-less platforms.
+// Implements IRenderer (mesh stores + renderFrame) on top of the same direct
+// renderMesh path the headless consumers have always driven.
+#include "litholattice/render/software_renderer.h"
+#include "font_data.h"  // Cortana 2026-10-15 1610: Debug Overlay strip glyphs
+#include "litholattice/render/model_dither.h"
+#include "litholattice/render/software_aa.h"
+#include "litholattice/render/software_ascii.h"
+#include "litholattice/render/software_shaders.h"
+#include "litholattice/core/log.h"
+#include "litholattice/render/ground_pulse.h"
+#include "litholattice/render/ground_traces.h"
+#include <chrono>
+#include "litholattice/render/software_simd.h"
+#include <exception>
+#include "litholattice/render/trace_ramps.h"
+#include <cstdio>
+#include <cstdlib>
+#include <atomic>
+#include <climits>
+#include <thread>
+#include <mutex>
+#include <functional>
+#include <condition_variable>
+#include <algorithm>
+#include <cmath>
+#include <limits>  // Cortana 2026-10-15 1715: Hi-Z
+#include <cstring>
+
+namespace litholattice {
+
+// ---------------------------------------------------------------------------
+// CpuTextureArray
+// ---------------------------------------------------------------------------
+
+bool CpuTextureArray::upload(const TextureRegistry& textures) {
+  const std::span<const Texture> src = textures.textures();
+  layers_ = int(src.size());
+  texels_.assign(size_t(layers_) * 256, 0xFFFF00FFu);  // magenta = missing
+  for (int layer = 0; layer < layers_; ++layer) {
+    const Image& img = src[size_t(layer)].image;
+    if (img.empty() || img.width() <= 0 || img.height() <= 0) continue;
+    uint32_t* dst = &texels_[size_t(layer) * 256];
+    // Box filter to 16x16 (identity when the source tile already is 16x16):
+    // the same bounds and per-channel integer averaging biome_capture applies
+    // when it builds the software texture buffer by hand.
+    for (int y = 0; y < kTileSize; ++y) {
+      const int y0 = y * img.height() / kTileSize;
+      const int y1 = std::max(y0 + 1, (y + 1) * img.height() / kTileSize);
+      for (int x = 0; x < kTileSize; ++x) {
+        const int x0 = x * img.width() / kTileSize;
+        const int x1 = std::max(x0 + 1, (x + 1) * img.width() / kTileSize);
+        uint32_t sum[4] = {0, 0, 0, 0};
+        int n = 0;
+        for (int sy = y0; sy < y1; ++sy)
+          for (int sx = x0; sx < x1; ++sx, ++n) {
+            const uint8_t* p = img.pixel(sx, sy);
+            for (int k = 0; k < 4; ++k) sum[k] += p[k];
+          }
+        const uint32_t r = n ? sum[0] / uint32_t(n) : 0, g = n ? sum[1] / uint32_t(n) : 0,
+                       b = n ? sum[2] / uint32_t(n) : 0, a = n ? sum[3] / uint32_t(n) : 0xFF;
+        dst[size_t(y) * kTileSize + size_t(x)] = (a << 24) | (r << 16) | (g << 8) | b;
+      }
+    }
+  }
+  return true;
+}
+
+void CpuTextureArray::setRaw(const uint32_t* data, uint32_t layers) {
+  if (!data || layers == 0) {
+    texels_.clear();
+    layers_ = 0;
+    return;
+  }
+  layers_ = int(layers);
+  texels_.assign(data, data + size_t(layers) * 256);
+}
+
+// ---------------------------------------------------------------------------
+// SoftwareRenderer
+// ---------------------------------------------------------------------------
+
+SoftwareRenderer::SoftwareRenderer() {
+  fb_.resize(800, 600);
+  depth_.resize(size_t(800) * 600, 1.0f);
+}
+
+SoftwareRenderer::~SoftwareRenderer() = default;
+
+void SoftwareRenderer::resize(uint32_t w, uint32_t h) {
+  fb_.resize(w, h);
+  depth_.assign(size_t(w) * h, 1.0f);
+  hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z off until the next clear()
+}
+
+thread_local SoftwareRenderer::GroundFx SoftwareRenderer::groundFx_{};
+thread_local float SoftwareRenderer::meshOriginX_ = 0.f;
+thread_local float SoftwareRenderer::meshOriginY_ = 0.f;
+thread_local float SoftwareRenderer::meshOriginZ_ = 0.f;
+
+// RND-H3 banding (2026-10-15): the rows this thread may write. The full
+// frame by default; the chunk pass narrows it per band thread.
+static thread_local int tlBandY0 = 0;
+static thread_local int tlBandY1 = 1 << 30;
+// Cortana 2026-10-15 1112: pre-transformed screen verts for the mesh the
+// band thread is drawing (set by the chunk pass; null = transform here).
+static thread_local const float* tlPreScreen = nullptr;
+// Cortana 2026-10-15 1255: optional quad-index list for the mesh being drawn
+// (the strip's bin); null = every quad. Indices are quad numbers (verts/4)
+// in ascending order, so per-strip draw order is the original order.
+static thread_local const uint32_t* tlQuadList = nullptr;
+static thread_local size_t tlQuadCount = 0;
+// Cortana 2026-10-15 1325: back-face culling for the chunk pass, matching
+// the GL/Vulkan chunk pipelines (GL_CULL_FACE, GL_BACK, CCW front).
+// Sign of the screen-space area of a back face (y-down screen flips CCW).
+static thread_local bool tlCullBack = false;
+// Cortana 2026-10-15 1350: per-quad shading mode for the per-pixel path
+// (set by renderMesh before rasterizing a quad). Cutout + Trace strip modes
+// alpha-test at 0.5 (the "black box" around Trace was alpha-0 texels drawn
+// opaque), and strip modes tint the gray mask through the r3 power ramps.
+static thread_local uint8_t tlQuadMode = 0;
+static thread_local uint8_t tlQuadValue = 0;
+// Cortana 2026-10-15 1755 [ENGINE]: blended chunk pass filter for renderMesh's per-pixel
+// path: -1 every quad, 0 opaque quads only, 1 kShadeAlphaBlend quads only.
+static thread_local int8_t tlBlendPass = -1;
+// Cortana 2026-10-15 1345: sign verified on real walk frames (no holes vs cull-off).
+static constexpr float g_backSign = 1.0f;
+static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
+static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
+static std::atomic<uint64_t> g_hizRows{0};  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
+
+namespace {
+// Persistent band threads for the chunk pass (no per-frame thread creation).
+// Cortana 2026-10-15 1156: thread count. Default 4 (JD: entry/older consumer
+// hardware); override with SoftwareRenderer::setRenderThreads (CLI
+// --render-threads, settings key renderThreads). Always a power of two,
+// clamped to <= hardware threads, capped at kSwMaxRenderThreads, >= 1.
+std::atomic<unsigned> g_swRequestedThreads{0};  // 0 = default
+[[maybe_unused]] constexpr unsigned kSwDefaultRenderThreads = 4;  // superseded 1450: auto (swAutoRenderThreads); kept for reference
+constexpr unsigned kSwMaxRenderThreads = 64;
+// Cortana 2026-10-15 1450 (ENGINE, JD ruling 14:41): default = auto by cores.
+// The largest power of two <= (logical cores - 2, which are left for the sim
+// and main threads), clamped to 2..16. i5-12450H (12 logical) gives 8.
+// An explicit request (CLI / settings renderThreads != 0) still overrides.
+unsigned swAutoRenderThreads(unsigned logical) {
+  const unsigned avail = logical > 2 ? logical - 2 : 1;
+  unsigned b = 1;
+  while (b * 2 <= avail) b *= 2;
+  return std::min(16u, std::max(2u, b));
+}
+unsigned swResolveThreads(unsigned req) {
+  const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+  if (!req) return swAutoRenderThreads(hw);  // auto: not limited by the hw clamp below (2-core floor is 2 by ruling)
+  const unsigned want = std::min(req, kSwMaxRenderThreads);
+  unsigned b = 1;
+  while (b * 2 <= want && b * 2 <= hw) b *= 2;
+  return b;
+}
+class SwBandPool {
+ public:
+  static SwBandPool& get() { static SwBandPool p; return p; }
+  unsigned bands() const { return bands_; }
+  void run(const std::function<void(unsigned)>& fn) {
+    // Cortana 2026-10-15 1415 (Elfie §1.4): nested run() from a band
+    // callback (or any thread already inside run) used to deadlock on runM_.
+    // It now runs every band inline on the calling thread - same result,
+    // no re-entry into the pool.
+    if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands_); ++b) fn(b); return; }
+    struct InRun { InRun() { tlInRun_ = true; } ~InRun() { tlInRun_ = false; } } inRun;
+    // Serialize whole frames (game view + MCP vision share the pool) and
+    // apply a thread-count change between frames.
+    std::lock_guard<std::mutex> runLock(runM_);
+    const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
+    if (want != bands_) { stopAll(); start(want); }
+    if (bands_ <= 1) { fn(0); return; }
+    // Several SoftwareRenderer instances share the pool (the game view and
+    // the MCP vision capture for the Daemon's pilots): one frame at a time.
+    // run() returns only after every band has finished, so the framebuffer
+    // is fully resolved before any post pass, grabFramebuffer or capture.
+    {
+      std::lock_guard<std::mutex> l(m_);
+      fn_ = &fn;
+      remaining_ = bands_ - 1;
+      ++gen_;
+    }
+    cv_.notify_all();
+    // Cortana 2026-10-15 1415: exception guard. A throwing band no longer
+    // skips its remaining_ decrement (which hung run() forever); the first
+    // exception is rethrown here after EVERY band finished, so the
+    // framebuffer is never torn down under a running worker.
+    std::exception_ptr mine;
+    try { fn(0); } catch (...) { mine = std::current_exception(); }
+    std::unique_lock<std::mutex> l(m_);
+    done_.wait(l, [&] { return remaining_ == 0; });
+    fn_ = nullptr;
+    std::exception_ptr err = mine ? mine : workerErr_;
+    workerErr_ = nullptr;
+    l.unlock();
+    if (err) std::rethrow_exception(err);
+  }
+  ~SwBandPool() { stopAll(); }
+ private:
+  SwBandPool() {
+    std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());  // Cortana 2026-10-15 1455
+    start(swResolveThreads(g_swRequestedThreads.load()));
+  }
+  void stopAll() {
+    { std::lock_guard<std::mutex> l(m_); stop_ = true; ++gen_; }
+    cv_.notify_all();
+    for (auto& t : threads_) if (t.joinable()) t.join();
+    threads_.clear();
+    std::lock_guard<std::mutex> l(m_);
+    stop_ = false;
+  }
+  void start(unsigned n) {
+    bands_ = n;
+    uint64_t g;
+    { std::lock_guard<std::mutex> l(m_); g = gen_; }
+    for (unsigned i = 1; i < bands_; ++i) threads_.emplace_back([this, i, g] { loop(i, g); });
+  }
+  void loop(unsigned band, uint64_t seen) {
+    for (;;) {
+      const std::function<void(unsigned)>* fn = nullptr;
+      {
+        std::unique_lock<std::mutex> l(m_);
+        cv_.wait(l, [&] { return stop_ || gen_ != seen; });
+        if (stop_) return;
+        seen = gen_;
+        fn = fn_;
+      }
+      tlInRun_ = true;  // a band callback calling run() takes the inline path
+      std::exception_ptr err;
+      try { (*fn)(band); } catch (...) { err = std::current_exception(); }
+      std::lock_guard<std::mutex> l(m_);
+      if (err && !workerErr_) workerErr_ = err;
+      if (--remaining_ == 0) done_.notify_one();
+    }
+  }
+  unsigned bands_ = 1;
+  std::vector<std::thread> threads_;
+  std::mutex m_, runM_;
+  std::condition_variable cv_, done_;
+  const std::function<void(unsigned)>* fn_ = nullptr;
+  unsigned remaining_ = 0;
+  std::exception_ptr workerErr_;  // first worker exception of the current run (m_)
+  inline static thread_local bool tlInRun_ = false;
+  uint64_t gen_ = 0;
+  bool stop_ = false;
+};
+}  // namespace
+
+void SoftwareRenderer::setRenderThreads(unsigned n) { g_swRequestedThreads.store(n); }
+unsigned SoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
+
+void SoftwareRenderer::clear(uint32_t color) {
+  // Cortana 2026-10-15 1455: runtime-dispatched fill (AVX2 or baseline; identical bytes).
+  swsimd::fill32(fb_.pixels.data(), fb_.pixels.size(), color);
+  swsimd::fillF(depth_.data(), depth_.size(), 1.0f);
+  hizReset();  // Cortana 2026-10-15 1715: Hi-Z
+}
+
+// Cortana 2026-10-15 1715: hierarchical-Z [ENGINE] (see software_renderer.h).
+void SoftwareRenderer::hizReset() {
+  hizFbW_ = fb_.width;
+  hizFbH_ = fb_.height;
+  hizTilesX_ = (fb_.width + kHizTile - 1) / kHizTile;
+  const size_t n = size_t(hizTilesX_) * ((fb_.height + kHizTile - 1) / kHizTile);
+  hizMax_.assign(n, std::numeric_limits<float>::infinity());
+  hizDirty_.assign(n, uint8_t(0));
+  if (depth_.size() != size_t(fb_.width) * fb_.height) hizFbW_ = 0;  // unpaired: stay off
+}
+
+float SoftwareRenderer::hizTileMax(int tx, int ty) {
+  const size_t i = size_t(ty) * hizTilesX_ + size_t(tx);
+  if (hizDirty_[i]) {
+    hizDirty_[i] = 0;
+    const int xa = tx * kHizTile, ya = ty * kHizTile;
+    const int xb = std::min(int(fb_.width), xa + kHizTile), yb = std::min(int(fb_.height), ya + kHizTile);
+    float m = -std::numeric_limits<float>::infinity();
+    for (int y = ya; y < yb; ++y) {
+      const float* row = depth_.data() + size_t(y) * fb_.width;
+      for (int x = xa; x < xb; ++x) m = std::max(m, row[x]);
+    }
+    hizMax_[i] = m;
+  }
+  return hizMax_[i];
+}
+
+// Transform a PackedVertex position to screen space.
+// PackedVertex x,y,z are in 1/16 block units local to sub-chunk.
+static void transformVertex(const PackedVertex& v, const float* mvp,
+                            float* out, uint32_t width, uint32_t height) {
+  // Position in block units (1/16 -> 1.0)
+  float x = v.x / 16.0f, y = v.y / 16.0f, z = v.z / 16.0f;
+  // MVP transform (column-major 4x4)
+  float cx = mvp[0]*x + mvp[4]*y + mvp[8]*z + mvp[12];
+  float cy = mvp[1]*x + mvp[5]*y + mvp[9]*z + mvp[13];
+  float cz = mvp[2]*x + mvp[6]*y + mvp[10]*z + mvp[14];
+  float cw = mvp[3]*x + mvp[7]*y + mvp[11]*z + mvp[15];
+  // Preserve the sign: callers reject behind-camera geometry via w <= 0, so
+  // clamping a negative w to +1e-6f would defeat near-plane rejection.
+  if (std::abs(cw) < 1e-6f) cw = std::copysign(1e-6f, cw);
+  // Perspective divide + viewport. out[3] carries the clip-space w so callers
+  // can reject behind-camera geometry (w <= 0 projects mirrored; fix 2026-10-11).
+  const float invW = 1.0f / cw;
+  out[0] = (cx * invW * 0.5f + 0.5f) * width;
+  out[1] = (1.0f - (cy * invW * 0.5f + 0.5f)) * height;  // flip Y
+  out[2] = cz * invW;  // depth 0..1
+  out[3] = cw;
+}
+
+// Backface culling: skip if triangle faces away.
+// Screen space is y-DOWN (transformVertex flips Y), which is orientation-reversing:
+// a triangle wound CCW seen from the face normal (the mesher/GL convention, kept by
+// glFrontFace(GL_CCW)) lands CLOCKWISE on screen, i.e. with negative screen-space
+// cross. So on screen, CCW (cross >= 0) = backface. (Fix 2026-10-11: this was
+// `cross <= 0`, culling every front face.)
+static bool isBackface(const float* v0, const float* v1, const float* v2) {
+  float cross = (v1[0]-v0[0])*(v2[1]-v0[1]) - (v1[1]-v0[1])*(v2[0]-v0[0]);
+  return cross >= 0;  // CCW on the y-down screen = backface
+}
+
+// Model dithering (JD 2026-10-13): per-triangle classification against the
+// fade band. A fragment's view depth is the perspective-correct interpolation
+// of the vertices' clip w, which lies within [min w, max w] of the triangle,
+// so: 1 = every fragment at/past far (keep all, zero per-pixel cost),
+// 0 = every fragment at/before near (drop the whole triangle — fully faded
+// geometry is not rasterized at all), 2 = straddling (per-pixel test).
+static int ditherTriClass(bool on, float near, float far, const float* v0,
+                          const float* v1, const float* v2) {
+  if (!on) return 1;
+  const float mn = std::min({v0[3], v1[3], v2[3]});
+  const float mx = std::max({v0[3], v1[3], v2[3]});
+  if (mn >= far) return 1;
+  if (mx <= near) return 0;
+  return 2;
+}
+
+void SoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
+                                         const float* v2, uint32_t color) {
+  if (isBackface(v0, v1, v2)) return;  // cull
+  const int ditherCls = ditherTriClass(ditherEnabled_, ditherNear_, ditherFar_, v0, v1, v2);
+  if (ditherCls == 0) return;  // fully faded: nothing to draw, no depth write
+
+  // Bounding box (clamped)
+  int x0 = std::max(0, int(std::floor(std::min({v0[0], v1[0], v2[0]}))));
+  int x1 = std::min(int(fb_.width)-1, int(std::ceil(std::max({v0[0], v1[0], v2[0]}))));
+  int y0 = std::max(0, int(std::floor(std::min({v0[1], v1[1], v2[1]}))));
+  int y1 = std::min(int(fb_.height)-1, int(std::ceil(std::max({v0[1], v1[1], v2[1]}))));
+  y0 = std::max(y0, tlBandY0);  // RND-H3 band
+  y1 = std::min(y1, tlBandY1 - 1);
+  if (y0 > y1) return;
+
+  // Edge function setup
+  auto edgeFn = [](const float* a, const float* b, float x, float y) {
+    return (b[0]-a[0])*(y-a[1]) - (b[1]-a[1])*(x-a[0]);
+  };
+  const float area = edgeFn(v0, v1, v2[0], v2[1]);
+  if (std::abs(area) < 1e-9f) return;
+
+  // RND-H3 (2026-10-15): ONE divide per triangle (invArea) and incremental
+  // edge functions: each barycentric is affine in x, so stepping one pixel
+  // adds a constant. Replaces three edge evaluations + three divides per
+  // pixel. Same coverage rule (w >= 0) and depth interpolation as before.
+  const float invArea = 1.0f / area;
+  const float dw0dx = -(v2[1] - v1[1]) * invArea, dw1dx = -(v0[1] - v2[1]) * invArea, dw2dx = -(v1[1] - v0[1]) * invArea;
+  const float dzdx = dw0dx * v0[2] + dw1dx * v1[2] + dw2dx * v2[2];
+  for (int y = y0; y <= y1; ++y) {
+    const float px0 = x0 + 0.5f, py = y + 0.5f;
+    float w0 = edgeFn(v1, v2, px0, py) * invArea;
+    float w1 = edgeFn(v2, v0, px0, py) * invArea;
+    float w2 = edgeFn(v0, v1, px0, py) * invArea;
+    float depth = w0*v0[2] + w1*v1[2] + w2*v2[2];
+    size_t idx = size_t(y) * fb_.width + size_t(x0);
+    for (int x = x0; x <= x1; ++x, ++idx, w0 += dw0dx, w1 += dw1dx, w2 += dw2dx, depth += dzdx) {
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      if (!(depth < depth_[idx])) continue;
+      if (ditherCls == 2) {
+        const float viewDepth = 1.0f / (w0 / v0[3] + w1 / v1[3] + w2 / v2[3]);
+        if (!modelDitherKeep(x, y, viewDepth, ditherNear_, ditherFar_)) continue;
+      }
+      depth_[idx] = depth;
+      fb_.pixels[idx] = color;
+    }
+  }
+}
+
+// Face colors: flat shading by face direction (top brightest, bottom darkest).
+//
+// FLAT-MODE MODE MAP (P3-3, Appendix D L3 — exact, do not over-read):
+// the flat path collapses PackedVertex shading modes onto two cases:
+//   - kShadeStripTint0 / kShadeStripTint1 (modes 3 / 4): a reddish tint of
+//     the value's luminance (parity detail from the shader is NOT
+//     reproduced);
+//   - EVERY other mode (kShadeTex, kShadePalette16/32/64, kShadePips,
+//     kShadeCells, kShadeAnimated, kShadeGlass, ...): plain grayscale
+//     from `value` — palette indices, pip/cell counts and animation
+//     indices are NOT resolved to their shader colors here.
+// Consequence: flat-mode consumers (MCP-vision captures are flat by
+// design) see strip-tinted or grayscale geometry, never the palette /
+// mask colors the per-pixel path (or GL) shows. That is the documented
+// simplification of this path, not a bug — read flat captures as
+// geometry/luminance, not as color truth.
+static uint32_t faceColor(uint8_t face, uint8_t value, uint8_t mode) {
+  // Base color from mode/value (simplified: use value as brightness)
+  uint8_t b = value;
+  // Face shading: top=1.0, sides=0.7, bottom=0.4
+  float shade = 0.7f;
+  if (face == 2) shade = 1.0f;      // top
+  else if (face == 3) shade = 0.4f; // bottom
+  uint8_t v = uint8_t(b * shade);
+  // Trace colors: mode determines red/blue tint
+  if (mode == 3 || mode == 4) {  // kShadeStripTint0/1
+    // Red/blue based on value parity (simplified)
+    return 0xFF000000 | (v << 16) | (v >> 1);  // reddish
+  }
+  return 0xFF000000 | (v << 16) | (v << 8) | v;  // grayscale
+}
+
+// Cortana 2026-10-15 1350: Trace power colour (CloudAtlas SHADER_NOTE r3):
+// lum = mask.r / 0.70; lum <= 1: rgb = ramp[s] * lum; else mix toward white
+// by min(1, (lum-1)*2.5) * (s/64)^2. Lighting = shaded / unshaded mask ratio
+// so the tinted face keeps the basic shader's N.L shading.
+static uint32_t traceTint(uint32_t texel, uint32_t shaded, bool blue, uint8_t value) {
+  const int s = value > 64 ? 64 : value;
+  const uint32_t rc = (blue ? kBlueTraceRamp : kRedTraceRamp)[s];
+  const float mr = float((texel >> 16) & 0xFF);
+  const float light = mr > 0.f ? std::min(1.f, float((shaded >> 16) & 0xFF) / mr) : 1.f;
+  const float lum = mr / 255.f / 0.70f;
+  float c[3] = {float((rc >> 16) & 0xFF), float((rc >> 8) & 0xFF), float(rc & 0xFF)};
+  if (lum <= 1.f) { for (float& ch : c) ch *= lum; }
+  else {
+    const float k = std::min(1.f, (lum - 1.f) * 2.5f) * (float(s) / 64.f) * (float(s) / 64.f);
+    for (float& ch : c) ch = ch + (255.f - ch) * k;
+  }
+  auto q = [light](float v) { const float o = v * light; return uint32_t(o > 255.f ? 255.f : o); };
+  return 0xFF000000u | (q(c[0]) << 16) | (q(c[1]) << 8) | q(c[2]);
+}
+
+/// Per-pixel rasterization with shader (slower, higher quality).
+/// `groundFx` marks a kShadeGroundPulse quad of the mesh renderFrame is
+/// currently drawing: the wafer ground pulse + ground traces emissives
+/// (CPU mirrors) add onto the shaded color, mirroring chunk_shading.glsl.
+void SoftwareRenderer::rasterizeTriangleShaded(const float* v0, const float* v1,
+                                              const float* v2, const ShaderVaryings* s0,
+                                              const ShaderVaryings* s1, const ShaderVaryings* s2,
+                                              FragmentShaderFn shader, bool groundFx) {
+  if (isBackface(v0, v1, v2)) return;
+  const int ditherCls = ditherTriClass(ditherEnabled_, ditherNear_, ditherFar_, v0, v1, v2);
+  if (ditherCls == 0) return;  // fully faded (JD 2026-10-13): skip shading entirely
+  int x0 = std::max(0, int(std::floor(std::min({v0[0], v1[0], v2[0]}))));
+  int x1 = std::min(int(fb_.width)-1, int(std::ceil(std::max({v0[0], v1[0], v2[0]}))));
+  int y0 = std::max(0, int(std::floor(std::min({v0[1], v1[1], v2[1]}))));
+  int y1 = std::min(int(fb_.height)-1, int(std::ceil(std::max({v0[1], v1[1], v2[1]}))));
+  y0 = std::max(y0, tlBandY0);  // RND-H3 band
+  y1 = std::min(y1, tlBandY1 - 1);
+  if (y0 > y1) return;
+  auto edgeFn = [](const float* a, const float* b, float x, float y) {
+    return (b[0]-a[0])*(y-a[1]) - (b[1]-a[1])*(x-a[0]);
+  };
+  const float area = edgeFn(v0, v1, v2[0], v2[1]);
+  if (std::abs(area) < 1e-9f) return;
+
+  FragmentInput fin{};  // value-init: unset map pointers are null, not indeterminate
+  fin.texData = textures_.data(); fin.texLayers = textures_.layers();
+  fin.pbr = effectivePbrContext();
+  const bool fx = groundFx && groundFx_.active();
+  // Cortana 2026-10-15 1320: the pulse emissive is a pure function of the
+  // fragment's CHUNK (sin + pow per pixel before); memoize the last chunk.
+  // Same inputs -> same float result, so pixels are unchanged.
+  int memoCx = INT32_MIN, memoCz = INT32_MIN;
+  std::array<float, 3> memoE{0.f, 0.f, 0.f};
+
+  // RND-H3 (2026-10-15): one divide per triangle + incremental edges (see
+  // rasterizeTriangle), and PERSPECTIVE-CORRECT varyings: attributes are
+  // weighted by 1/w and renormalized with one reciprocal per SHADED pixel
+  // (after the depth test), so UVs no longer swim on large near quads.
+  const float invArea = 1.0f / area;
+  const float dw0dx = -(v2[1] - v1[1]) * invArea, dw1dx = -(v0[1] - v2[1]) * invArea, dw2dx = -(v1[1] - v0[1]) * invArea;
+  const float dzdx = dw0dx * v0[2] + dw1dx * v1[2] + dw2dx * v2[2];
+  const float iw0 = 1.0f / v0[3], iw1 = 1.0f / v1[3], iw2 = 1.0f / v2[3];
+  // Cortana 2026-10-15 1715: hierarchical-Z early reject [ENGINE]. Every
+  // fragment's depth is (up to float rounding) >= the triangle's nearest vertex
+  // depth, so an 8-row tile band whose tiles across [x0, x1] all hold depth
+  // below that (minus a rounding margin) cannot pass a single depth test: skip
+  // those rows outright. Rows restart from exact edge functions, so the rows
+  // that ARE drawn produce the same bits as before.
+  const bool hiz = hizFbW_ == fb_.width && hizFbH_ == fb_.height && !hizMax_.empty();
+  const float triMinZ = std::min({v0[2], v1[2], v2[2]});
+  const float hizMargin = 1e-4f * std::max(1.0f, std::fabs(triMinZ));
+  const int htx0 = x0 / kHizTile, htx1 = x1 / kHizTile;
+  for (int y = y0; y <= y1; ++y) {
+    if (hiz && (y == y0 || y % kHizTile == 0)) {
+      bool occluded = true;
+      for (int tx = htx0; tx <= htx1 && occluded; ++tx) occluded = hizTileMax(tx, y / kHizTile) + hizMargin < triMinZ;
+      if (occluded) {
+        if (g_swProfOn) g_hizRows += uint64_t(std::min(y1, y | (kHizTile - 1)) - y + 1);
+        y = std::min(y1, y | (kHizTile - 1));  // last row of this tile band; the loop's ++y moves on
+        continue;
+      }
+    }
+    int wxLo = INT32_MAX, wxHi = -1;  // Cortana 2026-10-15 1715: written x span (Hi-Z dirty)
+    const float py = y + 0.5f;
+    // Ginny 2026-10-16 (perf list, Cortana): span setup. Each barycentric is affine in x, so
+    // the covered run of this row is bounded analytically per edge instead of scanning the
+    // whole bounding box (~74% of scanned pixels were outside the triangle). The bounds are
+    // widened by 1 px and every pixel still runs the exact w >= 0 test, so coverage rules are
+    // unchanged; edges restart exactly at the span start.
+    int xs = x0, xe = x1;
+    {
+      const float pxa = x0 + 0.5f;
+      const float e[3] = {edgeFn(v1, v2, pxa, py) * invArea, edgeFn(v2, v0, pxa, py) * invArea, edgeFn(v0, v1, pxa, py) * invArea};
+      const float d[3] = {dw0dx, dw1dx, dw2dx};
+      const float span = float(x1 - x0);
+      for (int i = 0; i < 3 && xs <= xe; ++i) {
+        if (d[i] > 0.f) {
+          if (e[i] < 0.f) { const float n = -e[i] / d[i]; if (n > span + 1.f) xs = x1 + 1; else xs = std::max(xs, x0 + int(n) - 1); }
+        } else if (d[i] < 0.f) {
+          if (e[i] < 0.f) xe = x0 - 1;
+          else { const float n = e[i] / -d[i]; if (n < span) xe = std::min(xe, x0 + int(n) + 1); }
+        } else if (e[i] < 0.f) {
+          xe = x0 - 1;
+        }
+      }
+    }
+    if (xs > xe) continue;
+    const float px0 = xs + 0.5f;
+    float sw0 = edgeFn(v1, v2, px0, py) * invArea;
+    float sw1 = edgeFn(v2, v0, px0, py) * invArea;
+    float sw2 = edgeFn(v0, v1, px0, py) * invArea;
+    float sdepth = sw0*v0[2] + sw1*v1[2] + sw2*v2[2];
+    size_t sidx = size_t(y) * fb_.width + size_t(xs);
+    uint64_t lc = 0, ls = 0;
+    for (int x = xs; x <= xe; ++x, ++sidx, sw0 += dw0dx, sw1 += dw1dx, sw2 += dw2dx, sdepth += dzdx) {
+      if (sw0 >= 0 && sw1 >= 0 && sw2 >= 0) {
+        const float depth = sdepth;
+        const size_t idx = sidx;
+        ++lc;
+        if (depth < depth_[idx]) {
+          ++ls;
+          const float pw0 = sw0 * iw0, pw1 = sw1 * iw1, pw2 = sw2 * iw2;
+          const float viewDepth = 1.0f / (pw0 + pw1 + pw2);
+          if (ditherCls == 2) {
+            // Screen-door discard BEFORE shading: faded fragments cost no
+            // fragment work and write no depth (true discard semantics).
+            if (!modelDitherKeep(x, y, viewDepth, ditherNear_, ditherFar_)) continue;
+          }
+          const float w0 = pw0 * viewDepth, w1 = pw1 * viewDepth, w2 = pw2 * viewDepth;  // perspective-correct
+          // Interpolate varyings
+          fin.varyings.nx = w0*s0->nx + w1*s1->nx + w2*s2->nx;
+          fin.varyings.ny = w0*s0->ny + w1*s1->ny + w2*s2->ny;
+          fin.varyings.nz = w0*s0->nz + w1*s1->nz + w2*s2->nz;
+          fin.varyings.u = w0*s0->u + w1*s1->u + w2*s2->u;
+          fin.varyings.v = w0*s0->v + w1*s1->v + w2*s2->v;
+          fin.varyings.layer = s0->layer;
+          fin.varyings.materialId = s0->materialId;  // flat per quad, like layer
+          fin.varyings.wx = w0*s0->wx + w1*s1->wx + w2*s2->wx;
+          fin.varyings.wy = w0*s0->wy + w1*s1->wy + w2*s2->wy;
+          fin.varyings.wz = w0*s0->wz + w1*s1->wz + w2*s2->wz;
+          // Cortana 2026-10-15 1350: alpha cutout (0.5) + Trace power tint.
+          uint32_t texel = 0xFFFFFFFFu;
+          const bool strip = tlQuadMode == kShadeStripTint0 || tlQuadMode == kShadeStripTint1;
+          if ((strip || tlQuadMode == kShadeCutout) && fin.texData && fin.varyings.layer < fin.texLayers) {
+            const uint32_t tx = uint32_t(swTile(fin.varyings.u) * 15.0f) & 15, ty = uint32_t(swTile(fin.varyings.v) * 15.0f) & 15;  // Cortana 2026-10-15 1705: swTile
+            texel = fin.texData[fin.varyings.layer * 256 + ty * 16 + tx];
+            if ((texel >> 24) < 128u) continue;  // discard: no colour, no depth write
+          }
+          uint32_t color = shader(fin);
+          if (strip) color = traceTint(texel, color, tlQuadMode == kShadeStripTint1, tlQuadValue);
+          if (fx) {
+            // Wafer ground pulse + traces (P1-RENDER H1): additive emissive
+            // at the fragment's world position, from the mesh's baked
+            // params — the CPU mirrors of the GLSL in chunk_shading.glsl.
+            const float wx = fin.varyings.wx + meshOriginX_;
+            const float wz = fin.varyings.wz + meshOriginZ_;
+            float er = 0.f, eg = 0.f, eb = 0.f;
+            if (groundFx_.pulseOn && groundFx_.pulseP0[2] > 0.f) {
+              const GroundPulseParams pp{groundFx_.pulseP0[0], groundFx_.pulseP0[1],
+                                         groundFx_.pulseP0[2], groundFx_.pulseP1[0],
+                                         groundFx_.pulseP1[1], groundFx_.pulseP1[2]};
+              const int ccx = int(std::floor(wx / 16.f)), ccz = int(std::floor(wz / 16.f));
+              if (ccx != memoCx || ccz != memoCz) {
+                memoE = groundPulseEmissive(groundFx_.pulseTimeSec, ccx, ccz, pp);
+                memoCx = ccx; memoCz = ccz;
+              }
+              const auto& e = memoE;
+              er += e[0]; eg += e[1]; eb += e[2];
+            }
+            if (groundFx_.traceOn && groundFx_.traceP0[2] > 0.f && groundFx_.traceP0[0] > 0.f) {
+              const GroundTraceParams tp{groundFx_.traceP0[0], groundFx_.traceP0[1],
+                                         groundFx_.traceP0[2], groundFx_.traceP0[3],
+                                         groundFx_.traceP1[0], groundFx_.traceP1[1],
+                                         groundFx_.traceP1[2]};
+              const auto e = groundTraceEmissiveFast(groundFx_.traceTimeSec, wx, wz, tp);  // Cortana 2026-10-15 1335
+              er += e[0]; eg += e[1]; eb += e[2];
+            }
+            if (er > 0.f || eg > 0.f || eb > 0.f) {
+              auto add = [](uint32_t ch, float e) {
+                return uint32_t(std::min(255.f, float(ch) + e * 255.f));
+              };
+              color = 0xFF000000u | (add((color >> 16) & 0xFF, er) << 16) |
+                      (add((color >> 8) & 0xFF, eg) << 8) | add(color & 0xFF, eb);
+            }
+          }
+          if (tlQuadMode == kShadeAlphaBlend) {
+            // Cortana 2026-10-15 1755 [ENGINE]: blended translucency (Laysor): src*a +
+            // dst*(1-a) with the texel's own alpha, depth-tested but no depth write (so
+            // nothing behind is lost) and no Hi-Z dirty mark (depth unchanged). value 1 =
+            // lit by an Emitor beam: a violet glow added, alpha floored so the light reads.
+            // Runs in the per-strip blended pass after the strip's opaque pass; strips are
+            // owned by one thread, so the read-modify-write of the pixel is race-free.
+            uint32_t a = 255;
+            if (fin.texData && fin.varyings.layer < fin.texLayers) {
+              const uint32_t tx = uint32_t(swTile(fin.varyings.u) * 15.0f) & 15, ty = uint32_t(swTile(fin.varyings.v) * 15.0f) & 15;
+              a = fin.texData[fin.varyings.layer * 256 + ty * 16 + tx] >> 24;
+            }
+            uint32_t sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+            if (tlQuadValue) {
+              sr = std::min(255u, sr + 70u); sg = std::min(255u, sg + 25u); sb = std::min(255u, sb + 90u);
+              a = std::max(a, 150u);
+            }
+            if (a == 0) continue;
+            const uint32_t dst = fb_.pixels[idx], ia = 255u - a;
+            const uint32_t r = (sr * a + ((dst >> 16) & 0xFF) * ia + 127u) / 255u;
+            const uint32_t g = (sg * a + ((dst >> 8) & 0xFF) * ia + 127u) / 255u;
+            const uint32_t b = (sb * a + (dst & 0xFF) * ia + 127u) / 255u;
+            fb_.pixels[idx] = 0xFF000000u | (r << 16) | (g << 8) | b;
+            continue;
+          }
+          depth_[idx] = depth;
+          fb_.pixels[idx] = color;
+          if (x < wxLo) wxLo = x;
+          wxHi = x;
+        }
+      }
+    }
+    if (hiz && wxHi >= 0) {  // Cortana 2026-10-15 1715: tiles whose depth went down get re-tightened lazily
+      uint8_t* d = hizDirty_.data() + size_t(y / kHizTile) * hizTilesX_;
+      for (int tx = wxLo / kHizTile; tx <= wxHi / kHizTile; ++tx) d[tx] = 1;
+    }
+    if (g_swProfOn) { if (xe >= xs) g_pxScan += uint64_t(xe - xs + 1); g_pxCov += lc; g_pxShade += ls; }
+  }
+  if (g_swProfOn) ++g_tris;
+}
+
+// Build software-vertex-stage varyings from a packed mesh vertex.
+// Face normals match the GL chunk shader (chunk.vert N[6]).
+static void varyingsFromPackedVertex(const PackedVertex& v, ShaderVaryings& s) {
+  static const float kFaceNormals[6][3] = {
+      {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  const uint8_t face = v.faceAo & 7;
+  s.nx = kFaceNormals[face][0];
+  s.ny = kFaceNormals[face][1];
+  s.nz = kFaceNormals[face][2];
+  s.u = v.u / 16.0f;
+  s.v = v.v / 16.0f;
+  s.layer = v.layerIndex();  // Cortana 2026-10-15 1628: CA-03 [ENGINE]
+  s.wx = v.x / 16.0f;
+  s.wy = v.y / 16.0f;
+  s.wz = v.z / 16.0f;
+  // SEAM (JD-locked coexistence, renderer.h): PackedVertex is 16 bytes fully
+  // packed and NEVER extended - it carries no material slot by design, so the
+  // classic path's fragments resolve to the 0xFFFF "none" marker and the PBR
+  // tier falls back to basic shading per fragment. Real per-vertex material
+  // IDs exist on the BinaryQuad path only (PbrQuadVertex::material) and reach
+  // the varyings through renderPbrMeshes (P1-RENDER H2).
+  s.materialId = 0xFFFF;
+}
+
+// Transform all vertices to screen space (x, y, depth, clipW per vertex) in
+// the reusable screen_ scratch; returns the scratch pointer.
+const float* SoftwareRenderer::transformVerts(const PackedVertex* verts, size_t count,
+                                              const float* viewProj) {
+  if (tlPreScreen) { const float* s = tlPreScreen; tlPreScreen = nullptr; return s; }
+  static thread_local std::vector<float> tlScreen;  // per band thread (RND-H3)
+  tlScreen.resize(count * 4);
+  float* screen = tlScreen.data();
+  for (size_t i = 0; i < count; ++i) {
+    transformVertex(verts[i], viewProj, &screen[i*4], fb_.width, fb_.height);
+  }
+  return screen;
+}
+
+void SoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
+                                       const float* viewProj) {
+  if (!verts || count < 4 || !viewProj) return;
+  const float* screen = transformVerts(verts, count, viewProj);
+  // Reject quads with any vertex behind the camera (w <= 0 mirrors projection).
+  auto quadVisible = [&](size_t i) {
+    return screen[i*4+3] > 0 && screen[(i+1)*4+3] > 0 &&
+           screen[(i+2)*4+3] > 0 && screen[(i+3)*4+3] > 0;
+  };
+  for (size_t i = 0; i + 3 < count; i += 4) {
+    if (!quadVisible(i)) {
+      // Cortana 2026-10-15 1420 (Elfie §1.2): the flat/sprite path dropped
+      // quads crossing the near plane (RND-H2 fixed only the per-pixel
+      // path). Same homogeneous clip against w >= kNearW, then a flat fan.
+      // Quads wholly in front never reach here, so their pixels are unchanged.
+      constexpr float kNearW = 1.0f / 128.0f;
+      float in[4][4], out[8][4];
+      int outN = 0;
+      bool anyFront = false;
+      for (int k = 0; k < 4; ++k) {
+        const PackedVertex& pv = verts[i + k];
+        const float x = pv.x / 16.0f, y = pv.y / 16.0f, z = pv.z / 16.0f;
+        const float* m = viewProj;
+        in[k][0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+        in[k][1] = m[1]*x + m[5]*y + m[9]*z + m[13];
+        in[k][2] = m[2]*x + m[6]*y + m[10]*z + m[14];
+        in[k][3] = m[3]*x + m[7]*y + m[11]*z + m[15];
+        anyFront |= in[k][3] >= kNearW;
+      }
+      if (!anyFront) continue;
+      for (int k = 0; k < 4; ++k) {
+        const float* a = in[k]; const float* b = in[(k + 1) % 4];
+        const bool ain = a[3] >= kNearW, bin = b[3] >= kNearW;
+        if (ain) { for (int q = 0; q < 4; ++q) out[outN][q] = a[q]; ++outN; }
+        if (ain != bin) {
+          const float t = (kNearW - a[3]) / (b[3] - a[3]);
+          for (int q = 0; q < 4; ++q) out[outN][q] = a[q] + t * (b[q] - a[q]);
+          ++outN;
+        }
+      }
+      if (outN < 3) continue;
+      float sc[8][4];
+      for (int k = 0; k < outN; ++k) {
+        const float iw = 1.0f / out[k][3];
+        sc[k][0] = (out[k][0] * iw * 0.5f + 0.5f) * fb_.width;
+        sc[k][1] = (1.0f - (out[k][1] * iw * 0.5f + 0.5f)) * fb_.height;
+        sc[k][2] = out[k][2] * iw;
+        sc[k][3] = out[k][3];
+      }
+      const uint32_t ccol = faceColor(verts[i].faceAo & 0x7, verts[i].value, verts[i].mode);
+      for (int k = 1; k + 1 < outN; ++k) rasterizeTriangle(sc[0], sc[k], sc[k + 1], ccol);
+      continue;
+    }
+    uint32_t color = faceColor(verts[i].faceAo & 0x7, verts[i].value, verts[i].mode);
+    const float* v0 = &screen[i*4];
+    const float* v1 = &screen[(i+1)*4];
+    const float* v2 = &screen[(i+2)*4];
+    const float* v3 = &screen[(i+3)*4];
+    rasterizeTriangle(v0, v1, v2, color);
+    rasterizeTriangle(v0, v2, v3, color);
+  }
+}
+
+void SoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
+                                  const float* viewProj) {
+  if (!verts || vertCount < 3 || !viewProj) return;
+
+  // Flat path (also the sprite pass path).
+  if (!perPixel_) {
+    renderFlatQuads(verts, vertCount, viewProj);
+    return;
+  }
+
+  // Per-pixel path: build varyings from the packed vertices and run the
+  // tier-selected fragment shader (Basic = existing basicFragmentShader,
+  // Pbr = pbrFragmentShader with graceful fallback per fragment).
+  const float* screen = transformVerts(verts, vertCount, viewProj);
+  // Reject quads with any vertex behind the camera (w <= 0 mirrors projection).
+  auto quadVisible = [&](size_t i) {
+    return screen[i*4+3] > 0 && screen[(i+1)*4+3] > 0 &&
+           screen[(i+2)*4+3] > 0 && screen[(i+3)*4+3] > 0;
+  };
+  const FragmentShaderFn shader = selectFragmentShader(shadingTier_);
+  ShaderVaryings sv[4];
+  const uint32_t* qlist = tlQuadList;
+  const size_t nq = qlist ? tlQuadCount : vertCount / 4;
+  tlQuadList = nullptr;
+  for (size_t qi = 0; qi < nq; ++qi) {
+    const size_t i = qlist ? size_t(qlist[qi]) * 4 : qi * 4;
+    if (i + 3 >= vertCount) continue;
+    if (tlBlendPass >= 0 && ((verts[i].mode == kShadeAlphaBlend) != (tlBlendPass == 1))) continue;  // Cortana 2026-10-15 1755
+    if (!quadVisible(i)) {
+      // RND-H2 (2026-10-15): a quad crossing the near plane used to vanish
+      // (any w <= 0 rejected the whole quad), so walls/floor beside the
+      // camera popped out. Clip it in homogeneous space against
+      // w >= kNearW (Sutherland-Hodgman, varyings lerped linearly in clip
+      // space, which is exact), then project and fan the result. Quads
+      // entirely in front take the fast path above unchanged.
+      constexpr float kNearW = 1.0f / 128.0f;
+      struct CV { float c[4]; ShaderVaryings s; };
+      CV in[4], out[8];
+      int inN = 0, outN = 0;
+      bool anyFront = false;
+      for (int k = 0; k < 4; ++k) {
+        const PackedVertex& pv = verts[i + k];
+        const float x = pv.x / 16.0f, y = pv.y / 16.0f, z = pv.z / 16.0f;
+        const float* m = viewProj;
+        CV& cv = in[inN++];
+        cv.c[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+        cv.c[1] = m[1]*x + m[5]*y + m[9]*z + m[13];
+        cv.c[2] = m[2]*x + m[6]*y + m[10]*z + m[14];
+        cv.c[3] = m[3]*x + m[7]*y + m[11]*z + m[15];
+        varyingsFromPackedVertex(pv, cv.s);
+        anyFront |= cv.c[3] >= kNearW;
+      }
+      if (!anyFront) continue;
+      for (int k = 0; k < inN; ++k) {
+        const CV& a = in[k];
+        const CV& b = in[(k + 1) % inN];
+        const bool ain = a.c[3] >= kNearW, bin = b.c[3] >= kNearW;
+        if (ain) out[outN++] = a;
+        if (ain != bin) {
+          const float t = (kNearW - a.c[3]) / (b.c[3] - a.c[3]);
+          CV& r = out[outN++];
+          for (int q = 0; q < 4; ++q) r.c[q] = a.c[q] + t * (b.c[q] - a.c[q]);
+          r.s = a.s;  // flat fields (layer, materialId) from a
+          auto L = [t](float p, float q) { return p + t * (q - p); };
+          r.s.nx = L(a.s.nx, b.s.nx); r.s.ny = L(a.s.ny, b.s.ny); r.s.nz = L(a.s.nz, b.s.nz);
+          r.s.u = L(a.s.u, b.s.u); r.s.v = L(a.s.v, b.s.v);
+          r.s.wx = L(a.s.wx, b.s.wx); r.s.wy = L(a.s.wy, b.s.wy); r.s.wz = L(a.s.wz, b.s.wz);
+        }
+      }
+      if (outN < 3) continue;
+      float sc[8][4];
+      for (int k = 0; k < outN; ++k) {
+        const float iw = 1.0f / out[k].c[3];
+        sc[k][0] = (out[k].c[0] * iw * 0.5f + 0.5f) * fb_.width;
+        sc[k][1] = (1.0f - (out[k].c[1] * iw * 0.5f + 0.5f)) * fb_.height;
+        sc[k][2] = out[k].c[2] * iw;
+        sc[k][3] = out[k].c[3];
+      }
+      const bool cfx = verts[i].mode == kShadeGroundPulse;
+      tlQuadMode = verts[i].mode; tlQuadValue = verts[i].value;  // Cortana 2026-10-15 1350
+      for (int k = 1; k + 1 < outN; ++k)
+        rasterizeTriangleShaded(sc[0], sc[k], sc[k + 1], &out[0].s, &out[k].s, &out[k + 1].s, shader, cfx);
+      continue;
+    }
+    if (tlCullBack) {
+      const float* a = &screen[i*4]; const float* b = &screen[(i+1)*4]; const float* c2 = &screen[(i+2)*4];
+      const float area = (b[0]-a[0])*(c2[1]-a[1]) - (b[1]-a[1])*(c2[0]-a[0]);
+      if (area * g_backSign > 0.f) continue;  // back face: GL would cull it
+    }
+    {  // RND-H3 band reject (2026-10-15): skip quads wholly outside this
+       // thread's rows before building varyings (pure early-out; the
+       // rasterizer would cover zero rows of them anyway).
+      const float qy0 = std::min(std::min(screen[i*4+1], screen[(i+1)*4+1]), std::min(screen[(i+2)*4+1], screen[(i+3)*4+1]));
+      const float qy1 = std::max(std::max(screen[i*4+1], screen[(i+1)*4+1]), std::max(screen[(i+2)*4+1], screen[(i+3)*4+1]));
+      if (qy1 < float(tlBandY0) - 1.0f || qy0 > float(tlBandY1) + 1.0f) continue;
+    }
+    for (int k = 0; k < 4; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
+    // Ground pulse/traces tag: only kShadeGroundPulse quads of a mesh whose
+    // baked params renderFrame supplied (direct renderMesh callers leave
+    // groundFx_ zeroed, so their frames are unchanged).
+    const bool fx = verts[i].mode == kShadeGroundPulse;
+    tlQuadMode = verts[i].mode; tlQuadValue = verts[i].value;  // Cortana 2026-10-15 1350
+    rasterizeTriangleShaded(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4],
+                            &sv[0], &sv[1], &sv[2], shader, fx);
+    rasterizeTriangleShaded(&screen[i*4], &screen[(i+2)*4], &screen[(i+3)*4],
+                            &sv[0], &sv[2], &sv[3], shader, fx);
+  }
+  tlQuadMode = 0; tlQuadValue = 0;  // Cortana 2026-10-15 1350: entity/PBR passes shade plain
+}
+
+void SoftwareRenderer::renderEntityVerts(const float* viewProj) {
+  const PackedVertex* verts = entityVerts_.data();
+  const size_t count = entityVerts_.size();
+  if (count < 3 || !viewProj) return;
+  const float* screen = transformVerts(verts, count, viewProj);
+  auto triVisible = [&](size_t i) {
+    return screen[i*4+3] > 0 && screen[(i+1)*4+3] > 0 && screen[(i+2)*4+3] > 0;
+  };
+  if (perPixel_) {
+    const FragmentShaderFn shader = selectFragmentShader(shadingTier_);
+    ShaderVaryings sv[3];
+    for (size_t i = 0; i + 2 < count; i += 3) {
+      if (!triVisible(i)) continue;
+      for (int k = 0; k < 3; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
+      rasterizeTriangleShaded(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4],
+                              &sv[0], &sv[1], &sv[2], shader);
+    }
+    return;
+  }
+  for (size_t i = 0; i + 2 < count; i += 3) {
+    if (!triVisible(i)) continue;
+    const uint32_t color = faceColor(verts[i].faceAo & 0x7, verts[i].value, verts[i].mode);
+    rasterizeTriangle(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4], color);
+  }
+}
+
+void SoftwareRenderer::setTextures(const uint32_t* data, uint32_t layers) {
+  textures_.setRaw(data, layers);
+}
+
+void SoftwareRenderer::applyFXAA() {
+  // FXAA-lite (P3-3, Appendix D L2): a 3x3 box blend applied ONLY at
+  // high-contrast edges — a pixel blends toward its neighbourhood average
+  // when the neighbourhood's luminance range exceeds kEdgeThreshold;
+  // flat regions pass through untouched. (The v1 code blurred EVERYTHING
+  // despite the "edges only" comment — dead-ish and misnamed; this gate is
+  // what the name claims. It is still not a full FXAA shader: no luma
+  // subpixel/edge-direction search. No production caller yet — the direct
+  // CPU surface and tests drive it.)
+  // fxaaSrc_ is a reusable member buffer (no per-call full-framebuffer copy).
+  constexpr uint32_t kEdgeThreshold = 48;  // luminance range (0..255) that counts as an edge
+  auto lum = [](uint32_t p) {
+    return (77u * ((p >> 16) & 0xFF) + 150u * ((p >> 8) & 0xFF) + 29u * (p & 0xFF)) >> 8;
+  };
+  fxaaSrc_ = fb_.pixels;
+  const std::vector<uint32_t>& src = fxaaSrc_;
+  uint32_t w = fb_.width, h = fb_.height;
+  for (uint32_t y = 1; y + 1 < h; ++y) {
+    for (uint32_t x = 1; x + 1 < w; ++x) {
+      uint32_t r = 0, g = 0, b = 0, lo = 255, hi = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          uint32_t p = src[size_t(y+dy) * w + (x+dx)];
+          r += (p >> 16) & 0xFF; g += (p >> 8) & 0xFF; b += p & 0xFF;
+          const uint32_t l = lum(p);
+          lo = std::min(lo, l);
+          hi = std::max(hi, l);
+        }
+      }
+      if (hi - lo < kEdgeThreshold) continue;  // not an edge: keep the source pixel
+      fb_.pixels[size_t(y) * w + x] = 0xFF000000 | ((r/9) << 16) | ((g/9) << 8) | (b/9);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IRenderer interface
+// ---------------------------------------------------------------------------
+
+std::string SoftwareRenderer::deviceInfo() const {
+  return "software rasterizer (CPU, no GPU)";
+}
+
+void SoftwareRenderer::setMaterials(const BlockMaterials& /*materials*/) {
+  // Documented no-op: nothing on the software path consumes BlockMaterials
+  // (see the header). PBR material data arrives via setPbrContext().
+}
+
+int SoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
+  return 0;  // no GPU programs; no program can use pack sources
+}
+
+// Mesh key identical to the GL/Vulkan backends.
+static int64_t swMeshKey(int cx, int sy, int cz) {
+  return int64_t((uint64_t(uint32_t(cx)) << 40) ^ (uint64_t(uint32_t(sy)) << 32) ^
+                 uint64_t(uint32_t(cz)));
+}
+
+void SoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
+  const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
+  if (mesh.verts.empty()) {  // empty = remove, like the other backends
+    meshes_.erase(key);
+    return;
+  }
+  StoredMesh& s = meshes_[key];
+  s.cx = mesh.cx;
+  s.sy = mesh.sy;
+  s.cz = mesh.cz;
+  // Cortana 2026-10-16: LOD-tagged quads (foliage) split into a near set (detail) and a far set.
+  // The far set keeps only untagged quads: far foliage is skipped on the software path.
+  s.hasLod = hasLodTags(mesh.verts);
+  s.showingFar = false;
+  s.lodOther.clear();
+  if (s.hasLod) {
+    selectLod(mesh.verts, /*far=*/false, s.verts);
+    s.lodOther.reserve(mesh.verts.size());
+    for (size_t q = 0; q + 3 < mesh.verts.size(); q += 4)
+      if (!(mesh.verts[q].mode & (kShadeLodNear | kShadeLodFar)))
+        s.lodOther.insert(s.lodOther.end(), mesh.verts.begin() + q, mesh.verts.begin() + q + 4);
+  } else {
+    s.verts = mesh.verts;
+  }
+  s.hasBlend = false;  // Cortana 2026-10-15 1755: route to the blended pass
+  for (size_t q = 0; q < s.verts.size(); q += 4)
+    if (s.verts[q].mode == kShadeAlphaBlend) { s.hasBlend = true; break; }
+  for (int i = 0; i < 4; ++i) {
+    s.pulseP0[i] = mesh.pulseP0[i];
+    s.pulseP1[i] = mesh.pulseP1[i];
+    s.traceP0[i] = mesh.traceP0[i];
+    s.traceP1[i] = mesh.traceP1[i];
+  }
+}
+
+// --- PBR / culling surface (P1-RENDER H2): real implementations, no inherited
+// no-ops left on the paths the game calls. -----------------------------------
+
+void SoftwareRenderer::setPbrMaterials(const MaterialRegistry& reg) {
+  pbrMaterials_ = &reg;
+  ownedPbrCtx_.registry = &reg;
+  ownedPbrCtx_.ambientMode = ambientMode_;
+  ownedPbrCtx_.emissive = &frameLights_;  // FrameParams::pbrLights, fed per frame
+}
+
+void SoftwareRenderer::setPbrTier(PbrTransparencyTier t) {
+  pbrTier_ = t;
+  // Selecting a PBR transparency tier is the user's PBR opt-in: run the PBR
+  // fragment tier on the per-pixel path. Classic PackedVertex fragments carry
+  // no material ID (0xFFFF) and fall back to basic per fragment, so classic
+  // frames are pixel-identical; BinaryQuad fragments shade real PBR.
+  shadingTier_ = SoftwareShadingTier::Pbr;
+  // Honest limit (pbr_software_shaders.h ULTRA TIER GAP): the CPU path does
+  // not implement the transparency-tier ladder — PBR fragments shade
+  // opaque regardless of tier. Loud once, not silent.
+  static bool warnedTier = false;
+  if (!warnedTier) {
+    warnedTier = true;
+    logWarn("software: PBR transparency tiers are not implemented on the CPU path; "
+            "PBR fragments shade opaque (tier selection still enables the PBR fragment path)");
+  }
+}
+
+void SoftwareRenderer::setAmbientMode(AmbientMode m) {
+  ambientMode_ = m;
+  ownedPbrCtx_.ambientMode = m;
+}
+
+void SoftwareRenderer::setFrustumMarginDeg(float degrees) {
+  frustumMarginDeg_ = std::clamp(degrees, 0.f, 15.f);  // JD-locked 2026-10-11, as GL/VK
+}
+
+void SoftwareRenderer::setModelDither(bool enabled, float nearBlocks, float farBlocks) {
+  ditherEnabled_ = enabled;
+  ditherNear_ = std::clamp(nearBlocks, 0.f, 1024.f);
+  ditherFar_ = std::clamp(farBlocks, ditherNear_, 2048.f);
+}
+
+// ---------------------------------------------------------------------------
+// AA ladder + ASCII pipeline (JD 2026-10-13). Both are presentational
+// stages on the finished frame; neither touches sim or mesh state.
+// ---------------------------------------------------------------------------
+SoftwareAaScratch& SoftwareRenderer::ensureAaScratch() {
+  if (!aaScratch_) aaScratch_ = std::make_unique<SoftwareAaScratch>();
+  return *aaScratch_;
+}
+
+void SoftwareRenderer::setAaMode(const char* modeName) {
+  SoftwareAaMode mode;
+  if (modeName && softwareAaModeFromName(modeName, mode)) aaMode_ = mode;
+}
+
+const char* SoftwareRenderer::aaModeName() const { return softwareAaModeName(aaMode_); }
+
+void SoftwareRenderer::applyAaPostPass() {
+  if (aaMode_ == SoftwareAaMode::Fxaa) {
+    applyFxaaPost(fb_, ensureAaScratch());
+  } else if (aaMode_ == SoftwareAaMode::Cmaa) {
+    // depth_ matches fb_ on the direct surface (resize keeps them paired);
+    // pass it only when the pairing holds, else run luma-only.
+    const float* depth =
+        (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr;
+    applyCmaaPost(fb_, depth, ensureAaScratch());
+  }
+  // Off: no-op. Ssaa2x: render-time mode — nothing to post-apply.
+}
+
+void SoftwareRenderer::setAsciiMode(bool enabled, int cols) {
+  asciiEnabled_ = enabled;
+  asciiCols_ = std::clamp(cols, 40, 400);
+}
+
+void SoftwareRenderer::setAsciiGlyphSet(const char* setName) {
+  AsciiGlyphSet set;
+  if (setName && asciiGlyphSetFromName(setName, set)) asciiSet_ = static_cast<int>(set);
+}
+
+void SoftwareRenderer::setAsciiValueSpan(int span) {
+  asciiSpan_ = std::clamp(span, 1, kAsciiMaxValueSpan);  // JD amendment 2026-10-13
+}
+
+void SoftwareRenderer::applyAsciiPass() {
+  framebufferToAsciiImage(fb_, asciiCols_, static_cast<AsciiGlyphSet>(asciiSet_),
+                          &asciiText_, nullptr, asciiSpan_);
+}
+
+void SoftwareRenderer::setCullProtoConfig(const CullProtoConfig& cfg) {
+  cullProto_.configure(cfg);
+}
+
+CullProtoStats SoftwareRenderer::cullProtoStats() const { return cullProto_.stats(); }
+
+void SoftwareRenderer::uploadPbrChunkMesh(const PbrChunkMesh& mesh) {
+  const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
+  if (mesh.verts.empty()) {  // empty = remove, like the classic store
+    pbrMeshes_.erase(key);
+    return;
+  }
+  pbrMeshes_[key] = mesh;
+}
+
+void SoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts) {
+  entityVerts_ = verts;  // dynamic: each upload replaces the previous batch
+}
+
+void SoftwareRenderer::clearChunkMeshes() {
+  meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
+  pbrMeshes_.clear();
+}
+
+static Mat4 swTranslation(float x, float y, float z) {
+  Mat4 t = Mat4::identity();
+  t.m[12] = x;
+  t.m[13] = y;
+  t.m[14] = z;
+  return t;
+}
+
+// FrameParams sky (0..1 floats) as the framebuffer's 0xAARRGGBB clear color:
+// sky {0.58, 0.70, 0.86} -> 0xFF94B3DB, the wafer day sky the MCP capture
+// path clears with.
+static uint32_t swSkyColor(const Vec3& sky) {
+  auto ch = [](float c) {
+    return uint32_t(std::lround(std::clamp(c, 0.0f, 1.0f) * 255.0f));
+  };
+  return 0xFF000000u | (ch(sky.x) << 16) | (ch(sky.y) << 8) | ch(sky.z);
+}
+
+void SoftwareRenderer::rasterizeBlendSprite(const BlendSprite& s) {
+  // Two triangles (0,1,2) + (0,2,3), barycentric like rasterizeTriangle,
+  // with backface culling, a depth TEST against the world depth buffer,
+  // and NO depth write: a nearer blended sprite must not occlude a farther
+  // one drawn after it (producer order is back-to-front).
+  const int tris[2][3] = {{0, 1, 2}, {0, 2, 3}};
+  for (const auto& t : tris) {
+    const float* v0 = s.v[t[0]];
+    const float* v1 = s.v[t[1]];
+    const float* v2 = s.v[t[2]];
+    if (isBackface(v0, v1, v2)) continue;
+    const int x0 = std::max(0, int(std::floor(std::min({v0[0], v1[0], v2[0]}))));
+    const int x1 = std::min(int(fb_.width) - 1, int(std::ceil(std::max({v0[0], v1[0], v2[0]}))));
+    const int y0 = std::max(0, int(std::floor(std::min({v0[1], v1[1], v2[1]}))));
+    const int y1 = std::min(int(fb_.height) - 1, int(std::ceil(std::max({v0[1], v1[1], v2[1]}))));
+    auto edgeFn = [](const float* a, const float* b, float x, float y) {
+      return (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+    };
+    const float area = edgeFn(v0, v1, v2[0], v2[1]);
+    if (std::abs(area) < 1e-9f) continue;
+    for (int y = y0; y <= y1; ++y) {
+      for (int x = x0; x <= x1; ++x) {
+        const float px = x + 0.5f, py = y + 0.5f;
+        const float w0 = edgeFn(v1, v2, px, py) / area;
+        const float w1 = edgeFn(v2, v0, px, py) / area;
+        const float w2 = edgeFn(v0, v1, px, py) / area;
+        if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+        const float depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2];
+        const size_t idx = size_t(y) * fb_.width + size_t(x);
+        if (!(depth < depth_[idx])) continue;  // test only; depth_ untouched
+        const uint32_t dst = fb_.pixels[idx];
+        const float dr = float((dst >> 16) & 0xFF), dg = float((dst >> 8) & 0xFF),
+                    db = float(dst & 0xFF);
+        float r, g, b;
+        if (s.additive) {
+          r = dr + s.r * s.a * 255.f;
+          g = dg + s.g * s.a * 255.f;
+          b = db + s.b * s.a * 255.f;
+        } else {
+          r = dr + (s.r * 255.f - dr) * s.a;
+          g = dg + (s.g * 255.f - dg) * s.a;
+          b = db + (s.b * 255.f - db) * s.a;
+        }
+        auto ch = [](float v) { return uint32_t(std::clamp(v, 0.f, 255.f) + 0.5f); };
+        fb_.pixels[idx] = 0xFF000000u | (ch(r) << 16) | (ch(g) << 8) | ch(b);
+      }
+    }
+  }
+}
+
+void SoftwareRenderer::drawSprites(const FrameParams& p) {
+  if (!p.spriteQuads || p.spriteQuadCount == 0) return;
+  // The game sprite host's software conversion (sprite_host.cpp), mirrored:
+  // each SpriteDrawQuad becomes 4 PackedVerts relative to a 16-aligned
+  // origin 1024 blocks below the camera on each axis (so live sprites land
+  // inside the uint16 local range on the positive side; quads outside are
+  // skipped), shaded flat with the luminance of the sprite's atlas-average
+  // color x tint on face 2 (faceColor's unshaded face). The host averages
+  // the def's frame-0 atlas rect; here the average is taken over the quad's
+  // own uv rect on its atlas page — the same region for frame 0, and the
+  // drawn frame's region for later animation frames.
+  const Vec3 origin{std::floor((p.camPos.x - 1024.f) / 16.f) * 16.f,
+                    std::floor((p.camPos.y - 1024.f) / 16.f) * 16.f,
+                    std::floor((p.camPos.z - 1024.f) / 16.f) * 16.f};
+  // Average-color cache (D-M2): keyed by (atlas version, page, pixel
+  // rect); a version move clears it wholesale. The average itself is
+  // summed directly over the page rect — no per-quad temp Image/vector.
+  if (spriteAvgVersion_ != p.spriteAtlasVersion) {
+    spriteAvgCache_.clear();
+    spriteAvgVersion_ = p.spriteAtlasVersion;
+  }
+  auto avgColorOf = [&](const SpriteDrawQuad& q) -> std::array<float, 4> {
+    std::array<float, 4> avg{1.f, 1.f, 1.f, 1.f};  // fallback: white (as the host)
+    if (q.page < 0 || size_t(q.page) >= p.spriteAtlasPages.size()) return avg;
+    const Image& page = p.spriteAtlasPages[size_t(q.page)];
+    if (page.empty() || page.width() <= 0 || page.height() <= 0) return avg;
+    float u0 = q.uv[0][0], v0 = q.uv[0][1], u1 = u0, v1 = v0;
+    for (int i = 1; i < 4; ++i) {
+      u0 = std::min(u0, q.uv[i][0]);
+      v0 = std::min(v0, q.uv[i][1]);
+      u1 = std::max(u1, q.uv[i][0]);
+      v1 = std::max(v1, q.uv[i][1]);
+    }
+    const int x0 = std::clamp(int(std::lround(u0 * float(page.width()))), 0, page.width());
+    const int y0 = std::clamp(int(std::lround(v0 * float(page.height()))), 0, page.height());
+    const int x1 = std::clamp(int(std::lround(u1 * float(page.width()))), 0, page.width());
+    const int y1 = std::clamp(int(std::lround(v1 * float(page.height()))), 0, page.height());
+    if (x1 <= x0 || y1 <= y0) return avg;
+    const SpriteAvgKey key{p.spriteAtlasVersion, q.page, x0, y0, x1, y1};
+    if (const auto it = spriteAvgCache_.find(key); it != spriteAvgCache_.end()) return it->second;
+    // Same weighting as Image::averageColor (alpha-weighted RGB), plus the
+    // plain mean alpha the blend modes need.
+    double s[3] = {0, 0, 0}, wsum = 0, asum = 0;
+    for (int y = y0; y < y1; ++y)
+      for (int x = x0; x < x1; ++x) {
+        const uint8_t* px = page.pixel(x, y);
+        const double a = px[3] / 255.0;
+        for (int c = 0; c < 3; ++c) s[c] += a * px[c] / 255.0;
+        wsum += a;
+        asum += a;
+      }
+    if (wsum > 0) {
+      const double n = double(x1 - x0) * double(y1 - y0);
+      avg = {float(s[0] / wsum), float(s[1] / wsum), float(s[2] / wsum), float(asum / n)};
+    }
+    spriteAvgCache_.emplace(key, avg);
+    return avg;
+  };
+  spriteScratch_.clear();
+  spriteScratch_.reserve(p.spriteQuadCount * 4);
+  spriteBlendScratch_.clear();
+  const Mat4 mvp = mul(p.viewProj, swTranslation(origin.x, origin.y, origin.z));
+  for (size_t qi = 0; qi < p.spriteQuadCount; ++qi) {
+    const SpriteDrawQuad& q = p.spriteQuads[qi];
+    const std::array<float, 4> avg = avgColorOf(q);
+    PackedVertex pv[4];
+    bool inRange = true;
+    for (int i = 0; i < 4; ++i) {
+      const float lx = (q.corners[i].x - origin.x) * 16.f;
+      const float ly = (q.corners[i].y - origin.y) * 16.f;
+      const float lz = (q.corners[i].z - origin.z) * 16.f;
+      if (lx < 0.f || ly < 0.f || lz < 0.f || lx > 65535.f || ly > 65535.f || lz > 65535.f)
+        inRange = false;
+      pv[i].x = uint16_t(std::clamp(lx, 0.f, 65535.f));
+      pv[i].y = uint16_t(std::clamp(ly, 0.f, 65535.f));
+      pv[i].z = uint16_t(std::clamp(lz, 0.f, 65535.f));
+      pv[i].u = 0;
+      pv[i].v = 0;
+      pv[i].faceAo = 2;  // face 2 = top: faceColor's unshaded (1.0) face
+      pv[i].layer = 0;
+      pv[i].mode = kShadeTex;
+      pv[i].slot = 0;
+    }
+    if (!inRange) continue;
+    const bool blended = q.shade == kShadeAlphaBlend || q.shade == kShadeAdditive;
+    if (!blended) {
+      const float lum = std::clamp(0.2126f * avg[0] * q.r + 0.7152f * avg[1] * q.g +
+                                       0.0722f * avg[2] * q.b,
+                                   0.f, 1.f);
+      for (PackedVertex& v : pv) v.value = uint8_t(std::lround(lum * 255.f));
+      for (const PackedVertex& v : pv) spriteScratch_.push_back(v);
+    } else {
+      // Blended: keep the quad's TRUE average color x tint (the flat
+      // luminance collapse is the opaque path's documented form; blending
+      // a gray would lose the sprite's hue for no benefit).
+      BlendSprite bs;
+      bs.r = std::clamp(avg[0] * q.r, 0.f, 1.f);
+      bs.g = std::clamp(avg[1] * q.g, 0.f, 1.f);
+      bs.b = std::clamp(avg[2] * q.b, 0.f, 1.f);
+      bs.a = std::clamp(avg[3] * q.a, 0.f, 1.f);
+      bs.additive = q.shade == kShadeAdditive;
+      if (ditherEnabled_) {
+        // Model dithering for blended sprites (JD 2026-10-13): fade the
+        // whole billboard by its NEAREST corner's distance to the camera —
+        // per-sprite, not per-pixel (the opaque paths dither per-pixel in
+        // the rasterizers; a translucent quad reads better as a fade).
+        float dmin = 1e30f;
+        for (int i = 0; i < 4; ++i) {
+          const float dx = q.corners[i].x - p.camPos.x;
+          const float dy = q.corners[i].y - p.camPos.y;
+          const float dz = q.corners[i].z - p.camPos.z;
+          dmin = std::min(dmin, std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        bs.a *= modelDitherFade(dmin, ditherNear_, ditherFar_);
+        if (bs.a <= 0.f) continue;  // fully faded: skip the quad entirely
+      }
+      const float* screen = transformVerts(pv, 4, mvp.m);
+      bool visible = true;
+      for (int i = 0; i < 4; ++i) {
+        if (screen[i * 4 + 3] <= 0) visible = false;
+        for (int k = 0; k < 4; ++k) bs.v[i][k] = screen[i * 4 + k];
+      }
+      if (visible) spriteBlendScratch_.push_back(bs);
+    }
+  }
+  // Producer order is cutout-first, then blended back-to-front: drawing
+  // the opaque batch first and the blended quads in order reproduces the
+  // FrameParams contract exactly.
+  if (!spriteScratch_.empty()) renderFlatQuads(spriteScratch_.data(), spriteScratch_.size(), mvp.m);
+  for (const BlendSprite& bs : spriteBlendScratch_) rasterizeBlendSprite(bs);
+}
+
+void SoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
+  // BinaryQuad (PBR) meshes: positions convert to PackedVertex-shaped verts
+  // for the shared transform; the varyings carry the REAL per-vertex compact
+  // material ID (PbrQuadVertex::material) — the fix for the classic path's
+  // 0xFFFF seam (H2). Shading is pbrFragmentShader through the effective
+  // context (external setPbrContext, else the owned setPbrMaterials one);
+  // with neither, it falls back to basic per fragment, never black.
+  frameLights_.frame = &p;
+  if (pbrMaterials_) {
+    ownedPbrCtx_.camX = p.camPos.x;
+    ownedPbrCtx_.camY = p.camPos.y;
+    ownedPbrCtx_.camZ = p.camPos.z;
+  }
+  for (const auto& [key, m] : pbrMeshes_) {
+    (void)key;
+    const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
+    if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos,
+                          frustumMarginDeg_) != CullDecision::Full)
+      continue;
+    const Mat4 mvp = mul(p.viewProj, swTranslation(mn.x, mn.y, mn.z));
+    pbrScratch_.clear();
+    pbrScratchMat_.clear();
+    pbrScratch_.reserve(m.verts.size());
+    pbrScratchMat_.reserve(m.verts.size());
+    for (const PbrQuadVertex& v : m.verts) {
+      PackedVertex pv{};
+      pv.x = v.x; pv.y = v.y; pv.z = v.z;
+      pv.faceAo = uint8_t(v.face & 7);
+      pbrScratch_.push_back(pv);
+      pbrScratchMat_.push_back(v.material);
+    }
+    const float* screen = transformVerts(pbrScratch_.data(), pbrScratch_.size(), mvp.m);
+    auto quadVisible = [&](size_t i) {
+      return screen[i*4+3] > 0 && screen[(i+1)*4+3] > 0 &&
+             screen[(i+2)*4+3] > 0 && screen[(i+3)*4+3] > 0;
+    };
+    static const float kFaceNormals[6][3] = {
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    ShaderVaryings sv[4];
+    for (size_t i = 0; i + 3 < pbrScratch_.size(); i += 4) {
+      if (!quadVisible(i)) continue;
+      // Per-quad flood-fill levels ride the owned context (its block/sky
+      // fields are context-global; the rasterizer is synchronous, so
+      // setting them per quad is exact). External contexts are the
+      // caller's own — theirs stay untouched.
+      if (!pbrContext_ && pbrMaterials_) {
+        ownedPbrCtx_.blockLight = m.verts[i].blockLight;
+        ownedPbrCtx_.skyLight = m.verts[i].skyLight;
+      }
+      for (int k = 0; k < 4; ++k) {
+        const PbrQuadVertex& v = m.verts[i + k];
+        const uint32_t face = v.face < 6 ? v.face : 2;
+        sv[k].nx = kFaceNormals[face][0];
+        sv[k].ny = kFaceNormals[face][1];
+        sv[k].nz = kFaceNormals[face][2];
+        sv[k].u = 0.f; sv[k].v = 0.f; sv[k].layer = 0;
+        sv[k].wx = mn.x + v.x / 16.f;  // world position (view dir + lights)
+        sv[k].wy = mn.y + v.y / 16.f;
+        sv[k].wz = mn.z + v.z / 16.f;
+        sv[k].materialId = uint16_t(pbrScratchMat_[i + k] & 0xFFFFu);
+      }
+      rasterizeTriangleShaded(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4],
+                              &sv[0], &sv[1], &sv[2], &pbrFragmentShader);
+      rasterizeTriangleShaded(&screen[i*4], &screen[(i+2)*4], &screen[(i+3)*4],
+                              &sv[0], &sv[2], &sv[3], &pbrFragmentShader);
+    }
+    ++stats_.drawn;
+  }
+  frameLights_.frame = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// HUD overlay (P1-RENDER H3): CPU rasterizer for buildHudVertices output.
+// Mirrors the GL33 hud program: pixel-space triangles, no depth test,
+// src-over blending in paint order; u < 0 = solid rect, otherwise the font
+// atlas coverage (NEAREST, like GL) multiplies the vertex alpha.
+// ---------------------------------------------------------------------------
+
+void SoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, float a) {
+  if (x < 0 || y < 0 || x >= int(fb_.width) || y >= int(fb_.height)) return;
+  if (a <= 0.f) return;
+  uint32_t& dst = fb_.pixels[size_t(y) * fb_.width + size_t(x)];
+  if (a >= 1.f) {
+    dst = 0xFF000000u | (uint32_t(std::lround(std::clamp(r, 0.f, 1.f) * 255.f)) << 16) |
+          (uint32_t(std::lround(std::clamp(g, 0.f, 1.f) * 255.f)) << 8) |
+          uint32_t(std::lround(std::clamp(b, 0.f, 1.f) * 255.f));
+    return;
+  }
+  const float ia = 1.f - a;
+  const float dr = float((dst >> 16) & 0xFF) / 255.f, dg = float((dst >> 8) & 0xFF) / 255.f,
+              db = float(dst & 0xFF) / 255.f;
+  dst = 0xFF000000u |
+        (uint32_t(std::lround(std::clamp(r * a + dr * ia, 0.f, 1.f) * 255.f)) << 16) |
+        (uint32_t(std::lround(std::clamp(g * a + dg * ia, 0.f, 1.f) * 255.f)) << 8) |
+        uint32_t(std::lround(std::clamp(b * a + db * ia, 0.f, 1.f) * 255.f));
+}
+
+void SoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex& B,
+                                            const HudVertex& C) {
+  const float area = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+  if (std::abs(area) < 1e-9f) return;
+  const int x0 = std::max(0, int(std::floor(std::min({A.x, B.x, C.x}))));
+  const int x1 = std::min(int(fb_.width) - 1, int(std::ceil(std::max({A.x, B.x, C.x}))));
+  const int y0 = std::max(0, int(std::floor(std::min({A.y, B.y, C.y}))));
+  const int y1 = std::min(int(fb_.height) - 1, int(std::ceil(std::max({A.y, B.y, C.y}))));
+  auto edge = [](const HudVertex& a, const HudVertex& b, float x, float y) {
+    return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+  };
+  for (int y = y0; y <= y1; ++y) {
+    for (int x = x0; x <= x1; ++x) {
+      const float px = x + 0.5f, py = y + 0.5f;
+      const float w0 = edge(B, C, px, py) / area;
+      const float w1 = edge(C, A, px, py) / area;
+      const float w2 = edge(A, B, px, py) / area;
+      if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+      const float u = w0 * A.u + w1 * B.u + w2 * C.u;
+      const float v = w0 * A.v + w1 * B.v + w2 * C.v;
+      const float r = w0 * A.r + w1 * B.r + w2 * C.r;
+      const float g = w0 * A.g + w1 * B.g + w2 * C.g;
+      const float b = w0 * A.b + w1 * B.b + w2 * C.b;
+      float a = w0 * A.a + w1 * B.a + w2 * C.a;
+      if (u >= 0.f) {  // glyph: font-atlas coverage multiplies alpha (hud.frag)
+        if (!hudAtlasReady_) {
+          hudAtlas_ = buildHudFontAtlas();
+          hudAtlasReady_ = true;
+        }
+        const int tx = std::clamp(int(u * float(hudAtlas_.width)), 0, hudAtlas_.width - 1);
+        const int ty = std::clamp(int(v * float(hudAtlas_.height)), 0, hudAtlas_.height - 1);
+        a *= float(hudAtlas_.pixels[size_t(ty) * size_t(hudAtlas_.width) + size_t(tx)]) / 255.f;
+      }
+      blendPixel(x, y, r, g, b, a);
+    }
+  }
+}
+
+void SoftwareRenderer::drawHud(const FrameParams& p) {
+  if (p.hud.rects.empty() && p.hud.texts.empty() && p.hud.draws.empty()) return;
+  buildHudVertices(p.hud, hudVerts_);
+  for (size_t i = 0; i + 2 < hudVerts_.size(); i += 3)
+    rasterizeHudTriangle(hudVerts_[i], hudVerts_[i + 1], hudVerts_[i + 2]);
+}
+
+// World-space line segment, depth-tested against depth_ (highlight outline:
+// GL draws it with depth test on). Projected with the frame viewProj;
+// segments crossing the near plane are clipped coarsely (endpoint w test —
+// the outline is 12 short edges around one block, so a fully-inside test
+// per endpoint with 32 subdivisions is ample).
+void SoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const Vec3& b,
+                                     uint32_t color) {
+  auto project = [&](const Vec3& v, float out[3]) {
+    const float* m = p.viewProj.m;
+    const float cx = m[0]*v.x + m[4]*v.y + m[8]*v.z + m[12];
+    const float cy = m[1]*v.x + m[5]*v.y + m[9]*v.z + m[13];
+    const float cz = m[2]*v.x + m[6]*v.y + m[10]*v.z + m[14];
+    const float cw = m[3]*v.x + m[7]*v.y + m[11]*v.z + m[15];
+    if (cw <= 1e-6f) return false;
+    const float inv = 1.f / cw;
+    out[0] = (cx * inv * 0.5f + 0.5f) * float(fb_.width);
+    out[1] = (1.f - (cy * inv * 0.5f + 0.5f)) * float(fb_.height);
+    out[2] = cz * inv;
+    return true;
+  };
+  constexpr int kSteps = 32;
+  float prev[3];
+  bool havePrev = project(a, prev);
+  for (int i = 1; i <= kSteps; ++i) {
+    const float t = float(i) / kSteps;
+    const Vec3 v{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
+    float cur[3];
+    const bool ok = project(v, cur);
+    if (ok && havePrev) {
+      const int x = int(std::lround(cur[0] - 0.5f)), y = int(std::lround(cur[1] - 0.5f));
+      if (x >= 0 && y >= 0 && x < int(fb_.width) && y < int(fb_.height)) {
+        const size_t idx = size_t(y) * fb_.width + size_t(x);
+        if (cur[2] < depth_[idx]) fb_.pixels[idx] = color;
+      }
+    }
+    if (ok) std::memcpy(prev, cur, sizeof prev);
+    havePrev = ok;
+  }
+}
+
+// NDC line segment, no depth test (crosshair: GL draws it on top). NDC y is
+// up; the framebuffer is y-down.
+void SoftwareRenderer::drawNdcLine(const Vec3& a, const Vec3& b, uint32_t color) {
+  constexpr int kSteps = 64;
+  for (int i = 0; i <= kSteps; ++i) {
+    const float t = float(i) / kSteps;
+    const float nx = a.x + (b.x - a.x) * t, ny = a.y + (b.y - a.y) * t;
+    const int x = int(std::lround((nx * 0.5f + 0.5f) * float(fb_.width) - 0.5f));
+    const int y = int(std::lround((1.f - (ny * 0.5f + 0.5f)) * float(fb_.height) - 0.5f));
+    if (x >= 0 && y >= 0 && x < int(fb_.width) && y < int(fb_.height))
+      fb_.pixels[size_t(y) * fb_.width + size_t(x)] = color;
+  }
+}
+
+void SoftwareRenderer::drawOverlayLines(const FrameParams& p) {
+  if (p.highlight) {
+    const auto lines = blockOutlineLines(p.hx, p.hy, p.hz);
+    for (size_t i = 0; i + 1 < lines.size(); i += 2)
+      drawWorldLine(p, lines[i], lines[i + 1], 0xFF0D0D14u);  // GL line color (0.05,0.05,0.08)
+  }
+  if (p.crosshair && p.height > 0) {
+    const auto lines = crosshairLines(p.width, p.height);
+    for (size_t i = 0; i + 1 < lines.size(); i += 2)
+      drawNdcLine(lines[i], lines[i + 1], 0xFFFFFFFFu);
+  }
+}
+
+namespace {
+struct SwProf {
+  bool on = std::getenv("LL_SW_PROF") != nullptr;
+  double acc[8] = {}; int frames = 0;
+  std::chrono::steady_clock::time_point t;
+  void mark(int i) { if (!on) return; auto n = std::chrono::steady_clock::now(); acc[i] += std::chrono::duration<double, std::milli>(n - t).count(); t = n; }
+  void start() { if (on) t = std::chrono::steady_clock::now(); }
+  void end() {
+    if (!on || ++frames < 60) return;
+    std::fprintf(stderr, "swprof tris=%llu scan=%llu cov=%llu shade=%llu /frame\n", (unsigned long long)(g_tris.exchange(0)/frames), (unsigned long long)(g_pxScan.exchange(0)/frames), (unsigned long long)(g_pxCov.exchange(0)/frames), (unsigned long long)(g_pxShade.exchange(0)/frames));
+    std::fprintf(stderr, "swprof hiz_rows_skipped=%llu /frame\n", (unsigned long long)(g_hizRows.exchange(0)/frames));  // Cortana 2026-10-15 1715
+    std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
+                 acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
+    for (double& a : acc) a = 0; frames = 0;
+  }
+};
+SwProf g_swProf;
+}  // namespace
+
+void SoftwareRenderer::renderFrame(const FrameParams& p) {
+  g_swProf.start();
+  if (p.width <= 0 || p.height <= 0) return;  // as the Vulkan backend
+  // SSAA2x (JD 2026-10-13): the world stage rasterizes at 2x in both axes
+  // and box-resolves to the target size before the overlay/HUD stage, so
+  // HUD and crosshair stay at native resolution (never supersampled).
+  const bool ssaa = aaMode_ == SoftwareAaMode::Ssaa2x;
+  const uint32_t targetW = uint32_t(p.width), targetH = uint32_t(p.height);
+  const uint32_t renderW = ssaa ? targetW * 2 : targetW;
+  const uint32_t renderH = ssaa ? targetH * 2 : targetH;
+  if (fb_.width != renderW || fb_.height != renderH) resize(renderW, renderH);
+  clear(swSkyColor(p.sky));
+  // Culling prototypes + frustum margin (M1): beginFrame arms the comet /
+  // velocity state; decide() then culls per mesh exactly like GL/VK. All
+  // prototypes default off, so decide() is the plain margin test.
+  cullProto_.beginFrame(p.viewProj, p.yawRad, p.pitchRad, p.timeSec);
+  stats_.meshes = uint32_t(meshes_.size() + pbrMeshes_.size());
+  stats_.drawn = 0;
+  // Stored chunk meshes at their sub-chunk origins (the same per-mesh
+  // translation the MCP capture path bakes into its MVP), in key order.
+  // Depth testing makes the order immaterial for the opaque world.
+  // stats_.drawn counts only meshes actually submitted (post-cull), like
+  // the GPU backends (fixes the L6 comparability gap).
+  // RND-H4 (2026-10-15): cull first, then draw the visible meshes
+  // front-to-back (nearest centre first) so the depth test rejects hidden
+  // pixels before they are shaded. Ties keep key order (stable sort), so
+  // the result is reproducible frame to frame.
+  drawOrder_.clear();
+  for (auto& [key, m] : meshes_) {
+    (void)key;
+    const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
+    if (m.hasLod) {  // Cortana 2026-10-16: per-sub-chunk LOD by horizontal centre distance
+      const float lx = mn.x + 8.f - p.camPos.x, lz = mn.z + 8.f - p.camPos.z;
+      const bool far = lx * lx + lz * lz > kLodSwitchBlocks * kLodSwitchBlocks;
+      if (far != m.showingFar) { m.verts.swap(m.lodOther); m.showingFar = far; }
+    }
+    if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos,
+                          frustumMarginDeg_) != CullDecision::Full)
+      continue;
+    const float dx = mn.x + 8.f - p.camPos.x, dy = mn.y + 8.f - p.camPos.y, dz = mn.z + 8.f - p.camPos.z;
+    drawOrder_.emplace_back(dx * dx + dy * dy + dz * dz, &m);
+  }
+  std::stable_sort(drawOrder_.begin(), drawOrder_.end(),
+                   [](const auto& a, const auto& b) { return a.first < b.first; });
+  // RND-H3 banding (2026-10-15): each band thread walks the same
+  // front-to-back list but only writes its own rows, so the output is
+  // identical to the serial pass (per-pixel depth test, same order per row).
+  // Per-mesh screen row span from the 8 projected AABB corners, computed
+  // once on the calling thread. Any corner at w <= 0 (camera inside or
+  // behind) => conservatively the whole screen.
+  meshRowY0_.resize(drawOrder_.size());
+  meshRowY1_.resize(drawOrder_.size());
+  for (size_t di = 0; di < drawOrder_.size(); ++di) {
+    const StoredMesh& m = *drawOrder_[di].second;
+    const float* M = p.viewProj.m;
+    float ymin = 1e30f, ymax = -1e30f;
+    bool full = false;
+    for (int c = 0; c < 8 && !full; ++c) {
+      const float x = m.cx * 16.f + ((c & 1) ? 16.f : 0.f);
+      const float y = m.sy * 16.f + ((c & 2) ? 16.f : 0.f);
+      const float z = m.cz * 16.f + ((c & 4) ? 16.f : 0.f);
+      const float cy = M[1]*x + M[5]*y + M[9]*z + M[13];
+      const float cw = M[3]*x + M[7]*y + M[11]*z + M[15];
+      if (cw <= 1e-4f) { full = true; break; }
+      const float sy = (1.0f - (cy / cw * 0.5f + 0.5f)) * float(fb_.height);
+      ymin = std::min(ymin, sy); ymax = std::max(ymax, sy);
+    }
+    if (full) { meshRowY0_[di] = 0; meshRowY1_[di] = int(fb_.height); }
+    else {
+      meshRowY0_[di] = int(std::floor(std::max(-1.0f, ymin))) - 2;
+      meshRowY1_[di] = int(std::ceil(std::min(float(fb_.height) + 1.0f, ymax))) + 2;
+    }
+  }
+  g_swProf.mark(0);
+  SwBandPool& bandPool = SwBandPool::get();
+  // Cortana 2026-10-15 1112: transform every drawn mesh's verts ONCE (split
+  // across the band threads by mesh), instead of once per band. Same
+  // transformVertex math, so the screen positions are bit-identical.
+  meshScreenOff_.resize(drawOrder_.size() + 1);
+  meshScreenOff_[0] = 0;
+  for (size_t di = 0; di < drawOrder_.size(); ++di)
+    meshScreenOff_[di + 1] = meshScreenOff_[di] + drawOrder_[di].second->verts.size() * 4;
+  if (frameScreen_.size() < meshScreenOff_.back()) frameScreen_.resize(meshScreenOff_.back());
+  constexpr int kStripHF = 32;
+  const int nStripsF = int((fb_.height + kStripHF - 1) / kStripHF);
+  if (meshBins_.size() < drawOrder_.size()) { meshBins_.resize(drawOrder_.size()); meshBinOff_.resize(drawOrder_.size()); }
+  if (binFill_.size() < 64) binFill_.resize(64);
+  {
+    bandPool.run([&](unsigned band) {
+      const unsigned nb = bandPool.bands();  // read inside run: count may change between frames
+      for (size_t di = band; di < drawOrder_.size(); di += nb) {
+        const StoredMesh& m = *drawOrder_[di].second;
+        const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
+        const Mat4 mvp = mul(p.viewProj, swTranslation(mn.x, mn.y, mn.z));
+        float* dst = frameScreen_.data() + meshScreenOff_[di];
+        for (size_t i = 0, n = m.verts.size(); i < n; ++i)
+          transformVertex(m.verts[i], mvp.m, dst + i * 4, fb_.width, fb_.height);
+        // Cortana 2026-10-15 1255: bin quads by 32-row strip (CSR per mesh)
+        // so a strip visits only quads that can touch it, instead of every
+        // quad of every mesh once per strip. Conservative (+-1 row); the
+        // rasterizer's own band clamp stays the authority, so pixels are
+        // unchanged. Quads with any w <= 0 (near-clip path) go to every strip.
+        if (perPixel_) {
+          const size_t nqd = m.verts.size() / 4;
+          auto& off = meshBinOff_[di];
+          auto& bins = meshBins_[di];
+          off.assign(size_t(nStripsF) + 1, 0u);
+          auto range = [&](size_t q, int& s0, int& s1) {
+            const float* s = dst + q * 16;
+            if (!(s[3] > 0 && s[7] > 0 && s[11] > 0 && s[15] > 0)) { s0 = 0; s1 = nStripsF - 1; return; }
+            const float y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
+            const float y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
+            if (!(y1 >= -1.f) || !(y0 <= float(fb_.height) + 1.f)) { s0 = 1; s1 = 0; return; }
+            s0 = std::max(0, int(std::floor(y0)) - 1) / kStripHF;
+            s1 = std::min(int(fb_.height) - 1, int(std::ceil(y1)) + 1) / kStripHF;
+          };
+          for (size_t q = 0; q < nqd; ++q) { int s0, s1; range(q, s0, s1); for (int s = s0; s <= s1; ++s) ++off[size_t(s) + 1]; }
+          for (int s = 0; s < nStripsF; ++s) off[size_t(s) + 1] += off[size_t(s)];
+          bins.resize(off[size_t(nStripsF)]);
+          binFill_[band].assign(off.begin(), off.end() - 1);
+          auto& fill = binFill_[band];
+          for (size_t q = 0; q < nqd; ++q) { int s0, s1; range(q, s0, s1); for (int s = s0; s <= s1; ++s) bins[fill[size_t(s)]++] = uint32_t(q); }
+        }
+      }
+    });
+  }
+  g_swProf.mark(1);
+  // Cortana 2026-10-15 1116: 32-row strips (power of two; colour+depth of a
+  // 1280-wide strip is ~320 KB, inside one i5-12450H core's L2) handed out
+  // dynamically, so the dense horizon strips don't leave threads idle.
+  constexpr int kStripH = 32;
+  const int nStrips = int((fb_.height + kStripH - 1) / kStripH);
+  std::atomic<int> nextStrip{0};
+  const auto drawBand = [&](unsigned) {
+   for (int strip; (strip = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nStrips;) {
+   tlBandY0 = strip * kStripH;
+   tlBandY1 = std::min(int(fb_.height), tlBandY0 + kStripH);
+   // Cortana 2026-10-15 1755 [ENGINE]: pass 0 = opaque front-to-back (as before); pass 1 =
+   // the strip's kShadeAlphaBlend quads far-to-near over meshes that have any (per-pixel
+   // path only; meshes without blend quads keep the unfiltered pass-0 path).
+   for (int pass = 0; pass < 2; ++pass) {
+   for (size_t oi = 0; oi < drawOrder_.size(); ++oi) {
+    const size_t di = pass == 0 ? oi : drawOrder_.size() - 1 - oi;
+    if (pass == 1 && (!perPixel_ || !drawOrder_[di].second->hasBlend)) continue;
+    if (meshRowY0_[di] >= tlBandY1 || meshRowY1_[di] < tlBandY0) continue;  // mesh misses this band
+    const StoredMesh& m = *drawOrder_[di].second;
+    const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
+    const Mat4 mvp = mul(p.viewProj, swTranslation(mn.x, mn.y, mn.z));
+    // Ground pulse + traces for this mesh (per-pixel path only; the flat
+    // path has no fragment hook and stays as it was).
+    groundFx_ = GroundFx{};
+    for (int i = 0; i < 4; ++i) {
+      groundFx_.pulseP0[i] = m.pulseP0[i];
+      groundFx_.pulseP1[i] = m.pulseP1[i];
+      groundFx_.traceP0[i] = m.traceP0[i];
+      groundFx_.traceP1[i] = m.traceP1[i];
+    }
+    groundFx_.pulseTimeSec = p.groundPulseTimeSec;
+    groundFx_.traceTimeSec = p.groundTraceTimeSec;
+    groundFx_.pulseOn = p.groundPulseOn;
+    groundFx_.traceOn = p.groundTraceOn;
+    meshOriginX_ = mn.x; meshOriginY_ = mn.y; meshOriginZ_ = mn.z;
+    if (perPixel_) {
+      const auto& off = meshBinOff_[di];
+      const uint32_t b0 = off[size_t(strip)], b1 = off[size_t(strip) + 1];
+      if (b0 == b1) continue;
+      tlQuadList = meshBins_[di].data() + b0;
+      tlQuadCount = b1 - b0;
+    }
+    tlPreScreen = frameScreen_.data() + meshScreenOff_[di];
+    tlCullBack = true;
+    tlBlendPass = (perPixel_ && m.hasBlend) ? int8_t(pass) : int8_t(-1);
+    renderMesh(m.verts.data(), m.verts.size(), mvp.m);
+    tlBlendPass = -1;
+    tlCullBack = false;
+    tlPreScreen = nullptr;
+    tlQuadList = nullptr;
+   }
+   }
+   }
+   tlBandY0 = 0;
+   tlBandY1 = 1 << 30;
+   groundFx_ = GroundFx{};
+   meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
+  };
+  bandPool.run(drawBand);
+  g_swProf.mark(2);
+  stats_.drawn += uint32_t(drawOrder_.size());
+  groundFx_ = GroundFx{};
+  meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
+  renderPbrMeshes(p);
+  if (!entityVerts_.empty()) {
+    // GAME-H1: entity verts are 1/16-block offsets from entityOrigin_.
+    const Mat4 emvp = mul(p.viewProj, swTranslation(entityOrigin_[0], entityOrigin_[1], entityOrigin_[2]));
+    meshOriginX_ = entityOrigin_[0]; meshOriginY_ = entityOrigin_[1]; meshOriginZ_ = entityOrigin_[2];
+    renderEntityVerts(emvp.m);
+    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
+    ++stats_.drawn;
+  }
+  drawSprites(p);
+  g_swProf.mark(3);
+  // AA + ASCII stages (JD 2026-10-13): the world frame is finished here.
+  // SSAA resolves down to target size; fxaa/cmaa post-filter in place;
+  // ASCII (when on) then converts the AA'd frame to its glyph
+  // visualization. Overlays/HUD draw after, at native resolution.
+  if (ssaa) {
+    aaOut_.resize(targetW, targetH);
+    resolveSsaa2x(fb_, aaOut_);
+    fb_.width = targetW;
+    fb_.height = targetH;
+    fb_.pixels = std::move(aaOut_.pixels);
+    depth_.assign(size_t(targetW) * targetH, 1.0f);  // overlay depth tests start fresh
+    hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z bounds no longer valid (depth went UP)
+  } else {
+    applyAaPostPass();
+  }
+  if (asciiEnabled_) applyAsciiPass();
+  // Overlays (H3): highlight + crosshair lines, then the HUD layer — the
+  // same order the GPU backends draw them (lines before HUD).
+  drawOverlayLines(p);
+  drawHud(p);
+  if (grabArmed_) {
+    grabArmed_ = false;
+    grabW_ = int(fb_.width);
+    grabH_ = int(fb_.height);
+    grabRgb_.resize(size_t(grabW_) * size_t(grabH_) * 3);
+    for (size_t i = 0, n = size_t(grabW_) * size_t(grabH_); i < n; ++i) {
+      const uint32_t px = fb_.pixels[i];
+      grabRgb_[3 * i] = uint8_t((px >> 16) & 0xFF);
+      grabRgb_[3 * i + 1] = uint8_t((px >> 8) & 0xFF);
+      grabRgb_[3 * i + 2] = uint8_t(px & 0xFF);
+    }
+    grabReady_ = true;
+  }
+  g_swProf.mark(4);
+  g_swProf.end();
+  // Debug aid (Cortana 2026-10-15 1340): LL_SW_SHOT=<file.ppm> and
+  // LL_SW_SHOT_FRAME=<n> dump the finished frame n once (verification of
+  // renderer changes on real game frames; off unless the env var is set).
+  {
+    static const char* shot = std::getenv("LL_SW_SHOT");
+    static const int shotAt = std::getenv("LL_SW_SHOT_FRAME") ? std::atoi(std::getenv("LL_SW_SHOT_FRAME")) : 300;
+    static int frameNo = 0;
+    if (shot && ++frameNo == shotAt) {
+      if (FILE* f = std::fopen(shot, "wb")) {
+        std::fprintf(f, "P6\n%u %u\n255\n", fb_.width, fb_.height);
+        for (uint32_t px : fb_.pixels) { const uint8_t rgb[3] = {uint8_t(px >> 16), uint8_t(px >> 8), uint8_t(px)}; std::fwrite(rgb, 1, 3, f); }
+        std::fclose(f);
+      }
+    }
+  }}
+
+bool SoftwareRenderer::grabFramebuffer(std::vector<uint8_t>& rgb, int& w, int& h) {
+  if (!grabReady_) return false;
+  rgb = grabRgb_;
+  w = grabW_;
+  h = grabH_;
+  return true;
+}
+
+}  // namespace litholattice
+
+// Cortana 2026-10-15 1610 (ENGINE): Debug Overlay status strip (see header).
+namespace litholattice {
+void SoftwareRenderer::drawStatusStrip(uint32_t* px, int w, int h, const char* text) {
+  if (!px || w <= 0 || h < stripRows() || !text) return;
+  const int rows = stripRows();
+  for (int y = 0; y < rows; ++y)
+    for (int x = 0; x < w; ++x) {  // darken to ~25% (keeps the scene faintly visible)
+      uint32_t& p = px[size_t(y) * size_t(w) + size_t(x)];
+      p = 0xFF000000u | ((p >> 2) & 0x003F3F3Fu);
+    }
+  int x0 = 4;
+  for (const char* t = text; *t && x0 + font::kCellW <= w; ++t, x0 += font::kCellW) {
+    const int ci = int(static_cast<unsigned char>(*t)) - font::kFirst;
+    if (ci <= 0 || ci >= font::kCount) continue;  // space / non-printable
+    const char* g = font::kGlyphs[ci];
+    for (int gy = 0; gy < font::kCellH; ++gy)
+      for (int gx = 0; gx < font::kCellW; ++gx) {
+        const char d = g[gy * font::kCellW + gx];
+        const int cov = d >= 'a' ? d - 'a' + 10 : d >= 'A' ? d - 'A' + 10 : d - '0';
+        if (cov <= 0) continue;
+        uint32_t& p = px[size_t(gy + 1) * size_t(w) + size_t(x0 + gx)];
+        const uint32_t v = uint32_t(cov * 17), bg = p & 0xFFu;
+        const uint32_t l = (v * 255u + bg * (255u - v)) / 255u;
+        p = 0xFF000000u | (l << 16) | (l << 8) | l;
+      }
+  }
+}
+}  // namespace litholattice
+namespace litholattice { unsigned SoftwareRenderer::autoRenderThreads(unsigned n) { return swAutoRenderThreads(n); } }  // Cortana 2026-10-15 1450

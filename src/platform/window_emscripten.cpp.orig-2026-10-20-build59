@@ -1,0 +1,674 @@
+// Emscripten (browser) implementation of the Window interface — WASM checkpoint,
+// 2026-10-18 overnight; input backend landed 2026-10-19 (JD playtest report #1:
+// "controls don't work in the web browser"). NEW FILE: the native window.cpp is
+// untouched and still builds everywhere else; CMake selects this file instead
+// of window.cpp + glfw_input_backend.cpp only under EMSCRIPTEN (see
+// src/platform/CMakeLists.txt).
+//
+// Scope, stated honestly:
+// - The page's <canvas id="canvas"> is resized to the requested window size and
+//   framebufferSize() reports the canvas element size.
+// - Input is a REAL backend (class EmscriptenHtml5InputBackend below): DOM
+//   keyboard (document-level), mouse + wheel (canvas-level), pointer lock for
+//   cursor capture, window focus edges — translated into the same InputEvent
+//   stream the GLFW backend produces natively, with the same semantics
+//   (motion deltas always fed; the game applies them when it has the cursor
+//   captured; FocusLost releases everything held). Transport: main-thread
+//   JS listeners + a per-frame drain (see the transport note at the backend);
+//   emscripten_set_*_callback delivery proved dead in this configuration.
+// - swap() is a no-op: in the browser the canvas is composited by the page
+//   — but only at task boundaries. Build 50 note: presentation is NOT
+//   this function's job; the app's frame loop must yield (on web it is
+//   driven by emscripten_set_main_loop_arg — see app/main.cpp FrameCtx).
+//   emscripten_webgl_commit_frame() is a documented no-op in current
+//   browsers ('swap is implicit'), and explicitSwapControl changes
+//   nothing without it; both were tried and reverted 2026-10-19.
+// - glProcAddress() forwards to emscripten_webgl_get_proc_address, so the
+//   GL33 loader pattern compiles and links unchanged. For OpenGL33 windows
+//   create() also creates a real WebGL2 (GLES3) context on "#canvas"
+//   and makes it current, mirroring the native contract ("the GL 3.3 core
+//   context is current on return") — the software presenter's WebGL
+//   variant and the GL33 backend both build on it. Whether the GL33
+//   renderer's GLSL 330 shaders run is the pack's business (ES 3.00
+//   translations ride the wasm pack overlay), not this file's.
+// - No Vulkan in the browser: surface/extensions report unavailable, and the
+//   app's Vulkan request falls back exactly as it does on a Vulkan-less PC.
+#include "litholattice/platform/window.h"
+
+#include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
+#include <emscripten/html5_webgl.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <optional>
+
+#include "litholattice/core/log.h"
+
+namespace litholattice {
+
+namespace {
+
+double nowSeconds() { return emscripten_get_now() / 1000.0; }
+
+/// State shared between the input backend's poll() (which converts the
+/// main-thread listener records into events) and the Window (cursor
+/// capture + focus). Everything is touched on this (proxied) pthread; the
+/// mutex is belt-and-braces, not load-bearing.
+struct InputSharedState {
+  std::mutex mutex;
+  std::vector<InputEvent> queue;
+  std::atomic<bool> focused{true};
+  std::atomic<bool> pointerLocked{false};
+  std::atomic<bool> captureWanted{false};
+  std::atomic<int> focusLostEdges{0};
+  std::atomic<int> focusGainedEdges{0};
+  std::atomic<double> lastLockRequest{-1.0};
+  bool debugEcho = false;       // ?debuginput=1 in the page URL
+  int moveEchoBudget = 0;       // rate-limited mousemove echo (debug only)
+  bool haveCursor = false;      // last canvas-relative cursor position valid
+  double lastX = 0, lastY = 0;  // CSS pixels, canvas-relative
+  double cssW = 0, cssH = 0;    // canvas CSS size, refreshed by every drain
+  int fbW = 0, fbH = 0;         // canvas framebuffer size, same refresh
+
+  void push(const InputEvent& e) {
+    std::lock_guard lock(mutex);
+    queue.push_back(e);
+  }
+};
+
+/// DOM KeyboardEvent.code (physical key position, layout independent — the
+/// same basis GLFW key codes use) -> litholattice Key.
+Key keyFromDomCode(const char* code) {
+  const std::string_view c = code;
+  if (c.size() == 4 && c.starts_with("Key")) {
+    const char l = c[3];
+    if (l >= 'A' && l <= 'Z') return Key(int(Key::A) + (l - 'A'));
+  }
+  if (c.size() == 6 && c.starts_with("Digit")) {
+    const char d = c[5];
+    if (d >= '0' && d <= '9') return Key(int(Key::Num0) + (d - '0'));
+  }
+  if (c.size() == 7 && c.starts_with("Numpad")) {
+    const char d = c[6];
+    if (d >= '0' && d <= '9') return Key(int(Key::Num0) + (d - '0'));
+  }
+  if (c == "Space") return Key::Space;
+  if (c == "Enter" || c == "NumpadEnter") return Key::Enter;
+  if (c == "Escape") return Key::Escape;
+  if (c == "Backspace") return Key::Backspace;
+  if (c == "Tab") return Key::Tab;
+  if (c == "ShiftLeft") return Key::LeftShift;
+  if (c == "ShiftRight") return Key::RightShift;
+  if (c == "ControlLeft") return Key::LeftCtrl;
+  if (c == "ControlRight") return Key::RightCtrl;
+  if (c == "AltLeft") return Key::LeftAlt;
+  if (c == "AltRight") return Key::RightAlt;
+  if (c == "ArrowUp") return Key::Up;
+  if (c == "ArrowDown") return Key::Down;
+  if (c == "ArrowLeft") return Key::Left;
+  if (c == "ArrowRight") return Key::Right;
+  if (c == "Insert") return Key::Insert;
+  if (c == "Delete") return Key::Delete;
+  if (c == "Home") return Key::Home;
+  if (c == "End") return Key::End;
+  if (c == "PageUp") return Key::PageUp;
+  if (c == "PageDown") return Key::PageDown;
+  if (c == "Minus") return Key::Minus;
+  if (c == "Equal") return Key::Equal;
+  if (c == "BracketLeft") return Key::LeftBracket;
+  if (c == "BracketRight") return Key::RightBracket;
+  if (c == "Semicolon") return Key::Semicolon;
+  if (c == "Quote") return Key::Apostrophe;
+  if (c == "Comma") return Key::Comma;
+  if (c == "Period") return Key::Period;
+  if (c == "Slash") return Key::Slash;
+  if (c == "Backslash" || c == "IntlBackslash") return Key::Backslash;
+  if (c == "Backquote") return Key::GraveAccent;
+  if (c.size() >= 2 && c[0] == 'F') {  // F1..F12
+    int n = 0;
+    bool digits = true;
+    for (size_t i = 1; i < c.size(); ++i) {
+      if (c[i] < '0' || c[i] > '9') { digits = false; break; }
+      n = n * 10 + (c[i] - '0');
+    }
+    if (digits && n >= 1 && n <= 12) return Key(int(Key::F1) + (n - 1));
+  }
+  return Key::Unknown;
+}
+
+std::optional<MouseButton> buttonFromDom(unsigned short b) {
+  switch (b) {
+    case 0: return MouseButton::Left;
+    case 1: return MouseButton::Middle;
+    case 2: return MouseButton::Right;
+    case 3: return MouseButton::Back;
+    case 4: return MouseButton::Forward;
+    default: return std::nullopt;
+  }
+}
+
+/// First UTF-8 code point of a DOM `key` string, or 0 when it is a named
+/// (multi-character) key rather than text.
+char32_t firstCodePoint(const char* s) {
+  const auto* u = reinterpret_cast<const unsigned char*>(s);
+  if (!u[0]) return 0;
+  if (u[0] < 0x80) return u[0];
+  if ((u[0] & 0xE0) == 0xC0 && u[1]) return char32_t(((u[0] & 0x1F) << 6) | (u[1] & 0x3F));
+  if ((u[0] & 0xF0) == 0xE0 && u[1] && u[2]) return char32_t(((u[0] & 0x0F) << 12) | ((u[1] & 0x3F) << 6) | (u[2] & 0x3F));
+  if ((u[0] & 0xF8) == 0xF0 && u[1] && u[2] && u[3])
+    return char32_t(((u[0] & 0x07) << 18) | ((u[1] & 0x3F) << 12) | ((u[2] & 0x3F) << 6) | (u[3] & 0x3F));
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Input transport (rewritten 2026-10-19, fix run for JD's playtest report #1)
+//
+// The first transport registered C++ callbacks with emscripten_set_*_callback
+// from this (proxied) pthread. In this build configuration those callbacks
+// are NEVER delivered: an in-game diagnostic heartbeat (poll() counting
+// callback pushes) ran for minutes across two browsers runs and recorded
+// pushed=0 while the same page's plain JS listeners saw every event, and a
+// standalone probe with identical flags DID receive its callbacks — so the
+// mechanism is configuration-sensitive in a way we could not pin down and
+// must not depend on. This transport uses only pipes proven live in this
+// binary: MAIN_THREAD_EM_ASM hops to the browser main thread (the same hop
+// the debug-flag read and Window::setTitle already rely on) and poll().
+//
+// Main-thread JS listeners (installed once by the backend constructor)
+// serialize DOM events into window.__lkQ as pipe-delimited lines; poll()
+// drains the queue once per frame via one MAIN_THREAD_EM_ASM_INT that also
+// reports the canvas geometry, then converts records to InputEvents with
+// exactly the semantics the callback version had (same key map, same
+// consume rules, same echoes, same drag-look fallback).
+// ---------------------------------------------------------------------------
+
+/// Percent-decode a JS encodeURIComponent string back to raw UTF-8 bytes.
+std::string urlDecode(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  auto hexv = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '%' && i + 2 < s.size() && hexv(s[i + 1]) >= 0 && hexv(s[i + 2]) >= 0) {
+      out.push_back(char(hexv(s[i + 1]) * 16 + hexv(s[i + 2])));
+      i += 2;
+    } else {
+      out.push_back(s[i]);
+    }
+  }
+  return out;
+}
+
+std::vector<std::string_view> splitFields(std::string_view line) {
+  std::vector<std::string_view> f;
+  size_t b = 0;
+  while (true) {
+    const size_t p = line.find('|', b);
+    if (p == std::string_view::npos) { f.push_back(line.substr(b)); break; }
+    f.push_back(line.substr(b, p - b));
+    b = p + 1;
+  }
+  return f;
+}
+
+double fieldNum(const std::vector<std::string_view>& f, size_t i) {
+  if (i >= f.size() || f[i].empty()) return 0;
+  return std::strtod(std::string(f[i]).c_str(), nullptr);
+}
+bool fieldFlag(const std::vector<std::string_view>& f, size_t i) { return fieldNum(f, i) != 0; }
+
+void handleKey(InputSharedState* st, bool down, const std::vector<std::string_view>& f) {
+  const std::string code = f.size() > 1 ? urlDecode(f[1]) : std::string();
+  const Key k = keyFromDomCode(code.c_str());
+  const double t = nowSeconds();
+  if (down) {
+    const bool repeat = fieldFlag(f, 3);
+    if (k != Key::Unknown) {
+      st->push(InputEvent::key(repeat ? InputEvent::Type::KeyRepeat : InputEvent::Type::KeyDown, k, t));
+      if (st->debugEcho) {
+        const std::string name(inputName(k));
+        logInfo("input> KeyDown %s (code %s%s)", name.c_str(), code.c_str(), repeat ? ", repeat" : "");
+      }
+    } else if (st->debugEcho) {
+      logInfo("input> KeyDown unmapped (code %s)", code.c_str());
+    }
+    // Text: the DOM `key` string is the post-layout character (GLFW's char
+    // callback equivalent). Single printable characters only.
+    if (!fieldFlag(f, 4) && !fieldFlag(f, 5) && f.size() > 2) {
+      const std::string kv = urlDecode(f[2]);
+      if (kv.size() >= 1 && kv.size() <= 4) {
+        const char32_t cp = firstCodePoint(kv.c_str());
+        if (cp >= 0x20 && cp != 0x7F) st->push(InputEvent::text(cp, t));
+      }
+    }
+  } else {
+    if (k != Key::Unknown) {
+      st->push(InputEvent::key(InputEvent::Type::KeyUp, k, t));
+      if (st->debugEcho) {
+        const std::string name(inputName(k));
+        logInfo("input> KeyUp %s", name.c_str());
+      }
+    }
+  }
+}
+
+/// Canvas-relative cursor position (CSS px) -> framebuffer pixels, using the
+/// geometry the last drain reported (refreshed every frame before use).
+void cursorFb(InputSharedState* st, double targetX, double targetY, float& fx, float& fy) {
+  fx = float(st->cssW > 0 ? targetX * st->fbW / st->cssW : targetX);
+  fy = float(st->cssH > 0 ? targetY * st->fbH / st->cssH : targetY);
+}
+
+void handleMouseButton(InputSharedState* st, bool down, const std::vector<std::string_view>& f) {
+  const auto b = buttonFromDom((unsigned short)fieldNum(f, 1));
+  const double t = nowSeconds();
+  if (b) {
+    st->push(InputEvent::mouse(down ? InputEvent::Type::MouseDown : InputEvent::Type::MouseUp, *b, t));
+    if (st->debugEcho) {
+      const std::string name(inputName(*b));
+      logInfo("input> Mouse%s %s", down ? "Down" : "Up", name.c_str());
+    }
+  }
+  if (down) {
+    float fx = 0, fy = 0;
+    cursorFb(st, fieldNum(f, 2), fieldNum(f, 3), fx, fy);
+    st->push(InputEvent::cursor(fx, fy, t));
+  }
+}
+
+void handleMouseMove(InputSharedState* st, const std::vector<std::string_view>& f) {
+  const double t = nowSeconds();
+  const double targetX = fieldNum(f, 1), targetY = fieldNum(f, 2);
+  float dx = 0, dy = 0;
+  if (st->pointerLocked.load() && (fieldNum(f, 3) != 0 || fieldNum(f, 4) != 0)) {
+    // Locked: the DOM movement is the unbounded delta (position is frozen).
+    dx = float(fieldNum(f, 3));
+    dy = float(fieldNum(f, 4));
+    st->haveCursor = false;  // position meaningless while locked
+  } else {
+    // Unlocked fallback (also the drag-look path when a browser refuses
+    // the lock): deltas from successive canvas-relative positions, exactly
+    // the GLFW backend's method. Look still turns; it just stops at edges.
+    if (st->haveCursor) {
+      dx = float(targetX - st->lastX);
+      dy = float(targetY - st->lastY);
+    }
+    st->lastX = targetX;
+    st->lastY = targetY;
+    st->haveCursor = true;
+  }
+  if (dx != 0.f || dy != 0.f) {
+    st->push(InputEvent::motion(dx, dy, t));
+    if (st->debugEcho && st->moveEchoBudget > 0) {
+      --st->moveEchoBudget;
+      logInfo("input> MouseMove %+.0f %+.0f%s", double(dx), double(dy), st->pointerLocked.load() ? " (locked)" : "");
+    }
+  }
+  if (!st->pointerLocked.load()) {
+    float fx = 0, fy = 0;
+    cursorFb(st, targetX, targetY, fx, fy);
+    st->push(InputEvent::cursor(fx, fy, t));
+  }
+}
+
+void handleWheel(InputSharedState* st, const std::vector<std::string_view>& f) {
+  // DOM: deltaY down is positive; the game's wheel is + = up / away.
+  const double deltaY = fieldNum(f, 1);
+  const int deltaMode = (int)fieldNum(f, 2);
+  float steps = 0;
+  if (deltaMode == 0) steps = float(-deltaY / 100.0);   // pixels: ~100 px per notch
+  else if (deltaMode == 1) steps = float(-deltaY);      // lines
+  else steps = float(-deltaY * 5.0);                    // pages
+  steps = std::clamp(steps, -8.f, 8.f);
+  if (steps != 0.f) {
+    st->push(InputEvent::wheel(steps, nowSeconds()));
+    if (st->debugEcho) logInfo("input> MouseWheel %+.2f", double(steps));
+  }
+}
+
+void handlePointerLockChange(InputSharedState* st, bool active) {
+  const bool was = st->pointerLocked.exchange(active);
+  logInfo("input: pointer lock %s", active ? "engaged" : "released");
+  if (was && !active) {
+    // The browser freed the cursor (Esc, or an OS-level grab): mirror the
+    // native focus-loss path so the game releases everything it held.
+    st->push(InputEvent::focusLost(nowSeconds()));
+    st->haveCursor = false;
+  }
+}
+
+void handlePointerLockError(InputSharedState* st) {
+  // Refused (no gesture, or the post-Esc cooldown Chrome enforces): not
+  // fatal — position-delta look keeps working, and the next canvas click
+  // retries the request from inside its handler.
+  logInfo("input: pointer lock refused by the browser (fallback: position-delta look; click the game to retry)");
+  st->lastLockRequest = nowSeconds();  // engage the frame-loop throttle too
+}
+
+void handleFocus(InputSharedState* st, bool gained) {
+  if (gained) {
+    st->focused = true;
+    ++st->focusGainedEdges;
+    st->haveCursor = false;  // no motion jump from where the cursor went while away
+    st->push(InputEvent::focusGained(nowSeconds()));
+    if (st->debugEcho) logInfo("input> FocusGained");
+  } else {
+    st->focused = false;
+    ++st->focusLostEdges;
+    st->push(InputEvent::focusLost(nowSeconds()));
+    if (st->debugEcho) logInfo("input> FocusLost");
+  }
+}
+
+/// HTML5 input backend for the browser window: DOM events in (via the
+/// main-thread listener queue), InputEvents out — the GLFW backend's
+/// contract on web primitives.
+class EmscriptenHtml5InputBackend final : public IInputBackend {
+ public:
+  explicit EmscriptenHtml5InputBackend(std::shared_ptr<InputSharedState> st) : st_(std::move(st)) {
+    // Instrumentation switch: ?debuginput=1 in the page URL (read once,
+    // here, straight from the address bar the player actually used).
+    // Read the flag on the browser MAIN thread: this backend runs on the
+    // proxied pthread, where `location` is the worker script's URL (no page
+    // query string) — a plain EM_ASM read here silently always saw "off".
+    // The pages set window.LK_DEBUG_INPUT when ?debuginput=1 is present;
+    // the main thread's own location.search is the fallback source.
+    st_->debugEcho = MAIN_THREAD_EM_ASM_INT({
+      return (window.LK_DEBUG_INPUT || new URLSearchParams(location.search).has('debuginput')) ? 1 : 0;
+    }) != 0;
+    st_->moveEchoBudget = st_->debugEcho ? 24 : 0;
+    // Install the main-thread DOM listeners (once). Keyboard on the
+    // document: keys belong to whichever frame holds the browser's focus
+    // (itch focuses its game iframe on click), and document delivery works
+    // regardless of which element inside the frame is focused. The consume
+    // rule (preventDefault set) mirrors the old callback return values.
+    MAIN_THREAD_EM_ASM({
+      if (window.__lkInputInstalled) return;
+      window.__lkInputInstalled = 1;
+      window.__lkQ = [];
+      window.__lkCaptureWanted = 0;
+      var Q = window.__lkQ;
+      var cv = document.getElementById('canvas');
+      var enc = encodeURIComponent;
+      document.addEventListener('keydown', function(e) {
+        Q.push('kd|' + enc(e.code) + '|' + enc(e.key || "") + '|' + (e.repeat ? 1 : 0) + '|' + (e.ctrlKey ? 1 : 0) + '|' + (e.metaKey ? 1 : 0));
+        if (document.pointerLockElement || e.code === 'Space' || e.code === 'Tab' ||
+            e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft' || e.code === 'ArrowRight' ||
+            e.code === 'PageUp' || e.code === 'PageDown') e.preventDefault();
+      });
+      document.addEventListener('keyup', function(e) {
+        Q.push('ku|' + enc(e.code) + '|' + enc(e.key || ""));
+      });
+      if (cv) {
+        cv.addEventListener('mousedown', function(e) {
+          // A click inside the canvas is the engagement gesture pointer
+          // lock wants: if the game is asking for the cursor and the lock
+          // is not engaged, ask again from inside this handler, where the
+          // browser grants it.
+          if (window.__lkCaptureWanted && !document.pointerLockElement) {
+            try { cv.requestPointerLock(); } catch (_) {}
+          }
+          Q.push('md|' + e.button + '|' + e.offsetX + '|' + e.offsetY);
+          e.preventDefault();
+        });
+        cv.addEventListener('mouseup', function(e) { Q.push('mu|' + e.button + '|' + e.offsetX + '|' + e.offsetY); });
+        cv.addEventListener('mousemove', function(e) { Q.push('mm|' + e.offsetX + '|' + e.offsetY + '|' + e.movementX + '|' + e.movementY); });
+        cv.addEventListener('wheel', function(e) { Q.push('wh|' + e.deltaY + '|' + e.deltaMode); e.preventDefault(); }, { passive: false });
+      }
+      document.addEventListener('pointerlockchange', function() { Q.push('plc|' + (document.pointerLockElement ? 1 : 0)); });
+      document.addEventListener('pointerlockerror', function() { Q.push('ple'); });
+      window.addEventListener('focus', function() { Q.push('fo'); });
+      window.addEventListener('blur', function() { Q.push('bl'); });
+    });
+    logInfo("input: emscripten-html5 backend live (transport: main-thread listeners + per-frame drain; debug echo %s)",
+            st_->debugEcho ? "ON (?debuginput=1)" : "off");
+  }
+
+  std::string_view name() const override { return "emscripten-html5"; }
+
+  void poll(std::vector<InputEvent>& out) override {
+    drainJsQueue();
+    std::lock_guard lock(st_->mutex);
+    out.insert(out.end(), st_->queue.begin(), st_->queue.end());
+    st_->queue.clear();
+  }
+
+ private:
+  /// One MAIN_THREAD hop per frame: fetch + clear the JS event queue and
+  /// the canvas geometry, then convert every record into InputEvents.
+  void drainJsQueue() {
+    if (drainBuf_.empty()) drainBuf_.resize(1 << 16);
+    const int n = MAIN_THREAD_EM_ASM_INT({
+      var q = window.__lkQ || [];
+      var cv = document.getElementById('canvas');
+      var cssW = 0; var cssH = 0; var fbW = 0; var fbH = 0;
+      if (cv) { var r = cv.getBoundingClientRect(); cssW = r.width; cssH = r.height; fbW = cv.width; fbH = cv.height; }
+      var nl = String.fromCharCode(10);
+      var s = 'sz|' + cssW + '|' + cssH + '|' + fbW + '|' + fbH + (q.length ? nl + q.join(nl) : "");
+      q.length = 0;  // clear IN PLACE: the listeners captured this array
+      var len = lengthBytesUTF8(s);
+      if (len + 1 > $1) return -1;
+      stringToUTF8(s, $0, $1);
+      return len;
+    }, drainBuf_.data(), (int)drainBuf_.size());
+    if (n < 0) {
+      // A frame's worth of records overflowed the drain buffer; the queue
+      // was still cleared JS-side so the pipe can never wedge shut.
+      logError("input: drain buffer overflow — one frame of input records dropped");
+      return;
+    }
+    if (n == 0) return;
+    const std::string_view text(drainBuf_.data(), (size_t)n);
+    size_t b = 0;
+    while (b < text.size()) {
+      const size_t e = text.find('\n', b);
+      const std::string_view line = text.substr(b, e == std::string_view::npos ? std::string_view::npos : e - b);
+      b = (e == std::string_view::npos) ? text.size() : e + 1;
+      if (line.empty()) continue;
+      const auto f = splitFields(line);
+      if (f.empty()) continue;
+      if (f[0] == "sz") {
+        st_->cssW = fieldNum(f, 1); st_->cssH = fieldNum(f, 2);
+        st_->fbW = (int)fieldNum(f, 3); st_->fbH = (int)fieldNum(f, 4);
+      } else if (f[0] == "kd") handleKey(st_.get(), true, f);
+      else if (f[0] == "ku") handleKey(st_.get(), false, f);
+      else if (f[0] == "md") handleMouseButton(st_.get(), true, f);
+      else if (f[0] == "mu") handleMouseButton(st_.get(), false, f);
+      else if (f[0] == "mm") handleMouseMove(st_.get(), f);
+      else if (f[0] == "wh") handleWheel(st_.get(), f);
+      else if (f[0] == "plc") handlePointerLockChange(st_.get(), fieldFlag(f, 1));
+      else if (f[0] == "ple") handlePointerLockError(st_.get());
+      else if (f[0] == "fo") handleFocus(st_.get(), true);
+      else if (f[0] == "bl") handleFocus(st_.get(), false);
+    }
+  }
+
+  std::shared_ptr<InputSharedState> st_;
+  std::vector<char> drainBuf_;
+};
+
+}  // namespace
+
+struct Window::Impl {
+  std::shared_ptr<InputSharedState> inputState = std::make_shared<InputSharedState>();
+  std::unique_ptr<IInputBackend> input = std::make_unique<EmscriptenHtml5InputBackend>(inputState);
+  std::string clipboard;  // page-session clipboard only (not the OS clipboard)
+  bool closeRequested = false;
+  int fbW = 0, fbH = 0;
+  EMSCRIPTEN_WEBGL_CONTEXT_HANDLE glCtx = 0;  // OpenGL33 windows only
+};
+
+std::unique_ptr<Window> Window::create(const WindowDesc& d) {
+  auto w = std::make_unique<Window>(Passkey{});
+  w->api_ = d.api;
+  w->impl_ = std::make_unique<Impl>();
+  w->vsync_ = d.vsync;
+  w->winW_ = d.width;
+  w->winH_ = d.height;
+  w->display_ = d.display;
+  w->impl_->fbW = d.width;
+  w->impl_->fbH = d.height;
+  // Size the page canvas to the requested window. Failure is non-fatal: the
+  // shell page may manage the canvas itself; framebufferSize() then reports
+  // the desc size until the element exists.
+  emscripten_set_canvas_element_size("#canvas", d.width, d.height);
+  logInfo("window: emscripten window %dx%d (api %s)", d.width, d.height,
+          d.api == GraphicsApi::Vulkan ? "vulkan" : "gl33");
+  if (d.api == GraphicsApi::OpenGL33) {
+    EmscriptenWebGLContextAttributes attrs;
+    emscripten_webgl_init_context_attributes(&attrs);
+    attrs.alpha = EM_FALSE;
+    attrs.depth = EM_TRUE;
+    attrs.stencil = EM_TRUE;
+    // Pacing pass (2026-10-19): ?aa=on|4 in the page URL requests a
+    // multisampled default framebuffer. WebGL's context attribute is a
+    // boolean — ANGLE's implicit MSAA is conventionally 4x, so "4" and
+    // "on" land in the same place; anything else (including no param)
+    // keeps the shipped default OFF. Read on the browser MAIN thread:
+    // this code runs on the proxied pthread, whose `location` is the
+    // worker script's URL, not the page's (the ?debuginput trap).
+    const int aaMode = MAIN_THREAD_EM_ASM_INT({
+      const v = new URLSearchParams(location.search).get('aa');
+      return v === 'on' ? 1 : v === '4' ? 4 : 0;
+    });
+    attrs.antialias = aaMode ? EM_TRUE : EM_FALSE;
+    logInfo("window: WebGL antialias %s (?aa=%s)", aaMode ? "requested" : "off",
+            aaMode == 1 ? "on" : aaMode == 4 ? "4" : "off");
+    // Test-build choice: keep the last presented frame in the drawing
+    // buffer so it stays inspectable after main() returns (a screenshot
+    // taken post-exit must not race the compositor's buffer clear).
+    attrs.preserveDrawingBuffer = EM_TRUE;
+    attrs.majorVersion = 2;  // WebGL2 == GLES3, the GL33 backend's dialect
+    attrs.minorVersion = 0;
+    attrs.enableExtensionsByDefault = EM_TRUE;
+    const EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_create_context("#canvas", &attrs);
+    if (ctx > 0) {
+      w->impl_->glCtx = ctx;
+      emscripten_webgl_make_context_current(ctx);
+      logInfo("window: WebGL2 context current on #canvas");
+    } else {
+      logError("window: WebGL2 context creation failed — GL backends will fail their own init gates");
+    }
+  }
+  return w;
+}
+
+const char* displayModeName(DisplayMode m) {
+  switch (m) {
+    case DisplayMode::Windowed: return "windowed";
+    case DisplayMode::Maximized: return "maximized";
+    case DisplayMode::Borderless: return "borderless";
+    case DisplayMode::Fullscreen: return "fullscreen";
+  }
+  return "windowed";
+}
+
+bool parseDisplayMode(const std::string& s, DisplayMode& out) {
+  for (DisplayMode m : {DisplayMode::Windowed, DisplayMode::Maximized, DisplayMode::Borderless, DisplayMode::Fullscreen})
+    if (s == displayModeName(m)) { out = m; return true; }
+  return false;
+}
+
+void Window::setDisplay(const DisplayDesc& d) {
+  display_ = d;
+  if (d.mode != DisplayMode::Windowed) lastFull_ = d.mode;
+  if (d.width > 0 && d.height > 0) {
+    winW_ = d.width;
+    winH_ = d.height;
+    impl_->fbW = d.width;
+    impl_->fbH = d.height;
+    emscripten_set_canvas_element_size("#canvas", d.width, d.height);
+  }
+}
+
+bool Window::pollDisplayToggle() { return false; }  // no Alt+Enter on the web
+
+Window::Window(Passkey) {}
+Window::~Window() = default;
+
+bool Window::shouldClose() const { return impl_->closeRequested; }
+bool Window::focused() const { return impl_->inputState->focused.load(); }
+void Window::requestClose() { impl_->closeRequested = true; }
+
+IInputBackend& Window::input() { return *impl_->input; }
+void Window::raiseAndFocus() {}
+void Window::setTopmost(bool on) { topmost_ = on; }  // no window manager; flag only
+bool Window::cursorReallyCaptured() const { return impl_->inputState->pointerLocked.load(); }
+void Window::takeFocusEdges(int& lost, int& gained) {
+  lost = impl_->inputState->focusLostEdges.exchange(0);
+  gained = impl_->inputState->focusGainedEdges.exchange(0);
+}
+
+bool Window::loadGamepadMappings(const std::string&) { return false; }
+
+void Window::swap() {}  // the page compositor presents the canvas; see header note
+
+void Window::setTitle(const std::string& t) {
+  // Game code runs on the proxied pthread, which has no DOM: a plain EM_ASM
+  // touching `document` throws ReferenceError there and kills the worker.
+  // MAIN_THREAD_EM_ASM proxies the snippet to the browser main thread.
+  MAIN_THREAD_EM_ASM({ document.title = UTF8ToString($0); }, t.c_str());
+}
+
+std::string Window::clipboardText() const { return impl_->clipboard; }
+void Window::setClipboardText(const std::string& text) { impl_->clipboard = text; }
+
+void Window::setCursorCaptured(bool c) {
+  captured_ = c;
+  InputSharedState& st = *impl_->inputState;
+  st.captureWanted = c;
+  // Mirror the want into the main-thread listener state (transitions
+  // only — this is re-applied every frame): the JS mousedown handler is
+  // the reliable pointer-lock requester, and it reads this flag.
+  static bool jsCaptureSent = false;
+  if (c != jsCaptureSent) {
+    jsCaptureSent = c;
+    MAIN_THREAD_EM_ASM({ window.__lkCaptureWanted = $0; }, c ? 1 : 0);
+  }
+  if (c) {
+    // Pointer lock is the web's cursor capture. The game loop re-applies
+    // this every frame (native parity), so throttle hard: a refused
+    // request must not spam the console at frame rate. The reliable path
+    // is the mousedown handler, which re-requests inside the gesture.
+    if (!st.pointerLocked.load()) {
+      const double now = nowSeconds();
+      double last = st.lastLockRequest.load();
+      if (now - last > 0.5) {
+        st.lastLockRequest = now;
+        emscripten_request_pointerlock("#canvas", EM_FALSE);
+      }
+    }
+  } else if (st.pointerLocked.load()) {
+    emscripten_exit_pointerlock();
+    MAIN_THREAD_EM_ASM({ if (document.exitPointerLock) document.exitPointerLock(); });
+  }
+}
+
+void Window::framebufferSize(int& w, int& h) const {
+  int cw = 0, ch = 0;
+  if (emscripten_get_canvas_element_size("#canvas", &cw, &ch) == EMSCRIPTEN_RESULT_SUCCESS && cw > 0 && ch > 0) {
+    w = cw;
+    h = ch;
+  } else {
+    w = impl_->fbW;
+    h = impl_->fbH;
+  }
+}
+
+void* Window::glProcAddress(const char* name) { return emscripten_webgl_get_proc_address(name); }
+
+std::vector<std::string> Window::vulkanInstanceExtensions() const { return {}; }
+uint64_t Window::createVulkanSurface(void*) const { return 0; }
+
+void Window::setIcon(const IconPixels*, int) {}  // no window icon in a browser tab
+
+}  // namespace litholattice

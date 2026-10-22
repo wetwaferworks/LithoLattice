@@ -1,0 +1,141 @@
+// Emscripten (browser) implementation of the Window interface — WASM checkpoint,
+// 2026-10-18 overnight. NEW FILE: the native window.cpp is untouched and still
+// builds everywhere else; CMake selects this file instead of window.cpp +
+// glfw_input_backend.cpp only under EMSCRIPTEN (see src/platform/CMakeLists.txt).
+//
+// Scope, stated honestly: this is a platform STUB with real canvas sizing.
+// - The page's <canvas id="canvas"> is resized to the requested window size and
+//   framebufferSize() reports the canvas element size.
+// - Input is a null backend (no events): keyboard/mouse via Emscripten HTML5
+//   event callbacks is the next step, not this one.
+// - swap() is a no-op: in the browser the canvas is composited by the page;
+//   the frame cadence (emscripten_set_main_loop restructure of the app loop)
+//   is also a next step, documented in wasm/WASM-READINESS.md.
+// - glProcAddress() forwards to emscripten_webgl_get_proc_address, so the
+//   GL33 loader pattern compiles and links unchanged; whether the GL33
+//   shaders (GLSL 330) run under WebGL2 is the known GLSL-ES translation
+//   question, deliberately NOT answered by this stub.
+// - No Vulkan in the browser: surface/extensions report unavailable, and the
+//   app's Vulkan request falls back exactly as it does on a Vulkan-less PC.
+#include "litholattice/platform/window.h"
+
+#include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
+#include <emscripten/html5_webgl.h>
+
+#include "litholattice/core/log.h"
+
+namespace litholattice {
+
+namespace {
+
+/// Null input backend: pumps nothing. Real HTML5 input events land here later.
+class EmscriptenNullInputBackend final : public IInputBackend {
+ public:
+  std::string_view name() const override { return "emscripten-null"; }
+  void poll(std::vector<InputEvent>&) override {}
+};
+
+}  // namespace
+
+struct Window::Impl {
+  std::unique_ptr<IInputBackend> input = std::make_unique<EmscriptenNullInputBackend>();
+  std::string clipboard;  // page-session clipboard only (not the OS clipboard)
+  bool closeRequested = false;
+  int fbW = 0, fbH = 0;
+};
+
+std::unique_ptr<Window> Window::create(const WindowDesc& d) {
+  auto w = std::make_unique<Window>(Passkey{});
+  w->api_ = d.api;
+  w->impl_ = std::make_unique<Impl>();
+  w->vsync_ = d.vsync;
+  w->winW_ = d.width;
+  w->winH_ = d.height;
+  w->display_ = d.display;
+  w->impl_->fbW = d.width;
+  w->impl_->fbH = d.height;
+  // Size the page canvas to the requested window. Failure is non-fatal: the
+  // shell page may manage the canvas itself; framebufferSize() then reports
+  // the desc size until the element exists.
+  emscripten_set_canvas_element_size("#canvas", d.width, d.height);
+  logInfo("window: emscripten stub window %dx%d (api %s)", d.width, d.height,
+          d.api == GraphicsApi::Vulkan ? "vulkan" : "gl33");
+  return w;
+}
+
+const char* displayModeName(DisplayMode m) {
+  switch (m) {
+    case DisplayMode::Windowed: return "windowed";
+    case DisplayMode::Maximized: return "maximized";
+    case DisplayMode::Borderless: return "borderless";
+    case DisplayMode::Fullscreen: return "fullscreen";
+  }
+  return "windowed";
+}
+
+bool parseDisplayMode(const std::string& s, DisplayMode& out) {
+  for (DisplayMode m : {DisplayMode::Windowed, DisplayMode::Maximized, DisplayMode::Borderless, DisplayMode::Fullscreen})
+    if (s == displayModeName(m)) { out = m; return true; }
+  return false;
+}
+
+void Window::setDisplay(const DisplayDesc& d) {
+  display_ = d;
+  if (d.mode != DisplayMode::Windowed) lastFull_ = d.mode;
+  if (d.width > 0 && d.height > 0) {
+    winW_ = d.width;
+    winH_ = d.height;
+    impl_->fbW = d.width;
+    impl_->fbH = d.height;
+    emscripten_set_canvas_element_size("#canvas", d.width, d.height);
+  }
+}
+
+bool Window::pollDisplayToggle() { return false; }  // no Alt+Enter in the stub
+
+Window::Window(Passkey) {}
+Window::~Window() = default;
+
+bool Window::shouldClose() const { return impl_->closeRequested; }
+bool Window::focused() const { return true; }
+void Window::requestClose() { impl_->closeRequested = true; }
+
+IInputBackend& Window::input() { return *impl_->input; }
+void Window::raiseAndFocus() {}
+void Window::setTopmost(bool on) { topmost_ = on; }  // no window manager; flag only
+bool Window::cursorReallyCaptured() const { return captured_; }
+void Window::takeFocusEdges(int& lost, int& gained) { lost = 0; gained = 0; }
+
+bool Window::loadGamepadMappings(const std::string&) { return false; }
+
+void Window::swap() {}  // the page compositor presents the canvas; see header note
+
+void Window::setTitle(const std::string& t) {
+  EM_ASM({ document.title = UTF8ToString($0); }, t.c_str());
+}
+
+std::string Window::clipboardText() const { return impl_->clipboard; }
+void Window::setClipboardText(const std::string& text) { impl_->clipboard = text; }
+
+void Window::setCursorCaptured(bool c) { captured_ = c; }
+
+void Window::framebufferSize(int& w, int& h) const {
+  int cw = 0, ch = 0;
+  if (emscripten_get_canvas_element_size("#canvas", &cw, &ch) == EMSCRIPTEN_RESULT_SUCCESS && cw > 0 && ch > 0) {
+    w = cw;
+    h = ch;
+  } else {
+    w = impl_->fbW;
+    h = impl_->fbH;
+  }
+}
+
+void* Window::glProcAddress(const char* name) { return emscripten_webgl_get_proc_address(name); }
+
+std::vector<std::string> Window::vulkanInstanceExtensions() const { return {}; }
+uint64_t Window::createVulkanSurface(void*) const { return 0; }
+
+void Window::setIcon(const IconPixels*, int) {}  // no window icon in a browser tab
+
+}  // namespace litholattice

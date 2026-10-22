@@ -1,0 +1,306 @@
+// Width-tagged paletted voxel storage (Infinite Registry, phase 1).
+//
+// Indices are stored bit-packed at 1/2/4/8/16/32 bits, chosen from the palette
+// size; the palette maps index -> StableId. At 64-bit width the palette
+// degenerates: the index IS the StableId (no palette entries). Random access
+// is O(1) at every width ("pack the zeros": we pay for width only when we use
+// it). Cell i occupies bits [i*w, i*w + w) of a u64 word array, LSB-first --
+// the packing storage::encodePalette already proves on disk. At 8/16/32 bits
+// that layout is byte-identical to the historical per-index little-endian
+// layout, so the byte widths behave exactly as before; sub-byte widths
+// (bit-packing audit F3) only add rungs below 8. Writes at sub-byte widths
+// are read-modify-write on the containing word; reads stay O(1) shifts.
+//
+// This representation is MEMORY-ONLY. The BLKS disk codec never sees it:
+// save resolves indices through the block registry to uint16 BlockIds and
+// encodePalette derives its own width from the values; load rebuilds
+// palettes through set(). Adding sub-byte widths therefore changes no byte
+// of any existing save file.
+//
+// Growth is one-way: the palette and the width only grow, never shrink. Removing the
+// last voxel of a type leaves its palette entry in place (a compact() can come later).
+// A fresh palette is all-air: width 1, single palette entry kAirStableId, indices 0.
+#pragma once
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+#include "litholattice/world/block.h"
+
+namespace litholattice {
+
+class VoxelPalette {
+ public:
+  /// Width tag. The historical values 0..3 (W8/W16/W32/W64) are unchanged;
+  /// the sub-byte widths (audit F3) are appended as 4..6. The tag is never
+  /// serialized (the disk codec translates values, see the header comment),
+  /// so the appended values cannot collide with stored data.
+  enum class Width : uint8_t { W8 = 0, W16 = 1, W32 = 2, W64 = 3, W4 = 4, W2 = 5, W1 = 6 };
+
+  explicit VoxelPalette(size_t voxelCount)
+      : count_(voxelCount), data_(storageBytes(Width::W1, voxelCount), 0), palette_{kAirStableId} {
+    assert(voxelCount > 0);
+  }
+
+  size_t voxelCount() const { return count_; }
+  Width width() const { return width_; }
+  /// Index width in bits at each Width (1/2/4/8/16/32/64).
+  static constexpr int bitsForWidth(Width w) {
+    switch (w) {
+      case Width::W1: return 1;
+      case Width::W2: return 2;
+      case Width::W4: return 4;
+      case Width::W8: return 8;
+      case Width::W16: return 16;
+      case Width::W32: return 32;
+      case Width::W64: return 64;
+    }
+    return 8;
+  }
+  /// Bytes of data_ storage for `count` indices at width `w`: a u64 word
+  /// array, so sub-byte widths round up to whole words (and the byte widths
+  /// come out exactly count * bits / 8 whenever count * bits is a multiple
+  /// of 64, as for the 4096-cell sub-chunk at every width).
+  static constexpr size_t storageBytes(Width w, size_t count) {
+    if (w == Width::W64) return count * 8;
+    const size_t bits = size_t(bitsForWidth(w));
+    return ((count * bits + 63) / 64) * 8;
+  }
+  /// Bytes per stored index at the byte-aligned widths: 1/2/4/8. Sub-byte
+  /// widths report 1 (an index is bit-packed, never byte-addressable; use
+  /// bitsForWidth()/storageBytes() for real accounting there).
+  static constexpr size_t bytesForWidth(Width w) {
+    return w == Width::W16 ? 2 : w == Width::W32 ? 4 : w == Width::W64 ? 8 : 1;
+  }
+  /// Palette entries (index -> StableId). Empty at 64-bit width (degenerate:
+  /// the index IS the stable id).
+  const std::vector<StableId>& palette() const { return palette_; }
+  size_t paletteSize() const { return palette_.size(); }
+
+  /// O(1) random read.
+  StableId at(size_t i) const {
+    assert(i < count_);
+    if (width_ == Width::W64) return readU64(i);
+    return palette_[readIndex(i)];
+  }
+  /// O(1) raw palette index (== the StableId itself at 64-bit width).
+  /// Hot paths resolve the palette to BlockIds once per sub-chunk, then use this.
+  uint64_t rawIndex(size_t i) const {
+    assert(i < count_);
+    return width_ == Width::W64 ? readU64(i) : readIndex(i);
+  }
+
+  /// Write, O(palette size) for the index lookup (a linear scan — palettes
+  /// are small; see indexFor). Grows the palette and steps the width up when
+  /// the palette outgrows it (1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64).
+  void set(size_t i, StableId id) {
+    assert(i < count_);
+    // indexFor() may step the width all the way to W64 (palette degenerated);
+    // re-check before writing.
+    if (width_ != Width::W64) {
+      const uint64_t idx = indexFor(id);
+      if (width_ != Width::W64) {
+        writeIndex(i, idx);
+        return;
+      }
+    }
+    writeU64(i, id);
+  }
+
+  /// Fill every voxel with `id`.
+  void fill(StableId id) {
+    if (width_ != Width::W64) {
+      const uint64_t idx = indexFor(id);
+      if (width_ != Width::W64) {
+        // Repeat the index across each u64 word and store the words; the
+        // tail bits beyond count_ cells are then masked back to zero so
+        // the padding invariant (see maskTailBits) survives a fill.
+        const int w = bitsForWidth(width_);
+        uint64_t word = 0;
+        for (int b = 0; b < 64; b += w) word |= idx << b;
+        const size_t words = data_.size() / 8;
+        for (size_t k = 0; k < words; ++k) storeWord(data_.data(), k, word);
+        maskTailBits();
+        return;
+      }
+    }
+    for (size_t i = 0; i < count_; ++i) writeU64(i, id);
+  }
+
+  /// Reset to the fresh all-air state (width 1, one palette entry).
+  void clear() {
+    width_ = Width::W1;
+    data_.assign(storageBytes(Width::W1, count_), 0);
+    palette_.assign(1, kAirStableId);
+  }
+
+  /// Resolves the palette to BlockIds via `reg`: one hash lookup per palette entry,
+  /// not per voxel. After this, `lut[rawIndex(i)]` is the voxel's BlockId.
+  /// `lut` is empty at 64-bit width (degenerate: rawIndex() IS the StableId there,
+  /// resolve each with reg.findByStableId()). Unresolvable entries map to kAir.
+  ///
+  /// Infinite Registry (phase 2): voxel storage holds blocks. A non-block stable
+  /// id in a palette is a programming error upstream — fail fast here, once per
+  /// palette entry, never per voxel. (In release builds the assert compiles out
+  /// and the kind-filtered findByStableId below maps it to kAir instead: loud in
+  /// dev, safe in prod.)
+  void resolveBlockIds(const BlockRegistry& reg, std::vector<BlockId>& lut) const {
+    lut.clear();
+    if (width_ == Width::W64) return;
+    lut.reserve(palette_.size());
+    for (StableId sid : palette_) {
+      [[maybe_unused]] const auto kind = reg.kindOf(sid);
+      assert(!kind || *kind == EntryKind::Block);
+      const auto id = reg.findByStableId(sid);
+      lut.push_back(id ? *id : kAir);
+    }
+  }
+
+  bool operator==(const VoxelPalette& o) const {
+    return width_ == o.width_ && count_ == o.count_ && palette_ == o.palette_ &&
+           data_ == o.data_;
+  }
+  bool operator!=(const VoxelPalette& o) const { return !(*this == o); }
+
+ private:
+  /// Palette capacity at each width; exceeding it steps the width up.
+  static constexpr uint64_t capacityForWidth(Width w) {
+    switch (w) {
+      case Width::W1: return 2ULL;
+      case Width::W2: return 4ULL;
+      case Width::W4: return 16ULL;
+      case Width::W8: return 256ULL;
+      case Width::W16: return 65536ULL;
+      default: return 0x100000000ULL;  // W32 (W64 is never queried)
+    }
+  }
+  static constexpr Width nextWidth(Width w) {
+    switch (w) {
+      case Width::W1: return Width::W2;
+      case Width::W2: return Width::W4;
+      case Width::W4: return Width::W8;
+      case Width::W8: return Width::W16;
+      case Width::W16: return Width::W32;
+      default: return Width::W64;
+    }
+  }
+
+  // Bit-packed word access, LSB-first: cell i occupies bits [i*w, i*w + w).
+  // memcpy-based so the byte vector's alignment never matters. Identical
+  // scheme (and identical bytes at w = 8/16/32) to storage::encodePalette
+  // and PackedMaterials' readPacked/writeIndex.
+  static uint64_t loadWord(const uint8_t* base, size_t wi) {
+    uint64_t v;
+    std::memcpy(&v, base + wi * 8, 8);
+    return v;
+  }
+  static void storeWord(uint8_t* base, size_t wi, uint64_t v) {
+    std::memcpy(base + wi * 8, &v, 8);
+  }
+  static uint64_t readPacked(const uint8_t* base, int w, size_t i) {
+    const size_t bit = i * size_t(w);
+    const size_t wi = bit >> 6, sh = bit & 63;
+    uint64_t v = loadWord(base, wi) >> sh;
+    if (sh + size_t(w) > 64) v |= loadWord(base, wi + 1) << (64 - sh);
+    return v & ((uint64_t(1) << w) - 1);
+  }
+  static void writePacked(uint8_t* base, int w, size_t i, uint64_t idx) {
+    const size_t bit = i * size_t(w);
+    const size_t wi = bit >> 6, sh = bit & 63;
+    const uint64_t m = (uint64_t(1) << w) - 1;
+    storeWord(base, wi, (loadWord(base, wi) & ~(m << sh)) | ((idx & m) << sh));
+    if (sh + size_t(w) > 64) {
+      const uint64_t hi = (uint64_t(1) << (sh + size_t(w) - 64)) - 1;
+      storeWord(base, wi + 1, (loadWord(base, wi + 1) & ~hi) | (idx >> (64 - sh)));
+    }
+  }
+
+  uint64_t readIndex(size_t i) const { return readPacked(data_.data(), bitsForWidth(width_), i); }
+  void writeIndex(size_t i, uint64_t idx) {
+    if (width_ == Width::W64) {  // defensive: index IS the id at W64
+      writeU64(i, idx);
+      return;
+    }
+    writePacked(data_.data(), bitsForWidth(width_), i, idx);
+  }
+  uint64_t readU64(size_t i) const {
+    const uint8_t* p = data_.data() + i * 8;
+    uint64_t v = 0;
+    for (int b = 0; b < 8; ++b) v |= uint64_t(p[b]) << (8 * b);
+    return v;
+  }
+  void writeU64(size_t i, uint64_t v) {
+    uint8_t* p = data_.data() + i * 8;
+    for (int b = 0; b < 8; ++b) p[b] = uint8_t(v >> (8 * b));
+  }
+
+  /// Invariant: bits beyond count_ cells in the final word are always zero
+  /// (fresh storage is zeroed, writeIndex only touches its own cell's bits,
+  /// stepWidth repacks into zeroed storage; fill() calls this). operator==
+  /// is representation equality and is legitimately used as such, so the
+  /// invariant is what makes identical contents compare identical.
+  void maskTailBits() {
+    const size_t usedBits = count_ * size_t(bitsForWidth(width_));
+    const size_t rem = usedBits & 63;
+    if (rem == 0) return;
+    const size_t wi = usedBits >> 6;
+    storeWord(data_.data(), wi, loadWord(data_.data(), wi) & ((uint64_t(1) << rem) - 1));
+  }
+
+  /// Palette index for `id`, adding it (and stepping the width) if new.
+  /// May step the width all the way to W64, in which case the caller must
+  /// re-check width() before using the returned index (it is meaningless:
+  /// at W64 the id is written directly).
+  ///
+  /// The lookup is a linear scan of palette_: sub-chunk palettes are small
+  /// (<= 256 entries at W8, and small in practice at W16), so the scan over
+  /// the already-resident vector replaces the old per-palette unordered_map
+  /// (bit-packing audit F4: ~500 B of map object + buckets + nodes saved per
+  /// sub-chunk, zero heap allocations on this path). Palette entries are
+  /// unique by construction (an id is appended only when the scan misses),
+  /// so the first match IS the index the map used to return.
+  uint32_t indexFor(StableId id) {
+    for (uint32_t i = 0; i < palette_.size(); ++i)
+      if (palette_[i] == id) return i;
+    uint64_t idx = palette_.size();
+    if (idx >= capacityForWidth(width_)) {
+      stepWidth();
+      if (width_ == Width::W64) return 0;
+      idx = palette_.size();
+    }
+    palette_.push_back(id);
+    return uint32_t(idx);
+  }
+
+  /// Widen the index storage, preserving every index value. At the W32 -> W64
+  /// step the palette degenerates: indices become the StableIds themselves.
+  void stepWidth() {
+    const Width nw = nextWidth(width_);
+    if (nw == Width::W64) {
+      std::vector<uint8_t> nd(count_ * 8);
+      for (size_t i = 0; i < count_; ++i) {
+        const uint64_t v = palette_[readIndex(i)];
+        for (int b = 0; b < 8; ++b) nd[i * 8 + b] = uint8_t(v >> (8 * b));
+      }
+      data_ = std::move(nd);
+      palette_.clear();
+      width_ = Width::W64;
+      return;
+    }
+    std::vector<uint8_t> nd(storageBytes(nw, count_), 0);
+    const int ow = bitsForWidth(width_), nb = bitsForWidth(nw);
+    for (size_t i = 0; i < count_; ++i)
+      writePacked(nd.data(), nb, i, readPacked(data_.data(), ow, i));
+    data_ = std::move(nd);
+    width_ = nw;
+  }
+
+  size_t count_ = 0;
+  Width width_ = Width::W1;
+  std::vector<uint8_t> data_;  // count_ indices bit-packed LSB-first across u64 words
+                               // (at W64: count_ raw little-endian StableIds)
+  std::vector<StableId> palette_;
+};
+
+}  // namespace litholattice
