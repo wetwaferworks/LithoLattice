@@ -212,10 +212,11 @@ class JobSystem {
     }
     [[maybe_unused]] const uint64_t g = workGen_.fetch_add(1, std::memory_order_release) + 1;  // wake a sleeper; pairs with the wait predicate
     LITHO_THREAD_LOG("job", "submit gen->%llu notify_one", (unsigned long long)g);
-    // B8 fix (2026-10-23): touch m_ between the predicate change and the notify. A sleeping worker
-    // tests its predicate under m_ and then blocks; without this, the increment + notify_one could
-    // land in that window, the notify reaches nobody, and the worker sleeps forever with the job
-    // queued (a JobFence / waitIdle() caller then hangs: the intermittent engine_sim / engine_core hang).
+    // B8 lost-wakeup issue, fixed 2026-10-23 (see docs/reviews/CODE_REVIEW_2026-10-23_Cortana.md, B8).
+    // The empty lock on m_ before the notify is REQUIRED: a worker tests its wait predicate under m_
+    // and then blocks. A worker between that check and its wait would miss a notify sent without
+    // m_, sleep forever with the job queued, and a fence/waitIdle()/join() then hangs forever.
+    // Proven with all-thread stacks; the tick timing handshake was investigated and ruled out.
     { std::lock_guard<std::mutex> l(m_); }  // L2, empty: orders us after any in-progress predicate check
     cv_.notify_one();
   }
@@ -355,6 +356,11 @@ class JobSystem {
                      ioInFlight_.load(std::memory_order_relaxed));
     stop_.store(true, std::memory_order_release);
     workGen_.fetch_add(1, std::memory_order_release);
+    // B8 lost-wakeup issue, fixed 2026-10-23 (see docs/reviews/CODE_REVIEW_2026-10-23_Cortana.md, B8).
+    // The empty locks before the notifies are REQUIRED: a worker (or io thread) between its stop_
+    // predicate check and its wait would miss a notify sent without its mutex and never wake, so
+    // the join below hangs forever (the captured engine_sim hang stacks: main in join, worker in
+    // cv_.wait). The tick timing handshake was investigated and ruled out.
     { std::lock_guard<std::mutex> l(m_); }    // B8 fix: same missed-wakeup window as submit()
     { std::lock_guard<std::mutex> l(ioM_); }  // io threads test stop_ under ioM_
     cv_.notify_all();
