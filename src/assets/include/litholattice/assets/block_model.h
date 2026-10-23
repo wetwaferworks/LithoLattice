@@ -49,12 +49,24 @@ struct FaceRef {
   bool operator==(const FaceRef&) const = default;
 };
 
+/// Fix 3c: connected side variant indices (a vertical run of the same block).
+enum : int { kConnectedSideBottom = 0, kConnectedSideMid = 1, kConnectedSideTop = 2, kConnectedSideSingle = 3, kConnectedSideCount = 4 };
+/// "side_bottom" / "side_mid" / "side_top" / "side_single" -> index, -1 otherwise.
+inline int connectedSideFromName(std::string_view n) {
+  return n == "side_bottom" ? kConnectedSideBottom : n == "side_mid" ? kConnectedSideMid : n == "side_top" ? kConnectedSideTop
+       : n == "side_single" ? kConnectedSideSingle : -1;
+}
+
 /// Face -> texture table with the side / all fallback.
 class FaceLayout {
  public:
   void set(FaceSlot f, FaceRef r) { faces_[size_t(f)] = r; }
   void setSide(FaceRef r) { side_ = r; }
   void setAll(FaceRef r) { all_ = r; }
+  /// Fix 3c: connected side variants (MODDING.md "Connected via sides"), index
+  /// kConnectedSideBottom..kConnectedSideSingle ("side_bottom", "side_mid", "side_top", "side_single").
+  void setConnected(int v, FaceRef r) { if (v >= 0 && v < 4) connected_[size_t(v)] = r; }
+  std::optional<FaceRef> connected(int v) const { return v >= 0 && v < 4 ? connected_[size_t(v)] : std::nullopt; }
   /// The face's own entry, else side, else all; nullopt if the layout has none of them.
   std::optional<FaceRef> lookup(FaceSlot f) const;
   bool empty() const;
@@ -62,6 +74,7 @@ class FaceLayout {
  private:
   std::array<std::optional<FaceRef>, kFaceSlotCount> faces_{};
   std::optional<FaceRef> side_, all_;
+  std::array<std::optional<FaceRef>, 4> connected_{};  // fix 3c
 };
 
 struct BlockModel {
@@ -74,6 +87,12 @@ struct BlockModel {
 
   /// Resolved face: active layout first (if `isActive`), then base, then the missing texture.
   FaceRef face(FaceSlot f, bool isActive) const;
+  /// Fix 3c: connected side variant `v`: active layout first (if `isActive`), then base; nullopt if none.
+  std::optional<FaceRef> connectedSide(int v, bool isActive) const {
+    if (isActive)
+      if (const auto r = active.connected(v)) return r;
+    return base.connected(v);
+  }
   /// Wire piece, falling back to Straight, then missing.
   FaceRef wirePiece(WirePiece p) const;
   bool isWire() const;

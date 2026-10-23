@@ -15,7 +15,7 @@ constexpr float kDegToRad = kPi / 180.f;
 constexpr float kMaxPitch = 1.55f;  // matches the game's player pitch clamp
 
 Vec3 sub(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-float length(Vec3 a) { return sqrtFast(dot(a, a)); }  // Carmack sqrt (view math)
+float length(Vec3 a) { return std::sqrt(dot(a, a)); }  // EXACT (fix run 2, 2026-10-23): speed drives the FOV kick, and the effective FOV reaches MCP senses (agent/robot vision) - deterministic std::sqrt, one call per frame
 float clampF(float v, float lo, float hi) { return std::min(std::max(v, lo), hi); }
 
 /// Player::forward convention (game/player.cpp): yaw from +X toward +Z.

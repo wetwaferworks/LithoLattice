@@ -528,7 +528,8 @@ void testModUiConfinement(Checker& check) {
     check(badge.x == 0 && badge.y == 0 && near(badge.w, 400) && badge.h > 0,
           "mod UI: badge strip spans the panel top");
     RecordingRenderer r;
-    Painter p(r, Theme::defaults());
+    const Theme th = Theme::defaults();  // fix 3b ASAN-1: Painter keeps a reference; no temporary
+    Painter p(r, th);
     panel->paintTree(p);
     check(r.drewText("MOD"), "mod UI: MOD badge tag is painted by the engine");
     check(r.depth == 0, "mod UI: badge paint leaves the clip stack balanced");
@@ -557,7 +558,8 @@ void testModUiConfinement(Checker& check) {
     }
     check(clean, "mod UI: no mod widget rect may intersect the badge strip");
     RecordingRenderer r;
-    Painter p(r, Theme::defaults());
+    const Theme th = Theme::defaults();  // fix 3b ASAN-1: Painter keeps a reference; no temporary
+    Painter p(r, th);
     panel->paintTree(p);
     check(r.drewText("MOD"), "mod UI: badge survives a hostile child (painted last, on top)");
   }

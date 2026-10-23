@@ -76,6 +76,7 @@ struct SimConfig {
   int tickRate = kDefaultTps;      ///< world TPS (one of kTickModes)
   int radiusChunks = 8;            ///< tick radius around the player
   bool roundArea = false;          ///< F56-7: round (disc) tick area; default square (hash scenarios unchanged)
+  bool diamondArea = false;        ///< diamond (Manhattan) tick area (JD 2026-10-23); wins over roundArea
   uint32_t epoch = 0;              ///< dimension load generation (stamped on mesh snapshots)
   BlockId belowWorldFill = kAir;   ///< what the mesher sees below y = 0 (solid hides bottom faces)
   int randomTicksPerSection = 8;   ///< per 16^3 section per world tick (per dimension; 0 = off)
@@ -350,6 +351,7 @@ class SimThread {
   std::unique_ptr<IWorldSimulation> sim_;
   const int radius_;
   const bool round_;  ///< F56-7
+  const bool diamond_;  ///< diamond (Manhattan) tick area (JD 2026-10-23)
   int randomPerSection_ = 8;
   std::vector<uint8_t> randomTickable_;
   uint64_t randomTicks_ = 0;

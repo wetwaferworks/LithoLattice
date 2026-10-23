@@ -13,7 +13,7 @@ namespace {
 
 inline Vec3 vsub(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 inline float vlen(Vec3 a) { return std::sqrt(dot(a, a)); }  // EXACT (bug-fix run): anim selftest pins two-bone reach/clamp; IK precision is load-bearing
-inline Vec3 snorm(Vec3 a) {  // normalize with zero guard (core normalize() has none)
+inline Vec3 snorm(Vec3 a) {  // normalize with zero guard (core normalize() now has an equivalent +Y guard at 1e-12; kept local for the 1e-9 IK threshold)
   const float l = vlen(a);
   return l < 1e-9f ? Vec3{0, 1, 0} : a * (1.f / l);
 }

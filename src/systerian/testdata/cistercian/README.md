@@ -1,0 +1,1 @@
+Reference masters for engine_systerian (39 SVGs), vendored 2026-10-23 by Cortana (fix run 2) from JD's generator output (alpha-docs-2026-10-15/Docs/cistercian, generate.py). Byte-identical copies; regenerate with that generate.py if the codec standard changes. SYSTERIAN_REFERENCE_DIR (env) still overrides.

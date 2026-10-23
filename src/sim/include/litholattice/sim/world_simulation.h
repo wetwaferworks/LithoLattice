@@ -32,9 +32,11 @@ struct SimCommand {
 struct TickArea {
   int pcx = 0, pcz = 0, radius = 0;  ///< player chunk and radius in chunks
   bool round = false;  ///< F56-7 (Proposed by JD, Built by Cortana): disc dx^2+dz^2 <= r^2+r (chunk-centre distance, fuller rim)
+  bool diamond = false;  ///< Diamond (JD 2026-10-23): Manhattan |dx|+|dz| <= r; wins over round when set
   bool contains(int x, int z) const {
     const int dx = (x >> 4) - pcx, dz = (z >> 4) - pcz;
     if (std::abs(dx) > radius || std::abs(dz) > radius) return false;
+    if (diamond) return std::abs(dx) + std::abs(dz) <= radius;
     return !round || int64_t(dx) * dx + int64_t(dz) * dz <= int64_t(radius) * radius + radius;
   }
 };

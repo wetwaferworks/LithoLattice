@@ -16,6 +16,7 @@
 #include <tuple>
 #include <vector>
 #include "litholattice/procgen/generator_loader.h"
+#include "litholattice/core/log.h"
 #include "litholattice/procgen/modifiers.h"
 #include "litholattice/procgen/stages.h"
 #include "litholattice/procgen/silicon_cities.h"
@@ -549,6 +550,20 @@ void ruinsChecks(Checker& check) {
                                                   R"( "carvers": [{"type": "ruins", "trace": "trace", "via": "via"}]})"),
                                         dimensionSeed(7, "wafer"), testMaterial, crustErr);
   check(noCrust, "ruins: missing crust list rejected (" + crustErr + ")");
+  {  // issue R-PG-2: a requested dungeon still loads, but loudly (no silent no-op)
+    uint64_t before = 0;  // only records pushed by this load count
+    for (const LogRecord& r : engineLogTap().snapshot()) before = r.seq;
+    std::string dErr;
+    // One raw literal per line: a raw string runs to the first )" so the pieces must each close.
+    const auto dg = loadGenerator(std::string(R"({"graph": {"nodes": {"h": {"type": "constant"}}, "outputs": {"height": "h"}},)"
+                                              R"( "terrain": {"output": "height", "material": "rock"},)"
+                                              R"( "features": [{"name": "dungeon", "type": "dungeon"}]})"),
+                                  dimensionSeed(7, "wafer"), testMaterial, dErr);
+    bool loud = false;
+    for (const LogRecord& r : engineLogTap().snapshot())
+      loud = loud || (r.seq > before && r.level == LogLevel::Error && r.text.find("dungeon generation is not implemented") != std::string::npos);
+    check(dg && loud, "procgen: a requested dungeon feature loads but logs an error (issue R-PG-2) " + dErr);
+  }
 
   const auto info = [](int cx, int cz) {
     ChunkInfo c;

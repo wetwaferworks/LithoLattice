@@ -8,6 +8,7 @@ BlockMaterials::BlockMaterials(size_t n) {
   faces_.assign(n, {});
   leafSlot_.assign(n, 0);
   wire_.assign(n, {});
+  connected_.assign(n, {});
   swatch_.assign(n, {1.f, 0.f, 1.f});
 }
 
@@ -59,6 +60,9 @@ BlockMaterials BlockMaterials::build(const BlockRegistry& reg, const TextureRegi
       for (int active = 0; active < 2; ++active)
         m.faces_[id][f][size_t(active)] = material(model->face(FaceSlot(f), active != 0));
     for (size_t p = 0; p < kWirePieceCount; ++p) m.wire_[id][p] = material(model->wirePiece(WirePiece(p)));
+    for (int v = 0; v < kConnectedSideCount; ++v)  // fix 3c: connected side variants
+      for (int active = 0; active < 2; ++active)
+        if (const auto r = model->connectedSide(v, active != 0)) m.connected_[id][size_t(v)][size_t(active)] = material(*r);
 
     if (appearance) appearance->bindMaterials(def, *model, m.bindings_);
     // 2026-10-16 (Wafer beta art): "tint:<texture>" masks -> kShadeTraceTint slots (shared table).

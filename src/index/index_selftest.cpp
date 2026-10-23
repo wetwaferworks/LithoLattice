@@ -203,7 +203,12 @@ int runIndexSelfTest() {
     std::printf("  [info] index: 10k docs + 100 queries in %lld ms (%zu hits)\n",
                 static_cast<long long>(ms), totalHits);
     check(totalHits == 100 * 10000, "latency fixture: every query hit all 10k docs");
-    check(ms < 5000, "10k docs + 100 queries under 5 s (sanity, not a benchmark)");
+#if defined(__SANITIZE_ADDRESS__)
+    constexpr double kSanSlack = 10.0;  // fix 3b: ASan builds run ~3-10x slower
+#else
+    constexpr double kSanSlack = 1.0;
+#endif
+    check(ms < 5000 * kSanSlack, "10k docs + 100 queries under 5 s (sanity, not a benchmark)");
   }
 
   return check.fails();

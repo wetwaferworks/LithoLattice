@@ -70,6 +70,7 @@
 #include "litholattice/render/frame_pacer.h"
 #include "litholattice/render/texture_array.h"
 #include "litholattice/sim/det_sched.h"
+#include "litholattice/sim/area_shape.h"  // fix run 3
 #include "litholattice/sim/random_ticks.h"
 #include "litholattice/sim/trace_jit.h"
 #include "litholattice/sim/trace_jit_compose.h"
@@ -108,6 +109,7 @@
 #include "litholattice/net/handshake.h"
 #include "litholattice/net/encryption.h"
 #include "litholattice/script/script_engine.h"
+#include "litholattice/script/script_generic.h"
 #include "litholattice/script/suspension_policy.h"
 #include "litholattice/core/log.h"
 #include "litholattice/script/script_binding_allowlist.h"
@@ -191,6 +193,24 @@ void testJobSystem();  // defined below testCore
 void testFileContract();  // defined below testAnvilRegion
 void testAsyncIo();       // defined below testFileContract
 void testModSandbox();    // defined below testAsyncIo
+// Fix run 2 (2026-10-23, R-TST-1): Windows creates symlinks only with Developer Mode
+// or admin. Probe once; symlink-dependent checks SKIP (printed, not counted) without it.
+bool symlinksAvailable() {
+  static const bool ok = [] {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto d = fs::temp_directory_path(ec) / "litholattice_symlink_probe";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    { std::ofstream f(d / "t.txt"); f << 'x'; }
+    std::error_code lec;
+    fs::create_symlink(d / "t.txt", d / "l.txt", lec);
+    const bool made = !lec && fs::is_symlink(fs::symlink_status(d / "l.txt", ec));
+    fs::remove_all(d, ec);
+    return made;
+  }();
+  return ok;
+}
 void testSandboxedOpen();  // defined below testModSandbox
 void testBackupDepth();    // defined below testFileContract
 
@@ -4795,6 +4815,68 @@ void testAttachables() {
         "attachables: pop off when the game / a script removes the support too, cascading to mounted ones");
 }
 
+// Fix run 3 (2026-10-23, JD t2262u): shared area-shape parser, containment
+// of the sim area in the stream area, and the diamond determinism golden.
+void testAreaShape() {
+  std::printf("sim: area shapes (parser, containment, diamond golden)\n");
+  bool ok = false;
+  check(parseAreaShape("Diamond", &ok) == AreaShape::Diamond && ok && parseAreaShape("SQUARE", &ok) == AreaShape::Square && ok &&
+            parseAreaShape(" Round ", &ok) == AreaShape::Round && ok && parseAreaShape("dIaMoNd\r\n", &ok) == AreaShape::Diamond && ok,
+        "area shape: parsing is case-insensitive and trims spaces");
+  check(parseAreaShape("hexagon", &ok) == AreaShape::Diamond && !ok && parseAreaShape("", &ok) == AreaShape::Diamond && !ok &&
+            parseAreaShape("squar", &ok) == AreaShape::Diamond && !ok,
+        "area shape: an unknown value reports !ok and falls back to DIAMOND, never square");
+  check(parseAreaShape("round", &ok, false) == AreaShape::Diamond && !ok && kDefaultAreaShape == AreaShape::Diamond,
+        "area shape: the stream footprint has no round mode (-> diamond, !ok); the default is diamond");
+  check(std::string(areaShapeName(AreaShape::Square)) == "square" && std::string(areaShapeName(AreaShape::Round)) == "round" &&
+            std::string(areaShapeName(AreaShape::Diamond)) == "diamond",
+        "area shape: names round-trip through the parser");
+  bool contained = true, minimal = true, diamondExact = true;
+  const AreaShape shapes[] = {AreaShape::Square, AreaShape::Round, AreaShape::Diamond};
+  for (AreaShape sim : shapes)
+    for (AreaShape stream : {AreaShape::Square, AreaShape::Diamond})
+      for (int r = 0; r <= 16; ++r) {
+        const int R = minStreamRadiusCovering(sim, r, stream);
+        bool missesBelow = R == 0;
+        for (int dz = -r; dz <= r; ++dz)
+          for (int dx = -r; dx <= r; ++dx) {
+            if (!areaContains(sim, dx, dz, r)) continue;
+            if (!areaContains(stream, dx, dz, R)) contained = false;
+            if (R > 0 && !areaContains(stream, dx, dz, R - 1)) missesBelow = true;
+          }
+        if (!missesBelow) minimal = false;
+        if (sim == AreaShape::Diamond && stream == AreaShape::Diamond && R != r) diamondExact = false;
+        if (stream == AreaShape::Square && R != r) diamondExact = false;  // square stream: the old max(tick, stream)
+      }
+  check(contained, "area shape: the sim area is ALWAYS inside the stream area at minStreamRadiusCovering (all shapes, r 0..16)");
+  check(minimal && diamondExact,
+        "area shape: the covering radius is minimal; diamond-in-diamond and any-in-square need exactly r");
+  // Golden: diamond tick area, fixed world + ticks. Update deliberately only.
+  BlockRegistry reg;
+  const BlockId grass = reg.add({"Grass", kSolid | kOpaque | kRandomTicks, Shape::Cube});
+  ChunkMap w = worldWithColumns(9, &reg);
+  for (int cz = 0; cz < 9; ++cz)
+    for (int cx = 0; cx < 9; ++cx)
+      for (int z = 0; z < 16; ++z) for (int x = 0; x < 16; ++x) for (int y = 0; y < 16; y += 3) w.set(cx * 16 + x, y, cz * 16 + z, grass);
+  const auto tickable = randomTickableBlocks(reg);
+  uint64_t h = 1469598103934665603ULL, sampled = 0;
+  const auto fn = [&h](int x, int y, int z, BlockId b, uint32_t rnd) {
+    const int64_t v[5] = {x, y, z, int64_t(b), int64_t(rnd)};
+    h = fnv(v, sizeof v, h);
+  };
+  RandomTickCache cache;
+  for (uint64_t t = 0; t < 16; ++t) sampled += runRandomTicks(w, reg, tickable, 4, 4, 3, t, 8, fn, &cache, false, true);
+  uint64_t h2 = 1469598103934665603ULL;
+  const auto fn2 = [&h2](int x, int y, int z, BlockId b, uint32_t rnd) {
+    const int64_t v[5] = {x, y, z, int64_t(b), int64_t(rnd)};
+    h2 = fnv(v, sizeof v, h2);
+  };
+  for (uint64_t t = 0; t < 16; ++t) runRandomTicks(w, reg, tickable, 4, 4, 3, t, 8, fn2, nullptr, false, true);
+  std::printf("  diamond golden: hash 0x%016llx, %llu cells sampled\n", (unsigned long long)h, (unsigned long long)sampled);
+  check(h == h2 && sampled > 0, "diamond golden: cached and uncached diamond random ticks are bit-identical");
+  check(h == 0xd34ce4e17eae47acULL, "diamond golden: fixed diamond tick-area hash (update deliberately if tick selection changes)");
+}
+
 void testSim() {
   std::printf("sim: SimThread with a fixture IWorldSimulation\n");
   ChunkMap w = worldWithColumns(1, &fixtureBlocks());
@@ -5342,6 +5424,11 @@ void testModSandbox() {
     check(!sb.resolve(std::string("a\0b", 3), &err), "sandbox: NUL byte rejected");
   }
   std::error_code ec;
+  if (!symlinksAvailable()) {
+    std::printf("  [SKIP] sandbox: symlink checks (this host cannot create symlinks: enable Windows Developer Mode or run elevated)\n");
+    std::filesystem::remove_all(dir);
+    return;
+  }
   std::filesystem::create_directory_symlink(dir, dir / "mod_a" / "link_out", ec);
   std::filesystem::create_directory_symlink(dir / "mod_a" / "data", dir / "mod_a" / "link_in", ec);
   check(!ec, "sandbox: test symlinks created");
@@ -5390,8 +5477,12 @@ void testSandboxedOpen() {
     // the race: swap the validated file for a symlink to the outside
     std::error_code ec;
     std::filesystem::remove(dir / "mod" / "data" / "ok.txt", ec);
-    std::filesystem::create_symlink(dir / "outside" / "evil.txt", dir / "mod" / "data" / "ok.txt", ec);
-    check(!ec, "sandboxed open: attacker swapped the file for a symlink");
+    if (symlinksAvailable()) {
+      std::filesystem::create_symlink(dir / "outside" / "evil.txt", dir / "mod" / "data" / "ok.txt", ec);
+      check(!ec, "sandboxed open: attacker swapped the file for a symlink");
+    } else {
+      std::printf("  [SKIP] sandboxed open: file->symlink swap (host cannot create symlinks)\n");
+    }
     err.clear();
     const auto f = st::SandboxedFile::openRead(*resolved, sb, &err);
 #if defined(__linux__)
@@ -5429,8 +5520,12 @@ void testSandboxedOpen() {
       std::ofstream f(dir / "outside" / "sub" / "file.txt", std::ios::binary);
       f << "evil-inner";
     }
-    std::filesystem::create_symlink(dir / "outside" / "sub", dir / "mod" / "sub", ec);
-    check(!ec, "sandboxed open: attacker swapped the intermediate dir");
+    if (symlinksAvailable()) {
+      std::filesystem::create_symlink(dir / "outside" / "sub", dir / "mod" / "sub", ec);
+      check(!ec, "sandboxed open: attacker swapped the intermediate dir");
+    } else {
+      std::printf("  [SKIP] sandboxed open: intermediate dir->symlink swap (host cannot create symlinks)\n");
+    }
     err.clear();
     const auto f = st::SandboxedFile::openRead(*resolved, sb, &err);
 #if defined(__linux__)
@@ -6344,6 +6439,76 @@ void testNet() {
     check(ok, "net: delta handles spawn, despawn, and move in one packet");
   }
 
+  // --- Fix run 2 (2026-10-23, Cortana): R-NET-1/2/3 -------------------------------------
+  {
+    // R-NET-1: duplicate ids are refused explicitly (was: silent gap underflow).
+    Snapshot cur;
+    cur.tick = 5;
+    cur.entities = {ent(4, 0, 0, 0), ent(9, 1, 1, 1), ent(4, 2, 2, 2)};
+    quantize::ByteWriter w;
+    bool tr = false;
+    EncodePackedInfo info;
+    const bool ok = encodeSnapshot(cur, nullptr, 0, 1200, w, tr, &info);
+    check(!ok && w.size() == 0 && info.error == SnapshotEncodeError::DuplicateEntityId,
+          "net: R-NET-1 duplicate entity ids refused with an explicit error, nothing written");
+    Snapshot base;
+    base.entities = {ent(1, 0, 0, 0), ent(1, 0, 0, 0)};
+    Snapshot cur2;
+    cur2.entities = {ent(2, 0, 0, 0)};
+    quantize::ByteWriter w2;
+    EncodePackedInfo info2;
+    const bool ok2 = encodeSnapshot(cur2, &base, 1, 1200, w2, tr, &info2);
+    check(!ok2 && w2.size() == 0 && info2.error == SnapshotEncodeError::DuplicateBaselineId,
+          "net: R-NET-1 duplicate baseline ids refused with an explicit error");
+  }
+  {
+    // R-NET-2: a removals block bigger than maxBytes is cut to fit; the rest
+    // is deferred, `truncated` is set, and the packet still decodes.
+    Snapshot base, cur;
+    base.seq = 3;
+    for (uint32_t i = 0; i < 3000; ++i) base.entities.push_back(ent(i * 1000, 0, 0, 0));
+    for (auto& e : base.entities) e.atRest = true;
+    cur.tick = 9;  // everything removed
+    const size_t kMax = 200;
+    quantize::ByteWriter w;
+    bool tr = false;
+    EncodePackedInfo info;
+    bool ok = encodeSnapshot(cur, &base, 3, kMax, w, tr, &info);
+    ok = ok && w.size() <= kMax && tr && !info.removedIds.empty() &&
+         info.removedIds.size() + info.deferredRemovedIds.size() == base.entities.size();
+    quantize::ByteReader r(w.data(), w.size());
+    Snapshot back;
+    ok = ok && decodeSnapshot(r, &base, back) &&
+         back.entities.size() == base.entities.size() - info.removedIds.size();
+    check(ok, ("net: R-NET-2 removals respect maxBytes (" + std::to_string(w.size()) + " <= 200), rest deferred, decodes").c_str());
+  }
+  {
+    // R-NET-3: decodeHeader rejects unknown payload types explicitly; engine
+    // types and mod types (>= 256) still pass.
+    auto hdr = [](uint16_t type) {
+      quantize::ByteWriter w;
+      PacketHeader h;
+      h.version = kProtocolVersion;
+      h.type = static_cast<PayloadType>(type);
+      encodeHeader(h, w);
+      return w;
+    };
+    bool ok = true;
+    for (uint16_t t : {uint16_t(0), uint16_t(6), uint16_t(255)}) {
+      quantize::ByteWriter w = hdr(t);
+      quantize::ByteReader r(w.data(), w.size());
+      PacketHeader out;
+      HeaderReject rej;
+      ok = ok && !decodeHeader(r, out, &rej) && rej.badPayloadType && rej.gotType == t;
+    }
+    for (uint16_t t : {uint16_t(1), uint16_t(5), uint16_t(256), uint16_t(4000)}) {
+      quantize::ByteWriter w = hdr(t);
+      quantize::ByteReader r(w.data(), w.size());
+      PacketHeader out;
+      ok = ok && decodeHeader(r, out) && static_cast<uint16_t>(out.type) == t;
+    }
+    check(ok, "net: R-NET-3 header decoder rejects payload types 0/6/255, accepts 1..5 and mod types >= 256");
+  }
   // --- snapshotter: cadence, baseline, acks ------------------------------------------------
   {
     SnapshotClient c;  // 512 TPS / 32 Hz -> divisor 16
@@ -6963,6 +7128,11 @@ void testNetConfinement() {
 static void stubPwn(const std::string&) {}
 static int stubSetBlock(int, int, int, uint16_t) { return 0; }
 static uint64_t stubWorldTick() { return 42; }
+// fix 3c: string / bool / float / int args, string return, auxiliary object last.
+static std::string stubGenEcho(const std::string& s, bool b, float f, int i, ScriptEngine* se) {
+  return s + (b ? "T" : "F") + std::to_string(int(f * 10.f)) + std::to_string(i) + (se ? "!" : "?");
+}
+static uint64_t stubGenTick() { return 4242; }
 static uint64_t stubThrowTick() { throw std::runtime_error("binding boom"); }
 
 static bool isPow2(uint64_t v) { return v && !(v & (v - 1)); }
@@ -6998,6 +7168,25 @@ void testScriptSandbox() {
     se.setModPermissions(kPermWorldRead);
     check(se.bindGlobalFunction("uint64 worldTick()", asFUNCTION(stubWorldTick), asCALL_CDECL) >= 0,
           "allowlist: worldTick binds with world-read permission");
+  }
+  {  // fix 3c (Elfie P2): the generic calling convention (WASM / AS_MAX_PORTABILITY) forced natively
+    ScriptEngine::forceGenericCalls(true);
+    ScriptBindingAllowlist::registerBinding({"string genEcho(const string &in, bool, float, int)", 0, "fix 3c generic test"});
+    ScriptEngine se;
+    bool ok = se.init() && ScriptEngine::useGenericCalls();
+    se.setModPermissions(kPermWorldRead);
+    ok = ok && se.bindFunction("string genEcho(const string &in, bool, float, int)", LL_SCRIPT_FN_OBJLAST(stubGenEcho), &se) >= 0;
+    ok = ok && se.bindFunction("uint64 worldTick()", LL_SCRIPT_FN_CDECL(stubGenTick)) >= 0;
+    ok = ok && se.loadSource("gen", "void onLoad() { log(genEcho(\"x\", true, 2.5f, 7)); log(\"t\" + worldTick()); }") &&
+         se.callHook("void onLoad()");
+    ScriptEngine::forceGenericCalls(false);
+    check(ok && se.logCount() == 2 && se.lastLog() == "t4242", "script generic path: log + uint64 cdecl binding run through asCALL_GENERIC");
+    ScriptEngine se2;
+    bool ok2 = se2.init();
+    ok2 = ok2 && se2.bindFunction("string genEcho(const string &in, bool, float, int)", LL_SCRIPT_FN_OBJLAST(stubGenEcho), &se2) >= 0;
+    ok2 = ok2 && se2.loadSource("gen", "void onLoad() { log(genEcho(\"x\", true, 2.5f, 7)); }") && se2.callHook("void onLoad()");
+    check(ok && ok2 && se2.lastLog() == "xT257!" && !ScriptEngine::useGenericCalls(),
+          "script generic path: OBJLAST string/bool/float/int binding matches the native result");
   }
 
   // --- allowlist: runtime registration is guarded too -------------------------
@@ -8061,7 +8250,7 @@ int runModule(const std::string& m) {
   if (m == "core") { testCore(); testFailFast(); }
   else if (m == "world") testWorld();
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
-  else if (m == "sim") { testSim(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();

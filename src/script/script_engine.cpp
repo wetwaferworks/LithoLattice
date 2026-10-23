@@ -10,6 +10,8 @@
 #include <vector>
 #include <algorithm>
 #include "scriptstdstring/scriptstdstring.h"
+#include "litholattice/script/script_generic.h"
+#include <atomic>
 #include "litholattice/core/log.h"
 #include "script_memory_internal.h"
 
@@ -150,10 +152,33 @@ bool ScriptEngine::init() {
   engine_->SetMessageCallback(asFUNCTION(messageCallback), this, asCALL_CDECL);
   RegisterStdString(engine_);
   // The core binding goes through the same gated path as everything else.
-  int r = bindGlobalFunction("void log(const string &in)", asFUNCTION(scriptLog), asCALL_CDECL_OBJLAST, this);
+  // fix 3b (Elfie P2): WASM builds of AngelScript are AS_MAX_PORTABILITY (no native calling
+  // conventions), so a native registration returns asNOT_SUPPORTED (-7) there. Native boots
+  // register fine ("AngelScript 2.38.0 ready"). Use the generic convention when the library
+  // reports max portability; the native path is unchanged.
+  // fix 3c: every binding now carries both forms (script_generic.h); see bindFunction().
+  const int r = bindFunction("void log(const string &in)", LL_SCRIPT_FN_OBJLAST(scriptLog), this);
+  if (useGenericCalls()) logInfo("AngelScript: bindings use the generic calling convention (%s)",
+                                 std::strstr(asGetLibraryOptions(), "AS_MAX_PORTABILITY") ? "max-portability build" : "forced");
   if (r < 0) { logError("AngelScript: register log failed (%d)", r); return false; }
   logInfo("AngelScript %s ready (sandbox: allowlisted bindings only)", version());
   return true;
+}
+
+namespace {
+std::atomic<bool> g_forceGenericCalls{false};  // fix 3c test hook
+}  // namespace
+
+bool ScriptEngine::useGenericCalls() {
+  static const bool portable = std::strstr(asGetLibraryOptions(), "AS_MAX_PORTABILITY") != nullptr;
+  return portable || g_forceGenericCalls.load();
+}
+
+void ScriptEngine::forceGenericCalls(bool on) { g_forceGenericCalls.store(on); }
+
+int ScriptEngine::bindFunction(const char* decl, const ScriptFn& fn, void* obj) {
+  return useGenericCalls() ? bindGlobalFunction(decl, fn.generic, asCALL_GENERIC, obj)
+                           : bindGlobalFunction(decl, fn.native, fn.nativeConv, obj);
 }
 
 int ScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, asDWORD callConv, void* obj) {

@@ -8,7 +8,16 @@ target_link_libraries(litholattice_tests PRIVATE litholattice_render_vk litholat
 litholattice_module_options(litholattice_tests)
 foreach(module core world render sim ai anim storage procgen trees shrubs water litho_formula ui assets audio input net script mods console crypto index mcp defrag subdiv texture)
   add_test(NAME engine_${module} COMMAND litholattice_tests ${module})
+  # fix 3b: out-of-tree build dirs cannot find game/ assets (wafer.json) by walking up the cwd.
+  set_tests_properties(engine_${module} PROPERTIES ENVIRONMENT "LITHO_SOURCE_ROOT=${LithoLattice_SOURCE_DIR}/..")
 endforeach()
 # Cortana 2026-10-15 1500 (TOOLS, MC-02): these modules write to fixed %TEMP% paths; never run them
 # concurrently under parallel ctest.
 set_tests_properties(engine_storage engine_assets engine_mods engine_world PROPERTIES RESOURCE_LOCK litho_tempdir)
+
+# Fix run 2 (2026-10-23, R-SIM-1): engine_sim timed out once under parallel load in run 1;
+# not reproduced in 6 clean -j8 runs (1.7 s each). Guard: a hang now fails in 300 s with
+# ctest's timeout report instead of stalling the whole suite (default 1500 s).
+if(TEST engine_sim)
+  set_tests_properties(engine_sim PROPERTIES TIMEOUT 300)
+endif()

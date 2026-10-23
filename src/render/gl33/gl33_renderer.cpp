@@ -13,6 +13,14 @@
 #include <unordered_map>
 #include <string_view>
 #include "builtin_shaders.h"
+#if defined(__EMSCRIPTEN__)
+// Phase 2 mega-draw verbs (thin layer, lk_webio.js / lkboot.js):
+// WEBGL_multi_draw entry points are extension functions and absent from the
+// GL proc-address table, so the probe and the draw travel as reserved
+// stream ops instead of loader-resolved GL calls.
+extern "C" int lk_mega_probe();
+extern "C" int lk_mega_draw(int mode, const void* counts, const void* offsets, int drawCount);
+#endif
 #include "gl_loader.h"
 #include "gl_program.h"
 #include "gl_texture_array.h"
@@ -62,7 +70,7 @@ class GL33Renderer final : public IRenderer {
   bool prefersGreedyMeshes() const override { return true; }
   explicit GL33Renderer(bool arena) : useArena_(arena) {}
   bool init() {
-    logInfo("gl33: chunk meshes in %s", useArena_ ? "one arena VBO + VAO (base-vertex draws)" : "one VBO + VAO per sub-chunk");
+    logInfo("gl33: chunk meshes in %s", useArena_ ? "one arena VBO + VAO (rebased-index draws)" : "one VBO + VAO per sub-chunk");
     if (loadShaders(ShaderLibrary{}) < 0) return false;  // built-ins until the app loads pack shaders
     std::vector<uint32_t> idx(kMaxQuads * 6);  // shared quad index buffer
     for (uint32_t q = 0; q < kMaxQuads; ++q) {
@@ -71,6 +79,10 @@ class GL33Renderer final : public IRenderer {
     }
     glGenBuffers(1, &ebo_); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * 4), idx.data(), GL_STATIC_DRAW);
+    if (useArena_) {  // Phase 2: per-frame instance records (19 floats per visible mesh)
+      glGenBuffers(1, &instVbo_); glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
+      glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(4096 * 19 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
+    }
     glGenVertexArrays(1, &lineVao_); glBindVertexArray(lineVao_);
     glGenBuffers(1, &lineVbo_); glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     glBufferData(GL_ARRAY_BUFFER, 24 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
@@ -360,6 +372,11 @@ class GL33Renderer final : public IRenderer {
     for (size_t i = 0; i < std::size(kProgramNames); ++i) {
       const std::string_view name = kProgramNames[i];
       const bool pbr = (i == kChunkPbrProgram);
+#if defined(__EMSCRIPTEN__)
+      // fix 3b (Elfie P1): chunk_pbr.frag uses samplerBuffer, which GLSL ES 3.00 lacks. Decline the
+      // PBR path up front with one info line instead of a compile ERROR (supportsPbrPath() -> false).
+      if (pbr) { logInfo("gl33: chunk_pbr not available on WebGL2 (no samplerBuffer in GLSL ES 3.00); classic path only"); continue; }
+#endif
       std::string log;
       std::optional<GlProgram>& prog = built[i];
       if (const ShaderSource* src = lib.find(name)) {
@@ -388,7 +405,9 @@ class GL33Renderer final : public IRenderer {
     // PBR program: swap in on success, clear on failure (supportsPbrPath() reads id()).
     if (built[kChunkPbrProgram]) pbrProg_ = std::move(*built[kChunkPbrProgram]);
     else pbrProg_ = GlProgram();
+#if !defined(__EMSCRIPTEN__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
     if (!supportsPbrPath()) logError("gl33: chunk_pbr unavailable - PBR/BinaryQuad path disabled, classic path only");
+#endif
     // Sprite program: same optional-path treatment (drawSprites() reads id()).
     if (built[kSpriteProgram]) spriteProg_ = std::move(*built[kSpriteProgram]);
     else spriteProg_ = GlProgram();
@@ -409,6 +428,52 @@ class GL33Renderer final : public IRenderer {
     uTraceP0_ = prog_.uniform("uTraceP0"); uTraceP1_ = prog_.uniform("uTraceP1");  // wafer ground traces (JD 2026-10-11)
     uGroundTraceTime_ = prog_.uniform("uGroundTraceTime"); uGroundTraceOn_ = prog_.uniform("uGroundTraceOn");
     uLineM_ = lineProg_.uniform("uM"); uLineC_ = lineProg_.uniform("uC");
+    // Phase 2 mega-draw variant of the chunk program: same sources with
+    // LK_MEGADRAW injected after the #version line; per-mesh offset/pulse/
+    // trace then arrive as instanced attributes + flat varyings instead of
+    // uniforms. Built from whichever source prog_ came from (pack library
+    // first, built-in copy otherwise). Any failure leaves megaOk_ false and
+    // the renderer behaves exactly as before Phase 2.
+    progMega_ = GlProgram();
+    megaOk_ = false;
+    {
+      std::string mlog;
+      std::string vs, fs;
+      if (const ShaderSource* src = lib.find("chunk")) { vs = std::string(src->vertex); fs = std::string(src->fragment); }
+      else { vs = builtinSource("chunk.vert", &mlog); fs = builtinSource("chunk.frag", &mlog); }
+      auto inject = [](std::string s) {
+        const size_t nl = s.find('\n');
+        if (nl != std::string::npos) s.insert(nl + 1, "#define LK_MEGADRAW 1\n");
+        return s;
+      };
+      if (!vs.empty() && !fs.empty()) {
+        if (auto mp = GlProgram::build(inject(vs), inject(fs), &mlog)) {
+          progMega_ = std::move(*mp);
+          uMegaVP_ = progMega_.uniform("uVP"); uMegaCam_ = progMega_.uniform("uCam");
+          uMegaSky_ = progMega_.uniform("uSky"); uMegaFogEnd_ = progMega_.uniform("uFogEnd");
+          uMegaTime_ = progMega_.uniform("uTime"); uMegaTwinkle_ = progMega_.uniform("uTwinkle");
+          uMegaDebug_ = progMega_.uniform("uDebug");
+          uMegaModelDither_ = progMega_.uniform("uModelDither");
+          uMegaModelDitherBand_ = progMega_.uniform("uModelDitherBand");
+          uMegaGroundPulseTime_ = progMega_.uniform("uGroundPulseTime");
+          uMegaGroundPulseOn_ = progMega_.uniform("uGroundPulseOn");
+          uMegaGroundTraceTime_ = progMega_.uniform("uGroundTraceTime");
+          uMegaGroundTraceOn_ = progMega_.uniform("uGroundTraceOn");
+          applyMaterialUniformsTo(progMega_);
+        } else {
+          logError("gl33: mega-draw chunk program failed to build; mega-draw off:\n%s", mlog.c_str());
+        }
+      }
+      // Capability latch: the thin layer answers 1 only when
+      // WEBGL_multi_draw exists on the live context. Native builds have no
+      // such verb and keep the per-mesh path.
+      megaOk_ = false;
+#if defined(__EMSCRIPTEN__)
+      megaOk_ = useArena_ && progMega_.id() && lk_mega_probe() == 1;
+#endif
+      logInfo("gl33: mega-draw %s", megaOk_ ? "ON (one instanced multi-draw per frame for classic chunk meshes)" : "off (per-mesh draws)");
+      if (useArena_) for (auto& [k, g] : meshes_) buildMeshIndices(g);
+    }
     uScreen_ = hudProg_.uniform("uScreen");
     if (supportsPbrPath()) {
       uPbrVP_ = pbrProg_.uniform("uVP"); uPbrOffset_ = pbrProg_.uniform("uOffset");
@@ -509,6 +574,10 @@ class GL33Renderer final : public IRenderer {
     arenaVao_ = arenaVbo_ = 0;
     arenaVerts_ = 0;
     arenaFree_.clear();
+    if (arenaEbo_) { glDeleteBuffers(1, &arenaEbo_); arenaEbo_ = 0; }
+    if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
+    arenaIndices_ = 0;
+    arenaIndexFree_.clear();
   }
 
   void renderFrame(const FrameParams& p) override {
@@ -568,7 +637,55 @@ class GL33Renderer final : public IRenderer {
         std::memcpy(last, v, sizeof(float) * 4);
       }
     };
-    for (const auto& [k, g] : meshes_) {
+    // Phase 2 mega-draw (2026-10-23): when latched on, the whole visible
+    // classic-mesh list goes out as ONE instanced multi-draw — per-mesh data
+    // (offset + pulse/trace) rides the instance buffer, indices come from the
+    // arena index buffer, and no per-mesh uniform or VAO call crosses the
+    // bridge. Cull decisions are the same decideOnce() calls the classic
+    // loop makes, so the visible set is identical by construction.
+    bool megaDrew = false;
+    if (megaOk_) {
+      megaCounts_.clear(); megaOffsets_.clear(); megaData_.clear();
+      bool megaComplete = true;
+      for (const auto& [k, g] : meshes_) {
+        const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
+        if (decideOnce(k, mn) != CullDecision::Full) continue;
+        if (g.indexBuiltCount <= 0) { megaComplete = false; break; }  // never partially mega-draw: classic loop draws the whole frame
+        megaCounts_.push_back(g.indexCount);
+        megaOffsets_.push_back(GLint(g.indexFirst * sizeof(uint32_t)));
+        const float off[3] = {mn.x, mn.y, mn.z};
+        megaData_.insert(megaData_.end(), off, off + 3);
+        megaData_.insert(megaData_.end(), g.pulseP0, g.pulseP0 + 4);
+        megaData_.insert(megaData_.end(), g.pulseP1, g.pulseP1 + 4);
+        megaData_.insert(megaData_.end(), g.traceP0, g.traceP0 + 4);
+        megaData_.insert(megaData_.end(), g.traceP1, g.traceP1 + 4);
+      }
+      if (megaComplete && !megaCounts_.empty()) {
+        progMega_.use();
+        glUniformMatrix4fv(uMegaVP_, 1, GL_FALSE, p.viewProj.m);
+        glUniform3f(uMegaCam_, p.camPos.x, p.camPos.y, p.camPos.z);
+        glUniform3f(uMegaSky_, p.sky.x, p.sky.y, p.sky.z);
+        glUniform1f(uMegaFogEnd_, p.fogEnd);
+        glUniform1f(uMegaModelDither_, ditherEnabled_ ? 1.f : 0.f);
+        glUniform2f(uMegaModelDitherBand_, ditherNear_, ditherFar_);
+        glUniform1f(uMegaTime_, p.timeSec);
+        glUniform1i(uMegaTwinkle_, p.leafTwinkle);
+        glUniform1i(uMegaDebug_, p.debugOverlay ? 1 : 0);
+        glUniform1f(uMegaGroundPulseTime_, p.groundPulseTimeSec);
+        glUniform1f(uMegaGroundPulseOn_, p.groundPulseOn ? 1.f : 0.f);
+        glUniform1f(uMegaGroundTraceTime_, p.groundTraceTimeSec);
+        glUniform1f(uMegaGroundTraceOn_, p.groundTraceOn ? 1.f : 0.f);
+        if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
+        glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(megaData_.size() * sizeof(float)), megaData_.data(), GL_DYNAMIC_DRAW);
+#if defined(__EMSCRIPTEN__)
+        lk_mega_draw(GL_TRIANGLES, megaCounts_.data(), megaOffsets_.data(), int(megaCounts_.size()));
+#endif
+        stats_.drawn += uint32_t(megaCounts_.size());
+        megaDrew = true;
+      }
+    }
+    if (!megaDrew) for (const auto& [k, g] : meshes_) {
       const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
       // Prototype pipeline: Full draws; MeshOnly keeps the uploaded mesh but
       // skips the draw (outer tier); Cull skips. Base margin = foundation.
@@ -582,7 +699,13 @@ class GL33Renderer final : public IRenderer {
       effectPrimed = true;
       if (useArena_) {
         if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
-        glDrawElementsBaseVertex(GL_TRIANGLES, g.indexCount, GL_UNSIGNED_INT, nullptr, GLint(g.first));
+        // Rebased indices (Phase 2): the arena EBO's per-mesh indices already
+        // carry the base vertex, so the classic arena draw needs no
+        // base-vertex call — which WebGL2 does not have (the reason the web
+        // configuration ran with the arena off until now). Identical pixels
+        // to the old pattern-EBO + BaseVertex draw.
+        glDrawElements(GL_TRIANGLES, g.indexCount, GL_UNSIGNED_INT,
+                       reinterpret_cast<const void*>(g.indexFirst * sizeof(uint32_t)));
       } else {
         glBindVertexArray(g.vao);
         glDrawElements(GL_TRIANGLES, g.indexCount, GL_UNSIGNED_INT, nullptr);
@@ -748,9 +871,12 @@ class GL33Renderer final : public IRenderer {
 
  private:
   // Uniforms that come from the block models; re-applied after a shader reload.
-  void applyMaterialUniforms() {
-    prog_.use();
-    auto u1 = [&](const std::string& n, int v) { glUniform1i(prog_.uniform(n.c_str()), v); };
+  void applyMaterialUniforms() { applyMaterialUniformsTo(prog_); }
+  // Same material set for another chunk program (the Phase 2 mega variant
+  // shares every material uniform with the classic program).
+  void applyMaterialUniformsTo(GlProgram& p) {
+    p.use();
+    auto u1 = [&](const std::string& n, int v) { glUniform1i(p.uniform(n.c_str()), v); };
     auto arr = [&](const char* n, size_t i) { return std::string(n) + "[" + std::to_string(i) + "]"; };
     u1("uTex", 0); u1("uPal", 1); u1("uTile", textures_.tileSize());
     for (size_t c = 0; c < 2; ++c) { u1(arr("uWirePal", c), bindings_.stripPalette[c]); u1(arr("uRing", c), bindings_.stripRing[c]); }
@@ -767,20 +893,27 @@ class GL33Renderer final : public IRenderer {
     for (size_t i = 0; i < animations_.size(); ++i) {
       u1(arr("uAnimStart", i), animations_[i].sequenceStart);
       u1(arr("uAnimLen", i), animations_[i].sequenceLength);
-      glUniform1f(prog_.uniform(arr("uAnimMs", i).c_str()), animations_[i].frameMs);
+      glUniform1f(p.uniform(arr("uAnimMs", i).c_str()), animations_[i].frameMs);
     }
     for (size_t i = 0; i < animFrames_.size(); ++i) u1(arr("uAnimSeq", i), animFrames_[i]);
   }
 
   // vao / vbo: per-mesh path. first / count: the mesh's vertex range in the arena VBO.
   struct Gpu { GLuint vao = 0, vbo = 0; GLsizei indexCount = 0; int cx = 0, sy = 0, cz = 0; size_t first = 0, count = 0;
-                 float pulseP0[4]{}; float pulseP1[4]{}; float traceP0[4]{}; float traceP1[4]{}; };  // wafer ground-pulse + trace blended params
+                 float pulseP0[4]{}; float pulseP1[4]{}; float traceP0[4]{}; float traceP1[4]{};  // wafer ground-pulse + trace blended params
+                 // Phase 2 mega-draw: this mesh's rebased pattern indices in the
+                 // arena index buffer (index units), and the (first, count) they
+                 // were built for — rebuilt whenever the vertex range moves.
+                 size_t indexFirst = 0; size_t indexBuiltFirst = ~size_t(0); GLsizei indexBuiltCount = 0; };
   // PBR (BinaryQuad) meshes: one VAO+VBO each (never in the arena - see uploadPbrChunkMesh).
   struct PbrGpu { GLuint vao = 0, vbo = 0; GLsizei indexCount = 0; int cx = 0, sy = 0, cz = 0; };
   void erase(int64_t key) {
     auto it = meshes_.find(key);
     if (it == meshes_.end()) return;
-    if (useArena_) freeRange(it->second.first, it->second.count);
+    if (useArena_) {
+      freeRange(it->second.first, it->second.count);
+      if (it->second.indexBuiltCount > 0) freeIndexRange(it->second.indexFirst, size_t(it->second.indexBuiltCount));
+    }
     else { glDeleteBuffers(1, &it->second.vbo); glDeleteVertexArrays(1, &it->second.vao); }
     meshes_.erase(it);
   }
@@ -806,7 +939,31 @@ class GL33Renderer final : public IRenderer {
     glVertexAttribIPointer(2, 2, GL_UNSIGNED_BYTE, sizeof(PackedVertex), reinterpret_cast<const void*>(10));
     glEnableVertexAttribArray(3);  // Cortana 2026-10-15 1628: CA-03 [ENGINE] aLayerHi (byte 15)
     glVertexAttribIPointer(3, 1, GL_UNSIGNED_BYTE, sizeof(PackedVertex), reinterpret_cast<const void*>(15));
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);  // rebased arena indices (0 until the first mesh builds them)
+    if (instVbo_) {  // NOT gated on megaOk_: this runs at init, before loadShaders
+                     // latches megaOk_ — gating on the latch left the instanced
+                     // attributes unset forever and every mega-draw read the
+                     // default (0,0,0,1) attribute (first bench run, 2026-10-23).
+      // Phase 2 instanced attributes (locations 4..8, divisor 1), one 19-float
+      // record per visible mesh: offset(3) + pulseP0(4) + pulseP1(4) +
+      // traceP0(4) + traceP1(4). The classic program does not declare these
+      // locations; enabled-but-unconsumed arrays are legal, and this VAO is
+      // only drawn by the classic path when megaOk_ is false (then this
+      // block never ran).
+      glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
+      const GLsizei stride = GLsizei(19 * sizeof(float));
+      glEnableVertexAttribArray(4);
+      glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(0));
+      glEnableVertexAttribArray(5);
+      glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(12));
+      glEnableVertexAttribArray(6);
+      glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(28));
+      glEnableVertexAttribArray(7);
+      glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(44));
+      glEnableVertexAttribArray(8);
+      glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(60));
+      for (GLuint loc = 4; loc <= 8; ++loc) glVertexAttribDivisor(loc, 1);
+    }
   }
   void growArena(size_t minVerts) {
     size_t cap = std::max(arenaVerts_ ? arenaVerts_ * 2 : kArenaInitialVerts, minVerts);
@@ -848,6 +1005,48 @@ class GL33Renderer final : public IRenderer {
         arenaFree_.erase(it);
       }
   }
+  // Phase 2: the index arena mirrors the vertex arena (first-fit free list,
+  // doubling growth) in index units.
+  std::optional<size_t> allocIndexRange(size_t n) {
+    for (auto it = arenaIndexFree_.begin(); it != arenaIndexFree_.end(); ++it) {
+      if (it->second < n) continue;
+      const size_t first = it->first, rest = it->second - n;
+      arenaIndexFree_.erase(it);
+      if (rest) arenaIndexFree_.emplace(first + n, rest);
+      return first;
+    }
+    return std::nullopt;
+  }
+  void freeIndexRange(size_t first, size_t n) {
+    if (!n) return;
+    auto it = arenaIndexFree_.emplace(first, n).first;
+    if (const auto next = std::next(it); next != arenaIndexFree_.end() && it->first + it->second == next->first) {
+      it->second += next->second;
+      arenaIndexFree_.erase(next);
+    }
+    if (it != arenaIndexFree_.begin())
+      if (const auto prev = std::prev(it); prev->first + prev->second == it->first) {
+        prev->second += it->second;
+        arenaIndexFree_.erase(it);
+      }
+  }
+  void growIndexArena(size_t minIndices) {
+    static constexpr size_t kArenaInitialIndices = kArenaInitialVerts * 3 / 2;  // 6 indices per 4 verts
+    size_t cap = std::max(arenaIndices_ ? arenaIndices_ * 2 : kArenaInitialIndices, minIndices);
+    GLuint ebo = 0;
+    glGenBuffers(1, &ebo);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, ebo);
+    glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
+    if (arenaEbo_) {
+      glBindBuffer(GL_COPY_READ_BUFFER, arenaEbo_);
+      glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, GLsizeiptr(arenaIndices_ * sizeof(uint32_t)));
+      glDeleteBuffers(1, &arenaEbo_);
+    }
+    freeIndexRange(arenaIndices_, cap - arenaIndices_);
+    arenaEbo_ = ebo;
+    arenaIndices_ = cap;
+    bindArenaAttribs();
+  }
   void uploadToArena(int64_t key, const ChunkMesh& m) {
     const size_t n = m.verts.size();
     auto it = meshes_.find(key);
@@ -867,11 +1066,55 @@ class GL33Renderer final : public IRenderer {
     for (int i = 0; i < 4; ++i) { g.pulseP0[i] = m.pulseP0[i]; g.pulseP1[i] = m.pulseP1[i]; g.traceP0[i] = m.traceP0[i]; g.traceP1[i] = m.traceP1[i]; }
     glBindBuffer(GL_ARRAY_BUFFER, arenaVbo_);
     glBufferSubData(GL_ARRAY_BUFFER, GLintptr(g.first * sizeof(PackedVertex)), GLsizeiptr(n * sizeof(PackedVertex)), m.verts.data());
+    buildMeshIndices(g);
+  }
+  // Phase 2: (re)build a mesh's rebased pattern indices whenever its vertex
+  // range or index count moved. The pattern is procedural (the shared quad
+  // strip), so index data is regenerated rather than stored. Called from
+  // uploadToArena and from loadShaders (a mega latch that turns ON after
+  // meshes already exist must not leave them index-less).
+  void buildMeshIndices(Gpu& g) {
+    if (!useArena_ || g.indexCount <= 0) return;
+    if (g.indexBuiltFirst == g.first && g.indexBuiltCount == g.indexCount) return;
+    if (g.indexBuiltCount > 0) { freeIndexRange(g.indexFirst, size_t(g.indexBuiltCount)); g.indexBuiltCount = 0; }
+    auto firstIdx = allocIndexRange(size_t(g.indexCount));
+    if (!firstIdx) { growIndexArena(size_t(g.indexCount)); firstIdx = allocIndexRange(size_t(g.indexCount)); }
+    if (!firstIdx) return;
+    g.indexFirst = *firstIdx;
+    std::vector<uint32_t> idx(size_t(g.indexCount));
+    const uint32_t quads = uint32_t(g.indexCount) / 6;
+    for (uint32_t q = 0; q < quads; ++q) {
+      const uint32_t b = uint32_t(g.first) + q * 4; uint32_t* o = &idx[q * 6];
+      o[0] = b; o[1] = b + 1; o[2] = b + 2; o[3] = b; o[4] = b + 2; o[5] = b + 3;
+    }
+    glBindVertexArray(arenaVao_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);
+    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(g.indexFirst * sizeof(uint32_t)),
+                    GLsizeiptr(idx.size() * sizeof(uint32_t)), idx.data());
+    g.indexBuiltFirst = g.first;
+    g.indexBuiltCount = g.indexCount;
   }
   bool useArena_ = true;
   GLuint arenaVao_ = 0, arenaVbo_ = 0;
   size_t arenaVerts_ = 0;
   std::map<size_t, size_t> arenaFree_;  // first vertex -> count
+  // Phase 2 mega-draw state (2026-10-23, Elfie implementing under Archie's
+  // direction): arena index buffer (rebased pattern indices per mesh), the
+  // per-frame instance buffer, the LK_MEGADRAW program variant, and the
+  // latched capability. megaOk_ is decided in loadShaders by a drawCount-0
+  // probe of glMultiDrawElementsInstancedWEBGL; when false, every mega path
+  // below is inert and the renderer is bit-identical to the pre-Phase-2 one.
+  GLuint arenaEbo_ = 0, instVbo_ = 0;
+  size_t arenaIndices_ = 0;
+  std::map<size_t, size_t> arenaIndexFree_;  // first index -> count
+  GlProgram progMega_;
+  bool megaOk_ = false;
+  GLint uMegaVP_ = -1, uMegaCam_ = -1, uMegaSky_ = -1, uMegaFogEnd_ = -1, uMegaTime_ = -1,
+        uMegaTwinkle_ = -1, uMegaDebug_ = -1, uMegaModelDither_ = -1, uMegaModelDitherBand_ = -1,
+        uMegaGroundPulseTime_ = -1, uMegaGroundPulseOn_ = -1, uMegaGroundTraceTime_ = -1,
+        uMegaGroundTraceOn_ = -1;
+  std::vector<GLint> megaCounts_, megaOffsets_;
+  std::vector<float> megaData_;
   std::unordered_map<int64_t, Gpu> meshes_;
   GLuint entityVao_ = 0, entityVbo_ = 0;
   GLsizei entityVertCount_ = 0;

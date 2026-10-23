@@ -322,8 +322,8 @@ void evalVoronoi(Ctx& c, const TextureNode& node, int nodeIndex, std::vector<flo
           else if (d < f2) { f2 = d; }
         }
       }
-      f1 = sqrtFast(f1);  // Carmack sqrt (baked texture content)
-      f2 = sqrtFast(f2);
+      f1 = std::sqrt(f1);  // EXACT (fix run 2, 2026-10-23): baked texture content is deterministic content (Jenny's rules)
+      f2 = std::sqrt(f2);
       out[i] = node.voronoiMode == VoronoiMode::F1 ? clampf(f1 * kInvSqrt2, 0.0f, 1.0f)
                                                    : clampf((f2 - f1) * 2.0f, 0.0f, 1.0f);
     }

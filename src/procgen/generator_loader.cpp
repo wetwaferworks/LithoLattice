@@ -756,7 +756,14 @@ bool loadSandDrifts(Loader& l, const Json& json, const std::vector<std::string>&
 
 std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   const std::string type = j.getStr("type"), section = "feature '" + j.getStr("name") + "'";
-  if (type == "dungeon") return std::make_unique<DungeonSlot>();
+  if (type == "dungeon") {
+    // Issue R-PG-2 (2026-10-23): dungeon generation has no design or implementation yet (chip
+    // dungeons are a planned feature: docs/DESIGN-BRIEF-full.md). Keep the slot so existing
+    // worldgen JSON still loads, but say loudly that the requested dungeons will not place.
+    logError("procgen: %s: dungeon generation is not implemented (issue R-PG-2); this feature places "
+             "nothing, so this world gets no dungeons", section.c_str());
+    return std::make_unique<DungeonSlot>();
+  }
   if (type == "trace_tree") {
     TraceTreeSettings s;
     if (!l.material(j, "trunk", s.trunk, section) || !l.material(j, "branch", s.branch, section) ||

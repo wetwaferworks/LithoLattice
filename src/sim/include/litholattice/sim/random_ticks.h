@@ -27,6 +27,7 @@ using RandomTickFn = std::function<void(int x, int y, int z, BlockId block, uint
 struct RandomTickCache {
   int pcx = 0, pcz = 0, radius = -1;
   bool round = false;  ///< F56-7
+  bool diamond = false;  ///< diamond (Manhattan) tick area (JD 2026-10-23)
   size_t columnCount = 0;
   struct Col {
     int cx = 0, cz = 0;
@@ -42,6 +43,6 @@ struct RandomTickCache {
 /// and `fn` (palette resolved once per sub-chunk, then O(1) per pick).
 uint64_t runRandomTicks(const ChunkMap& world, const BlockRegistry& reg, const std::vector<uint8_t>& tickable,
                         int pcx, int pcz, int radius, uint64_t tickIndex, int perSection, const RandomTickFn& fn,
-                        RandomTickCache* cache = nullptr, bool round = false);  // F56-7: round = disc r^2+r
+                        RandomTickCache* cache = nullptr, bool round = false, bool diamond = false);  // F56-7: round = disc r^2+r; diamond = Manhattan (JD 2026-10-23)
 
 }  // namespace litholattice

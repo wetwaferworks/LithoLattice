@@ -113,6 +113,8 @@ class SnapshotClient {
   void requestFull();
   /// Client needFull requests dropped by the rate limiter.
   uint64_t ignoredForcedFulls() const { return ignoredForcedFulls_; }
+  /// Snapshots refused by encodeSnapshot (duplicate ids; R-NET-1, fix run 2).
+  uint64_t encodeErrors() const { return encodeErrors_; }
 
   uint32_t baselineSeq() const { return baselineSeq_; }
   uint16_t nextSeq() const { return nextSeq_; }
@@ -139,6 +141,7 @@ class SnapshotClient {
   uint64_t lastForcedFullBuild_ = 0;   // buildCount_ when requestFull() was last honored
   bool everForcedFull_ = false;
   uint64_t ignoredForcedFulls_ = 0;    // client requests dropped by the limiter
+  uint64_t encodeErrors_ = 0;          // encodes refused (R-NET-1)
 
   const Snapshot* findSnapshot(uint32_t seq) const;
   void evictThrough(uint32_t seq);

@@ -93,7 +93,7 @@ plus a state byte) and optionally the `ColumnMaps` (height, climate, biome per c
 | `ICarver` | `WormCaveCarver` (cross-chunk worms replayed from every chunk in reach, keeps `surface_margin` below the surface) | example |
 | | `RavineCarver` | stub (carves nothing) |
 | `IFeature` (+ `FeatureRegistry`) | `OreVeinFeature` (random-walk veins replacing one material, inside the chunk) | example |
-| | `DungeonSlot` | placeholder (places nothing) |
+| | `DungeonSlot` | placeholder (places nothing; the loader logs an error when a generator requests one, issue R-PG-2) |
 | | `TraceTreeFeature` (via-like trunk 4-7, 2-4 forking trace branches, red/blue glowing tips; per-biome density) | done |
 | | `CapacitorCanFeature` (3-7 squat cans 2-3 tall in radius-2 clusters; per-biome density) | done |
 | | `ResonatorSpireFeature` (crystal spike 8-16 tall, 1-2 wide; per-biome density) | done |

@@ -213,10 +213,17 @@ add_subdirectory("${LITHOKRAFT_GAME_DIR}" game)  # binary dir "game": the exe Li
 # The custom target is in ALL and a dependency of the game exe, so it runs on every build
 # (even when nothing recompiles) and before the exe's sources compile.
 find_program(LITHOLATTICE_PYTHON3 NAMES python3 python)
+# 2026-10-23 (JD, fix run 2): builds NEVER write the engine counter by default; it is
+# set by hand (see docs/versioning/COUNTERS.md). The target only regenerates the header.
+option(LL_ENGINE_COUNTER_BUMP "Roll BUILD_COUNTER.txt on every build (off: read-only)" OFF)
+set(_jd_counter_mode --no-bump)
+if(LL_ENGINE_COUNTER_BUMP)
+  set(_jd_counter_mode)
+endif()
 if(LITHOLATTICE_PYTHON3)
   get_filename_component(JD_TREE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" DIRECTORY)
   add_custom_target(jd_build_counter ALL
-    COMMAND "${LITHOLATTICE_PYTHON3}" "${JD_TREE_ROOT}/tools/build_counter.py"
+    COMMAND "${LITHOLATTICE_PYTHON3}" "${JD_TREE_ROOT}/tools/build_counter.py" ${_jd_counter_mode}
             --state "${JD_TREE_ROOT}/BUILD_COUNTER.txt"
             --header "${CMAKE_BINARY_DIR}/generated/build_counter.h"
             --log "${JD_TREE_ROOT}/BUILD_COUNTER.log"

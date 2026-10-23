@@ -157,7 +157,18 @@ bool encodeHeader(const PacketHeader& h, quantize::ByteWriter& out);
 struct HeaderReject {
   bool versionMismatch = false;  ///< false = bad magic or truncated input
   uint8_t got = 0;               ///< the version byte that arrived (when versionMismatch)
+  /// Fix run 2 (2026-10-23, R-NET-3): the payload type is neither an engine
+  /// PayloadType (1..5) nor a mod wire type (>= 256, see confinement.h).
+  bool badPayloadType = false;
+  uint16_t gotType = 0;  ///< the type field that arrived (when badPayloadType)
 };
+
+/// First mod wire type; must equal kModNetTypeBase in confinement.h.
+constexpr uint16_t kWireModTypeBase = 256;
+/// True for a type decodeHeader accepts: an engine PayloadType or a mod type.
+constexpr bool isValidWirePayloadType(uint16_t t) {
+  return (t >= 1 && t <= 5) || t >= kWireModTypeBase;
+}
 
 /// Validates magic; returns false (header untouched) on bad magic, a version
 /// outside `acceptedVersion`, or truncated input. On a version mismatch
@@ -226,16 +237,29 @@ struct Snapshot {
 /// payload: packed records decode to the caller's current values bit-exactly
 /// (for encoder-feasible inputs), updates cut by the byte budget keep the
 /// baseline value, and cut spawns never shipped. See SnapshotClient::build().
+/// Fix run 2 (2026-10-23, R-NET-1/2): why encodeSnapshot refused or cut.
+enum class SnapshotEncodeError : uint8_t {
+  None = 0,
+  DuplicateEntityId,    ///< `current` holds the same id twice: refused (returns false)
+  DuplicateBaselineId,  ///< `baseline` holds the same id twice: refused (returns false)
+};
+
 struct EncodePackedInfo {
   std::vector<uint32_t> packedIds;   ///< records packed, id ascending
   std::vector<uint32_t> removedIds;  ///< removals packed, id ascending
+  /// Removals that did NOT fit maxBytes this time (R-NET-2): the client still
+  /// holds them, so the caller must keep them in its post-image baseline.
+  std::vector<uint32_t> deferredRemovedIds;
+  SnapshotEncodeError error = SnapshotEncodeError::None;
 };
 
 /// Encode `current` against `baseline` (nullptr = full snapshot vs the empty
 /// state). `baselineSeq` is written into the payload. Stops packing entity
 /// updates before exceeding maxBytes; sets `truncated` when updates were cut.
-/// Removals are always packed first. Returns false only on programmer error
-/// (unsorted input is sorted internally, so this cannot fail otherwise).
+/// Removals are packed first, but never past maxBytes (R-NET-2): removals that
+/// do not fit are reported in packedOut->deferredRemovedIds and `truncated` is
+/// set. Returns false (nothing written to out) on duplicate entity ids in
+/// current or `baseline` (R-NET-1); packedOut->error says which.
 /// `packedOut` optionally receives the packed record/removal ids (see
 /// EncodePackedInfo).
 bool encodeSnapshot(const Snapshot& current, const Snapshot* baseline, uint32_t baselineSeq,

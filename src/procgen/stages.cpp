@@ -185,7 +185,8 @@ void BiomeHeightmapTerrain::generate(StageContext& ctx) const {
   const int n = ctx.chunk.size, top = ctx.blocks.height() - 1;
   const size_t last = perBiome_.size() - 1;
   const size_t nb = std::min(ctx.maps.biomeCount, perBiome_.size());
-  const bool blended = nb > 0 && ctx.maps.biomeWeight.size() >= size_t(n) * size_t(n) * nb;
+  const size_t wStride = ctx.maps.biomeCount;  // biomeWeight[i * biomeCount + b] (Cortana review 2026-10-23)
+  const bool blended = nb > 0 && ctx.maps.biomeWeight.size() >= size_t(n) * size_t(n) * wStride;
   const auto biomeHeight = [&](size_t b, size_t i) {
     float v = h[slotBase[b]][i];
     if (slotUplift[b] != kNoUplift) v += perBiome_[b].upliftAmplitude * h[slotUplift[b]][i];
@@ -199,7 +200,7 @@ void BiomeHeightmapTerrain::generate(StageContext& ctx) const {
       // edges read as gradients. One-hot (unblended) weights reduce to the dominant height.
       float hv = biomeHeight(dom, i);
       if (blended) {
-        const float* w = ctx.maps.biomeWeight.data() + i * nb;
+        const float* w = ctx.maps.biomeWeight.data() + i * wStride;
         float hsum = 0.f, wsum = 0.f;
         for (size_t b = 0; b < nb; ++b)
           if (w[b] > 0.f) {
@@ -235,8 +236,8 @@ void LayeredSurface::apply(StageContext& ctx) const {
       // picked by a seeded hash of the column position, so the boundary is a noisy
       // gradient rather than a line. One-hot weights always pick the dominant biome.
       const size_t nb = std::min(ctx.maps.biomeCount, perBiome_.size());
-      if (nb > 1 && ctx.maps.biomeWeight.size() >= (i + 1) * nb) {
-        const float* w = ctx.maps.biomeWeight.data() + i * nb;
+      if (nb > 1 && ctx.maps.biomeWeight.size() >= (i + 1) * ctx.maps.biomeCount) {
+        const float* w = ctx.maps.biomeWeight.data() + i * ctx.maps.biomeCount;  // stride = biomeCount (Cortana review 2026-10-23)
         int mixed = 0;
         for (size_t b = 0; b < nb; ++b) mixed += (w[b] > 0.f) ? 1 : 0;
         if (mixed > 1) {

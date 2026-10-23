@@ -1,6 +1,7 @@
 // mcp_selftest.cpp: headless checks for the MCP Phase 0 JSON-RPC core.
 #include "litholattice/mcp/mcp_selftest.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -11,6 +12,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "litholattice/mcp/json.h"
 #include "litholattice/mcp/jsonrpc.h"
@@ -1990,6 +1995,41 @@ int runMcpSelfTest() {
       }
     }
 
+    // -- R-RACE-1 (fix run 2, 2026-10-23): shutdown of a runStdio() thread that
+    // is BLOCKED in the real-stdin read. stdin (fd 0) is swapped for an empty
+    // pipe so the read blocks; stopStdioThread must cancel it and join, so the
+    // server can be freed. Start/stop loop x8 (the old code detached + freed).
+    {
+#ifdef _WIN32
+      int joined = 0;
+      const int kLoops = 8;
+      const int savedIn = _dup(0);
+      for (int i = 0; i < kLoops && savedIn >= 0; ++i) {
+        int fds[2] = {-1, -1};
+        if (_pipe(fds, 4096, _O_BINARY) != 0) break;
+        _dup2(fds[0], 0);
+        auto srv = std::make_unique<McpServer>();
+        srv->setLogSink(nullptr);
+        std::atomic<bool> done{false};
+        McpServer* raw = srv.get();
+        std::thread th([raw, &done] { raw->runStdio(); done.store(true, std::memory_order_release); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(i % 2 ? 30 : 0));  // cancel before AND during the read
+        const bool ok = stopStdioThread(th, done, std::chrono::milliseconds(3000));
+        if (ok) { ++joined; srv.reset(); }  // free only after the join
+        else { th.detach(); (void)srv.release(); }
+        _dup2(savedIn, 0);
+        _close(fds[0]);
+        _close(fds[1]);
+        if (!ok) break;
+      }
+      if (savedIn >= 0) _close(savedIn);
+      check(joined == kLoops, "mcp: R-RACE-1 blocked stdin reader cancelled + joined before free (x" +
+                                  std::to_string(joined) + "/" + std::to_string(kLoops) + ")");
+      check(!stdioStopRequested(), "mcp: R-RACE-1 stop flag reset after a clean join");
+#else
+      check(true, "mcp: R-RACE-1 stdin cancel test is Windows-only (POSIX uses the poll transport)");
+#endif
+    }
   }
 
   int fails = check.fails();

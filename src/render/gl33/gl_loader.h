@@ -130,6 +130,7 @@ using GLintptr = std::ptrdiff_t;
   X(void, DrawElementsBaseVertex, (GLenum, GLsizei, GLenum, const void*, GLint)) \
   X(void, EnableVertexAttribArray, (GLuint)) \
   X(void, VertexAttribIPointer, (GLuint, GLint, GLenum, GLsizei, const void*)) \
+  X(void, VertexAttribDivisor, (GLuint, GLuint)) /* GL 3.3 core; Phase 2 instancing (Cortana review 2026-10-23) */ \
   X(void, TexBuffer, (GLenum, GLenum, GLuint)) \
   X(void, Uniform3fv, (GLint, GLsizei, const GLfloat*)) \
   X(void, Uniform4fv, (GLint, GLsizei, const GLfloat*)) \
@@ -197,6 +198,7 @@ LITHOLATTICE_GL_FUNCS(LITHOLATTICE_DECLARE)
 #define glDrawElementsBaseVertex litholattice_glDrawElementsBaseVertex
 #define glEnableVertexAttribArray litholattice_glEnableVertexAttribArray
 #define glVertexAttribIPointer litholattice_glVertexAttribIPointer
+#define glVertexAttribDivisor litholattice_glVertexAttribDivisor
 #define glTexBuffer litholattice_glTexBuffer
 #define glUniform3fv litholattice_glUniform3fv
 #define glUniform4fv litholattice_glUniform4fv

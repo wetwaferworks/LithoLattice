@@ -496,7 +496,8 @@ class OreVeinFeature final : public IFeature {
   OreVeinSettings s_;
 };
 
-/// Structure slot for dungeons. Placeholder: places nothing yet.
+/// Structure slot for dungeons. Placeholder: places nothing yet. Issue R-PG-2: the loader logs
+/// an error whenever a generator requests one, so the no-op is never silent.
 class DungeonSlot final : public IFeature {
  public:
   void place(StageContext&, Rng&) const override {}

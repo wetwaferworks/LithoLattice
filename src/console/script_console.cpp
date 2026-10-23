@@ -4,6 +4,7 @@
 #include <angelscript.h>
 
 #include "litholattice/core/log.h"
+#include "litholattice/script/script_generic.h"
 #include "litholattice/mods/mod_interface.h"  // kPermConsole
 
 namespace litholattice::console {
@@ -67,14 +68,14 @@ void scriptConsoleSetCvar(const std::string& name, const std::string& value, Con
 
 struct BindingDecl {
   const char* decl;
-  asSFuncPtr ptr;
+  ScriptEngine::ScriptFn fn;  // fix 3c: native + generic forms
   const char* description;
 };
 
 const BindingDecl kConsoleBindings[] = {
-    {"void consoleCmd(const string &in)", asFUNCTION(scriptConsoleCmd), "execute a console line"},
-    {"string consoleCvar(const string &in)", asFUNCTION(scriptConsoleCvar), "read a cvar value"},
-    {"void consoleSetCvar(const string &in, const string &in)", asFUNCTION(scriptConsoleSetCvar),
+    {"void consoleCmd(const string &in)", LL_SCRIPT_FN_OBJLAST(scriptConsoleCmd), "execute a console line"},
+    {"string consoleCvar(const string &in)", LL_SCRIPT_FN_OBJLAST(scriptConsoleCvar), "read a cvar value"},
+    {"void consoleSetCvar(const string &in, const string &in)", LL_SCRIPT_FN_OBJLAST(scriptConsoleSetCvar),
      "write a cvar value"},
 };
 
@@ -93,7 +94,7 @@ std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se, Con
   ctx->modId = modId;
   ctx->permissionMask = se.modPermissions();  // the mod's own authority, not ambient
   for (const BindingDecl& b : kConsoleBindings) {
-    if (se.bindGlobalFunction(b.decl, b.ptr, asCALL_CDECL_OBJLAST, ctx.get()) < 0) {
+    if (se.bindFunction(b.decl, b.fn, ctx.get()) < 0) {
       logWarn("console: refusing '%s' for mod '%s' (allowlist or missing kPermConsole)", b.decl,
               modId.c_str());
       return nullptr;

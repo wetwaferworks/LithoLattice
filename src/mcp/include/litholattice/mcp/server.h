@@ -43,6 +43,8 @@
 // types exist. Anything else in a schema is not produced by this server.
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -50,6 +52,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -550,6 +553,22 @@ class FdStdioTransport : public IStdioTransport {
   std::string pending_;
 };
 
+/// Fix run 2 (2026-10-23, Cortana; review R-RACE-1): stop a thread that is
+/// running McpServer::runStdio() on the REAL stdin and join it, so the server
+/// can be freed safely. `done` must be set by the thread as its last action.
+/// Sets the process-wide stdin stop flag (FdStdioTransport returns EOF without
+/// dispatching once it is set), then on Windows repeatedly CancelSynchronousIo()s
+/// the blocked read until the thread finishes or `timeout` passes.
+/// Returns true when the thread was joined. On false the thread is STILL
+/// running: the caller must not free the server (leak it and detach instead;
+/// with the stop flag set it will never dispatch another message).
+bool stopStdioThread(std::thread& t, const std::atomic<bool>& done,
+                     std::chrono::milliseconds timeout);
+/// Clears the stdin stop flag (a later runStdio() may read again). Called by
+/// stopStdioThread after a successful join.
+void resetStdioStop();
+/// True once stopStdioThread has requested the stdin reader to stop.
+bool stdioStopRequested();
 using LogSink = std::function<void(std::string_view line)>;
 
 // ---------------------------------------------------------------------------

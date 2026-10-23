@@ -210,7 +210,13 @@ class JobSystem {
       LITHO_THREAD_LOG("job", "submit prio=%u worker=%u depth~%zu", pi, target,
                        workers_[target]->deques[pi].approxSize());
     }
-    workGen_.fetch_add(1, std::memory_order_release);  // wake a sleeper; pairs with the wait predicate
+    [[maybe_unused]] const uint64_t g = workGen_.fetch_add(1, std::memory_order_release) + 1;  // wake a sleeper; pairs with the wait predicate
+    LITHO_THREAD_LOG("job", "submit gen->%llu notify_one", (unsigned long long)g);
+    // B8 fix (2026-10-23): touch m_ between the predicate change and the notify. A sleeping worker
+    // tests its predicate under m_ and then blocks; without this, the increment + notify_one could
+    // land in that window, the notify reaches nobody, and the worker sleeps forever with the job
+    // queued (a JobFence / waitIdle() caller then hangs: the intermittent engine_sim / engine_core hang).
+    { std::lock_guard<std::mutex> l(m_); }  // L2, empty: orders us after any in-progress predicate check
     cv_.notify_one();
   }
 
@@ -231,15 +237,27 @@ class JobSystem {
   void waitIdle() {
     assert(!t_onJobThread && "waitIdle() from a job thread would deadlock the pool");
     std::unique_lock<std::mutex> l(m_);  // L2
-    idleCv_.wait(l, [this] {
+    auto idle = [this] {
       return inFlight_.load(std::memory_order_acquire) == 0 &&
              ioInFlight_.load(std::memory_order_acquire) == 0;
-    });
+    };
+    if constexpr (kThreadDebug) {  // B8 watchdog (debug builds only): same wait, dump after 10 s
+      if (!idleCv_.wait_for(l, std::chrono::seconds(10), idle)) { debugDump("waitIdle() 10 s without progress"); }
+    }
+    idleCv_.wait(l, idle);
   }
 
   uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
   unsigned workerCount() const { return (unsigned)workers_.size(); }
   unsigned ioThreadCount() const { return (unsigned)ioThreads_.size(); }
+
+  /// B8 (debug builds only): job-system counters + every thread's trace ring to stderr.
+  void debugDump(const char* why) const {
+    LITHO_THREAD_LOG("job", "dump: workGen=%llu inFlight=%d ioInFlight=%d stop=%d", (unsigned long long)workGen_.load(),
+                     inFlight_.load(), ioInFlight_.load(), int(stop_.load()));
+    LITHO_THREAD_DUMP(why);
+    (void)why;
+  }
 
   /// True when called on a worker or I/O thread of any JobSystem.
   static bool onJobThread() { return t_onJobThread; }
@@ -337,6 +355,8 @@ class JobSystem {
                      ioInFlight_.load(std::memory_order_relaxed));
     stop_.store(true, std::memory_order_release);
     workGen_.fetch_add(1, std::memory_order_release);
+    { std::lock_guard<std::mutex> l(m_); }    // B8 fix: same missed-wakeup window as submit()
+    { std::lock_guard<std::mutex> l(ioM_); }  // io threads test stop_ under ioM_
     cv_.notify_all();
     ioCv_.notify_all();
     for (auto& t : workerThreads_) t.join();
@@ -429,7 +449,7 @@ class JobSystem {
       // No work anywhere: sleep until a submit or shutdown. The predicate
       // compares workGen_ against the generation seen before the scan, so a
       // submit that lands between the scan and the wait cannot be missed.
-      LITHO_THREAD_LOG("thread", "worker %u sleep", self);
+      LITHO_THREAD_LOG("thread", "worker %u sleep gen=%llu", self, (unsigned long long)gen);
       std::unique_lock<std::mutex> l(m_);  // L2
       cv_.wait(l, [this, &gen] {
         return stop_.load(std::memory_order_acquire) ||
@@ -561,6 +581,12 @@ class JobFence {
   int wait() {
     assert(!JobSystem::onJobThread() && "JobFence::wait() from a job thread would deadlock");
     std::unique_lock<std::mutex> l(m_);  // L1 leaf
+    if constexpr (kThreadDebug) {  // B8 watchdog (debug builds only): same wait, dump after 10 s
+      if (!cv_.wait_for(l, std::chrono::seconds(10), [this] { return pending_ == 0; })) {
+        LITHO_THREAD_LOG("job", "fence stuck: pending=%d", pending_);
+        sys_.debugDump("JobFence::wait() 10 s without progress");
+      }
+    }
     cv_.wait(l, [this] { return pending_ == 0; });
     return failed_;
   }

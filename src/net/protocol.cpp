@@ -36,6 +36,14 @@ bool decodeHeader(quantize::ByteReader& in, PacketHeader& out, uint8_t acceptedV
   if (!in.getU16LE(h.ack)) return false;
   if (!in.getU16LE(h.ackBits)) return false;
   if (!in.getU16LE(type)) return false;
+  // Fix run 2 (R-NET-3): unknown payload types are an explicit rejection.
+  if (!isValidWirePayloadType(type)) {
+    if (reject) {
+      reject->badPayloadType = true;
+      reject->gotType = type;
+    }
+    return false;
+  }
   h.type = static_cast<PayloadType>(type);
   if (!in.getU16LE(h.payloadLen)) return false;
   out = h;
@@ -151,6 +159,8 @@ bool encodeSnapshot(const Snapshot& current, const Snapshot* baseline, uint32_t 
   if (packedOut) {
     packedOut->packedIds.clear();
     packedOut->removedIds.clear();
+    packedOut->deferredRemovedIds.clear();
+    packedOut->error = SnapshotEncodeError::None;
   }
   // Normalize + sort: entities hit the wire in id order for gap coding.
   // atRest normalizes stored velocity to zero so future deltas stay small and
@@ -164,6 +174,20 @@ bool encodeSnapshot(const Snapshot& current, const Snapshot* baseline, uint32_t 
             [](const SnapshotEntity& a, const SnapshotEntity& b) { return a.id < b.id; });
 
   const std::vector<SnapshotEntity>* baseVec = baseline ? &baseline->entities : nullptr;
+
+  // Fix run 2 (R-NET-1): duplicate ids made the gap coding underflow (id - prev - 1
+  // wraps) and silently produced a packet the decoder rejects. Refuse explicitly.
+  for (size_t i = 1; i < sorted.size(); ++i)
+    if (sorted[i].id == sorted[i - 1].id) {
+      if (packedOut) packedOut->error = SnapshotEncodeError::DuplicateEntityId;
+      return false;
+    }
+  if (baseVec)
+    for (size_t i = 1; i < baseVec->size(); ++i)
+      if ((*baseVec)[i].id <= (*baseVec)[i - 1].id) {  // baseline must be strictly ascending
+        if (packedOut) packedOut->error = SnapshotEncodeError::DuplicateBaselineId;
+        return false;
+      }
 
   // Removals: baseline ids not present now. Linear merge over two sorted
   // ranges. Packed first: a ghost entity is worse than a stale position.
@@ -185,13 +209,30 @@ bool encodeSnapshot(const Snapshot& current, const Snapshot* baseline, uint32_t 
       }
     }
   }
-  remBody.putUVarint(static_cast<uint32_t>(removed.size()));
-  uint32_t prev = 0;
-  bool rfirst = true;
-  for (uint32_t id : removed) {
-    remBody.putUVarint(rfirst ? id : id - prev - 1);
-    rfirst = false;
-    prev = id;
+  // Fix run 2 (R-NET-2): removals still go first, but only as many as fit the
+  // byte budget; the rest are deferred (the caller keeps them in its baseline,
+  // so they are re-sent next snapshot) instead of overrunning maxBytes.
+  const size_t remBudget = maxBytes > 13 ? maxBytes - 13 : 0;
+  size_t nRem = 0;
+  {
+    quantize::ByteWriter ids;
+    uint32_t prev = 0;
+    for (size_t k = 0; k < removed.size(); ++k) {
+      quantize::ByteWriter one, cnt;
+      one.putUVarint(k == 0 ? removed[k] : removed[k] - prev - 1);
+      cnt.putUVarint(static_cast<uint32_t>(k + 1));
+      if (cnt.size() + ids.size() + one.size() > remBudget) break;
+      ids.putBytes(one.data(), one.size());
+      prev = removed[k];
+      nRem = k + 1;
+    }
+    remBody.putUVarint(static_cast<uint32_t>(nRem));
+    remBody.putBytes(ids.data(), ids.size());
+  }
+  if (nRem < removed.size()) {
+    truncated = true;
+    if (packedOut) packedOut->deferredRemovedIds.assign(removed.begin() + nRem, removed.end());
+    removed.resize(nRem);
   }
 
   // Records, packed until the byte budget would be exceeded. Each record is

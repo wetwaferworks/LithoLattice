@@ -4,6 +4,7 @@
 // Immutable once built; shared read-only by mesh worker threads.
 #pragma once
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <array>
@@ -59,6 +60,12 @@ class BlockMaterials {
   const FaceMaterial& face(BlockId b, FaceSlot f, bool active) const {
     return b < faces_.size() ? faces_[b][size_t(f)][active ? 1 : 0] : kMissing;
   }
+  /// Fix 3c: the model's connected side variant (kConnectedSide*), nullptr if the model has none.
+  const FaceMaterial* connectedSide(BlockId b, int v, bool active) const {
+    if (b >= connected_.size() || v < 0 || v >= kConnectedSideCount) return nullptr;
+    const auto& o = connected_[b][size_t(v)][active ? 1 : 0];
+    return o ? &*o : nullptr;
+  }
   const FaceMaterial& wirePiece(BlockId b, WirePiece p) const { return b < wire_.size() ? wire_[b][size_t(p)] : kMissing; }
   const MaterialBindings& bindings() const { return bindings_; }
   /// 2026-10-16: 1-based leaf glow slot of block `b` (0 = none); see kShadeLeaf.
@@ -91,6 +98,7 @@ class BlockMaterials {
   using StateFaces = std::array<FaceMaterial, 2>;  // [base, active]
   std::vector<std::array<StateFaces, kFaceSlotCount>> faces_;
   std::vector<std::array<FaceMaterial, kWirePieceCount>> wire_;
+  std::vector<std::array<std::array<std::optional<FaceMaterial>, 2>, kConnectedSideCount>> connected_;  // fix 3c
   std::vector<std::array<float, 3>> swatch_;
   MaterialBindings bindings_;
   std::vector<ShaderAnimation> animations_;

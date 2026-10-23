@@ -53,7 +53,7 @@ void SimThread::validateTickRate(int tps) {
 
 SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_ptr<IWorldSimulation> simulation,
                      SimConfig config, SubmitMesh submit)
-    : chunks_(chunks), blocks_(blocks), sim_(std::move(simulation)), radius_(config.radiusChunks), round_(config.roundArea), epoch_(config.epoch),
+    : chunks_(chunks), blocks_(blocks), sim_(std::move(simulation)), radius_(config.radiusChunks), round_(config.roundArea), diamond_(config.diamondArea), epoch_(config.epoch),
       belowWorld_(config.belowWorldFill), submit_(std::move(submit)), requestedTps_(config.tickRate) {
   validateTickRate(config.tickRate);
   if (config.domains.size() > size_t(kMaxClockDomains)) config.domains.resize(size_t(kMaxClockDomains));
@@ -572,7 +572,7 @@ void SimThread::run() {
       stepEditsApplied_ |= tickEdits;
       stepRaycastDone_ |= tickEdits;  // applyControlEvents casts iff it had due edits
       const uint64_t pk = areaChunkKey_;  // stamped PlayerChunk state, folded at the POST phase
-      const TickArea area{int(int32_t(pk >> 32)), int(int32_t(pk & 0xffffffffu)), radius_, round_};  // F56-7
+      const TickArea area{int(int32_t(pk >> 32)), int(int32_t(pk & 0xffffffffu)), radius_, round_, diamond_};  // F56-7 + diamond
       sim_->tick(chunks_, area, dirtyFn);
       if (tpOn) tpA[3] = ::litholattice::tickprof::nowNs();
       if (handshake_ && handshake_->frozen()) {
@@ -589,7 +589,7 @@ void SimThread::run() {
                          ++randomTicks_;
                          sim_->onRandomTick(chunks_, x, y, z, b, rnd, dirtyFn);
                        },
-                       &randomTickCache_, round_);  // F56-7
+                       &randomTickCache_, round_, diamond_);  // F56-7 + diamond
         if (tpOn) tpA[5] = ::litholattice::tickprof::nowNs();
         ++worldTickN_; ++windowWorldTicks_;
         if (tickHook_) tickHook_(worldTickN_);  // LL_HASH_AT_TICK probe (measure only; Proposed by JD; co-implemented by JD and Cortana)

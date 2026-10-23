@@ -110,6 +110,7 @@ void salvageSegment(const uint8_t* p, size_t avail, DemoParseResult& r) {
   if (r.sessionKnown && sessionDisagrees(r.session, segSession)) return;
   if (!r.sessionKnown) {
     r.session = segSession;
+      r.session.area = r.area;  // Fix run 3
     r.sessionKnown = true;
   }
   size_t at = kLlcHeaderBytes;
@@ -213,6 +214,8 @@ DemoParseResult parseDemo(const uint8_t* data, size_t n) {
   }
   if (getU16(data + 4) != kDemoFormatVersion)
     return hardError(DemoError::UnsupportedVersion, "demo: unsupported format version");
+  r.area = unpackDemoArea(getU16(data + 6));  // Fix run 3
+  r.session.area = r.area;
 
   uint64_t declaredSum = 0;
   size_t offset = kPreambleBytes;
@@ -284,6 +287,7 @@ DemoParseResult parseDemo(const uint8_t* data, size_t n) {
       return hardError(DemoError::HeaderMismatch, "demo: segment header disagrees with the first segment");
     if (!r.sessionKnown) {
       r.session = segSession;
+      r.session.area = r.area;  // Fix run 3
       r.sessionKnown = true;
     }
     declaredSum += seg.header.declaredEvents;
@@ -312,7 +316,7 @@ bool DemoRecorder::begin(ControlStream& stream, const DemoSessionInfo& info) {
   bytes_.clear();
   bytes_.insert(bytes_.end(), kDemoMagic, kDemoMagic + 4);
   putU16(bytes_, kDemoFormatVersion);
-  putU16(bytes_, 0);
+  putU16(bytes_, packDemoArea(info.area));  // Fix run 3: area word (was reserved 0)
   eventsRecorded_ = 0;
   stream_->setRecording(true);
   lastError_ = DemoError::None;
@@ -465,6 +469,36 @@ std::vector<ControlEvent> demoEventsInTickRange(const DemoParseResult& p, uint64
   for (const ControlEvent& e : p.events)
     if (e.tick >= lo && e.tick <= hi) out.push_back(e);
   return out;
+}
+
+// ------------------------------------------------- area word (Fix run 3)
+
+uint16_t packDemoArea(const DemoAreaInfo& a) {
+  if (!a.known) return 0;
+  const uint16_t r = a.tickRadius > 1023 ? 1023 : a.tickRadius;
+  return uint16_t(0x8000u | (uint16_t(a.simShape) & 3u) | ((uint16_t(a.streamShape) & 3u) << 2) | (r << 4));
+}
+
+DemoAreaInfo unpackDemoArea(uint16_t w) {
+  DemoAreaInfo a;
+  if (!(w & 0x8000u)) return a;  // pre-fix-3 file: not recorded
+  const auto shape = [](unsigned v) { return v <= 2 ? AreaShape(v) : kDefaultAreaShape; };
+  a.known = true;
+  a.simShape = shape(w & 3u);
+  a.streamShape = shape((w >> 2) & 3u);
+  a.tickRadius = uint16_t((w >> 4) & 0x3ffu);
+  return a;
+}
+
+DemoAreaInfo resolveReplayArea(const DemoAreaInfo& recorded, const DemoAreaInfo& current, bool* mismatch) {
+  if (!recorded.known) {
+    if (mismatch) *mismatch = false;
+    return current;
+  }
+  if (mismatch)
+    *mismatch = recorded.simShape != current.simShape || recorded.streamShape != current.streamShape ||
+                recorded.tickRadius != current.tickRadius;
+  return recorded;
 }
 
 }  // namespace litholattice

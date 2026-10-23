@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <memory>
 #include <vector>
 
 #include "litholattice/mods/extensible_interface.h"
@@ -550,6 +551,9 @@ struct FakeParent {
     facet_.firstPartyGrantCount = static_cast<uint32_t>(grantPtrs_.size());
     facet_.firstPartyGrants = grantPtrs_.empty() ? nullptr : grantPtrs_.data();
   }
+  // fix 3b ASAN-2: facet_ points at this object's own members; never copy or move it.
+  FakeParent(const FakeParent&) = delete;
+  FakeParent& operator=(const FakeParent&) = delete;
   const LithoLatticeExtensible* facet() const { return &facet_; }
   const LithoLatticeExtensionApi* childApi() const { return &childApi_; }
 
@@ -646,10 +650,11 @@ void testExtensionLoaderDepthCap(Checker& c) {
     ExtensionLoader loader;
     std::vector<std::string> ids = {"caproot"};
     for (int i = 1; i <= 8; ++i) ids.push_back("d" + std::to_string(i));
-    std::vector<FakeParent> mods;
+    std::vector<std::unique_ptr<FakeParent>> mods;  // fix 3b ASAN-2: stable addresses
     for (int i = 0; i < 8; ++i)
-      mods.emplace_back(FakeParent{{{ids[i + 1], "*", 0}}});
-    for (int i = 0; i < 8; ++i) regParent(loader, i, mods[i], ids[i].c_str(), "1.0.0");
+      mods.push_back(std::make_unique<FakeParent>(
+          std::vector<std::tuple<std::string, std::string, uint32_t>>{{ids[i + 1], "*", 0}}));
+    for (int i = 0; i < 8; ++i) regParent(loader, i, *mods[i], ids[i].c_str(), "1.0.0");
     regLeaf(loader, ids[8].c_str(), "1.0.0");
     std::string err;
     c(loader.loadMod("caproot", err), "loader: 8-deep chain loads at the default cap");
@@ -662,10 +667,11 @@ void testExtensionLoaderDepthCap(Checker& c) {
     ExtensionLoader loader;
     std::vector<std::string> ids = {"caproot9"};
     for (int i = 1; i <= 9; ++i) ids.push_back("e" + std::to_string(i));
-    std::vector<FakeParent> mods;
+    std::vector<std::unique_ptr<FakeParent>> mods;  // fix 3b ASAN-2: stable addresses
     for (int i = 0; i < 9; ++i)
-      mods.emplace_back(FakeParent{{{ids[i + 1], "*", 0}}});
-    for (int i = 0; i < 9; ++i) regParent(loader, i, mods[i], ids[i].c_str(), "1.0.0");
+      mods.push_back(std::make_unique<FakeParent>(
+          std::vector<std::tuple<std::string, std::string, uint32_t>>{{ids[i + 1], "*", 0}}));
+    for (int i = 0; i < 9; ++i) regParent(loader, i, *mods[i], ids[i].c_str(), "1.0.0");
     regLeaf(loader, ids[9].c_str(), "1.0.0");
     std::string err;
     c(!loader.loadMod("caproot9", err), "loader: 9th nesting level is rejected");

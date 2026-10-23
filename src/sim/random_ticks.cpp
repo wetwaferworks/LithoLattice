@@ -18,13 +18,13 @@ std::vector<uint8_t> randomTickableBlocks(const BlockRegistry& blocks) {
 
 uint64_t runRandomTicks(const ChunkMap& world, const BlockRegistry& reg, const std::vector<uint8_t>& tickable,
                         int pcx, int pcz, int radius, uint64_t tickIndex, int perSection, const RandomTickFn& fn,
-                        RandomTickCache* cache, bool round) {  // F56-7
+                        RandomTickCache* cache, bool round, bool diamond) {  // F56-7 + diamond (JD 2026-10-23)
   if (perSection <= 0) return 0;
   // Column-pointer cache: one hash lookup per column per area change instead of
   // per column per tick. Rebuilt when the area moves or the column set changes.
   const RandomTickCache::Col* cols = nullptr;
   size_t ncols = 0;
-  if (cache && cache->pcx == pcx && cache->pcz == pcz && cache->radius == radius && cache->round == round &&
+  if (cache && cache->pcx == pcx && cache->pcz == pcz && cache->radius == radius && cache->round == round && cache->diamond == diamond &&
       cache->columnCount == world.columns().size()) {
     cols = cache->cols.data();
     ncols = cache->cols.size();
@@ -33,10 +33,11 @@ uint64_t runRandomTicks(const ChunkMap& world, const BlockRegistry& reg, const s
     scratch.clear();
     for (int cz = pcz - radius; cz <= pcz + radius; ++cz)
       for (int cx = pcx - radius; cx <= pcx + radius; ++cx)
-        if (!round || (cx - pcx) * (cx - pcx) + (cz - pcz) * (cz - pcz) <= radius * radius + radius)  // F56-7
+        if (diamond ? (std::abs(cx - pcx) + std::abs(cz - pcz) <= radius)
+                    : (!round || (cx - pcx) * (cx - pcx) + (cz - pcz) * (cz - pcz) <= radius * radius + radius))  // F56-7 + diamond
           if (const ChunkColumn* col = world.column(cx, cz)) scratch.push_back({cx, cz, col});
     if (cache) {
-      cache->pcx = pcx; cache->pcz = pcz; cache->radius = radius; cache->round = round;
+      cache->pcx = pcx; cache->pcz = pcz; cache->radius = radius; cache->round = round; cache->diamond = diamond;
       cache->columnCount = world.columns().size();
       cache->cols = scratch;
     }

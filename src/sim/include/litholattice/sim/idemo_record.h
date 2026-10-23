@@ -9,7 +9,10 @@
 //
 // File format (v1, little-endian):
 //   Preamble (8 bytes): 'LLDM', u16 demo format version (= 1), u16
-//   reserved. Then zero or more segment frames, then — only on a clean
+//   area word (Fix run 3, 2026-10-23): bit 15 = sim/stream area recorded,
+//   bits 0-1 sim AreaShape, bits 2-3 stream AreaShape, bits 4-13 tick
+//   radius (0..1023). Pre-fix-3 files wrote 0 here (= not recorded: the
+//   replayer keeps its configured area, the old behaviour). Then zero or more segment frames, then — only on a clean
 //   finish — one trailer.
 //   Segment frame: u32 payloadLen, then payloadLen bytes holding ONE
 //   complete LLCS v1 stream (writeControlStream) whose header carries the
@@ -35,6 +38,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "litholattice/sim/area_shape.h"
 #include "litholattice/sim/control_stream.h"
 
 namespace litholattice {
@@ -52,6 +56,24 @@ enum class DemoError : uint8_t {
 };
 const char* demoErrorName(DemoError e);
 
+// Fix run 3 (2026-10-23): the sim/stream area a session ran with. A replay
+// MUST use the recorded area (resolveReplayArea), not the replayer's settings.
+struct DemoAreaInfo {
+  bool known = false;
+  AreaShape simShape = kDefaultAreaShape;
+  AreaShape streamShape = kDefaultAreaShape;
+  uint16_t tickRadius = 0;
+  bool operator==(const DemoAreaInfo& o) const {
+    return known == o.known && simShape == o.simShape && streamShape == o.streamShape && tickRadius == o.tickRadius;
+  }
+  bool operator!=(const DemoAreaInfo& o) const { return !(*this == o); }
+};
+uint16_t packDemoArea(const DemoAreaInfo& a);
+DemoAreaInfo unpackDemoArea(uint16_t w);
+/// The area a replay runs with: the recorded one when the file carries it
+/// (*mismatch set when it differs from `current`), else `current`.
+DemoAreaInfo resolveReplayArea(const DemoAreaInfo& recorded, const DemoAreaInfo& current, bool* mismatch = nullptr);
+
 struct DemoSessionInfo {
   uint64_t worldSeed = 0;
   uint8_t mode = 0;              // 0 legacy / 1 handshake (matches ControlStreamHeader::mode)
@@ -59,6 +81,7 @@ struct DemoSessionInfo {
   uint16_t phasesPerCycle = 0;
   uint32_t streamFormatVersion = kControlStreamFormatVersion;
   uint16_t demoFormatVersion = kDemoFormatVersion;
+  DemoAreaInfo area;  // Fix run 3: written into the preamble area word
 };
 struct DemoTrailerInfo {
   bool present = false;
@@ -76,6 +99,7 @@ struct DemoParseResult {
   std::vector<ControlEvent> events;   // recovered events, application order
   DemoTrailerInfo trailer;
   size_t segmentsRecovered = 0;
+  DemoAreaInfo area;  // Fix run 3: from the preamble area word (known=false in old files)
 };
 class IDemoRecord {
  public:

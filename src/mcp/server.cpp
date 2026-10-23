@@ -13,7 +13,11 @@
 #include <sstream>
 #ifdef _WIN32
 #include <io.h>  // _read (MCP-H2)
+// CancelSynchronousIo (kernel32), declared here to avoid pulling in <windows.h>.
+extern "C" __declspec(dllimport) int __stdcall CancelSynchronousIo(void* hThread);
 #endif
+#include <atomic>
+#include <thread>
 
 // kPerm* bits (header-only C macros) and the engine/SDK version macros.
 #include "litholattice/mods/mod_interface.h"
@@ -1916,12 +1920,15 @@ bool FdStdioTransport::readLine(std::string& out) {
   // so a short JSON-RPC line on a pipe never got answered on Windows. _read
   // returns whatever the pipe has (a partial read), like POSIX read().
   while (!lineDone) {
+    if (stdioStopRequested()) return false;  // R-RACE-1: shutdown, never dispatch
     const int n = _read(0, chunk, unsigned(sizeof chunk));
+    if (stdioStopRequested()) return false;  // read cancelled (or data raced the stop)
     if (n <= 0) break;  // EOF or read error
     feed(chunk, static_cast<size_t>(n));
   }
 #else
   while (!lineDone && std::cin) {
+    if (stdioStopRequested()) return false;
     std::cin.read(chunk, sizeof chunk);
     const std::streamsize n = std::cin.gcount();
     if (n <= 0) break;  // EOF or read error
@@ -1941,6 +1948,36 @@ bool FdStdioTransport::readLine(std::string& out) {
 void FdStdioTransport::writeLine(std::string_view line) {
   std::cout << line << '\n';
   std::cout.flush();
+}
+
+// ---------------------------------------------------------------------------
+// Fix run 2 (2026-10-23, Cortana; review R-RACE-1): cancel + join the stdin
+// reader thread so McpServer can be freed without a use-after-free.
+// ---------------------------------------------------------------------------
+namespace {
+std::atomic<bool> gStdioStop{false};
+}  // namespace
+
+bool stdioStopRequested() { return gStdioStop.load(std::memory_order_acquire); }
+void resetStdioStop() { gStdioStop.store(false, std::memory_order_release); }
+
+bool stopStdioThread(std::thread& t, const std::atomic<bool>& done,
+                     std::chrono::milliseconds timeout) {
+  if (!t.joinable()) return true;
+  gStdioStop.store(true, std::memory_order_release);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!done.load(std::memory_order_acquire)) {
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+#ifdef _WIN32
+    // Re-issued every pass: a cancel that lands before the thread enters
+    // _read is a no-op, and the next pass catches the read itself.
+    CancelSynchronousIo(t.native_handle());
+#endif
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  t.join();
+  resetStdioStop();
+  return true;
 }
 
 }  // namespace litholattice::mcp

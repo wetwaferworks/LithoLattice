@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "litholattice/core/log.h"
+
 namespace litholattice {
 namespace net {
 
@@ -91,7 +93,14 @@ std::vector<uint8_t> SnapshotClient::buildNormalized(const Snapshot& normalized,
   quantize::ByteWriter payload;
   bool truncated = false;
   EncodePackedInfo packed;  // side-channel: which records/removals shipped
-  encodeSnapshot(cur, base, encBaseline, budget, payload, truncated, &packed);
+  if (!encodeSnapshot(cur, base, encBaseline, budget, payload, truncated, &packed)) {
+    // Fix run 2 (R-NET-1): explicit failure instead of a silently corrupt packet.
+    ++encodeErrors_;
+    logError("net: snapshot encode refused (tick %u): %s - nothing sent, full resync forced", cur.tick,
+             packed.error == SnapshotEncodeError::DuplicateEntityId ? "duplicate entity id" : "duplicate baseline id");
+    forceFull_ = true;
+    return {};
+  }
   forceFull_ = false;
 
   PacketHeader h;
@@ -134,6 +143,17 @@ std::vector<uint8_t> SnapshotClient::buildNormalized(const Snapshot& normalized,
       }
       // else (full snapshot): cut records simply never shipped
     }
+  }
+  // Fix run 2 (R-NET-2): removals deferred by the byte budget never reached the
+  // client, so they stay in the post-image and are re-sent next snapshot.
+  if (base && !packed.deferredRemovedIds.empty()) {
+    for (uint32_t id : packed.deferredRemovedIds) {
+      auto it = std::lower_bound(base->entities.begin(), base->entities.end(), id,
+                                 [](const SnapshotEntity& e, uint32_t i) { return e.id < i; });
+      if (it != base->entities.end() && it->id == id) post.entities.push_back(*it);
+    }
+    std::sort(post.entities.begin(), post.entities.end(),
+              [](const SnapshotEntity& a, const SnapshotEntity& b) { return a.id < b.id; });
   }
   post.seq = h.seq;
   history_.push_back(std::move(post));

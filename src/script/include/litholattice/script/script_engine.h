@@ -38,6 +38,19 @@ class ScriptEngine {
   ScriptEngine& operator=(const ScriptEngine&) = delete;
 
   bool init();      // engine + message callback + core API (string, log)
+  /// Fix 3c (Elfie P2): a binding in both calling conventions (see script_generic.h,
+  /// LL_SCRIPT_FN_OBJLAST / LL_SCRIPT_FN_CDECL). bindFunction() registers the generic form when
+  /// useGenericCalls() (AS_MAX_PORTABILITY library, i.e. WASM, or forced), else the native one,
+  /// through bindGlobalFunction (same allowlist / permission gate).
+  struct ScriptFn {
+    asSFuncPtr native;
+    asSFuncPtr generic;
+    asDWORD nativeConv;
+  };
+  int bindFunction(const char* decl, const ScriptFn& fn, void* obj = nullptr);
+  static bool useGenericCalls();
+  /// Test hook: force the generic path on native builds (affects bindings made afterwards).
+  static void forceGenericCalls(bool on);
   /// The mod's granted permission bitmask (LithoLatticeModPermission bits, from
   /// the mod's mod.json). The game sets this before binding the mod's API;
   /// bindGlobalFunction() refuses bindings the mask does not grant. Changing

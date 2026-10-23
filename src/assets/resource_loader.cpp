@@ -174,6 +174,7 @@ class ModelParser {
       if (face == "side") layout.setSide(*ref);
       else if (face == "all") layout.setAll(*ref);
       else if (const auto slot = faceSlotFromName(face)) layout.set(*slot, *ref);
+      else if (const int v = connectedSideFromName(face); v >= 0) layout.setConnected(v, *ref);  // fix 3c: connected via sides
       else warn_.push_back(where_ + ": unknown face '" + face + "'");
     }
   }

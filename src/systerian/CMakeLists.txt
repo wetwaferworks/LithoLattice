@@ -13,6 +13,6 @@ litholattice_module_options(litholattice_systerian)
 add_executable(litholattice_systerian_selftest systerian_selftest.cpp)
 target_link_libraries(litholattice_systerian_selftest PRIVATE litholattice_systerian)
 target_compile_definitions(litholattice_systerian_selftest PRIVATE
-  SYSTERIAN_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../user/files/cistercian")
+  SYSTERIAN_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata/cistercian")  # fix run 2: vendored in-tree (was ../../../../user/files, outside the repo)
 litholattice_module_options(litholattice_systerian_selftest)
 add_test(NAME engine_systerian COMMAND litholattice_systerian_selftest)

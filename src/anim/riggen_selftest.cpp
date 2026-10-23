@@ -184,8 +184,13 @@ int runRiggenSelfTest() {
     const double ms =
         std::chrono::duration<double, std::milli>(t1 - t0).count();
     char buf[128];
+#if defined(__SANITIZE_ADDRESS__)
+    constexpr double kSanSlack = 10.0;  // fix 3b: ASan builds run ~3-10x slower
+#else
+    constexpr double kSanSlack = 1.0;
+#endif
     std::snprintf(buf, sizeof buf, "riggen: 32^3 sphere extracts in %.1f ms (< 200 ms)", ms);
-    check(r.has_value() && ms < 200.0, buf);
+    check(r.has_value() && ms < 200.0 * kSanSlack, buf);
   }
 
   std::printf("riggen selftest: %d failure(s)\n", check.fails);
