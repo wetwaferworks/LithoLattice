@@ -9,7 +9,7 @@
 // Who gets notified: the `done` callback you pass, invoked on an I/O thread
 // immediately after its op finishes. Callbacks run on I/O threads, NEVER on the
 // sim/tick/worker threads. A callback must be short and non-blocking — the
-// pattern is push-into-a-lock-free-queue (cSpscQueue, the InputPump idiom) and
+// pattern is push-into-a-lock-free-queue (cSpscQueue, the cInputPump idiom) and
 // let the tick thread drain it once per frame. A callback must never wait on
 // sim state, take game locks, or call cIoFence::wait()/JobSystem::waitIdle()
 // (thread-local assert: that would deadlock the pool). Exceptions thrown by a

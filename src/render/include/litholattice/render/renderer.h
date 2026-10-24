@@ -214,7 +214,7 @@ struct FrameParams {
   bool debugOverlay = false;  // F3: debug-only shading (wire strength numbers)
   HudLayer hud;
   /// PBR analytic lights for the BinaryQuad path (phase 2, Worker 3): the game fills
-  /// these per frame from a LightCollector fed by ChunkEmissiveProvider
+  /// these per frame from a LightCollector fed by cChunkEmissiveProvider
   /// (pbr_emissive_provider.h); the GL backend uploads them to the chunk_pbr
   /// uPbrLightPos/uPbrLightColor uniforms. Empty = specular from analytic lights off
   /// (flood-fill irradiance still shades). Backends without a PBR path ignore it.

@@ -34,7 +34,7 @@
 
 namespace litholattice {
 
-class ControlStream;   // control_stream.h — the serialized control-event stream
+class cControlStream;   // control_stream.h — the serialized control-event stream
 struct ControlEvent;   // control_stream.h — one stamped event (the POST scratch holds these)
 
 constexpr int kTickModes[] = {32, 64, 128, 256};  // world TPS modes (powers of two)
@@ -210,8 +210,8 @@ class SimThread {
   std::vector<uint8_t> drainPlaceReceipts();
   /// The serialized control stream (producers submit; IDemoRecord taps
   /// the record; tests inject stamped streams). Owned by this thread.
-  ControlStream& controlStream() { return *control_; }
-  const ControlStream& controlStream() const { return *control_; }
+  cControlStream& controlStream() { return *control_; }
+  const cControlStream& controlStream() const { return *control_; }
   /// Re-snapshots every loaded sub-chunk for meshing at the next tick (textures were reloaded).
   void requestRemeshAll() { remeshAll_.store(true); notifyWake(); }
   /// Columns whose cells changed (player edits, simulation ticks, random ticks, commands) since
@@ -371,9 +371,9 @@ class SimThread {
   // crosses here (edits, the stamped ray, the player chunk). Constructed
   // with the SimThread; producers submit from any thread; the sim thread
   // alone stamps (PRE) and extracts (POST).
-  std::unique_ptr<ControlStream> control_;
+  std::unique_ptr<cControlStream> control_;
   std::unordered_set<uint64_t> changedCols_;  // sim thread (or caller while stopped)
-  HandoffQueue<SimEvent> events_;       // sim -> game
+  cHandoffQueue<SimEvent> events_;       // sim -> game
   std::vector<SimEvent> eventBuf_;
   void publishEvents();
 

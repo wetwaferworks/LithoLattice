@@ -67,7 +67,7 @@ void testInputPump(const auto& check) {
     return evs;
   };
   {  // Threaded mode: order preserved, pump timestamps monotonic, nothing dropped.
-    InputPump pump(std::make_unique<ScriptedBackend>(motionStream(500)));
+    cInputPump pump(std::make_unique<ScriptedBackend>(motionStream(500)));
     std::vector<InputEvent> got;
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (got.size() < 500 && std::chrono::steady_clock::now() < until) {
@@ -83,7 +83,7 @@ void testInputPump(const auto& check) {
           "input pump (threaded): 500 events arrive in order with monotonic pump timestamps");
   }
   {  // Manual mode: the owner drives pumpOnce() (the GLFW-backend path).
-    InputPump pump(std::make_unique<ScriptedBackend>(motionStream(300)), InputPump::Mode::Manual);
+    cInputPump pump(std::make_unique<ScriptedBackend>(motionStream(300)), cInputPump::Mode::Manual);
     std::vector<InputEvent> got;
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (got.size() < 300 && std::chrono::steady_clock::now() < until) {
@@ -95,20 +95,20 @@ void testInputPump(const auto& check) {
     check(ordered, "input pump (manual): owner-driven polling delivers every event in order");
   }
   {  // Overflow: 3000 events, no drain; the newest are dropped with a count.
-    InputPump pump(std::make_unique<ScriptedBackend>(motionStream(3000)));
+    cInputPump pump(std::make_unique<ScriptedBackend>(motionStream(3000)));
     // Cortana 2026-10-15 1145 (LOW input timer): wait until the pump has
     // actually overrun (or 10 s), instead of a fixed 2.5 s that Windows'
     // ~15.6 ms sleep granularity could not satisfy. Same assertions.
     {
       const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (pump.dropped() < 3000 - InputPump::kQueueCapacity && std::chrono::steady_clock::now() < until)
+      while (pump.dropped() < 3000 - cInputPump::kQueueCapacity && std::chrono::steady_clock::now() < until)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     std::vector<InputEvent> got;
     pump.drainInto(got);
-    bool ordered = got.size() == InputPump::kQueueCapacity;
+    bool ordered = got.size() == cInputPump::kQueueCapacity;
     for (size_t i = 0; i < got.size(); ++i) ordered = ordered && got[i].x == float(i);
-    check(ordered && pump.dropped() == 3000 - InputPump::kQueueCapacity,
+    check(ordered && pump.dropped() == 3000 - cInputPump::kQueueCapacity,
           "input pump: queue overflow drops the newest events and counts them");
   }
 
@@ -166,7 +166,7 @@ void testModInputConfinement(const auto& check) {
   }
 
   // Anti-cheat: there is no injection path. The router exposes no method
-  // taking an InputEvent and holds no InputPump/InputSystem/IInputBackend -
+  // taking an InputEvent and holds no cInputPump/InputSystem/IInputBackend -
   // a synthetic key event is inexpressible here, so routing a game key event
   // to a mod (the game's explicit onInputEvent call) must leave the engine
   // pipeline exactly as it was.

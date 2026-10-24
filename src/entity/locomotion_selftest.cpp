@@ -25,7 +25,7 @@ using Solid = std::function<bool(int, int, int)>;
 
 const Solid kFloor = [](int, int y, int) { return y < 0; };  // top surface y=0
 
-void run(LocomotionController& c, Entity& e, const LocomotionInput& in, const Solid& s,
+void run(cLocomotionController& c, Entity& e, const LocomotionInput& in, const Solid& s,
          double dt, int steps) {
   for (int i = 0; i < steps; ++i) c.step(e, in, s, dt);
 }
@@ -40,7 +40,7 @@ int main() {
 
   // -- Accessors + input-driven poses in the open ---------------------------
   {
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 0; e.y = 0; e.z = 0;
     check(c.mode() == LocomotionMode::Walk && c.pose() == LocomotionPose::Stand,
@@ -66,7 +66,7 @@ int main() {
 
   // -- Free fall: gravity, terminal velocity, no tunneling at coarse dt -----
   {
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 0; e.y = 80; e.z = 0;
     double minVy = 0;
@@ -86,7 +86,7 @@ int main() {
   // -- Sustained speeds: walk / sprint / sneak / crawl / wish clamp ---------
   {
     auto speedAfter = [&](const LocomotionInput& in, double seconds) {
-      LocomotionController c;
+      cLocomotionController c;
       Entity e;
       e.x = 0; e.y = 0; e.z = 0;
       run(c, e, in, kFloor, kDt, 5);  // settle onto the floor
@@ -110,7 +110,7 @@ int main() {
   // -- Wall slide ------------------------------------------------------------
   {
     const Solid wall = [](int x, int y, int) { return y < 0 || (x >= 5 && y <= 3); };
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 3; e.y = 0; e.z = 0;
     LocomotionInput diag{};
@@ -123,7 +123,7 @@ int main() {
 
   // -- Jump: apex ~= jumpHeight, returns to ground ---------------------------
   {
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 0; e.y = 0; e.z = 0;
     run(c, e, none, kFloor, 1.0 / 240.0, 30);  // settle (fine dt: apex is an integral)
@@ -142,7 +142,7 @@ int main() {
   {
     const Solid cliff = [](int x, int y, int) { return y < 0 && x < 4; };
     {  // sneaking: must stop at the edge and stay supported
-      LocomotionController c;
+      cLocomotionController c;
       Entity e;
       e.x = 1; e.y = 0; e.z = 0;
       LocomotionInput in{}; in.wishX = 1; in.sneak = true;
@@ -159,7 +159,7 @@ int main() {
       check(minY > -0.05, "locomotion: sneak never dips into a fall at the edge");
     }
     {  // walking (no sneak): the same edge is a fall
-      LocomotionController c;
+      cLocomotionController c;
       Entity e;
       e.x = 1; e.y = 0; e.z = 0;
       LocomotionInput in{}; in.wishX = 1;
@@ -171,7 +171,7 @@ int main() {
       const Solid stepDown = [](int x, int y, int) {
         return (x < 4 && y < 0) || (x >= 4 && y < -1);  // floor drops 1 block at x=4
       };
-      LocomotionController c;
+      cLocomotionController c;
       Entity e;
       e.x = 1; e.y = 0; e.z = 0;
       LocomotionInput in{}; in.wishX = 1; in.sneak = true;
@@ -187,7 +187,7 @@ int main() {
       if (y < 0) return true;
       return y >= 1 && x >= 3 && x <= 9 && z >= -1 && z <= 1;  // ceiling slab: 1-block gap
     };
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 0; e.y = 0; e.z = 0;
     LocomotionInput walk{}; walk.wishX = 1;  // no sneak/crawl held: Stand is desired throughout
@@ -218,7 +218,7 @@ int main() {
       if (y < 0) return true;
       return y >= 2 && x >= -2 && x <= 2 && z >= -2 && z <= 2;
     };
-    LocomotionController c;
+    cLocomotionController c;
     c.setMode(LocomotionMode::Fly);
     Entity e;
     e.x = 0; e.y = 0.3; e.z = 0;
@@ -231,7 +231,7 @@ int main() {
 
   // -- Fly: rise / hover / descend / ceiling ---------------------------------
   {
-    LocomotionController c;
+    cLocomotionController c;
     c.setMode(LocomotionMode::Fly);
     Entity e;
     e.x = 0; e.y = 0; e.z = 0;
@@ -254,7 +254,7 @@ int main() {
   }
   {
     const Solid ceil = [](int, int y, int) { return y >= 3; };
-    LocomotionController c;
+    cLocomotionController c;
     c.setMode(LocomotionMode::Fly);
     Entity e;
     e.x = 0; e.y = 1; e.z = 0;
@@ -272,7 +272,7 @@ int main() {
   {
     auto script = [kDt] {
       const Solid wall = [](int x, int y, int) { return y < 0 || (x >= 5 && y <= 3); };
-      LocomotionController c;
+      cLocomotionController c;
       Entity e;
       e.x = 0; e.y = 3; e.z = 0;
       LocomotionInput in{}; in.wishX = 0.8; in.wishZ = 0.6;
@@ -293,7 +293,7 @@ int main() {
   // Cortana 2026-10-15 2240 [ENGINE] (JD 22:36): kneel = triple sneak tap, derived from the
   // sneak bit history (no control-format change); latches; next tap or jump releases.
   {
-    LocomotionController c;
+    cLocomotionController c;
     Entity e;
     e.x = 0; e.y = 0; e.z = 0;
     LocomotionInput dn{}; dn.sneak = true;
@@ -306,7 +306,7 @@ int main() {
           "kneel: third quick sneak tap latches Kneel (1.2 / eye 1.0) with sneak released");
     tap();
     check(!c.kneeling() && c.pose() == LocomotionPose::Stand, "kneel: the next sneak tap releases it");
-    LocomotionController s;
+    cLocomotionController s;
     Entity e2;
     e2.x = 0; e2.y = 0; e2.z = 0;
     for (int i = 0; i < 3; ++i) { run(s, e2, dn, kFloor, kDt, 2); run(s, e2, none, kFloor, 0.5, 1); }

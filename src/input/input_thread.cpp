@@ -1,4 +1,4 @@
-// InputPump: the input thread (see input_thread.h for the contract).
+// cInputPump: the input thread (see input_thread.h for the contract).
 #include "litholattice/input/input_thread.h"
 
 #include <utility>
@@ -8,7 +8,7 @@
 
 namespace litholattice {
 
-InputPump::InputPump(std::unique_ptr<IInputBackend> backend, Mode mode,
+cInputPump::cInputPump(std::unique_ptr<IInputBackend> backend, Mode mode,
                      std::chrono::milliseconds pollInterval)
     : backend_(std::move(backend)), mode_(mode), pollInterval_(pollInterval) {
   if (mode_ == Mode::Threaded) {
@@ -21,7 +21,7 @@ InputPump::InputPump(std::unique_ptr<IInputBackend> backend, Mode mode,
   }
 }
 
-InputPump::~InputPump() {
+cInputPump::~cInputPump() {
   if (inputThread_.joinable()) {
     running_.store(false, std::memory_order_release);
     inputThread_.join();  // disciplined: the input thread is never detached
@@ -29,7 +29,7 @@ InputPump::~InputPump() {
   }
 }
 
-void InputPump::threadLoop() {
+void cInputPump::threadLoop() {
   ThreadUtil::setName("litho-input");
   if (const uint64_t mask = JobSystem::realtimeAffinityMask(); mask != 0)
     ThreadUtil::pinToCores(mask);  // off the sim workers' cores (see job_system.h policy)
@@ -40,12 +40,12 @@ void InputPump::threadLoop() {
   pollOnce();  // final drain: don't lose the events that landed during shutdown
 }
 
-void InputPump::pumpOnce() {
+void cInputPump::pumpOnce() {
   if (mode_ == Mode::Threaded) return;  // the owned thread already polls
   pollOnce();
 }
 
-void InputPump::pollOnce() {
+void cInputPump::pollOnce() {
   staging_.clear();
   backend_->poll(staging_);
   const double now = nowSeconds();
@@ -66,12 +66,12 @@ void InputPump::pollOnce() {
   LITHO_THREAD_LOG("input", "polled %zu events", staging_.size());
 }
 
-void InputPump::drainInto(std::vector<InputEvent>& out) {
+void cInputPump::drainInto(std::vector<InputEvent>& out) {
   // Tick thread only. tryPop is wait-free; the input thread never waits on us.
   while (auto ev = queue_.tryPop()) out.push_back(*ev);
 }
 
-double InputPump::nowSeconds() {
+double cInputPump::nowSeconds() {
   using namespace std::chrono;
   return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
 }

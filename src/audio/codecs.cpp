@@ -411,7 +411,7 @@ std::unique_ptr<IAudioDecoder> makeAudioDecoder(const uint8_t* data, size_t size
   return dec;
 }
 
-AudioStreamer::DecodeFn adaptDecoderToDecodeFn(IAudioDecoder* decoder) {
+cAudioStreamer::DecodeFn adaptDecoderToDecodeFn(IAudioDecoder* decoder) {
   if (!decoder) {
     logError("audio: adaptDecoderToDecodeFn got a null decoder; the stream will be silent");
     return [](float* /*out*/, size_t /*maxFrames*/) { return size_t(0); };

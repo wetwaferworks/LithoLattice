@@ -107,7 +107,7 @@
 // conflict declarations = more parallelism; coarser = simpler declarations
 // but more serialization. Two deployment patterns:
 //   Pattern A (recommended start): ONE propagation ISimSystem declaring
-//   writeRes(kSignalNetworkRes) — the same convention as TraceJitSystem in
+//   writeRes(kSignalNetworkRes) — the same convention as cTraceJitSystem in
 //   trace_jit_compose.h — that internally iterates the tick's partitions in
 //   canonical order. Simple, one declaration, serializes against every other
 //   signal writer exactly as it should. The granularity then only changes the
@@ -138,7 +138,7 @@
 // partitionsForTick() reads the field on every call. For Pattern B, a switch
 // changes the declared access set, so the scheduler's stage plan must be
 // rebuilt between ticks — the same between-ticks-only rule as
-// TraceJitSystem::recompile(). There is no such thing as switching mid-tick:
+// cTraceJitSystem::recompile(). There is no such thing as switching mid-tick:
 // the tick's partitions are already emitted by then.
 //
 // WHAT THE BUILDER OWNS FROM HERE

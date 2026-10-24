@@ -236,7 +236,7 @@ void testCore() {
     check(monotonic && last > 0, "triple buffer across threads: values never go backwards");
   }
   {
-    HandoffQueue<int> q;
+    cHandoffQueue<int> q;
     std::vector<std::thread> producers;
     for (int t = 0; t < 4; ++t) producers.emplace_back([&q, t] { for (int i = 0; i < 10000; ++i) q.push(t * 10000 + i); });
     std::vector<int> got;
@@ -2435,7 +2435,7 @@ void testSoftwareRenderHonesty() {
 
 // P3-3 (Appendix D M2 + M3): the software sprite pass honours shade modes
 // (AlphaBlend/Additive blend in producer order with depth TEST but no
-// depth WRITE; Cutout stays the opaque luminance form), and FramePacer
+// depth WRITE; Cutout stays the opaque luminance form), and cFramePacer
 // implements the render.fps_cap deadline (default off).
 void testSoftwareSpritesAndPacer() {
   std::printf("render: software sprite shade modes (D-M2) + frame pacer (D-M3)\n");
@@ -2508,23 +2508,23 @@ void testSoftwareSpritesAndPacer() {
     check(sr.framebuffer().pixels[kCenter] == 0xFFFF0000u,
           "sprite-dm2: blended sprites do not depth-write (farther blend still lands)");
   }
-  {  // FramePacer: default off; cap clamps; deadline math; overrun free.
-    FramePacer pacer;
+  {  // cFramePacer: default off; cap clamps; deadline math; overrun free.
+    cFramePacer pacer;
     check(!pacer.enabled() && pacer.capFps() == 0, "pacer-dm3: frame cap defaults OFF");
     pacer.setCapFps(10000);
     check(pacer.capFps() == 1000, "pacer-dm3: cap clamps to 1000 fps");
     pacer.setCapFps(50);  // 20 ms period
-    const auto t0 = FramePacer::Clock::now();
+    const auto t0 = cFramePacer::Clock::now();
     pacer.beginFrame(t0);
     const auto slept = pacer.endFrameAndWait(t0);
     check(slept >= std::chrono::milliseconds(15) && slept <= std::chrono::milliseconds(25),
           "pacer-dm3: endFrameAndWait targets the 20 ms deadline at 50 fps");
     pacer.beginFrame(t0);
-    check(pacer.endFrameAndWait(t0 + std::chrono::seconds(1)) == FramePacer::Clock::duration::zero(),
+    check(pacer.endFrameAndWait(t0 + std::chrono::seconds(1)) == cFramePacer::Clock::duration::zero(),
           "pacer-dm3: an overrun frame sleeps zero (no catch-up debt)");
-    FramePacer off;
+    cFramePacer off;
     off.beginFrame(t0);
-    check(off.endFrameAndWait(t0) == FramePacer::Clock::duration::zero(),
+    check(off.endFrameAndWait(t0) == cFramePacer::Clock::duration::zero(),
           "pacer-dm3: uncapped pacer never sleeps");
   }
 }
@@ -2879,7 +2879,7 @@ void testPbrChunkMaterials() {
   }
 }
 
-// PBR phase 2, item 3: world-side emissive enumeration (ChunkEmissiveProvider, the real
+// PBR phase 2, item 3: world-side emissive enumeration (cChunkEmissiveProvider, the real
 // IEmissiveProvider for the phase-1 seam). Cached scan + explicit refresh; the block-ID
 // fallback keeps light-emitting blocks visible while no producer writes material bytes.
 void testPbrEmissiveEnumeration() {
@@ -2913,7 +2913,7 @@ void testPbrEmissiveEnumeration() {
   w.set(5, 65, 6, kRock);
   col00->subs[4]->setMaterial(5, 1, 6, 1);  // local (5,1,6): lava
   w.set(9, 64, 9, kRock);                   // default byte 0 -> torch too (byte 0 IS torch here)
-  ChunkEmissiveProvider prov(&reg);
+  cChunkEmissiveProvider prov(&reg);
   prov.refresh(w, 0, 0, 1);
   check(prov.candidateCount() == 3, "pbr-emissive: material-byte scan finds all 3 emissives");
   {
@@ -2943,7 +2943,7 @@ void testPbrEmissiveEnumeration() {
   ChunkMap w2 = worldWithColumns(2, &fixtureBlocks());
   w2.set(4, 70, 4, kRock);   // column (0,0), sub 4
   w2.set(20, 70, 4, kRock);  // column (1,0), sub 4: across the chunk boundary
-  ChunkEmissiveProvider prov2(&reg);
+  cChunkEmissiveProvider prov2(&reg);
   prov2.refresh(w2, 0, 0, 1);
   check(prov2.candidateCount() == 0, "pbr-emissive: all-default world, no mapper -> no candidates");
   prov2.setBlockMaterial(rockIsTorch);
@@ -2957,7 +2957,7 @@ void testPbrEmissiveEnumeration() {
 
   // --- Empty world: no columns with blocks -> no candidates, no crash.
   ChunkMap w3 = worldWithColumns(1, &fixtureBlocks());
-  ChunkEmissiveProvider prov3(&reg);
+  cChunkEmissiveProvider prov3(&reg);
   prov3.setBlockMaterial(rockIsTorch);
   prov3.refresh(w3, 0, 0, 1);
   check(prov3.candidateCount() == 0, "pbr-emissive: empty world -> no candidates");
@@ -2968,7 +2968,7 @@ void testPbrEmissiveEnumeration() {
   c4->materialPalette.assign({stoneId});
   w4.set(1, 64, 1, kRock);
   c4->subs[4]->setMaterial(1, 0, 1, 0);  // explicit stone: not emissive
-  ChunkEmissiveProvider prov4(&reg);
+  cChunkEmissiveProvider prov4(&reg);
   prov4.setBlockMaterial(rockIsTorch);
   prov4.refresh(w4, 0, 0, 0);
   check(prov4.candidateCount() == 0, "pbr-emissive: explicit non-emissive byte beats the fallback");
@@ -2976,7 +2976,7 @@ void testPbrEmissiveEnumeration() {
   // --- K-nearest through the real LightCollector: 10 torches, K=8, nearest-first.
   ChunkMap w5 = worldWithColumns(1, &fixtureBlocks());
   for (int x = 0; x < 10; ++x) w5.set(x, 64, 8, kRock);
-  ChunkEmissiveProvider prov5(&reg);
+  cChunkEmissiveProvider prov5(&reg);
   prov5.setBlockMaterial(rockIsTorch);
   prov5.refresh(w5, 0, 0, 0);
   check(prov5.candidateCount() == 10, "pbr-emissive: 10 torch voxels enumerated");
@@ -2989,7 +2989,7 @@ void testPbrEmissiveEnumeration() {
   check(orderOk, "pbr-emissive: K=8 nearest-first ordering through LightCollector");
 
   // --- Place/break consistency: the game's edit funnel marks dirty, refresh re-scans.
-  ChunkEmissiveProvider prov6(&reg);
+  cChunkEmissiveProvider prov6(&reg);
   prov6.setBlockMaterial(rockIsTorch);
   ChunkMap w6 = worldWithColumns(1, &fixtureBlocks());
   prov6.refresh(w6, 0, 0, 0);
@@ -3007,7 +3007,7 @@ void testPbrEmissiveEnumeration() {
   check(prov6.needsRefresh(1, 0), "pbr-emissive: moving the focus chunk needs a refresh");
 
   // --- Determinism: two refreshes (and a second provider) give identical sequences.
-  ChunkEmissiveProvider prov7(&reg);
+  cChunkEmissiveProvider prov7(&reg);
   prov7.setBlockMaterial(rockIsTorch);
   prov7.refresh(w5, 0, 0, 0);
   auto snap = prov7.candidates();
@@ -3019,7 +3019,7 @@ void testPbrEmissiveEnumeration() {
     same = same && a.x == b.x && a.y == b.y && a.z == b.z && a.r == b.r && a.g == b.g &&
            a.b == b.b && a.intensity == b.intensity;
   }
-  ChunkEmissiveProvider prov8(&reg);
+  cChunkEmissiveProvider prov8(&reg);
   prov8.setBlockMaterial(rockIsTorch);
   prov8.refresh(w5, 0, 0, 0);
   same = same && prov8.candidates().size() == snap.size();
@@ -3027,14 +3027,14 @@ void testPbrEmissiveEnumeration() {
   check(same, "pbr-emissive: enumeration order identical across refreshes and providers");
 
   // --- Null registry degrades gracefully (no crash, no candidates).
-  ChunkEmissiveProvider provNull(nullptr);
+  cChunkEmissiveProvider provNull(nullptr);
   provNull.refresh(w5, 0, 0, 0);
   check(provNull.candidateCount() == 0, "pbr-emissive: null registry -> no candidates, no crash");
 
   // --- Cost: refresh a denser 3x3 region, report the time (expected: tens of us).
   ChunkMap wCost = worldWithColumns(3, &fixtureBlocks());
   for (int i = 0; i < 200; ++i) wCost.set(i % 48, 64 + (i % 6) * 16, (i / 48) % 48, kRock);
-  ChunkEmissiveProvider provCost(&reg);
+  cChunkEmissiveProvider provCost(&reg);
   provCost.setBlockMaterial(rockIsTorch);
   const auto t0 = std::chrono::steady_clock::now();
   provCost.refresh(wCost, 1, 1, 1);
@@ -4493,7 +4493,7 @@ void testTraceJitCompose() {
   // --- access() declares Write on the signal-network resource ---
   {
     FakeJit jit;
-    TraceJitSystem sys(&jit, nullptr, 0);
+    cTraceJitSystem sys(&jit, nullptr, 0);
     const auto acc = sys.access();
     const bool ok = acc.size() == 1 && acc[0].resource == kSignalNetworkRes && acc[0].write &&
                     std::strcmp(sys.name(), "trace_jit") == 0 && sys.signalResource() == kSignalNetworkRes;
@@ -4501,7 +4501,7 @@ void testTraceJitCompose() {
   }
   {
     FakeJit jit;
-    TraceJitSystem sys(&jit, nullptr, 0, /*signalResource=*/777, /*name=*/"chip0");
+    cTraceJitSystem sys(&jit, nullptr, 0, /*signalResource=*/777, /*name=*/"chip0");
     const auto acc = sys.access();
     const bool ok = acc.size() == 1 && acc[0].resource == 777 && acc[0].write &&
                     std::strcmp(sys.name(), "chip0") == 0;
@@ -4512,7 +4512,7 @@ void testTraceJitCompose() {
   {
     FakeJit jit;
     cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
-    sched.addSystem(std::make_unique<TraceJitSystem>(&jit, nullptr, 0));  // id 0: Write(kSignalNetworkRes)
+    sched.addSystem(std::make_unique<cTraceJitSystem>(&jit, nullptr, 0));  // id 0: Write(kSignalNetworkRes)
     sched.addSystem(std::make_unique<NopSystem>("w", std::vector<ResourceAccess>{writeRes(kSignalNetworkRes)}));
     sched.addSystem(std::make_unique<NopSystem>("r", std::vector<ResourceAccess>{readRes(900)}));
     const auto& st = sched.stages();
@@ -4527,8 +4527,8 @@ void testTraceJitCompose() {
     for (unsigned threads : {1u, 4u}) {
       FakeJit jit;
       cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
-      auto sys = std::make_unique<TraceJitSystem>(&jit, nullptr, 0);
-      TraceJitSystem* raw = sys.get();
+      auto sys = std::make_unique<cTraceJitSystem>(&jit, nullptr, 0);
+      cTraceJitSystem* raw = sys.get();
       const uint64_t graphId = raw->graph().id;
       sched.addSystem(std::move(sys));
       SchedWorld w;
@@ -4544,8 +4544,8 @@ void testTraceJitCompose() {
   // --- recompile between ticks swaps the graph and frees the old one ---
   {
     FakeJit jit;
-    auto sys = std::make_unique<TraceJitSystem>(&jit, nullptr, 0);
-    TraceJitSystem* raw = sys.get();
+    auto sys = std::make_unique<cTraceJitSystem>(&jit, nullptr, 0);
+    cTraceJitSystem* raw = sys.get();
     const uint64_t id1 = raw->graph().id;
     cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
     sched.addSystem(std::move(sys));
@@ -4565,7 +4565,7 @@ void testTraceJitCompose() {
   {
     FakeJit jit;
     {
-      TraceJitSystem sys(&jit, nullptr, 0);
+      cTraceJitSystem sys(&jit, nullptr, 0);
       const bool compiledOnce = jit.compiles == 1 && jit.frees == 0;
       if (!compiledOnce) check(false, "trace-jit-compose: constructor compiles exactly once");
     }

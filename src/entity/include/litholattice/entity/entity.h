@@ -40,11 +40,11 @@ class IEntityBehavior {
 };
 
 /// Owns every entity in one dimension.
-class EntityManager {
+class cEntityMgr {
  public:
   using BehaviorFactory = std::function<std::unique_ptr<IEntityBehavior>(uint32_t type)>;
 
-  explicit EntityManager(BehaviorFactory factory) : factory_(std::move(factory)) {}
+  explicit cEntityMgr(BehaviorFactory factory) : factory_(std::move(factory)) {}
 
   /// Spawn an entity; returns its id.
   uint64_t spawn(uint32_t type, double x, double y, double z);

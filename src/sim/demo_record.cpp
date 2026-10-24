@@ -302,7 +302,7 @@ DemoParseResult parseDemo(const uint8_t* data, size_t n) {
 
 // ---------------------------------------------------------------- recorder
 
-bool cDemoRecorder::begin(ControlStream& stream, const DemoSessionInfo& info) {
+bool cDemoRecorder::begin(cControlStream& stream, const DemoSessionInfo& info) {
   if (begun_) {
     lastError_ = DemoError::State;
     return false;
@@ -432,7 +432,7 @@ bool cDemoPlayer::loadFile(const std::string& path) {
 
 const DemoParseResult& cDemoPlayer::parsed() const { return parsed_; }
 
-bool cDemoPlayer::submitInto(ControlStream& stream) const {
+bool cDemoPlayer::submitInto(cControlStream& stream) const {
   if (!loaded_) {
     lastError_ = DemoError::State;
     return false;

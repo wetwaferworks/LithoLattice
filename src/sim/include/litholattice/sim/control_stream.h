@@ -121,7 +121,7 @@ struct ControlStreamStats {
 /// The serialized control stream. Producers (any thread) submit raw
 /// events; the owning sim thread runs the PRE/POST phases. All sim-thread
 /// methods are sim-thread-only; stats() is any-thread.
-class ControlStream {
+class cControlStream {
  public:
   // ---- producer side (any thread) ----
   /// Queue a raw (unstamped) event. Its seq/tick fields are ignored: the

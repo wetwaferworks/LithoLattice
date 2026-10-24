@@ -147,9 +147,9 @@ class ILocomotion {
 };
 
 /// The concrete controller. Construct one per body from its config.
-class LocomotionController : public ILocomotion {
+class cLocomotionController : public ILocomotion {
  public:
-  explicit LocomotionController(LocomotionConfig cfg = {}) : cfg_(cfg) {}
+  explicit cLocomotionController(LocomotionConfig cfg = {}) : cfg_(cfg) {}
 
   void step(Entity& e, const LocomotionInput& in,
             const std::function<bool(int, int, int)>& isSolid, double dt) override;

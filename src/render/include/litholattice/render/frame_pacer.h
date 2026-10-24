@@ -1,7 +1,7 @@
 // Frame pacer: an optional frame-rate cap for the render loop
 // (P3-3, Appendix D M3).
 //
-// WHAT: FramePacer is a deadline pacer. The host calls beginFrame() at the
+// WHAT: cFramePacer is a deadline pacer. The host calls beginFrame() at the
 //   top of each frame and endFrameAndWait() after presenting; when a cap
 //   is set, the latter sleeps until the frame's deadline (start + 1/cap).
 //   Cap 0 (the default) disables pacing entirely — endFrameAndWait() is a
@@ -20,7 +20,7 @@
 // INTEGRATION (remaining wiring, game-owned files): the game registers a
 // `render.fps_cap` cvar (integer FPS, 0 = off, clamp 0..1000) beside the
 // other render cvars in settings_cvars.cpp, stores it in Settings, and
-// drives one FramePacer from the main loop in main.cpp:
+// drives one cFramePacer from the main loop in main.cpp:
 // pacer.setCapFps(settings.fpsCap) when the cvar changes, beginFrame()
 // at loop top, endFrameAndWait() right after present/swap. Until that
 // wiring lands, this class is engine-tested but inert in the game.
@@ -32,7 +32,7 @@
 
 namespace litholattice {
 
-class FramePacer {
+class cFramePacer {
  public:
   using Clock = std::chrono::steady_clock;
 

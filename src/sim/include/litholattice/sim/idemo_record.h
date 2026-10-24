@@ -111,7 +111,7 @@ class cDemoRecorder final : public IDemoRecord {
  public:
   // Attaches to the stream's recording tap (setRecording(true)) and starts
   // the file image with the demo preamble. False + State error if begun twice.
-  bool begin(ControlStream& stream, const DemoSessionInfo& info);
+  bool begin(cControlStream& stream, const DemoSessionInfo& info);
   // Drains the tap (takeRecord) and appends ONE framed LLCS segment holding
   // the drained events; returns events appended (0 = nothing drained, no frame).
   size_t pump();
@@ -128,7 +128,7 @@ class cDemoRecorder final : public IDemoRecord {
   void abort();
 
  private:
-  ControlStream* stream_ = nullptr;
+  cControlStream* stream_ = nullptr;
   DemoSessionInfo session_;
   std::vector<uint8_t> bytes_;
   uint64_t eventsRecorded_ = 0;
@@ -141,7 +141,7 @@ class cDemoPlayer final : public IDemoRecord {
   bool load(const uint8_t* data, size_t n);   // parseDemo; true iff complete || truncated
   bool loadFile(const std::string& path);     // Io error on unreadable file
   const DemoParseResult& parsed() const;
-  bool submitInto(ControlStream& stream) const;  // submitStamped(all parsed events); false if !load'ed ok
+  bool submitInto(cControlStream& stream) const;  // submitStamped(all parsed events); false if !load'ed ok
   const DemoSessionInfo& session() const override;
   DemoError lastError() const override;
 

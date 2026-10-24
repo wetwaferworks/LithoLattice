@@ -11,7 +11,7 @@
 //   - The server NEVER touches engine subsystems directly. Every data source
 //     is an injectable seam interface declared below (ISimStatus, IWorldReader,
 //     ...). The game adapts its real classes (SimThread, ModLoader, ChunkMap,
-//     EntityManager, cConsoleReg, cTextIndexer, cDefragService, ...) to
+//     cEntityMgr, cConsoleReg, cTextIndexer, cDefragService, ...) to
 //     these seams; the self-tests use stub seams. Consequence: the mcp library
 //     has no link dependencies on any other engine module — it only reads
 //     three header-only public headers (kPerm* bits, engine version macros,

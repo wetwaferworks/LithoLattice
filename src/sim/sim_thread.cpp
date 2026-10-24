@@ -69,7 +69,7 @@ SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_
   }
   for (const ClockDomain& d : domains_) domainInitial_.push_back(d.enabled);
   randomPerSection_ = config.randomTicksPerSection;
-  control_ = std::make_unique<ControlStream>();
+  control_ = std::make_unique<cControlStream>();
   randomTickable_ = randomTickableBlocks(blocks_);
   chunks_.setRegistry(&blocks_);  // ChunkMap translates BlockId <-> StableId through this
   sim_->scan(chunks_);

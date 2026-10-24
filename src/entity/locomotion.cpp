@@ -78,10 +78,10 @@ double jumpVelocity(const LocomotionConfig& c) {
 
 }  // namespace
 
-double LocomotionController::eyeHeight() const { return eyeFor(cfg_, pose_); }
-double LocomotionController::currentHeight() const { return heightFor(cfg_, pose_); }
+double cLocomotionController::eyeHeight() const { return eyeFor(cfg_, pose_); }
+double cLocomotionController::currentHeight() const { return heightFor(cfg_, pose_); }
 
-void LocomotionController::step(Entity& e, const LocomotionInput& in,
+void cLocomotionController::step(Entity& e, const LocomotionInput& in,
                                 const std::function<bool(int, int, int)>& isSolid,
                                 double dt) {
   if (!(dt > 0.0)) return;  // no time passes, no motion (also rejects NaN)

@@ -5,7 +5,7 @@
 // Locked design (JD 2026-10-10): projectiles are engine-side, tick with
 // the world, and load chunks ahead of their path. How that is realised:
 //
-//  - ProjectileManager::tick() advances every live projectile by ONE world
+//  - cProjectileMgr::tick() advances every live projectile by ONE world
 //    tick. Velocity is blocks per tick (see Projectile), so tick() takes
 //    no dt: the caller drives it once per world tick, exactly like the
 //    sim drives its other per-tick systems. There is no gravity and no
@@ -98,8 +98,8 @@ class IProjectileBehavior {
 /// Manages all projectiles. The engine owns this; the game spawns projectiles.
 ///
 /// Threading: single-threaded (the owner's tick thread), like
-/// EntityManager. Not thread-safe.
-class ProjectileManager {
+/// cEntityMgr. Not thread-safe.
+class cProjectileMgr {
  public:
   /// Voxel seam result: `solid` = the voxel stops a point projectile;
   /// `density` is consulted only when solid (BlockDef::density currency).

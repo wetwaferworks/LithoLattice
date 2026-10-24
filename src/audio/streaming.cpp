@@ -7,23 +7,23 @@
 
 namespace litholattice {
 
-AudioStreamer::AudioStreamer(size_t chunkFrames, size_t maxQueuedChunks)
+cAudioStreamer::cAudioStreamer(size_t chunkFrames, size_t maxQueuedChunks)
     : chunkFrames_(chunkFrames ? chunkFrames : 1),
       maxQueued_(maxQueuedChunks ? maxQueuedChunks : 1) {
   pending_.reserve(maxQueued_ + 1);
 }
 
-AudioStreamer::~AudioStreamer() { stop(); }
+cAudioStreamer::~cAudioStreamer() { stop(); }
 
-void AudioStreamer::play(DecodeFn decode) {
+void cAudioStreamer::play(DecodeFn decode) {
   stop();  // joins any running worker and requests the audio-side reset
   decode_ = std::move(decode);  // no worker running: game-thread owned again
   running_.store(true, std::memory_order_relaxed);
-  worker_ = std::thread(&AudioStreamer::workerMain, this);
+  worker_ = std::thread(&cAudioStreamer::workerMain, this);
   workerId_ = worker_.get_id();  // Cortana 2026-10-15 1450
 }
 
-void AudioStreamer::stop() {
+void cAudioStreamer::stop() {
   running_.store(false, std::memory_order_relaxed);
   if (worker_.joinable()) worker_.join();
   decode_ = nullptr;
@@ -42,7 +42,7 @@ void AudioStreamer::stop() {
   pendingReset_.store(true, std::memory_order_release);
 }
 
-void AudioStreamer::workerMain() {
+void cAudioStreamer::workerMain() {
   // Cortana 2026-10-15 1450: workerId_ is now set by play() (game thread)  // before any reader can call workerId(); writing it here raced with it.
   // Decode target: one persistent buffer per worker thread, grown once. The
   // old code resized a fresh vector per chunk (malloc + a full zero-fill of
@@ -73,7 +73,7 @@ void AudioStreamer::workerMain() {
   running_.store(false, std::memory_order_relaxed);
 }
 
-size_t AudioStreamer::render(float* out, size_t frames) {
+size_t cAudioStreamer::render(float* out, size_t frames) {
   // Apply a pending play()/stop() reset on the audio thread only. The read
   // cursor (pending_/chunkIdx_/frameOff_) is never mutated from the game
   // thread, so the old vector cannot be cleared while the loop below

@@ -24,7 +24,7 @@
 //   world-side forEachEmissive replaces this seam without changing this file's
 //   contract.
 //
-// RESOLVED (PBR phase 2): ChunkEmissiveProvider (pbr_emissive_provider.h) is the
+// RESOLVED (PBR phase 2): cChunkEmissiveProvider (pbr_emissive_provider.h) is the
 //   world-side implementation - cached chunk-material scan with explicit refresh.
 //   The null-provider behaviour above is unchanged (graceful degradation).
 //

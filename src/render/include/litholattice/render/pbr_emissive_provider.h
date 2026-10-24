@@ -1,6 +1,6 @@
 // World-side emissive enumeration for the PBR many-lights hybrid (PBR phase 2).
 //
-// WHAT: ChunkEmissiveProvider - the real IEmissiveProvider implementation for the
+// WHAT: cChunkEmissiveProvider - the real IEmissiveProvider implementation for the
 //   pbr_software_shaders.h seam (and any future GPU path). It scans chunk material
 //   bytes across a chunk region around a focus column, resolves each voxel through
 //   the column's materialPalette into the MaterialRegistry, and caches every voxel
@@ -110,7 +110,7 @@ struct EmissiveCandidate {
 
 /// World-side IEmissiveProvider over chunk material bytes. See the file header for the
 /// design decision (cached scan + explicit refresh).
-class ChunkEmissiveProvider final : public IEmissiveProvider {
+class cChunkEmissiveProvider final : public IEmissiveProvider {
  public:
   /// Maps a voxel's StableId to a compact MaterialRegistry ID. Used ONLY when a voxel's
   /// material byte resolves to the built-in default (no producer assigned it yet). The game
@@ -119,7 +119,7 @@ class ChunkEmissiveProvider final : public IEmissiveProvider {
   using BlockMaterialFn = std::function<uint16_t(StableId)>;
 
   /// `registry` must outlive the provider (same contract as PbrFragmentContext).
-  explicit ChunkEmissiveProvider(const MaterialRegistry* registry) : registry_(registry) {}
+  explicit cChunkEmissiveProvider(const MaterialRegistry* registry) : registry_(registry) {}
 
   /// Install the stable-ID -> material fallback (may be null = no fallback).
   void setBlockMaterial(BlockMaterialFn fn) { blockMaterial_ = std::move(fn); dirty_ = true; }

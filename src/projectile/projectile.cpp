@@ -1,4 +1,4 @@
-// ProjectileManager implementation (P2c 2026-10-13, review ENT-1).
+// cProjectileMgr implementation (P2c 2026-10-13, review ENT-1).
 // Semantics are documented in projectile.h; this file is the one place
 // they are enforced.
 #include "litholattice/projectile/projectile.h"
@@ -18,7 +18,7 @@ int floorDiv16(double v) { return int(std::floor(v / 16.0)); }
 
 }  // namespace
 
-uint64_t ProjectileManager::spawn(const Projectile& p, IProjectileBehavior* behavior) {
+uint64_t cProjectileMgr::spawn(const Projectile& p, IProjectileBehavior* behavior) {
   Projectile q = p;
   if (q.id == 0) {
     while (entries_.count(nextId_)) ++nextId_;
@@ -38,29 +38,29 @@ uint64_t ProjectileManager::spawn(const Projectile& p, IProjectileBehavior* beha
   return id;
 }
 
-void ProjectileManager::eraseEntry(uint64_t id) {
+void cProjectileMgr::eraseEntry(uint64_t id) {
   entries_.erase(id);
   order_.erase(std::remove(order_.begin(), order_.end(), id), order_.end());
 }
 
-void ProjectileManager::despawn(uint64_t id) { eraseEntry(id); }
+void cProjectileMgr::despawn(uint64_t id) { eraseEntry(id); }
 
-const Projectile* ProjectileManager::get(uint64_t id) const {
+const Projectile* cProjectileMgr::get(uint64_t id) const {
   const auto it = entries_.find(id);
   return it == entries_.end() ? nullptr : &it->second.p;
 }
 
-void ProjectileManager::clear() {
+void cProjectileMgr::clear() {
   entries_.clear();
   order_.clear();
 }
 
-void ProjectileManager::requestColumn(int cx, int cz) {
+void cProjectileMgr::requestColumn(int cx, int cz) {
   if (!chunkReq_) return;
   if (requestedChunks_.insert(chunkKey(cx, cz)).second) chunkReq_(cx, cz);
 }
 
-void ProjectileManager::loadChunksAhead(double x, double y, double z, double dx, double dy, double dz,
+void cProjectileMgr::loadChunksAhead(double x, double y, double z, double dx, double dy, double dz,
                                         uint32_t distance) {
   if (!chunkReq_ || distance == 0) return;
   const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -76,7 +76,7 @@ void ProjectileManager::loadChunksAhead(double x, double y, double z, double dx,
   }
 }
 
-void ProjectileManager::tick() {
+void cProjectileMgr::tick() {
   // Snapshot the id order: behaviors may spawn/despawn during their own
   // onTick (a hit that fires a return projectile, a splitter, ...).
   const std::vector<uint64_t> ids = order_;

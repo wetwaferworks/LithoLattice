@@ -15,7 +15,7 @@
 //   sources without depending on world internals. The convenience adapter
 //   filterCandidatesViaLighting reads from ILighting where that data exists.
 //
-// RESOLVED (PBR phase 2): ChunkEmissiveProvider (pbr_emissive_provider.h) is the
+// RESOLVED (PBR phase 2): cChunkEmissiveProvider (pbr_emissive_provider.h) is the
 //   world-side forEachEmissive - a cached chunk-material scan with explicit refresh
 //   (scan-vs-retained decision documented there). The adapter above now has a real
 //   candidate source to filter; the "caller supplies positions" fallback remains valid

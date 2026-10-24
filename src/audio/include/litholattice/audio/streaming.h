@@ -3,7 +3,7 @@
 //
 // WHAT: a DecodeFn (the codec: wav/vorbis/whatever the game plugs in) runs on
 // a dedicated worker thread, filling fixed-size PCM chunks. Finished chunks
-// cross to the audio thread through a HandoffQueue (MPSC: the worker pushes,
+// cross to the audio thread through a cHandoffQueue (MPSC: the worker pushes,
 // the audio thread swaps the whole vector out in O(1) - see
 // core/threading.h). The audio thread then plays the chunks sequentially from
 // pre-reserved buffers: no allocation, no blocking, no decode on the callback.
@@ -30,18 +30,18 @@
 
 namespace litholattice {
 
-class AudioStreamer {
+class cAudioStreamer {
  public:
   /// Fills up to maxFrames interleaved stereo float frames into `out`;
   /// returns frames written. Returning < maxFrames (0 at the very end)
   /// signals end-of-stream. Runs ONLY on the worker thread.
   using DecodeFn = std::function<size_t(float* out, size_t maxFrames)>;
 
-  explicit AudioStreamer(size_t chunkFrames = 4096, size_t maxQueuedChunks = 8);
-  ~AudioStreamer();
+  explicit cAudioStreamer(size_t chunkFrames = 4096, size_t maxQueuedChunks = 8);
+  ~cAudioStreamer();
 
-  AudioStreamer(const AudioStreamer&) = delete;
-  AudioStreamer& operator=(const AudioStreamer&) = delete;
+  cAudioStreamer(const cAudioStreamer&) = delete;
+  cAudioStreamer& operator=(const cAudioStreamer&) = delete;
 
   /// Game thread: install the decoder and start the worker. Replaces any
   /// previous source (stops it first). The read cursor is audio-thread-owned:
@@ -77,7 +77,7 @@ class AudioStreamer {
 
   const size_t chunkFrames_;
   const size_t maxQueued_;
-  HandoffQueue<Chunk> queue_;     // worker -> audio thread (decoded chunks)
+  cHandoffQueue<Chunk> queue_;     // worker -> audio thread (decoded chunks)
   std::vector<Chunk> pending_;    // audio-thread side, pre-reserved
   size_t chunkIdx_ = 0;           // audio thread only
   size_t frameOff_ = 0;           // audio thread only

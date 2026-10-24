@@ -748,7 +748,7 @@ class cGL33Renderer final : public IRenderer {
       glActiveTexture(GL_TEXTURE0 + kPbrMatTexUnit);
       glBindTexture(GL_TEXTURE_BUFFER, pbrMatTex_);
       // Analytic lights: the game fills FrameParams::pbrLights per frame from its
-      // LightCollector (fed by ChunkEmissiveProvider); empty = specular off.
+      // LightCollector (fed by cChunkEmissiveProvider); empty = specular off.
       const uint32_t nl =
           std::min<uint32_t>(p.pbrLightCount, uint32_t(FrameParams::kMaxPbrFrameLights));
       // Fix 2026-10-11 (audit): skip the array uploads when there are no lights

@@ -1,5 +1,5 @@
 // Codec stubs: format sniffing + minimal decoders feeding the async streaming
-// pipeline (see streaming.h: AudioStreamer::DecodeFn).
+// pipeline (see streaming.h: cAudioStreamer::DecodeFn).
 //
 // WHAT: WAV PCM decodes fully by hand (it is just a header + raw samples).
 // FLAC / Opus / Vorbis parse their containers and headers today so the engine
@@ -39,7 +39,7 @@ struct AudioFormatInfo {
 };
 
 /// One-shot decoder: open() sniffs + parses headers, decode() streams
-/// interleaved STEREO float frames (the AudioStreamer::DecodeFn contract).
+/// interleaved STEREO float frames (the cAudioStreamer::DecodeFn contract).
 /// Decoders borrow the source buffer (no copy) - the caller must keep `data`
 /// alive until the decoder is destroyed. Decoders are NOT thread-safe; run
 /// one instance per worker thread. decode() fills up to maxFrames and returns
@@ -62,7 +62,7 @@ class IAudioDecoder {
 std::unique_ptr<IAudioDecoder> makeAudioDecoder(const uint8_t* data, size_t size,
                                                 std::string& err);
 
-/// Adapts an IAudioDecoder to the AudioStreamer::DecodeFn contract. DecodeFn
+/// Adapts an IAudioDecoder to the cAudioStreamer::DecodeFn contract. DecodeFn
 /// has no error channel, so this checks implemented() UP FRONT: wiring a stub
 /// decoder (FLAC/Opus/Vorbis today) into a streamer can never fail as silent
 /// end-of-stream — the stub reason is logged once here, at wire-up time, and
@@ -71,6 +71,6 @@ std::unique_ptr<IAudioDecoder> makeAudioDecoder(const uint8_t* data, size_t size
 /// stream: the first short read ends the stream).
 /// The decoder must outlive the returned functor; the functor itself runs on
 /// the streamer's worker thread (never the audio thread).
-AudioStreamer::DecodeFn adaptDecoderToDecodeFn(IAudioDecoder* decoder);
+cAudioStreamer::DecodeFn adaptDecoderToDecodeFn(IAudioDecoder* decoder);
 
 }  // namespace litholattice

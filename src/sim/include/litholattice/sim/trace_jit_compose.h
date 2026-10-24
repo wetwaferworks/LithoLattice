@@ -113,7 +113,7 @@
 //   you declare. Under-declaring races; over-declaring serializes the sim
 //   for no reason. If the graph's footprint grows, declare it — don't sneak
 //   it past the scheduler.
-// - Sharing ONE TraceJitSystem across two schedulers / two worlds: the
+// - Sharing ONE cTraceJitSystem across two schedulers / two worlds: the
 //   graph is single-owner, single-world state. One chip, one system, one
 //   scheduler.
 //
@@ -169,7 +169,7 @@ constexpr uint32_t kSignalNetworkRes = 300;
 /// update() executes it once per tick; the destructor frees it. recompile()
 /// swaps in a freshly compiled graph — legal only between ticks, never
 /// mid-tick (see the design block above).
-class TraceJitSystem : public ISimSystem {
+class cTraceJitSystem : public ISimSystem {
  public:
   /// @param jit      borrowed JIT; must outlive this system. Shared across
   ///                 systems on purpose (one JIT, many chips).
@@ -180,20 +180,20 @@ class TraceJitSystem : public ISimSystem {
   ///                 has its own signal-resource numbering — and then use it
   ///                 consistently everywhere.
   /// @param name     system name for diagnostics; must outlive the system.
-  TraceJitSystem(ITraceJit* jit, ISignalNode** nodes, uint32_t nodeCount,
+  cTraceJitSystem(ITraceJit* jit, ISignalNode** nodes, uint32_t nodeCount,
                  uint32_t signalResource = kSignalNetworkRes,
                  const char* name = "trace_jit")
       : jit_(jit), signalResource_(signalResource), name_(name) {
     graph_ = jit_->compile(nodes, nodeCount);
   }
 
-  ~TraceJitSystem() override { freeGraph(); }
+  ~cTraceJitSystem() override { freeGraph(); }
 
-  // Single-owner graph lifetime: never copy or move a TraceJitSystem.
-  TraceJitSystem(const TraceJitSystem&) = delete;
-  TraceJitSystem& operator=(const TraceJitSystem&) = delete;
-  TraceJitSystem(TraceJitSystem&&) = delete;
-  TraceJitSystem& operator=(TraceJitSystem&&) = delete;
+  // Single-owner graph lifetime: never copy or move a cTraceJitSystem.
+  cTraceJitSystem(const cTraceJitSystem&) = delete;
+  cTraceJitSystem& operator=(const cTraceJitSystem&) = delete;
+  cTraceJitSystem(cTraceJitSystem&&) = delete;
+  cTraceJitSystem& operator=(cTraceJitSystem&&) = delete;
 
   const char* name() const override { return name_; }
 

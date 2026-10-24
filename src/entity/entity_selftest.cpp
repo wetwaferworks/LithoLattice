@@ -1,4 +1,4 @@
-// EntityManager + moveCollide self-tests (ctest: engine_entity).
+// cEntityMgr + moveCollide self-tests (ctest: engine_entity).
 // Pins H-ENT-5 (persistent sorted ids, behaviour exception boundary) and
 // H-ENT-6 (moveCollide substepping) from review Appendix H. Exit = failures.
 #include <cmath>
@@ -41,7 +41,7 @@ int main() {
   // offender is culled in the same tick, and later entities still tick.
   {
     int counted = 0;
-    EntityManager mgr([&](uint32_t type) -> std::unique_ptr<IEntityBehavior> {
+    cEntityMgr mgr([&](uint32_t type) -> std::unique_ptr<IEntityBehavior> {
       if (type == 1) return std::make_unique<ThrowBehavior>();
       auto b = std::make_unique<CountBehavior>();
       b->ticks = &counted;
@@ -64,7 +64,7 @@ int main() {
 
   // H-ENT-5: querySphere returns id order regardless of spawn/despawn history.
   {
-    EntityManager mgr([](uint32_t) { return std::make_unique<NoopBehavior>(); });
+    cEntityMgr mgr([](uint32_t) { return std::make_unique<NoopBehavior>(); });
     const uint64_t a = mgr.spawn(1, 0, 0, 0);
     const uint64_t b = mgr.spawn(1, 0.5, 0, 0);
     const uint64_t c = mgr.spawn(1, 1.0, 0, 0);

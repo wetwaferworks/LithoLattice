@@ -10,7 +10,7 @@
 //      (strings in, void out) and the engine->mod onInputEvent hook.
 //      Audited in mods_selftest.cpp (testModApiUiInputAudit).
 //   2. One-directional flow: this router is the engine-side record of mod
-//      input actions and the delivery-policy check. It holds no InputPump*,
+//      input actions and the delivery-policy check. It holds no cInputPump*,
 //      no InputSystem*, no IInputBackend*, no DeviceState* — there is no
 //      method here that can place an event into the engine's input pipeline,
 //      by construction. Engine -> mod is a call the GAME makes; mod -> engine
@@ -27,7 +27,7 @@
 // engine's input pipeline has exactly two event-injection points, both
 // engine-internal and both unreachable from mod code:
 //   a. cReplayInputBackend::push() — the replay/testing seam. The backend
-//      object is owned by InputPump (private unique_ptr); the mod API
+//      object is owned by cInputPump (private unique_ptr); the mod API
 //      surface exposes no path to it.
 //   b. InputSystem::processFrame() — replay/tests. Mods never receive an
 //      InputSystem*.
@@ -87,7 +87,7 @@ class cModInputRouter {
   // this class. The only engine->mod input path is the game's explicit call
   // of the mod's onInputEvent hook; this router keeps the books and the
   // policy, and it cannot place events into the engine pipeline — it holds
-  // no InputPump*, InputSystem*, IInputBackend*, or DeviceState*.
+  // no cInputPump*, InputSystem*, IInputBackend*, or DeviceState*.
 
  private:
   static bool isValidId(std::string_view id);

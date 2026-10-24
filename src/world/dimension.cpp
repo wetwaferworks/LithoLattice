@@ -5,7 +5,7 @@ namespace litholattice {
 
 Spawn Dimension::load(JobPool& pool, int sizeChunks) {
   unload();
-  HandoffQueue<std::unique_ptr<ChunkColumn>> out;
+  cHandoffQueue<std::unique_ptr<ChunkColumn>> out;
   int failed = 0;
   if (!generator) {
     logError("dimension '%s': no terrain generator; loading empty", id.c_str());

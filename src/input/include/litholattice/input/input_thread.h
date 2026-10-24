@@ -2,7 +2,7 @@
 // stalling behind sim, render, or I/O.
 //
 // ==== THE INPUT-THREAD CONTRACT (read this before wiring input) ====
-// Who owns the input thread: InputPump. Construct it with the game's
+// Who owns the input thread: cInputPump. Construct it with the game's
 // IInputBackend; in Mode::Threaded it spawns one cNamedThread ("litho-input",
 // pinned to the realtime affinity mask) that polls the backend in a loop.
 // In Mode::Manual it spawns no thread and the owner calls pumpOnce() instead —
@@ -61,7 +61,7 @@
 
 namespace litholattice {
 
-class InputPump {
+class cInputPump {
  public:
   enum class Mode {
     Threaded,  ///< pump owns the input thread; backend must be pollable off the main thread
@@ -69,12 +69,12 @@ class InputPump {
   };
 
   /// `pollInterval`: how often the input thread polls the backend in Threaded mode.
-  explicit InputPump(std::unique_ptr<IInputBackend> backend, Mode mode = Mode::Threaded,
+  explicit cInputPump(std::unique_ptr<IInputBackend> backend, Mode mode = Mode::Threaded,
                      std::chrono::milliseconds pollInterval = std::chrono::milliseconds(2));
-  ~InputPump();  // stops the thread (if any) and joins it: disciplined, never detached
+  ~cInputPump();  // stops the thread (if any) and joins it: disciplined, never detached
 
-  InputPump(const InputPump&) = delete;
-  InputPump& operator=(const InputPump&) = delete;
+  cInputPump(const cInputPump&) = delete;
+  cInputPump& operator=(const cInputPump&) = delete;
 
   /// Tick thread, once per frame: move all queued events into `out` (oldest
   /// first). Never blocks, never waits on the input thread.

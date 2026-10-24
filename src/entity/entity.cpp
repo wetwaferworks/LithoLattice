@@ -4,7 +4,7 @@
 
 namespace litholattice {
 
-uint64_t EntityManager::spawn(uint32_t type, double x, double y, double z) {
+uint64_t cEntityMgr::spawn(uint32_t type, double x, double y, double z) {
   const uint64_t id = nextId_++;
   Entity e;
   e.id = id;
@@ -18,17 +18,17 @@ uint64_t EntityManager::spawn(uint32_t type, double x, double y, double z) {
   return id;
 }
 
-void EntityManager::despawn(uint64_t id) {
+void cEntityMgr::despawn(uint64_t id) {
   auto it = entities_.find(id);
   if (it != entities_.end()) it->second.dead = true;
 }
 
-Entity* EntityManager::get(uint64_t id) {
+Entity* cEntityMgr::get(uint64_t id) {
   auto it = entities_.find(id);
   return it == entities_.end() ? nullptr : &it->second;
 }
 
-std::vector<Entity*> EntityManager::querySphere(double x, double y, double z, double radius,
+std::vector<Entity*> cEntityMgr::querySphere(double x, double y, double z, double radius,
                                                 uint32_t type) {
   // Visit in id order via the persistent sorted id list: unordered_map bucket
   // order is a function of insertion/erase history, and query results must
@@ -47,7 +47,7 @@ std::vector<Entity*> EntityManager::querySphere(double x, double y, double z, do
   return out;
 }
 
-void EntityManager::tick(double dt) {
+void cEntityMgr::tick(double dt) {
   // Tick in id order (the persistent sorted list): behavior execution order
   // is then a pure function of the entity set, stable across STL builds,
   // edit histories, and save/load round-trips.
@@ -92,7 +92,7 @@ void EntityManager::tick(double dt) {
   }
 }
 
-void EntityManager::clear() {
+void cEntityMgr::clear() {
   entities_.clear();
   behaviors_.clear();
   sortedIds_.clear();

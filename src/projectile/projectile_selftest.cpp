@@ -1,4 +1,4 @@
-// ProjectileManager selftest (P2c 2026-10-13, review ENT-1): movement,
+// cProjectileMgr selftest (P2c 2026-10-13, review ENT-1): movement,
 // swept wall hits (no tunnelling), penetration, chunk-ahead requests
 // through a fake seam, entity hits / owner exclusion, and the despawn
 // rules. Prints PASS/FAIL per check; exit code = failures.
@@ -34,9 +34,9 @@ struct RecordBehavior : IProjectileBehavior {
 };
 
 // A wall: every voxel with x >= 10 is solid stone of the given density.
-ProjectileManager::VoxelQueryFn wall(uint8_t density) {
-  return [density](int x, int, int) -> ProjectileManager::VoxelInfo {
-    return x >= 10 ? ProjectileManager::VoxelInfo{true, density} : ProjectileManager::VoxelInfo{};
+cProjectileMgr::VoxelQueryFn wall(uint8_t density) {
+  return [density](int x, int, int) -> cProjectileMgr::VoxelInfo {
+    return x >= 10 ? cProjectileMgr::VoxelInfo{true, density} : cProjectileMgr::VoxelInfo{};
   };
 }
 }  // namespace
@@ -44,7 +44,7 @@ ProjectileManager::VoxelQueryFn wall(uint8_t density) {
 int runProjectileSelfTest() {
   // -- spawn / tick movement in open air --------------------------------
   {
-    ProjectileManager m;  // no seams: air everywhere
+    cProjectileMgr m;  // no seams: air everywhere
     Projectile p;
     p.x = 0; p.y = 64; p.z = 0; p.vx = 2; p.maxRange = 64;
     const uint64_t id = m.spawn(p, nullptr);
@@ -59,14 +59,14 @@ int runProjectileSelfTest() {
   }
   // -- duplicate caller id refused --------------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     Projectile p; p.id = 77; p.vx = 1;
     check(m.spawn(p, nullptr) == 77, "caller-supplied id honoured");
     check(m.spawn(p, nullptr) == 0 && m.size() == 1, "duplicate id refused (first wins)");
   }
   // -- range despawn ------------------------------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     Projectile p; p.vx = 4; p.maxRange = 10;
     const uint64_t id = m.spawn(p, nullptr);
     m.tick(); m.tick();
@@ -76,7 +76,7 @@ int runProjectileSelfTest() {
   }
   // -- swept hit: a fast projectile must not tunnel through a 1-block wall
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     m.setVoxelQuery(wall(200));
     RecordBehavior b;
     Projectile p; p.x = 0; p.y = 64; p.z = 0; p.vx = 30; p.maxRange = 1000;  // 30 blocks in ONE tick
@@ -88,7 +88,7 @@ int runProjectileSelfTest() {
     // pinned by the slow case below.)
   }
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     m.setVoxelQuery(wall(200));
     RecordBehavior b; b.keep = true;  // keep-alive behavior on a NON-boomerang: still dies on a stopped hit
     Projectile p; p.x = 9.0; p.y = 64; p.z = 0; p.vx = 0.4; p.maxRange = 1000;
@@ -102,7 +102,7 @@ int runProjectileSelfTest() {
   }
   // -- penetration pierces -------------------------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     m.setVoxelQuery(wall(10));  // weak wall
     RecordBehavior b;
     Projectile p; p.x = 0; p.y = 64; p.z = 0; p.vx = 4; p.penetration = 64; p.maxRange = 1000;
@@ -114,7 +114,7 @@ int runProjectileSelfTest() {
   }
   // -- chunk-ahead requests through the seam --------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     std::vector<std::pair<int, int>> req;
     m.setChunkRequester([&](int cx, int cz) { req.emplace_back(cx, cz); });
     Projectile p; p.x = 8; p.y = 64; p.z = 8; p.vx = 4; p.maxRange = 64;
@@ -130,7 +130,7 @@ int runProjectileSelfTest() {
     m.tick();
     check(req.size() > afterSpawn, "clearRequestedChunks re-arms requests (dimension switch)");
     // One-shot form, diagonal ray.
-    ProjectileManager m2;
+    cProjectileMgr m2;
     std::set<std::pair<int, int>> cols2;
     m2.setChunkRequester([&](int cx, int cz) { cols2.emplace(cx, cz); });
     m2.loadChunksAhead(0, 64, 0, 1, 0, 1, 48);
@@ -141,7 +141,7 @@ int runProjectileSelfTest() {
   }
   // -- entity hits + owner exclusion -----------------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     // A target entity (id 42) standing at x in [20,21); owner is 7.
     m.setEntityQuery([](double x, double, double, uint64_t exclude) -> uint64_t {
       if (x >= 20.0 && x < 21.0) return exclude == 42 ? 0 : 42;
@@ -153,7 +153,7 @@ int runProjectileSelfTest() {
     m.tick();
     check(b.lastHitEntity == 42 && !m.alive(id), "entity hit despawns and reports the entity");
     // The owner firing through its own position is never self-hit.
-    ProjectileManager m2;
+    cProjectileMgr m2;
     m2.setEntityQuery([](double x, double, double, uint64_t exclude) -> uint64_t {
       return (x >= 0.0 && exclude != 7) ? 7 : 0;  // entity 7 (the owner) at the muzzle
     });
@@ -164,7 +164,7 @@ int runProjectileSelfTest() {
   }
   // -- behavior returning false despawns --------------------------------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     RecordBehavior b; b.keep = false;
     Projectile p; p.vx = 1; p.maxRange = 1000;
     const uint64_t id = m.spawn(p, &b);
@@ -173,7 +173,7 @@ int runProjectileSelfTest() {
   }
   // -- boomerang: turns at maxRange, despawns after the return leg ------------
   {
-    ProjectileManager m;
+    cProjectileMgr m;
     Projectile p; p.x = 0; p.y = 64; p.z = 0; p.vx = 4; p.maxRange = 8; p.returnsToOwner = true;
     const uint64_t id = m.spawn(p, nullptr);
     m.tick(); m.tick();  // traveled 8: turn

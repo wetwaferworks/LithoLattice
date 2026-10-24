@@ -32,7 +32,7 @@ const char* controlKindName(ControlKind k) {
 
 // ---------------------------------------------------------------- stream
 
-void ControlStream::submit(ControlEvent e) {
+void cControlStream::submit(ControlEvent e) {
   e.seq = 0;
   e.tick = 0;  // stamps are assigned at the PRE phase, never by producers
   {
@@ -42,7 +42,7 @@ void ControlStream::submit(ControlEvent e) {
   submitted_.fetch_add(1, std::memory_order_relaxed);
 }
 
-void ControlStream::submitStamped(std::vector<ControlEvent> evts) {
+void cControlStream::submitStamped(std::vector<ControlEvent> evts) {
   if (evts.empty()) return;
   {
     std::lock_guard l(injectM_);
@@ -51,7 +51,7 @@ void ControlStream::submitStamped(std::vector<ControlEvent> evts) {
   injected_.fetch_add(evts.size(), std::memory_order_relaxed);
 }
 
-void ControlStream::insertSorted(ControlEvent e) {
+void cControlStream::insertSorted(ControlEvent e) {
   // pending_ stays sorted by (tick, seq); equal keys keep insertion order
   // (upper_bound), so application order is stable across identical stamps.
   const auto it = std::upper_bound(pending_.begin(), pending_.end(), e,
@@ -61,7 +61,7 @@ void ControlStream::insertSorted(ControlEvent e) {
   pending_.insert(it, std::move(e));
 }
 
-void ControlStream::prePhase(uint64_t stampTick) {
+void cControlStream::prePhase(uint64_t stampTick) {
   std::vector<ControlEvent> live, injected;
   {
     std::lock_guard l(inboundM_);
@@ -88,7 +88,7 @@ void ControlStream::prePhase(uint64_t stampTick) {
   }
 }
 
-size_t ControlStream::extractDue(uint64_t tick, std::vector<ControlEvent>& out) {
+size_t cControlStream::extractDue(uint64_t tick, std::vector<ControlEvent>& out) {
   size_t n = 0;
   while (!pending_.empty() && pending_.front().tick <= tick) {
     ControlEvent e = pending_.front();
@@ -111,13 +111,13 @@ size_t ControlStream::extractDue(uint64_t tick, std::vector<ControlEvent>& out) 
   return n;
 }
 
-void ControlStream::takeRecord(std::vector<ControlEvent>& out) {
+void cControlStream::takeRecord(std::vector<ControlEvent>& out) {
   std::lock_guard l(recordM_);
   out.insert(out.end(), std::make_move_iterator(record_.begin()), std::make_move_iterator(record_.end()));
   record_.clear();
 }
 
-ControlStreamStats ControlStream::stats() const {
+ControlStreamStats cControlStream::stats() const {
   ControlStreamStats s;
   s.submitted = submitted_.load(std::memory_order_relaxed);
   s.injected = injected_.load(std::memory_order_relaxed);

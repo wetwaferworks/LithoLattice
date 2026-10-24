@@ -153,7 +153,7 @@ class JobBatch {
 
 // MPSC hand-off: workers push, render thread swaps the whole vector out in O(1).
 template <class T>
-class HandoffQueue {
+class cHandoffQueue {
  public:
   void push(T v) { locktiming::TimedGuard l(m_, locktiming::kHandoff); items_.push_back(std::move(v)); }  // 0.0.1.60 timing (diagnostic)
   void drainInto(std::vector<T>& out) {
