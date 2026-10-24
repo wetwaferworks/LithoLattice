@@ -1,4 +1,4 @@
-// Bandwidth budgeting: Veloren's PrioManager model.
+// Bandwidth budgeting: Veloren's cPrioMgr model.
 //
 // Every outbound stream (snapshots, chunk data, events, ...) registers with a
 // priority and a GUARANTEED byte floor. Each snapshot slot, allocate() runs:
@@ -15,7 +15,7 @@
 // INTEREST-MANAGEMENT HOOK: this is the prioritization half. The selection
 // half (which entities/chunks are worth sending) is game policy: the game
 // sorts entities by relevance (distance to the client's player,PVS, etc.)
-// before handing them to SnapshotClient::build, whose byte budget then
+// before handing them to cSnapshotClient::build, whose byte budget then
 // enforces the grant. Streams:
 //
 //   kStreamSnapshot = 1  Critical  the entity snapshot (never starve this)
@@ -23,7 +23,7 @@
 //                                  full sends + per-node deltas ride here)
 //   kStreamEvent    = 3  Normal    gameplay events, chat, etc.
 //
-// Research basis: survey 6.5 (Veloren network crate: PrioManager, guaranteed
+// Research basis: survey 6.5 (Veloren network crate: cPrioMgr, guaranteed
 // bandwidth + priority-ordered leftover) and 6.7 (GameNetworkingSockets
 // lanes: the industrial version of the same idea).
 #pragma once
@@ -63,7 +63,7 @@ struct StreamGrant {
 
 /// Veloren-style per-slot bandwidth allocator. Not thread-safe by design
 /// (owned by the net tick); all math is integer and deterministic.
-class PrioManager {
+class cPrioMgr {
  public:
   void clear() { streams_.clear(); }
   void addStream(StreamDef def) { streams_.push_back(def); }

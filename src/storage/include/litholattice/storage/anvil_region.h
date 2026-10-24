@@ -1,9 +1,9 @@
-// EXPERIMENTAL (P3-2 C-L3): AnvilRegion has NO production callers. The
+// EXPERIMENTAL (P3-2 C-L3): cAnvilRegion has NO production callers. The
 // production region path is RegionFile / WorldStore (storage.h); this
 // layer is a design experiment kept for evaluation and its own tests.
 // Do not wire it into a save path without a fresh review.
 //
-// litholattice::storage::AnvilRegion: an Anvil-inverted region file layer.
+// litholattice::storage::cAnvilRegion: an Anvil-inverted region file layer.
 // 32x32 chunk columns per file, an 8 KiB index header (Anvil-compatible 3-byte
 // big-endian sector offset + 1-byte count entries), 512-byte sector allocation
 // with the free bitmap rebuilt from the index on every open, a per-record
@@ -23,7 +23,7 @@ namespace litholattice::storage {
 
 using Bytes = std::vector<uint8_t>;
 
-class AnvilRegion {
+class cAnvilRegion {
  public:
   static constexpr int kSpan = 32;                 ///< chunk columns per side
   static constexpr size_t kSector = 512;           ///< allocation quantum (Anvil: 4096)
@@ -58,9 +58,9 @@ class AnvilRegion {
     bool external = false; ///< staged into a sidecar instead of sectors
   };
 
-  explicit AnvilRegion(std::filesystem::path p, int rx = 0, int rz = 0)
+  explicit cAnvilRegion(std::filesystem::path p, int rx = 0, int rz = 0)
       : path_(std::move(p)), rx_(rx), rz_(rz) {}
-  ~AnvilRegion();
+  ~cAnvilRegion();
 
   /// Opens the region, validating the preamble and rebuilding the free-sector
   /// bitmap from the location table. Creates the file (header only) if absent.

@@ -4929,13 +4929,13 @@ void testAnvilRegion() {
     for (auto& x : b) x = uint8_t(rng());
     return b;
   };
-  const uint8_t codecs[] = {st::AnvilRegion::kCodecNone, st::AnvilRegion::kCodecLZ4,
-                            st::AnvilRegion::kCodecCustom, 9};
+  const uint8_t codecs[] = {st::cAnvilRegion::kCodecNone, st::cAnvilRegion::kCodecLZ4,
+                            st::cAnvilRegion::kCodecCustom, 9};
   {  // 1. round trip: 200 random payloads, 4 codec tags, byte-identical after reopen
     std::vector<std::vector<uint8_t>> payloads(200);
     std::vector<uint8_t> codecOf(200);
     {
-      st::AnvilRegion r(dir / "r.0.0.llar", 0, 0);
+      st::cAnvilRegion r(dir / "r.0.0.llar", 0, 0);
       std::string err;
       bool ok = r.open(&err);
       std::ifstream mf(dir / "r.0.0.llar", std::ios::binary);
@@ -4950,7 +4950,7 @@ void testAnvilRegion() {
       check(ok, "anvil region: 200 puts across 200 slots");
     }
     {
-      st::AnvilRegion r(dir / "r.0.0.llar", 0, 0);
+      st::cAnvilRegion r(dir / "r.0.0.llar", 0, 0);
       std::string err;
       check(r.open(&err) && r.count() == 200, "anvil region: reopen finds all 200 slots indexed");
       bool all = true;
@@ -4970,11 +4970,11 @@ void testAnvilRegion() {
     uint32_t sector = 0;
     uint8_t count = 0;
     {
-      st::AnvilRegion r(p, 1, 0);
+      st::cAnvilRegion r(p, 1, 0);
       std::string err;
       r.open(&err);
-      r.put(7, 9, st::AnvilRegion::kCodecLZ4, rnd(3000), &err);
-      r.put(8, 9, st::AnvilRegion::kCodecNone, rnd(100), &err);
+      r.put(7, 9, st::cAnvilRegion::kCodecLZ4, rnd(3000), &err);
+      r.put(8, 9, st::cAnvilRegion::kCodecNone, rnd(100), &err);
       check(r.locate(7, 9, &sector, &count) && count == 6, "anvil region: locate reports the index entry");
     }
     {
@@ -4989,7 +4989,7 @@ void testAnvilRegion() {
       f.put(c);
     }
     {
-      st::AnvilRegion r(p, 1, 0);
+      st::cAnvilRegion r(p, 1, 0);
       std::string err;
       r.open(&err);
       std::string re, ne;
@@ -5003,7 +5003,7 @@ void testAnvilRegion() {
     const auto p = dir / "r.2.0.llar";
     const auto v1 = rnd(2000), v2 = rnd(2500);
     {
-      st::AnvilRegion r(p, 2, 0);
+      st::cAnvilRegion r(p, 2, 0);
       std::string err;
       r.open(&err);
       check(r.put(3, 3, 3, v1, &err), "anvil region: baseline write commits");
@@ -5012,7 +5012,7 @@ void testAnvilRegion() {
       r.stage(4, 4, 3, v2, &err);  // ...and a brand-new slot staged, never committed
     }  // "crash": the region is destroyed with commits pending
     {
-      st::AnvilRegion r(p, 2, 0);
+      st::cAnvilRegion r(p, 2, 0);
       std::string err;
       r.open(&err);
       std::string re, re2;
@@ -5028,7 +5028,7 @@ void testAnvilRegion() {
       f.write(reinterpret_cast<const char*>(evil), 4);
     }
     {
-      st::AnvilRegion r(p, 2, 0);
+      st::cAnvilRegion r(p, 2, 0);
       std::string err;
       r.open(&err);
       std::string re;
@@ -5037,18 +5037,18 @@ void testAnvilRegion() {
   }
   {  // 4. sub-4KiB packing: 100 small records stay under 1 KiB/chunk (Anvil needs >= 4)
     const auto p = dir / "r.3.0.llar";
-    st::AnvilRegion r(p, 3, 0);
+    st::cAnvilRegion r(p, 3, 0);
     std::string err;
     r.open(&err);
     for (int i = 0; i < 100; ++i) r.put(i % 32, i / 32, 3, rnd(100), &err);
-    const uint64_t bytes = uint64_t(r.fileSectors()) * st::AnvilRegion::kSector;
+    const uint64_t bytes = uint64_t(r.fileSectors()) * st::cAnvilRegion::kSector;
     // Anvil's 4 KiB sectors would need at least (2 header + 100) * 4096 = 417792 bytes.
     check(bytes < 100 * 1024, "anvil region: 100 x ~109-byte records pack into under 1 KiB/chunk all-in");
   }
   {  // 5. 32x32 lookup: every slot addressed directly through the index
     const auto p = dir / "r.4.0.llar";
     {
-      st::AnvilRegion r(p, 4, 0);
+      st::cAnvilRegion r(p, 4, 0);
       std::string err;
       r.open(&err);
       for (int lz = 0; lz < 32; ++lz)
@@ -5062,7 +5062,7 @@ void testAnvilRegion() {
       check(r.count() == 1024, "anvil region: all 1024 slots indexed");
     }
     {
-      st::AnvilRegion r(p, 4, 0);
+      st::cAnvilRegion r(p, 4, 0);
       std::string err;
       r.open(&err);
       bool all = true;
@@ -5080,7 +5080,7 @@ void testAnvilRegion() {
     const auto p = dir / "r.5.0.llar";
     size_t sectorsBefore = 0;
     {
-      st::AnvilRegion r(p, 5, 0);
+      st::cAnvilRegion r(p, 5, 0);
       std::string err;
       r.open(&err);
       for (int i = 0; i < 10; ++i) r.put(i, 0, 3, rnd(4000), &err);  // 4009 B -> 8 sectors each
@@ -5089,7 +5089,7 @@ void testAnvilRegion() {
       check(r.count() == 5 && r.fileSectors() == sectorsBefore, "anvil region: erase drops entries without growing the file");
     }
     {
-      st::AnvilRegion r(p, 5, 0);  // reopen: bitmap derived purely from the surviving index
+      st::cAnvilRegion r(p, 5, 0);  // reopen: bitmap derived purely from the surviving index
       std::string err;
       r.open(&err);
       for (int i = 10; i < 15; ++i) r.put(i, 0, 3, rnd(4000), &err);
@@ -5107,22 +5107,22 @@ void testAnvilRegion() {
   }
   {  // 7. oversized records spill to a sidecar; erase removes it
     const auto p = dir / "r.6.0.llar";
-    const auto pay = rnd(st::AnvilRegion::kMaxInlineBytes + 1000);
-    const auto sp = st::AnvilRegion::sidecarPath(p, 6 * 32, 0);
+    const auto pay = rnd(st::cAnvilRegion::kMaxInlineBytes + 1000);
+    const auto sp = st::cAnvilRegion::sidecarPath(p, 6 * 32, 0);
     {
-      st::AnvilRegion r(p, 6, 0);
+      st::cAnvilRegion r(p, 6, 0);
       std::string err;
       r.open(&err);
-      check(r.put(0, 0, st::AnvilRegion::kCodecCustom, pay, &err) && std::filesystem::exists(sp),
+      check(r.put(0, 0, st::cAnvilRegion::kCodecCustom, pay, &err) && std::filesystem::exists(sp),
             "anvil region: a record past the 255-sector cap spills to a sidecar file");
     }
     {
-      st::AnvilRegion r(p, 6, 0);
+      st::cAnvilRegion r(p, 6, 0);
       std::string err;
       r.open(&err);
       std::string re;
       const auto rec = r.read(0, 0, &re);
-      const bool roundTrips = rec && rec->codec == st::AnvilRegion::kCodecCustom && rec->payload == pay;
+      const bool roundTrips = rec && rec->codec == st::cAnvilRegion::kCodecCustom && rec->payload == pay;
       std::string ee;
       const bool erased = r.erase(0, 0, &ee);
       std::string re2;
@@ -5132,7 +5132,7 @@ void testAnvilRegion() {
   }
   {  // 8. timestamp table works as a dirty-generation vector
     const auto p = dir / "r.7.0.llar";
-    st::AnvilRegion r(p, 7, 0);
+    st::cAnvilRegion r(p, 7, 0);
     std::string err;
     r.open(&err);
     r.put(1, 1, 3, rnd(50), &err);
@@ -5147,7 +5147,7 @@ void testAnvilRegion() {
   {  // 9. a damaged file fails open and is never overwritten in place
     const auto p = dir / "r.9.0.llar";
     { std::ofstream f(p, std::ios::binary); f << "garbage"; }
-    st::AnvilRegion r(p, 9, 0);
+    st::cAnvilRegion r(p, 9, 0);
     std::string err;
     check(!r.open(&err) && !err.empty(), "anvil region: a damaged file fails open, kept for recovery");
   }
@@ -5289,7 +5289,7 @@ void testAsyncIo() {
   {  // completions run on an I/O thread, never the submitting (sim stand-in) thread
     std::atomic<bool> cbOnJobThread{false}, cbOnSimThread{false};
     const std::thread::id simId = std::this_thread::get_id();
-    st::IoFence fence(io);
+    st::cIoFence fence(io);
     fence.submitWrite(dir / "a.bin", st::Bytes{1, 2, 3}, opts, [&](bool ok, std::string) {
       cbOnJobThread = JobSystem::onJobThread();
       cbOnSimThread = std::this_thread::get_id() == simId;
@@ -5301,7 +5301,7 @@ void testAsyncIo() {
   {  // per-path FIFO: same-path ops complete in submission order
     std::vector<int> order;
     std::mutex om;
-    st::IoFence fence(io);
+    st::cIoFence fence(io);
     const auto fp = dir / "fifo.bin";
     for (int i = 0; i < 20; ++i)
       fence.submitWrite(fp, st::Bytes{uint8_t(i)}, opts, [&, i](bool, std::string) {
@@ -5331,7 +5331,7 @@ void testAsyncIo() {
     check(done == 8, "async io: every submitted op completes");
   }
   {  // framed write + read round trip on one path; a missing file is a reported error, not a fence failure
-    st::IoFence fence(io);
+    st::cIoFence fence(io);
     std::string seen = "unset";
     fence.submitWriteRecord(dir / "rec.bin", st::Bytes{4, 5, 6}, opts, [](bool, std::string) {});
     fence.submitRead(dir / "rec.bin", [&](st::Bytes d, std::string e) {
@@ -5346,7 +5346,7 @@ void testAsyncIo() {
           "async io: framed record written async validates");
   }
   {  // a throwing callback counts as a failed op on the fence
-    st::IoFence fence(io);
+    st::cIoFence fence(io);
     io.submit([] {}, [] { throw std::runtime_error("boom"); }, &fence);
     check(fence.wait() == 1, "async io: a throwing callback counts as one failed op");
   }
@@ -6511,7 +6511,7 @@ void testNet() {
   }
   // --- snapshotter: cadence, baseline, acks ------------------------------------------------
   {
-    SnapshotClient c;  // 512 TPS / 32 Hz -> divisor 16
+    cSnapshotClient c;  // 512 TPS / 32 Hz -> divisor 16
     bool ok = c.divisor() == 16 && c.isSnapshotTick(0) && c.isSnapshotTick(16) &&
               !c.isSnapshotTick(15) && c.baselineSeq() == 0;
     std::vector<SnapshotEntity> e1 = {ent(1, 0, 0, 0)};
@@ -6549,7 +6549,7 @@ void testNet() {
 
   // --- receiver: out-of-order / duplicate / malformed ------------------------------------------
   {
-    SnapshotClient srv;
+    cSnapshotClient srv;
     SnapshotReceiver cli;
     std::vector<SnapshotEntity> e = {ent(1, 0, 0, 0)};
     e[0].atRest = true;
@@ -6575,7 +6575,7 @@ void testNet() {
 
   // --- lost baseline -> needFull -> resync ---------------------------------------------------------
   {
-    SnapshotClient srv;
+    cSnapshotClient srv;
     SnapshotReceiver cli;
     std::vector<SnapshotEntity> e1 = {ent(1, 0, 0, 0)};
     e1[0].atRest = true;
@@ -6633,7 +6633,7 @@ void testNet() {
 
   // --- receiver sample(): render state between buffered snapshots ------------------------------------------
   {
-    SnapshotClient srv;
+    cSnapshotClient srv;
     SnapshotReceiver cli;
     bool ok = true;
     for (int i = 0; i < 3; ++i) {
@@ -6651,7 +6651,7 @@ void testNet() {
 
   // --- spiral of death: missed slots are skipped, never caught up ----------------------------------------------
   {
-    SnapshotClient c;
+    cSnapshotClient c;
     std::vector<SnapshotEntity> e = {ent(1, 0, 0, 0)};
     e[0].atRest = true;
     const auto p1 = c.build(0, e);
@@ -6673,7 +6673,7 @@ void testNet() {
 
   // --- byte budget: truncation flag, recovery on the next delta ------------------------------------------------------
   {
-    SnapshotClient c;
+    cSnapshotClient c;
     std::vector<SnapshotEntity> ents;
     for (uint32_t i = 0; i < 50; ++i) {
       auto e = ent(i, int32_t(i), 0, 0);
@@ -6702,9 +6702,9 @@ void testNet() {
     check(ok, "net: byte budget truncates with flag; next delta recovers cut entities");
   }
 
-  // --- PrioManager --------------------------------------------------------------------------------------
+  // --- cPrioMgr --------------------------------------------------------------------------------------
   {
-    PrioManager pm;
+    cPrioMgr pm;
     pm.addStream({streams::kSnapshot, StreamPriority::Critical, 800});
     pm.addStream({streams::kChunk, StreamPriority::High, 200});
     pm.addStream({streams::kEvent, StreamPriority::Normal, 100});
@@ -6713,7 +6713,7 @@ void testNet() {
     bool ok = g.size() == 3 && g[0].streamId == streams::kSnapshot && g[0].bytes == 1700 &&
               g[1].bytes == 200 && g[2].bytes == 100;
     // Leftover splits evenly within one priority level; remainder to lowest id.
-    PrioManager pm2;
+    cPrioMgr pm2;
     pm2.addStream({20, StreamPriority::High, 0});
     pm2.addStream({10, StreamPriority::High, 0});
     const auto g2 = pm2.allocate(101);
@@ -6908,7 +6908,7 @@ void testNetChannels() {
 
   // --- reliable delivery under loss: every byte exactly once, in order ------------------------------------
   {
-    ReliableChannel a, b;  // default config: RTO 200 ms
+    cReliableChannel a, b;  // default config: RTO 200 ms
     const int kMsgs = 120;
     std::mt19937 rng(0xC4A4E1u);  // fixed seed: deterministic
     struct Flight {
@@ -6928,7 +6928,7 @@ void testNetChannels() {
     bool ok = true;
     int sentA = 0, sentB = 0, now = 0;
     std::vector<uint32_t> gotA, gotB;
-    auto drain = [&](ReliableChannel& ch, std::vector<uint32_t>& got) {
+    auto drain = [&](cReliableChannel& ch, std::vector<uint32_t>& got) {
       std::vector<uint8_t> p;
       PayloadType t = PayloadType::Ack;
       while (ch.pollDelivery(p, t)) {
@@ -7001,7 +7001,7 @@ void testNetChannels() {
 
   // --- retransmit timing: RTO default 200 ms; ack stops retransmits ---------------------------------------
   {
-    ReliableChannel a;
+    cReliableChannel a;
     std::vector<uint8_t> d;
     bool ok = a.send(payloadFor(1), PayloadType::Event, 1000, d);
     ok = ok && a.unackedCount() == 1;
@@ -7019,7 +7019,7 @@ void testNetChannels() {
     // Backpressure: the in-flight window caps sends.
     ReliableConfig small;
     small.maxInFlight = 4;
-    ReliableChannel c(small);
+    cReliableChannel c(small);
     bool filled = true;
     for (int i = 0; i < 4; ++i)
       filled = filled && c.send(payloadFor(uint32_t(i)), PayloadType::Event, 0, d);
@@ -7059,7 +7059,7 @@ void testNetChannels() {
     PayloadType t = PayloadType::Ack;
     ok = ok && !rx.receive(sent[got[0]].data(), sent[got[0]].size(), p, t);
     // A reliable-channel datagram is refused here (the demux routes those).
-    ReliableChannel rc;
+    cReliableChannel rc;
     std::vector<uint8_t> rd;
     ok = ok && rc.send(payloadFor(7), PayloadType::Event, 0, rd) &&
          !rx.receive(rd.data(), rd.size(), p, t);
@@ -7072,12 +7072,12 @@ void testNetChannels() {
     int reliableHits = 0, unreliableHits = 0;
     demux.onReliable([&](const uint8_t*, size_t) { ++reliableHits; });
     demux.onUnreliable([&](const uint8_t*, size_t) { ++unreliableHits; });
-    ReliableChannel rc;
+    cReliableChannel rc;
     UnreliableChannel uc;
     std::vector<uint8_t> rd, ud;
     bool ok = rc.send(payloadFor(3), PayloadType::Event, 0, rd) &&
               uc.send(payloadFor(4), PayloadType::ChunkBatch, ud);
-    // Legacy snapshot datagram: framed by SnapshotClient, bit clear.
+    // Legacy snapshot datagram: framed by cSnapshotClient, bit clear.
     PacketHeader h;
     h.type = PayloadType::Snapshot;
     h.seq = 41;
@@ -7777,7 +7777,7 @@ void testNetHandshake() {
   // --- happy path over a fake reliable transport (with one dropped hello) ------
   {
     bool ok = true;
-    ReliableChannel cc, sc;  // client / server channel endpoints
+    cReliableChannel cc, sc;  // client / server channel endpoints
     for (auto* c : {&cc, &sc}) {
       c->setAcceptedVersions(knownProtocolVersions());  // pre-handshake: accept {1,2,3}
       c->setVersion(maxProtocolVersion());              // stamp own highest
@@ -7842,7 +7842,7 @@ void testNetHandshake() {
       c->setVersion(3);
       c->setAcceptedVersions({3});
     }
-    ReliableChannel legacy;  // a v1-stamped datagram must not slip through now
+    cReliableChannel legacy;  // a v1-stamped datagram must not slip through now
     legacy.setVersion(1);
     std::vector<uint8_t> ldg;
     const uint8_t pl[] = {7};
@@ -8051,7 +8051,7 @@ void testNetHandshake() {
   // --- negotiated version on the snapshot path ------------------------------------
   {
     bool ok = true;
-    SnapshotClient srv;
+    cSnapshotClient srv;
     srv.setVersion(1);  // post-handshake: agreed on v1
     std::vector<SnapshotEntity> e(1);
     e[0].id = 7;
@@ -8081,10 +8081,10 @@ void testNetEncryption() {
     check(ok, "net: crypto overhead budget: 16 B/pkt on the wire (tag only), 28 B never-exceed");
   }
 
-  // --- NullCipher: refuses, never silently plaintext ----------------------------
+  // --- cNullCipher: refuses, never silently plaintext ----------------------------
   {
     bool ok = true;
-    NullCipher nc;
+    cNullCipher nc;
     ok = ok && nc.isPlaintext();
     uint8_t nonce[kCryptoNonceBytes] = {};
     const uint8_t plain[] = {1, 2, 3, 4};
@@ -8099,13 +8099,13 @@ void testNetEncryption() {
     check(ok, "net: NullCipher seal/open return NotImplemented and touch nothing (never silently plaintext)");
   }
 
-  // --- CryptoSession: arming, requireEncryption, deriveKeys stub ------------------
+  // --- cCryptoSession: arming, requireEncryption, deriveKeys stub ------------------
   {
     bool ok = true;
-    CryptoSession s(CryptoConfig{false, 0x12345678});
+    cCryptoSession s(CryptoConfig{false, 0x12345678});
     ok = ok && s.isPlaintext() && s.state() == CryptoSessionState::Plaintext;
     // arming the null cipher is allowed in v1 (deliberate plaintext), still plaintext
-    ok = ok && s.armCipher(std::make_unique<NullCipher>()).error == CryptoError::None;
+    ok = ok && s.armCipher(std::make_unique<cNullCipher>()).error == CryptoError::None;
     ok = ok && s.isPlaintext() && s.state() == CryptoSessionState::Plaintext;
     // seal/open while plaintext: NotImplemented (the game sends raw payloads itself)
     uint8_t buf[64];
@@ -8116,8 +8116,8 @@ void testNetEncryption() {
     KeyExchangeMsg a, b;
     ok = ok && s.deriveKeys(a, b).error == CryptoError::NotImplemented;
     // requireEncryption: arming a plaintext cipher fails closed, old cipher kept
-    CryptoSession hard(CryptoConfig{true, 0x9});
-    ok = ok && hard.armCipher(std::make_unique<NullCipher>()).error == CryptoError::NotImplemented;
+    cCryptoSession hard(CryptoConfig{true, 0x9});
+    ok = ok && hard.armCipher(std::make_unique<cNullCipher>()).error == CryptoError::NotImplemented;
     ok = ok && hard.isPlaintext() && hard.state() == CryptoSessionState::Plaintext;
     ok = ok && hard.armCipher(nullptr).error == CryptoError::BadKey;  // null backend refused
     check(ok, "net: CryptoSession arms NullCipher as deliberate plaintext; requireEncryption refuses it");
@@ -8134,7 +8134,7 @@ void testNetEncryption() {
     ok = ok && !std::equal(std::begin(n1), std::end(n1), std::begin(n3));  // counter matters
     ok = ok && n1[0] == 0x78 && n1[1] == 0x56 && n1[2] == 0x34 && n1[3] == 0x12;  // LE session id
     ok = ok && n1[4] == 42 && n1[5] == 0;  // LE counter
-    CryptoSession s(CryptoConfig{false, 0xAABBCCDD});
+    cCryptoSession s(CryptoConfig{false, 0xAABBCCDD});
     uint8_t a[kCryptoNonceBytes], b[kCryptoNonceBytes];
     s.nextNonce(a);
     s.nextNonce(b);
@@ -8143,10 +8143,10 @@ void testNetEncryption() {
     check(ok, "net: makeNonce packs sessionId||counter (LE, implicit on the wire); send counter advances");
   }
 
-  // --- ReplayWindow: in-order, reorder, duplicates, too-old ---------------------------
+  // --- cReplayWindow: in-order, reorder, duplicates, too-old ---------------------------
   {
     bool ok = true;
-    ReplayWindow w;
+    cReplayWindow w;
     ok = ok && w.accept(0) && w.accept(1) && w.accept(2);
     ok = ok && !w.accept(1) && !w.accept(2) && !w.accept(0);  // duplicates rejected
     ok = ok && w.accept(5) && w.accept(3) && w.accept(4);     // reorder inside window OK
@@ -8191,7 +8191,7 @@ void testNetEncryption() {
       const char* name() const override { return "fake-fail"; }
     };
     bool ok = true;
-    CryptoSession s(CryptoConfig{false, 0x77});
+    cCryptoSession s(CryptoConfig{false, 0x77});
     ok = ok && s.armCipher(std::make_unique<FailCipher>()).error == CryptoError::None;
     const uint8_t pl[] = {1, 2, 3};
     uint8_t buf[64];

@@ -31,7 +31,7 @@
 // file/network/process/system bindings exist there).
 //
 // THREADING: not thread-safe by design — owned by the net tick, like
-// PrioManager and the channels (see channels.h). Time is a game-provided
+// cPrioMgr and the channels (see channels.h). Time is a game-provided
 // monotonic millisecond clock (fakeable in tests); never wall-clock, keeping
 // the sim deterministic.
 #pragma once
@@ -81,7 +81,7 @@ struct ModNetBudgets {
 /// log lines are rate-limited — the first denial per mod per 1 s window
 /// logs in full, the rest are counted and summarized when the window rolls.
 /// A buggy/malicious mod waving kPermNet can no longer fill the log volume.
-class ModNetGate {
+class cModNetGate {
  public:
   /// Denial-log suppression window: the first denial in each window logs in
   /// full; the rest are counted and summarized at rollover.
@@ -144,11 +144,11 @@ class ModNetGate {
 /// non-suspended mod inside its budgets. Fails closed (false = drop the
 /// datagram) on: null gate with Mod origin, unknown mod, throttled budget,
 /// suspended mod. Denials are logged with a reason, rate-limited per the
-/// ModNetGate::DenyLogWindow policy (audit LOW 2026-10-11).
+/// cModNetGate::DenyLogWindow policy (audit LOW 2026-10-11).
 class NetConfinement {
  public:
   static bool checkSend(NetOrigin origin, const std::string& modId, size_t bytes,
-                        uint64_t nowMs, ModNetGate* gate);
+                        uint64_t nowMs, cModNetGate* gate);
 };
 
 /// ChannelMux with the confinement guard wired into the send path. The game
@@ -156,7 +156,7 @@ class NetConfinement {
 /// points; there is no unguarded path to the socket from here.
 class ConfinedChannelMux {
  public:
-  explicit ConfinedChannelMux(ChannelMap map = ChannelMap{}, ModNetGate* gate = nullptr)
+  explicit ConfinedChannelMux(ChannelMap map = ChannelMap{}, cModNetGate* gate = nullptr)
       : mux_(map), gate_(gate) {}
 
   /// Engine traffic (origin Engine): straight to the channels, no gate.
@@ -176,8 +176,8 @@ class ConfinedChannelMux {
 
  private:
   ChannelMux mux_;
-  ModNetGate* gate_;  // not owned; must outlive the mux
-  ModNetGate::DenyLogWindow denyLog_;  // reserved-type denial suppression
+  cModNetGate* gate_;  // not owned; must outlive the mux
+  cModNetGate::DenyLogWindow denyLog_;  // reserved-type denial suppression
 };
 
 }  // namespace net

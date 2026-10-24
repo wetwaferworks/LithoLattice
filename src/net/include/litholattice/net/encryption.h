@@ -1,10 +1,10 @@
 // Packet encryption: stubs + builder notes (v1 = deliberate plaintext).
 //
 // STATUS: no real cryptography is implemented in this tree. What exists:
-//   - the seam (ICipher, CryptoSession, key-exchange message shape),
+//   - the seam (ICipher, cCryptoSession, key-exchange message shape),
 //   - the replay-protection window (real logic: it is bookkeeping, not crypto),
 //   - the nonce construction (pure byte packing),
-//   - a NullCipher that REFUSES to seal/open and reports NotImplemented —
+//   - a cNullCipher that REFUSES to seal/open and reports NotImplemented —
 //     traffic stays plaintext, but never silently: isPlaintext() is true
 //     and the game must surface it (log once per session; requireEncryption
 //     turns it into a hard failure).
@@ -44,7 +44,7 @@
 //      public-domain, ~3k lines, trivially auditable, and enough if binary
 //      size matters — but then the builder owns the KEX/Ed25519 glue.
 //      BoringSSL is overkill (TLS stack weight for a datagram protocol).
-//      Whichever is chosen, it lives behind ICipher: only NullCipher is
+//      Whichever is chosen, it lives behind ICipher: only cNullCipher is
 //      replaced, nothing else in net/ changes.
 //   2. PLUG-IN POINT: after cConnectHandshake reaches Agreed and BEFORE the
 //      game narrows the accepted version set / starts game traffic. The
@@ -63,17 +63,17 @@
 //      counter, 12 bytes LE (makeNonce). Each direction keeps its own
 //      u64 counter, starting at 0 per session; the 12-byte nonce is never
 //      transmitted. The receiver rebuilds the expected nonce from the
-//      claimed counter and PEEKS at the ReplayWindow BEFORE opening:
+//      claimed counter and PEEKS at the cReplayWindow BEFORE opening:
 //      duplicates and >64-behind packets are dropped without touching the
 //      cipher, and the window is COMMITTED only after the cipher verifies
 //      the packet (review F-L1: an accept-before-auth window lets one
 //      forged far-future counter poison the session). Counter space is
 //      u64: at 512 packets/s it lasts ~10^12 years.
 //   5. KEY LIFETIME: one ephemeral keypair per session, zeroed on close
-//      (the backend owns the zeroing; NullCipher holds no key material).
+//      (the backend owns the zeroing; cNullCipher holds no key material).
 //      Rekeying is a future item — the session id in the nonce already
 //      partitions the nonce space per session, so rekey = new session.
-//   6. PLAINTEXT v1 IS DELIBERATE: NullCipher::isPlaintext() is the gate
+//   6. PLAINTEXT v1 IS DELIBERATE: cNullCipher::isPlaintext() is the gate
 //      the game checks. Ship v1 plaintext ONLY with the session log line
 //      and (for server browsers) an "unencrypted" badge; flip
 //      CryptoConfig::requireEncryption the moment a backend lands.
@@ -155,7 +155,7 @@ class ICipher {
 /// The v1 stub: seal()/open() return NotImplemented and touch nothing.
 /// isPlaintext() is true so the game can (must) surface the state.
 /// This is the deliberate-plaintext gate — plaintext is never silent.
-class NullCipher final : public ICipher {
+class cNullCipher final : public ICipher {
  public:
   CryptoResult seal(const uint8_t* plain, size_t plainLen,
                     const uint8_t nonce[kCryptoNonceBytes], uint8_t* out,
@@ -194,7 +194,7 @@ inline void makeNonce(uint32_t sessionId, uint64_t counter,
 /// the old accept-before-open order let one forged packet with a far-future
 /// counter shift the window and drop every legitimate packet behind it.
 /// accept() (= peek + commit) remains for callers with no auth step.
-class ReplayWindow {
+class cReplayWindow {
  public:
   /// True if `counter` is fresh. Advances the window on accept; duplicates
   /// and counters more than 63 behind the highest are rejected.
@@ -231,7 +231,7 @@ enum class KexAlgorithm : uint8_t {
 ///   ephKeyLen x u8           ephemeral public key bytes
 ///
 /// The message SHAPE is implemented (encode/parse); the key math is not —
-/// CryptoSession::deriveKeys() returns NotImplemented until the backend
+/// cCryptoSession::deriveKeys() returns NotImplemented until the backend
 /// lands. Runs on the reliable channel after cConnectHandshake::Agreed.
 struct KeyExchangeMsg {
   bool initiator = false;
@@ -246,7 +246,7 @@ bool parseKeyExchange(const uint8_t* data, size_t len, KeyExchangeMsg& out);
 // --- session -----------------------------------------------------------------------
 
 enum class CryptoSessionState : uint8_t {
-  Plaintext,    ///< no cipher armed (v1 state: NullCipher or nothing)
+  Plaintext,    ///< no cipher armed (v1 state: cNullCipher or nothing)
   KeyExchange,  ///< KEX in flight (post-handshake; builder-driven)
   Encrypted,    ///< cipher armed; seal/open active
 };
@@ -263,10 +263,10 @@ struct CryptoConfig {
 
 /// Owns the cipher backend and the receive-side replay window for one
 /// connection. The game drives it: armCipher() after the KEX (or with a
-/// NullCipher for v1), then seal()/open() around ChannelMux/ChannelDemux.
-class CryptoSession {
+/// cNullCipher for v1), then seal()/open() around ChannelMux/ChannelDemux.
+class cCryptoSession {
  public:
-  explicit CryptoSession(CryptoConfig cfg);
+  explicit cCryptoSession(CryptoConfig cfg);
 
   CryptoSessionState state() const { return state_; }
   const CryptoConfig& config() const { return cfg_; }
@@ -288,7 +288,7 @@ class CryptoSession {
   // --- packet path ---
   /// Seal one outbound payload. Plaintext state + requireEncryption =>
   /// NotImplemented (fail-closed). Plaintext state without the flag =>
-  /// NotImplemented too: NullCipher never copies plaintext through; the
+  /// NotImplemented too: cNullCipher never copies plaintext through; the
   /// game sends the raw payload itself while isPlaintext() is true.
   CryptoResult sealPacket(const uint8_t* plain, size_t plainLen, uint8_t* out,
                           size_t outCap);
@@ -303,14 +303,14 @@ class CryptoSession {
   /// encrypted; harmless otherwise.
   void nextNonce(uint8_t nonce[kCryptoNonceBytes]) { makeNonce(cfg_.sessionId, sendCounter_++, nonce); }
   uint64_t sendCounter() const { return sendCounter_; }
-  const ReplayWindow& replayWindow() const { return replay_; }
+  const cReplayWindow& replayWindow() const { return replay_; }
 
  private:
   CryptoConfig cfg_;
   CryptoSessionState state_ = CryptoSessionState::Plaintext;
   std::unique_ptr<ICipher> cipher_;
   uint64_t sendCounter_ = 0;
-  ReplayWindow replay_;
+  cReplayWindow replay_;
 };
 
 }  // namespace net

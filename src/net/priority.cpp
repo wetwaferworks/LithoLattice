@@ -5,7 +5,7 @@
 namespace litholattice {
 namespace net {
 
-std::vector<StreamGrant> PrioManager::allocate(uint32_t totalBytes) const {
+std::vector<StreamGrant> cPrioMgr::allocate(uint32_t totalBytes) const {
   // Deterministic order: by streamId ascending throughout.
   std::vector<StreamDef> defs = streams_;
   std::sort(defs.begin(), defs.end(),

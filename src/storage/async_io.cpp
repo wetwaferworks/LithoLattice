@@ -16,7 +16,7 @@ cIoScheduler::StrandGuard::~StrandGuard() { sched->finishStrand(path); }
 
 void cIoScheduler::submitRead(std::filesystem::path path,
                              std::function<void(Bytes data, std::string err)> done,
-                             IoFence* fence) {
+                             cIoFence* fence) {
   struct Result {
     Bytes data;
     std::string err;
@@ -34,7 +34,7 @@ void cIoScheduler::submitRead(std::filesystem::path path,
 
 void cIoScheduler::submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
                               std::function<void(bool ok, std::string err)> done,
-                              IoFence* fence) {
+                              cIoFence* fence) {
   struct Result {
     bool ok = false;
     std::string err;
@@ -51,12 +51,12 @@ void cIoScheduler::submitWrite(std::filesystem::path path, Bytes data, const Fil
 void cIoScheduler::submitWriteRecord(std::filesystem::path path, Bytes payload,
                                     const FileWriteOptions& opts,
                                     std::function<void(bool ok, std::string err)> done,
-                                    IoFence* fence) {
+                                    cIoFence* fence) {
   submitWrite(std::move(path), frameRecord(payload), opts, std::move(done), fence);
 }
 
 void cIoScheduler::submit(std::function<void()> work, std::function<void()> done,
-                         IoFence* fence) {
+                         cIoFence* fence) {
   if (fence) {
     std::lock_guard<std::mutex> l(fence->m_);
     ++fence->pending_;
@@ -79,7 +79,7 @@ void cIoScheduler::submit(std::function<void()> work, std::function<void()> done
   });
 }
 
-void cIoScheduler::submitStrand(std::filesystem::path path, Op op, IoFence* fence) {
+void cIoScheduler::submitStrand(std::filesystem::path path, Op op, cIoFence* fence) {
   // Canonical strand identity: absolute + lexically_normal, so "world/r.0.0.llr",
   // "./world/r.0.0.llr" and "world//r.0.0.llr" hash to ONE strand (and one
   // .tmp) instead of getting concurrent writers on the same file. Lexical
@@ -156,9 +156,9 @@ void cIoScheduler::finishStrand(const std::filesystem::path& path) {
   }
 }
 
-// ---- IoFence ----------------------------------------------------------------------
+// ---- cIoFence ----------------------------------------------------------------------
 
-IoFence::~IoFence() {
+cIoFence::~cIoFence() {
   // Fix 2026-10-11 (regression): wait() refuses on a job thread (returns -1
   // instead of deadlocking). But the in-flight op lambdas hold a raw `this`
   // and call onOpDone() on completion — if the destructor completes while ops
@@ -175,29 +175,29 @@ IoFence::~IoFence() {
   }
 }
 
-void IoFence::submitRead(std::filesystem::path path,
+void cIoFence::submitRead(std::filesystem::path path,
                          std::function<void(Bytes data, std::string err)> done) {
   io_.submitRead(std::move(path), std::move(done), this);
 }
 
-void IoFence::submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
+void cIoFence::submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
                           std::function<void(bool ok, std::string err)> done) {
   io_.submitWrite(std::move(path), std::move(data), opts, std::move(done), this);
 }
 
-void IoFence::submitWriteRecord(std::filesystem::path path, Bytes payload,
+void cIoFence::submitWriteRecord(std::filesystem::path path, Bytes payload,
                                 const FileWriteOptions& opts,
                                 std::function<void(bool ok, std::string err)> done) {
   io_.submitWriteRecord(std::move(path), std::move(payload), opts, std::move(done), this);
 }
 
-void IoFence::onOpDone(bool ok) {
+void cIoFence::onOpDone(bool ok) {
   std::lock_guard<std::mutex> l(m_);
   if (!ok) ++failed_;
   if (--pending_ == 0) cv_.notify_all();
 }
 
-int IoFence::wait() {
+int cIoFence::wait() {
   // Runtime-checked, not just assert(): an NDEBUG build must not silently
   // deadlock the pool. Returns -1 when refused (never 0-vs-failed ambiguity:
   // a real wait returns the failed-op count, >= 0).

@@ -20,7 +20,7 @@
 //               as NewestOnly so the generic channel shares it.
 //
 // WHICH TRAFFIC GOES WHERE is config: ChannelMap (game-filled). Defaults
-// preserve today's wire behavior exactly: SnapshotClient keeps framing its
+// preserve today's wire behavior exactly: cSnapshotClient keeps framing its
 // own packets (bit clear, no retransmits, deltas rebase on the newest ack)
 // and those datagrams pass through the multiplexer untouched. Events default
 // to reliable; chunk batches and acks default to unreliable.
@@ -30,7 +30,7 @@
 // game-provided monotonic millisecond clock (fakeable in tests).
 //
 // THREADING: not thread-safe by design (owned by the net tick), like
-// PrioManager and SnapshotClient.
+// cPrioMgr and cSnapshotClient.
 #pragma once
 
 #include <cstdint>
@@ -75,7 +75,7 @@ class NewestOnly {
 /// Which channel each traffic kind uses. The game fills this once; the
 /// multiplexer consults it when framing. Defaults preserve today's wire
 /// behavior: snapshots stay on the effectively-unreliable delta stream
-/// (SnapshotClient frames its own packets; the channel layer passes those
+/// (cSnapshotClient frames its own packets; the channel layer passes those
 /// datagrams through untouched -- see ChannelMux), events go reliable.
 struct ChannelMap {
   ChannelId snapshot = ChannelId::Unreliable;
@@ -146,10 +146,10 @@ struct ReliableConfig {
 /// per-channel interpretation differs. RFC-1982 seq arithmetic throughout.
 ///
 /// A channel is a fresh pairing: both sides start their seq at 1 and the
-/// receiver expects 1 first. Create a new ReliableChannel per connection.
-class ReliableChannel {
+/// receiver expects 1 first. Create a new cReliableChannel per connection.
+class cReliableChannel {
  public:
-  explicit ReliableChannel(ReliableConfig cfg = ReliableConfig{}) : cfg_(cfg) {}
+  explicit cReliableChannel(ReliableConfig cfg = ReliableConfig{}) : cfg_(cfg) {}
 
   /// Queue `payload` for reliable ordered delivery. `nowMs` seeds the RTO
   /// clock for this packet. `datagram` receives the framed bytes for the
@@ -308,7 +308,7 @@ class UnreliableChannel {
                PayloadType& type);
   /// Ingest with an already-parsed header (see
   /// ChannelDemux::onUnreliableHeader): skips the channel's second header
-  /// decode. Same precondition as ReliableChannel::receive(h, payload, len).
+  /// decode. Same precondition as cReliableChannel::receive(h, payload, len).
   bool receive(const PacketHeader& h, const uint8_t* payload, size_t payloadLen,
                std::vector<uint8_t>& out, PayloadType& type);
 
@@ -316,10 +316,10 @@ class UnreliableChannel {
   bool haveReceived() const { return gate_.have(); }
   uint16_t highestReceived() const { return gate_.highest(); }
 
-  /// Version byte stamped on outbound headers (see ReliableChannel).
+  /// Version byte stamped on outbound headers (see cReliableChannel).
   void setVersion(uint8_t v) { version_ = v; }
   uint8_t version() const { return version_; }
-  /// Protocol versions accepted on receive (see ReliableChannel).
+  /// Protocol versions accepted on receive (see cReliableChannel).
   void setAcceptedVersions(std::vector<uint8_t> v) { accepted_ = std::move(v); }
   const std::vector<uint8_t>& acceptedVersions() const { return accepted_; }
   HeaderReject lastReject() const { return lastReject_; }
@@ -338,11 +338,11 @@ class UnreliableChannel {
 /// payload per the ChannelMap and hands the datagram to the socket.
 ///
 /// Snapshot passthrough: PayloadType::Snapshot ALWAYS returns false here.
-/// SnapshotClient owns snapshot framing (its own seq/ack state drives the
+/// cSnapshotClient owns snapshot framing (its own seq/ack state drives the
 /// delta baselines), so its datagrams go to the socket directly, untouched --
 /// channel bit clear, today's wire behavior bit-for-bit. Mapping
 /// ChannelMap::snapshot = Reliable is accepted by the config but needs a
-/// SnapshotClient framing change to take effect (open question; the game
+/// cSnapshotClient framing change to take effect (open question; the game
 /// cannot feed framed snapshot packets through the reliable channel, which
 /// needs bare payloads).
 class ChannelMux {
@@ -351,25 +351,25 @@ class ChannelMux {
 
   const ChannelMap& map() const { return map_; }
   void setMap(ChannelMap m) { map_ = m; }
-  ReliableChannel& reliable() { return reliable_; }
+  cReliableChannel& reliable() { return reliable_; }
   UnreliableChannel& unreliable() { return unreliable_; }
 
   /// Frame `payload` on its mapped channel. `nowMs` feeds the reliable RTO
   /// clock. Returns false for PayloadType::Snapshot (passthrough -- the
-  /// caller already holds the SnapshotClient-framed datagram), for oversize
+  /// caller already holds the cSnapshotClient-framed datagram), for oversize
   /// payloads, or on reliable backpressure.
   bool send(PayloadType type, const uint8_t* payload, size_t len, uint64_t nowMs,
             std::vector<uint8_t>& datagram);
 
   /// Version byte stamped on outbound headers by both channels (see
-  /// ReliableChannel::setVersion). The game calls this after the connect
+  /// cReliableChannel::setVersion). The game calls this after the connect
   /// handshake agrees on a version.
   void setVersion(uint8_t v) {
     reliable_.setVersion(v);
     unreliable_.setVersion(v);
   }
   /// Protocol versions accepted on receive by both channels (see
-  /// ReliableChannel::setAcceptedVersions).
+  /// cReliableChannel::setAcceptedVersions).
   void setAcceptedVersions(std::vector<uint8_t> v) {
     reliable_.setAcceptedVersions(v);
     unreliable_.setAcceptedVersions(v);
@@ -377,7 +377,7 @@ class ChannelMux {
 
  private:
   ChannelMap map_;
-  ReliableChannel reliable_;
+  cReliableChannel reliable_;
   UnreliableChannel unreliable_;
 };
 
@@ -407,7 +407,7 @@ class ChannelDemux {
   bool receive(const uint8_t* data, size_t len) const;
 
   /// Protocol versions accepted when routing (see
-  /// ReliableChannel::setAcceptedVersions). Before the connect handshake
+  /// cReliableChannel::setAcceptedVersions). Before the connect handshake
   /// completes the game installs knownProtocolVersions() so a v1-stamped
   /// ClientHello still routes on a v2 server; after agreement it narrows to
   /// the agreed version.

@@ -1,4 +1,4 @@
-// Net confinement selftest: ModNetGate rate limiting, NetConfinement
+// Net confinement selftest: cModNetGate rate limiting, NetConfinement
 // send-path guard, ConfinedChannelMux. See confinement.h for the design.
 #include "litholattice/net/confinement_selftest.h"
 
@@ -25,7 +25,7 @@ class Checker {
 };
 
 void testRegistration(Checker& c) {
-  ModNetGate gate;
+  cModNetGate gate;
   c(gate.registerMod("chatmod"), "valid mod id registers");
   c(!gate.registerMod("chatmod"), "duplicate registration refused");
   c(!gate.registerMod("Bad-Id") && !gate.registerMod("") &&
@@ -37,7 +37,7 @@ void testRegistration(Checker& c) {
 void testBudgets(Checker& c) {
   // Inside the budget everything passes.
   {
-    ModNetGate gate;
+    cModNetGate gate;
     gate.registerMod("okmod", ModNetBudgets{128, 4});
     bool all = true;
     for (int i = 0; i < 4; ++i)
@@ -46,7 +46,7 @@ void testBudgets(Checker& c) {
   }
   // ADVERSARIAL: packet-budget overrun -> throttled (dropped, logged).
   {
-    ModNetGate gate;
+    cModNetGate gate;
     gate.registerMod("spammod", ModNetBudgets{1 << 20, 4});
     bool ok = true;
     for (int i = 0; i < 4; ++i)
@@ -56,7 +56,7 @@ void testBudgets(Checker& c) {
   }
   // ADVERSARIAL: byte-budget overrun -> throttled.
   {
-    ModNetGate gate;
+    cModNetGate gate;
     gate.registerMod("bigmod", ModNetBudgets{128, 1 << 10});
     c(gate.checkSend("bigmod", 129, 3000) == ModNetVerdict::Throttle,
       "byte overrun is throttled (dropped with a logged reason)");
@@ -70,7 +70,7 @@ void testBudgets(Checker& c) {
   }
   // Windows roll over: a new window gets a fresh budget.
   {
-    ModNetGate gate;
+    cModNetGate gate;
     gate.registerMod("winmod", ModNetBudgets{64, 2});
     c(gate.checkSend("winmod", 32, 1000) == ModNetVerdict::Allow &&
           gate.checkSend("winmod", 32, 1000) == ModNetVerdict::Allow &&
@@ -82,7 +82,7 @@ void testBudgets(Checker& c) {
 
 void testSuspension(Checker& c) {
   // ADVERSARIAL: sustained abuse -> suspended, then re-enabled by the engine.
-  ModNetGate gate;
+  cModNetGate gate;
   gate.registerMod("abuser", ModNetBudgets{64, 1 << 10});
   ModNetVerdict last = ModNetVerdict::Allow;
   for (int i = 0; i < 16; ++i) last = gate.checkSend("abuser", 65, 4000);
@@ -100,7 +100,7 @@ void testSuspension(Checker& c) {
 }
 
 void testFailClosed(Checker& c) {
-  ModNetGate gate;
+  cModNetGate gate;
   c(gate.checkSend("ghost", 8, 5000) == ModNetVerdict::Throttle,
     "unregistered mod is denied (fail-closed)");
   c(!NetConfinement::checkSend(NetOrigin::Mod, "ghost", 8, 5000, nullptr),
@@ -112,7 +112,7 @@ void testFailClosed(Checker& c) {
 }
 
 void testConfinedMux(Checker& c) {
-  ModNetGate gate;
+  cModNetGate gate;
   gate.registerMod("muxmod");
   ConfinedChannelMux mux(ChannelMap{}, &gate);
   std::vector<uint8_t> d;
@@ -137,7 +137,7 @@ void testConfinedMux(Checker& c) {
 
 void testSustainedAbuseThroughMux(Checker& c) {
   // ADVERSARIAL: a mod hammering the mux exhausts its budget and is cut off.
-  ModNetGate gate;
+  cModNetGate gate;
   gate.registerMod("hammer", ModNetBudgets{64, 1 << 10});
   ConfinedChannelMux mux(ChannelMap{}, &gate);
   std::vector<uint8_t> d;

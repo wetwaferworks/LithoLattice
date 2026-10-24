@@ -13,7 +13,7 @@ constexpr uint64_t kDenyLogWindowMs = 1000;
 
 }  // namespace
 
-bool ModNetGate::denyLogGate(DenyLogWindow& w, uint64_t nowMs, const std::string& modId) {
+bool cModNetGate::denyLogGate(DenyLogWindow& w, uint64_t nowMs, const std::string& modId) {
   // First denial in the window logs in full; the rest are counted. When the
   // window rolls with a pending count, the summary goes out before the new
   // window's first full line — at most two lines per mod per second.
@@ -30,7 +30,7 @@ bool ModNetGate::denyLogGate(DenyLogWindow& w, uint64_t nowMs, const std::string
   return false;
 }
 
-bool ModNetGate::isValidModId(const std::string& id) {
+bool cModNetGate::isValidModId(const std::string& id) {
   // Same rule as cExtensionReg::isValidId ([a-z0-9_]{1,64}); duplicated
   // so the net module never depends on the mods module.
   if (id.empty() || id.size() > 64) return false;
@@ -41,7 +41,7 @@ bool ModNetGate::isValidModId(const std::string& id) {
   return true;
 }
 
-bool ModNetGate::registerMod(const std::string& modId, ModNetBudgets budgets) {
+bool cModNetGate::registerMod(const std::string& modId, ModNetBudgets budgets) {
   if (!isValidModId(modId)) {
     logError("netconf: refusing to register invalid mod id '%s'", modId.c_str());
     return false;
@@ -58,7 +58,7 @@ bool ModNetGate::registerMod(const std::string& modId, ModNetBudgets budgets) {
   return true;
 }
 
-ModNetVerdict ModNetGate::checkSend(const std::string& modId, size_t bytes, uint64_t nowMs) {
+ModNetVerdict cModNetGate::checkSend(const std::string& modId, size_t bytes, uint64_t nowMs) {
   auto it = mods_.find(modId);
   if (it == mods_.end()) {
     // Fail closed: a mod the gate never heard of gets nothing on the wire.
@@ -112,12 +112,12 @@ ModNetVerdict ModNetGate::checkSend(const std::string& modId, size_t bytes, uint
   return ModNetVerdict::Allow;
 }
 
-bool ModNetGate::isSuspended(const std::string& modId) const {
+bool cModNetGate::isSuspended(const std::string& modId) const {
   const auto it = mods_.find(modId);
   return it != mods_.end() && it->second.suspended;
 }
 
-bool ModNetGate::resetSuspension(const std::string& modId) {
+bool cModNetGate::resetSuspension(const std::string& modId) {
   auto it = mods_.find(modId);
   if (it == mods_.end() || !it->second.suspended) return false;
   it->second.suspended = false;
@@ -127,7 +127,7 @@ bool ModNetGate::resetSuspension(const std::string& modId) {
   return true;
 }
 
-bool ModNetGate::setBudgets(const std::string& modId, ModNetBudgets budgets) {
+bool cModNetGate::setBudgets(const std::string& modId, ModNetBudgets budgets) {
   auto it = mods_.find(modId);
   if (it == mods_.end()) return false;
   it->second.budgets = budgets;
@@ -137,13 +137,13 @@ bool ModNetGate::setBudgets(const std::string& modId, ModNetBudgets budgets) {
 }
 
 bool NetConfinement::checkSend(NetOrigin origin, const std::string& modId, size_t bytes,
-                               uint64_t nowMs, ModNetGate* gate) {
+                               uint64_t nowMs, cModNetGate* gate) {
   if (origin == NetOrigin::Engine) return true;  // engine traffic is ungated
   if (gate == nullptr) {
     // Fail closed: mod traffic with no gate configured never reaches the wire.
     // (Denial log rate-limited process-wide: no gate exists to hold a window.)
-    static ModNetGate::DenyLogWindow w;
-    if (ModNetGate::denyLogGate(w, nowMs, modId))
+    static cModNetGate::DenyLogWindow w;
+    if (cModNetGate::denyLogGate(w, nowMs, modId))
       logError("netconf: DENIED mod '%s' send: no gate configured (fail-closed)", modId.c_str());
     return false;
   }
@@ -153,7 +153,7 @@ bool NetConfinement::checkSend(NetOrigin origin, const std::string& modId, size_
 bool ConfinedChannelMux::sendMod(const std::string& modId, uint16_t type, const uint8_t* payload,
                                  size_t len, uint64_t nowMs, std::vector<uint8_t>& datagram) {
   if (type < kModNetTypeBase) {
-    if (ModNetGate::denyLogGate(denyLog_, nowMs, modId))
+    if (cModNetGate::denyLogGate(denyLog_, nowMs, modId))
       logError("netconf: DENIED mod '%s' send: wire type %u is reserved for engine traffic",
                modId.c_str(), type);
     return false;

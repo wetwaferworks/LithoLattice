@@ -96,7 +96,7 @@
 // Agreed, the game may run the key-exchange handshake (kHsKeyExchange, see
 // encryption.h) on the reliable channel before game traffic flows; until a
 // real cipher is armed, traffic is deliberately plaintext — gated behind
-// the NullCipher stub, never silent (see encryption.h).
+// the cNullCipher stub, never silent (see encryption.h).
 //
 // SPOOFING (audit MEDIUM 2026-10-11): a client in HelloSent accepts any
 // well-formed Reject/ServerHello, so a spoofed 3-byte Reject kills the
@@ -276,7 +276,7 @@ struct HandshakeConfig {
 /// One side of the connect handshake, run over the reliable channel. The
 /// class is transport-agnostic: it produces and consumes handshake PAYLOADS
 /// (std::vector<uint8_t>); the game frames them with
-/// ReliableChannel::send(..., PayloadType::Handshake, ...) and feeds
+/// cReliableChannel::send(..., PayloadType::Handshake, ...) and feeds
 /// pollDelivery() output back in via onPayload().
 ///
 ///   Client: start() -> send hello -> onPayload(ServerHello) => Agreed.
@@ -284,7 +284,7 @@ struct HandshakeConfig {
 ///
 /// Retransmission is the reliable channel's job (RTO); this class only
 /// needs the deadline. A fresh cConnectHandshake is created per connection
-/// attempt (like ReliableChannel, it is a fresh pairing).
+/// attempt (like cReliableChannel, it is a fresh pairing).
 class cConnectHandshake {
  public:
   explicit cConnectHandshake(HandshakeConfig cfg);

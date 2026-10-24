@@ -27,7 +27,7 @@
 // authoritative/non-authoritative mode switch, and no peer/input validator
 // anywhere in the tree. ANTI-CHEAT IS UNIMPLEMENTED: deterministic-sim
 // validation is a design property that no net code consumes yet. Traffic
-// design is plaintext (NullCipher only) and the handshake offer list is
+// design is plaintext (cNullCipher only) and the handshake offer list is
 // unauthenticated until KEX lands. This file describes the scaling DESIGN;
 // nothing here is a shipping multiplayer feature.
 //

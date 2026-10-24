@@ -236,7 +236,7 @@ struct Snapshot {
 /// post-image baseline — what the client decodes — without re-parsing the
 /// payload: packed records decode to the caller's current values bit-exactly
 /// (for encoder-feasible inputs), updates cut by the byte budget keep the
-/// baseline value, and cut spawns never shipped. See SnapshotClient::build().
+/// baseline value, and cut spawns never shipped. See cSnapshotClient::build().
 /// Fix run 2 (2026-10-23, R-NET-1/2): why encodeSnapshot refused or cut.
 enum class SnapshotEncodeError : uint8_t {
   None = 0,

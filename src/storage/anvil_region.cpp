@@ -21,7 +21,7 @@ namespace {
 constexpr uint64_t kPreambleSize = 16;
 constexpr uint64_t kLocTableOff = kPreambleSize;
 constexpr uint64_t kTimeTableOff = kPreambleSize + 4096;
-constexpr uint64_t kHeaderBytes = uint64_t(AnvilRegion::kHeaderSectors) * AnvilRegion::kSector;
+constexpr uint64_t kHeaderBytes = uint64_t(cAnvilRegion::kHeaderSectors) * cAnvilRegion::kSector;
 
 void putU32LE(uint8_t* p, uint32_t v) {
   p[0] = uint8_t(v);
@@ -108,7 +108,7 @@ bool syncDir(const std::filesystem::path& filePath, std::string* err) {
 /// Serializes one record: [u32 LE len][u8 codec][u8 flags][payload][u32 LE crc32].
 /// The CRC sits at the end so it covers the contiguous prefix len || codec || flags || payload.
 std::vector<uint8_t> buildRecord(uint8_t codec, const std::vector<uint8_t>& payload) {
-  std::vector<uint8_t> rec(AnvilRegion::kRecordOverhead + payload.size());
+  std::vector<uint8_t> rec(cAnvilRegion::kRecordOverhead + payload.size());
   putU32LE(rec.data(), uint32_t(payload.size()));
   rec[4] = codec;
   rec[5] = 0;  // flags, reserved
@@ -120,12 +120,12 @@ std::vector<uint8_t> buildRecord(uint8_t codec, const std::vector<uint8_t>& payl
 /// Validates one record image. False + err on truncation, length mismatch, or CRC failure.
 bool parseRecord(const uint8_t* data, size_t n, uint8_t* codecOut, std::vector<uint8_t>* payloadOut,
                  std::string* err) {
-  if (n < AnvilRegion::kRecordOverhead) {
+  if (n < cAnvilRegion::kRecordOverhead) {
     if (err) *err = "record image truncated";
     return false;
   }
   const uint32_t len = getU32LE(data);
-  if (uint64_t(AnvilRegion::kRecordOverhead) + len > n) {
+  if (uint64_t(cAnvilRegion::kRecordOverhead) + len > n) {
     if (err) *err = "record length exceeds its sector allocation: corrupt index or torn write";
     return false;
   }
@@ -143,17 +143,17 @@ bool parseRecord(const uint8_t* data, size_t n, uint8_t* codecOut, std::vector<u
 // The count byte keeps only 7 bits for the sector count (0x80 = external
 // sidecar): an inline record must never need more than 127 sectors, or the
 // count byte collides with kExternalBit and read() misclassifies the record.
-static_assert((AnvilRegion::kRecordOverhead + AnvilRegion::kMaxInlineBytes +
-               AnvilRegion::kSector - 1) /
-                  AnvilRegion::kSector <=
+static_assert((cAnvilRegion::kRecordOverhead + cAnvilRegion::kMaxInlineBytes +
+               cAnvilRegion::kSector - 1) /
+                  cAnvilRegion::kSector <=
               127,
               "kMaxInlineBytes must fit the 7-bit inline sector count");
 
-AnvilRegion::~AnvilRegion() {
+cAnvilRegion::~cAnvilRegion() {
   if (f_) std::fclose(f_);
 }
 
-bool AnvilRegion::writeAt(uint64_t off, const uint8_t* data, size_t n, std::string* err) {
+bool cAnvilRegion::writeAt(uint64_t off, const uint8_t* data, size_t n, std::string* err) {
   if (!seekAbs(f_, off) || std::fwrite(data, 1, n, f_) != n) {
     if (err) *err = "write failed at offset " + std::to_string(off);
     return false;
@@ -161,7 +161,7 @@ bool AnvilRegion::writeAt(uint64_t off, const uint8_t* data, size_t n, std::stri
   return true;
 }
 
-bool AnvilRegion::readAt(uint64_t off, uint8_t* data, size_t n, std::string* err) const {
+bool cAnvilRegion::readAt(uint64_t off, uint8_t* data, size_t n, std::string* err) const {
   if (!seekAbs(f_, off) || std::fread(data, 1, n, f_) != n) {
     if (err) *err = "read failed at offset " + std::to_string(off);
     return false;
@@ -169,9 +169,9 @@ bool AnvilRegion::readAt(uint64_t off, uint8_t* data, size_t n, std::string* err
   return true;
 }
 
-bool AnvilRegion::flushFile(std::string* err) { return syncFile(f_, err); }
+bool cAnvilRegion::flushFile(std::string* err) { return syncFile(f_, err); }
 
-bool AnvilRegion::readHeader(std::string* err) {
+bool cAnvilRegion::readHeader(std::string* err) {
   quarantinedEntries_ = 0;  // C-L3: the count describes THIS header read
   uint8_t pre[kPreambleSize];
   if (!readAt(0, pre, sizeof(pre), err)) return false;
@@ -226,7 +226,7 @@ bool AnvilRegion::readHeader(std::string* err) {
   return true;
 }
 
-void AnvilRegion::rebuildBitmap() {
+void cAnvilRegion::rebuildBitmap() {
   freeBits_.assign((fileSectors_ + 63) / 64, ~uint64_t(0));
   const auto markUsed = [&](uint32_t s) { freeBits_[s / 64] &= ~(uint64_t(1) << (s % 64)); };
   for (uint32_t s = 0; s < kHeaderSectors && s < fileSectors_; ++s) markUsed(s);
@@ -237,7 +237,7 @@ void AnvilRegion::rebuildBitmap() {
   }
 }
 
-bool AnvilRegion::open(std::string* err) {
+bool cAnvilRegion::open(std::string* err) {
   const auto fail = [&](const std::string& e) {
     if (err) *err = e;
     if (f_) {
@@ -291,7 +291,7 @@ bool AnvilRegion::open(std::string* err) {
   return true;
 }
 
-bool AnvilRegion::allocRun(uint8_t need, uint32_t* outSector, std::string* err) {
+bool cAnvilRegion::allocRun(uint8_t need, uint32_t* outSector, std::string* err) {
   uint32_t run = 0, runStart = 0;
   for (uint32_t s = uint32_t(kHeaderSectors); s < fileSectors_; ++s) {
     if (freeBits_[s / 64] & (uint64_t(1) << (s % 64))) {
@@ -321,17 +321,17 @@ bool AnvilRegion::allocRun(uint8_t need, uint32_t* outSector, std::string* err) 
   return true;
 }
 
-void AnvilRegion::freeRun(uint32_t sector, uint8_t count) {
+void cAnvilRegion::freeRun(uint32_t sector, uint8_t count) {
   for (uint32_t s = sector, e = sector + count; s < e && s < fileSectors_; ++s)
     freeBits_[s / 64] |= (uint64_t(1) << (s % 64));
 }
 
-std::filesystem::path AnvilRegion::sidecarPath(const std::filesystem::path& regionPath, int cx, int cz) {
+std::filesystem::path cAnvilRegion::sidecarPath(const std::filesystem::path& regionPath, int cx, int cz) {
   return regionPath.parent_path() /
          (regionPath.stem().string() + ".c" + std::to_string(cx) + "." + std::to_string(cz) + ".llx");
 }
 
-AnvilRegion::Staged AnvilRegion::stage(int lx, int lz, uint8_t codec,
+cAnvilRegion::Staged cAnvilRegion::stage(int lx, int lz, uint8_t codec,
                                        const std::vector<uint8_t>& payload, std::string* err) {
   Staged none{};
   if (!opened_) {
@@ -385,7 +385,7 @@ AnvilRegion::Staged AnvilRegion::stage(int lx, int lz, uint8_t codec,
   return s;
 }
 
-bool AnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32_t payloadLen,
+bool cAnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32_t payloadLen,
                          std::string* err) {
   if (!opened_) {
     if (err) *err = "region not open";
@@ -486,14 +486,14 @@ bool AnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32_
   return true;
 }
 
-bool AnvilRegion::put(int lx, int lz, uint8_t codec, const std::vector<uint8_t>& payload,
+bool cAnvilRegion::put(int lx, int lz, uint8_t codec, const std::vector<uint8_t>& payload,
                       std::string* err) {
   const Staged s = stage(lx, lz, codec, payload, err);
   if (!s.external && s.sector == 0) return false;
   return commit(lx, lz, codec, s, uint32_t(payload.size()), err);
 }
 
-bool AnvilRegion::erase(int lx, int lz, std::string* err) {
+bool cAnvilRegion::erase(int lx, int lz, std::string* err) {
   if (!opened_) {
     if (err) *err = "region not open";
     return false;
@@ -519,7 +519,7 @@ bool AnvilRegion::erase(int lx, int lz, std::string* err) {
   return true;
 }
 
-std::optional<AnvilRegion::Record> AnvilRegion::readInline(uint32_t sector, uint8_t count,
+std::optional<cAnvilRegion::Record> cAnvilRegion::readInline(uint32_t sector, uint8_t count,
                                                           uint32_t gen, std::string* err) const {
   if (sector < kHeaderSectors || uint64_t(sector) + count > fileSectors_) {
     if (err) *err = "record location out of bounds: the index entry is corrupt";
@@ -541,7 +541,7 @@ std::optional<AnvilRegion::Record> AnvilRegion::readInline(uint32_t sector, uint
   return r;
 }
 
-std::optional<AnvilRegion::Record> AnvilRegion::readExternal(int lx, int lz, uint32_t gen,
+std::optional<cAnvilRegion::Record> cAnvilRegion::readExternal(int lx, int lz, uint32_t gen,
                                                             std::string* err) const {
   const auto sp = sidecarPath(path_, rx_ * kSpan + lx, rz_ * kSpan + lz);
   std::FILE* sf = std::fopen(sp.string().c_str(), "rb");
@@ -575,7 +575,7 @@ std::optional<AnvilRegion::Record> AnvilRegion::readExternal(int lx, int lz, uin
   return r;
 }
 
-std::optional<AnvilRegion::Record> AnvilRegion::read(int lx, int lz, std::string* err) const {
+std::optional<cAnvilRegion::Record> cAnvilRegion::read(int lx, int lz, std::string* err) const {
   if (!opened_) {
     if (err) *err = "region not open";
     return std::nullopt;
@@ -591,25 +591,25 @@ std::optional<AnvilRegion::Record> AnvilRegion::read(int lx, int lz, std::string
   return readInline(sectors_[sl], c & 0x7F, gens_[sl], err);
 }
 
-bool AnvilRegion::locate(int lx, int lz, uint32_t* sector, uint8_t* count) const {
+bool cAnvilRegion::locate(int lx, int lz, uint32_t* sector, uint8_t* count) const {
   if (!opened_ || !validLocal(lx, lz) || counts_[slot(lx, lz)] == 0) return false;
   if (sector) *sector = sectors_[slot(lx, lz)];
   if (count) *count = counts_[slot(lx, lz)];
   return true;
 }
 
-uint32_t AnvilRegion::generation(int lx, int lz) const {
+uint32_t cAnvilRegion::generation(int lx, int lz) const {
   if (!opened_ || !validLocal(lx, lz)) return 0;
   return gens_[slot(lx, lz)];
 }
 
-size_t AnvilRegion::count() const {
+size_t cAnvilRegion::count() const {
   size_t n = 0;
   for (uint8_t c : counts_) n += (c != 0);
   return n;
 }
 
-size_t AnvilRegion::usedSectors() const {
+size_t cAnvilRegion::usedSectors() const {
   size_t n = 0;
   for (int i = 0; i < kSpan * kSpan; ++i)
     if (counts_[i] != 0 && !(counts_[i] & kExternalBit)) n += counts_[i] & 0x7F;

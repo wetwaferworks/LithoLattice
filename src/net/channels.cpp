@@ -33,14 +33,14 @@ bool decodeAcceptedHeader(const uint8_t* data, size_t len,
 }
 }  // namespace
 
-// --- ReliableChannel ---------------------------------------------------------
+// --- cReliableChannel ---------------------------------------------------------
 
-bool ReliableChannel::decodeAccepted(const uint8_t* data, size_t len, PacketHeader& h,
+bool cReliableChannel::decodeAccepted(const uint8_t* data, size_t len, PacketHeader& h,
                                      quantize::ByteReader& in) {
   return decodeAcceptedHeader(data, len, accepted_, h, in, &lastReject_);
 }
 
-bool ReliableChannel::heartbeat(uint64_t /*nowMs*/, std::vector<uint8_t>& datagram) {
+bool cReliableChannel::heartbeat(uint64_t /*nowMs*/, std::vector<uint8_t>& datagram) {
   // Ack-only: not sequenced, not queued, not retransmitted. Seq 0 can never
   // be a payload seq (send() skips it), so the receiver treats it as pure
   // ack flow.
@@ -58,7 +58,7 @@ bool ReliableChannel::heartbeat(uint64_t /*nowMs*/, std::vector<uint8_t>& datagr
   return true;
 }
 
-bool ReliableChannel::send(const uint8_t* payload, size_t len, PayloadType type,
+bool cReliableChannel::send(const uint8_t* payload, size_t len, PayloadType type,
                            uint64_t nowMs, std::vector<uint8_t>& datagram) {
   if (len > cfg_.maxPayloadBytes) return false;
   if (inflight_.size() >= cfg_.maxInFlight) return false;  // backpressure
@@ -80,7 +80,7 @@ bool ReliableChannel::send(const uint8_t* payload, size_t len, PayloadType type,
   return true;
 }
 
-std::vector<std::vector<uint8_t>> ReliableChannel::poll(uint64_t nowMs) {
+std::vector<std::vector<uint8_t>> cReliableChannel::poll(uint64_t nowMs) {
   std::vector<std::vector<uint8_t>> out;
   for (auto& kv : inflight_) {
     InflightPacket& p = kv.second;
@@ -96,7 +96,7 @@ std::vector<std::vector<uint8_t>> ReliableChannel::poll(uint64_t nowMs) {
   return out;
 }
 
-void ReliableChannel::restampAcks(std::vector<uint8_t>& datagram) const {
+void cReliableChannel::restampAcks(std::vector<uint8_t>& datagram) const {
   // Header layout: ack at offset 6, ackBits at offset 8 (little-endian).
   const uint16_t ack = ackSeq(), bits = ackBits();
   datagram[6] = static_cast<uint8_t>(ack & 0xFF);
@@ -105,7 +105,7 @@ void ReliableChannel::restampAcks(std::vector<uint8_t>& datagram) const {
   datagram[9] = static_cast<uint8_t>(bits >> 8);
 }
 
-void ReliableChannel::onAck(uint16_t ack, uint16_t ackBits) {
+void cReliableChannel::onAck(uint16_t ack, uint16_t ackBits) {
   if (ack == 0 && ackBits == 0) return;  // nothing acked yet
   // RFC-1982 "at-or-before", valid inside the 2^15 window (the in-flight
   // window is <= 64 deep, so this is unambiguous in practice).
@@ -129,7 +129,7 @@ void ReliableChannel::onAck(uint16_t ack, uint16_t ackBits) {
   }
 }
 
-uint16_t ReliableChannel::ackBits() const {
+uint16_t cReliableChannel::ackBits() const {
   // Exact SACK: the reorder buffer IS the set of received-but-not-contiguous
   // packets, so bit i = "reorder_ holds ack+1+i". No aliasing ring needed.
   uint16_t bits = 0;
@@ -141,7 +141,7 @@ uint16_t ReliableChannel::ackBits() const {
   return bits;
 }
 
-bool ReliableChannel::receive(const uint8_t* data, size_t len) {
+bool cReliableChannel::receive(const uint8_t* data, size_t len) {
   quantize::ByteReader in(data, len);
   PacketHeader h;
   if (!decodeAccepted(data, len, h, in)) return false;
@@ -150,7 +150,7 @@ bool ReliableChannel::receive(const uint8_t* data, size_t len) {
   return receive(h, data + kHeaderLen, in.remaining());
 }
 
-bool ReliableChannel::receive(const PacketHeader& h, const uint8_t* payload, size_t payloadLen) {
+bool cReliableChannel::receive(const PacketHeader& h, const uint8_t* payload, size_t payloadLen) {
   onAck(h.ack, h.ackBits);
 
   if (h.seq == 0) {
@@ -187,7 +187,7 @@ bool ReliableChannel::receive(const PacketHeader& h, const uint8_t* payload, siz
   return true;
 }
 
-void ReliableChannel::advanceExpected() {
+void cReliableChannel::advanceExpected() {
   for (;;) {
     ++expected_;
     if (expected_ == 0) expected_ = 1;  // seq 0 marks ack-only heartbeats

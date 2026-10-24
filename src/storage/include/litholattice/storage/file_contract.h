@@ -14,7 +14,7 @@
 //      load; corruption is detected, never misread.
 //   3. Payload before header: inside multi-part files, data bytes are written and
 //      flushed before any index/header that points at them is committed, so a torn
-//      write is old-or-absent, never garbage. (AnvilRegion implements this per
+//      write is old-or-absent, never garbage. (cAnvilRegion implements this per
 //      record; RegionFile implements it per whole-file swap.)
 //
 // Future file-writing code gets safety by default by going through writeFileAtomic

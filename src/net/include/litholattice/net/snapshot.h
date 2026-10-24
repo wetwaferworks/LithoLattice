@@ -6,7 +6,7 @@
 // snapshot-interval render delay (Fiedler). Per-tick state NEVER ships: at
 // 512 Hz the UDP header overhead alone would be ~14 KB/s per player.
 //
-// SERVER (SnapshotClient, one per connected client):
+// SERVER (cSnapshotClient, one per connected client):
 //   - isSnapshotTick(tick): true when tick % divisor == 0, divisor =
 //     round(simHz / snapshotHz). Default: 512/32 = 16.
 //   - build(tick, entities): delta-encodes the entity list against the
@@ -39,10 +39,10 @@
 //   - kInterpDelay: Fiedler's recommended render delay in snapshot intervals
 //     (2). The game renders at newestTick - kInterpDelay * intervalTicks.
 //
-// INTEREST MANAGEMENT: SnapshotClient::build takes an optional byte budget
+// INTEREST MANAGEMENT: cSnapshotClient::build takes an optional byte budget
 // (default: config maxPayloadBytes). Entity updates pack until the budget is
 // hit; the truncated flag marks a cut snapshot and the dropped updates ride
-// the next delta. Wire SnapshotClient to PrioManager (priority.h): give the
+// the next delta. Wire cSnapshotClient to cPrioMgr (priority.h): give the
 // snapshot stream its guaranteed floor, and chunk/event traffic splits the
 // leftover by priority.
 #pragma once
@@ -69,9 +69,9 @@ struct SnapshotConfig {
 };
 
 /// Server-side per-client snapshot state.
-class SnapshotClient {
+class cSnapshotClient {
  public:
-  explicit SnapshotClient(SnapshotConfig cfg = SnapshotConfig{});
+  explicit cSnapshotClient(SnapshotConfig cfg = SnapshotConfig{});
 
   /// Snapshot cadence divisor: snapshots ship when tick % divisor() == 0.
   uint32_t divisor() const;

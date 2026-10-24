@@ -4,14 +4,14 @@
 // Who runs the work: the JobSystem's dedicated I/O threads, via submitIo().
 // Blocking file work NEVER runs on a worker thread, and the sim/tick threads
 // NEVER block on disk: every submit*() below returns immediately; waiting is
-// opt-in through IoFence, which must not be waited on from a job thread.
+// opt-in through cIoFence, which must not be waited on from a job thread.
 //
 // Who gets notified: the `done` callback you pass, invoked on an I/O thread
 // immediately after its op finishes. Callbacks run on I/O threads, NEVER on the
 // sim/tick/worker threads. A callback must be short and non-blocking — the
 // pattern is push-into-a-lock-free-queue (SpscQueue, the InputPump idiom) and
 // let the tick thread drain it once per frame. A callback must never wait on
-// sim state, take game locks, or call IoFence::wait()/JobSystem::waitIdle()
+// sim state, take game locks, or call cIoFence::wait()/JobSystem::waitIdle()
 // (thread-local assert: that would deadlock the pool). Exceptions thrown by a
 // callback are caught and counted as failures.
 //
@@ -21,10 +21,10 @@
 //    so a write's completion is visible before the next op on that path begins.
 //  - Across different paths: no ordering guarantee. Ops on different paths may
 //    run concurrently on different I/O threads.
-//  - Unpathed submit(): no ordering relative to anything; use IoFence to group.
+//  - Unpathed submit(): no ordering relative to anything; use cIoFence to group.
 //
 // Failure model: failures never throw. A failed op reports (ok=false, err) on its
-// callback and is counted by IoFence::wait(). Crash safety of the writes comes
+// callback and is counted by cIoFence::wait(). Crash safety of the writes comes
 // from the file contract (file_contract.h): temp + fsync + atomic rename, with
 // optional backup rotation.
 //
@@ -52,12 +52,12 @@ class cIoScheduler;
 /// A group of I/O ops on an cIoScheduler that can be waited on by itself — the
 /// async counterpart of JobFence. The destructor waits, so a fence must not
 /// outlive the data its callbacks touch.
-class IoFence {
+class cIoFence {
  public:
-  explicit IoFence(cIoScheduler& io) : io_(io) {}
-  ~IoFence();  // defined in async_io.cpp: fail-closed on job-thread misuse
-  IoFence(const IoFence&) = delete;
-  IoFence& operator=(const IoFence&) = delete;
+  explicit cIoFence(cIoScheduler& io) : io_(io) {}
+  ~cIoFence();  // defined in async_io.cpp: fail-closed on job-thread misuse
+  cIoFence(const cIoFence&) = delete;
+  cIoFence& operator=(const cIoFence&) = delete;
 
   /// Read `path` asynchronously; `done(data, err)` runs on an I/O thread.
   /// Empty data + non-empty err = failure. Registered on this fence.
@@ -103,27 +103,27 @@ class cIoScheduler {
   /// run concurrently. When `fence` is non-null the op is counted on it.
   void submitRead(std::filesystem::path path,
                   std::function<void(Bytes data, std::string err)> done,
-                  IoFence* fence = nullptr);
+                  cIoFence* fence = nullptr);
 
   /// Crash-safe write (file contract: temp + fsync + rename). Same strand and
   /// callback rules as submitRead.
   void submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
                    std::function<void(bool ok, std::string err)> done,
-                   IoFence* fence = nullptr);
+                   cIoFence* fence = nullptr);
 
   /// CRC32-framed write (frameRecord, then the contract write).
   void submitWriteRecord(std::filesystem::path path, Bytes payload, const FileWriteOptions& opts,
                          std::function<void(bool ok, std::string err)> done,
-                         IoFence* fence = nullptr);
+                         cIoFence* fence = nullptr);
 
   /// A raw op with no path strand: `work` runs on an I/O thread, then `done()`
   /// runs on the same thread. For file work prefer the pathed submits (ordering).
-  void submit(std::function<void()> work, std::function<void()> done, IoFence* fence = nullptr);
+  void submit(std::function<void()> work, std::function<void()> done, cIoFence* fence = nullptr);
 
   JobSystem& jobs() { return jobs_; }
 
  private:
-  friend class IoFence;
+  friend class cIoFence;
   struct Op {
     std::function<void()> work;  // the blocking part
     std::function<void()> done;  // runs right after work, on the same I/O thread
@@ -141,7 +141,7 @@ class cIoScheduler {
   };
   // `fence` may be null. Wraps op.done so the fence is always notified, even if
   // the user callback throws.
-  void submitStrand(std::filesystem::path path, Op op, IoFence* fence);
+  void submitStrand(std::filesystem::path path, Op op, cIoFence* fence);
   void launchHead(const std::filesystem::path& path, Strand& s);  // m_ held
   void finishStrand(const std::filesystem::path& path);
 

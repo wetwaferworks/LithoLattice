@@ -3,9 +3,9 @@
 namespace litholattice {
 namespace net {
 
-// --- NullCipher: the deliberate-plaintext stub ---------------------------------
+// --- cNullCipher: the deliberate-plaintext stub ---------------------------------
 
-CryptoResult NullCipher::seal(const uint8_t* /*plain*/, size_t /*plainLen*/,
+CryptoResult cNullCipher::seal(const uint8_t* /*plain*/, size_t /*plainLen*/,
                               const uint8_t /*nonce*/[kCryptoNonceBytes], uint8_t* /*out*/,
                               size_t /*outCap*/) {
   // Never copies plaintext through: the game sends the raw payload itself
@@ -14,15 +14,15 @@ CryptoResult NullCipher::seal(const uint8_t* /*plain*/, size_t /*plainLen*/,
   return {CryptoError::NotImplemented, 0};
 }
 
-CryptoResult NullCipher::open(const uint8_t* /*sealed*/, size_t /*sealedLen*/,
+CryptoResult cNullCipher::open(const uint8_t* /*sealed*/, size_t /*sealedLen*/,
                               const uint8_t /*nonce*/[kCryptoNonceBytes], uint8_t* /*out*/,
                               size_t /*outCap*/) {
   return {CryptoError::NotImplemented, 0};
 }
 
-// --- ReplayWindow ------------------------------------------------------------------
+// --- cReplayWindow ------------------------------------------------------------------
 
-bool ReplayWindow::peek(uint64_t counter) const {
+bool cReplayWindow::peek(uint64_t counter) const {
   if (!started_) return true;
   if (counter > highest_) return true;
   const uint64_t diff = highest_ - counter;
@@ -30,7 +30,7 @@ bool ReplayWindow::peek(uint64_t counter) const {
   return (bitmap_ & (1ull << diff)) == 0;  // false when already seen (replay)
 }
 
-void ReplayWindow::commit(uint64_t counter) {
+void cReplayWindow::commit(uint64_t counter) {
   if (!peek(counter)) return;  // defensive: a stale commit changes nothing
   if (!started_) {
     started_ = true;
@@ -48,7 +48,7 @@ void ReplayWindow::commit(uint64_t counter) {
   bitmap_ |= 1ull << (highest_ - counter);
 }
 
-bool ReplayWindow::accept(uint64_t counter) {
+bool cReplayWindow::accept(uint64_t counter) {
   if (!peek(counter)) return false;
   commit(counter);
   return true;
@@ -85,11 +85,11 @@ bool parseKeyExchange(const uint8_t* data, size_t len, KeyExchangeMsg& out) {
   return true;
 }
 
-// --- CryptoSession ---------------------------------------------------------------------
+// --- cCryptoSession ---------------------------------------------------------------------
 
-CryptoSession::CryptoSession(CryptoConfig cfg) : cfg_(cfg) {}
+cCryptoSession::cCryptoSession(CryptoConfig cfg) : cfg_(cfg) {}
 
-CryptoResult CryptoSession::armCipher(std::unique_ptr<ICipher> cipher) {
+CryptoResult cCryptoSession::armCipher(std::unique_ptr<ICipher> cipher) {
   if (!cipher) return {CryptoError::BadKey, 0};
   if (cfg_.requireEncryption && cipher->isPlaintext()) {
     // Fail-closed: a plaintext backend is refused, the old cipher stays.
@@ -101,18 +101,18 @@ CryptoResult CryptoSession::armCipher(std::unique_ptr<ICipher> cipher) {
   return {CryptoError::None, 0};
 }
 
-CryptoResult CryptoSession::deriveKeys(const KeyExchangeMsg& /*local*/,
+CryptoResult cCryptoSession::deriveKeys(const KeyExchangeMsg& /*local*/,
                                        const KeyExchangeMsg& /*remote*/) {
   // STUB: the builder implements ephemeral-X25519 here (see the builder
   // notes in encryption.h) and arms the resulting cipher via armCipher().
   return {CryptoError::NotImplemented, 0};
 }
 
-bool CryptoSession::isPlaintext() const {
+bool cCryptoSession::isPlaintext() const {
   return !cipher_ || cipher_->isPlaintext();
 }
 
-CryptoResult CryptoSession::sealPacket(const uint8_t* plain, size_t plainLen, uint8_t* out,
+CryptoResult cCryptoSession::sealPacket(const uint8_t* plain, size_t plainLen, uint8_t* out,
                                        size_t outCap) {
   if (isPlaintext()) return {CryptoError::NotImplemented, 0};  // never silently plaintext
   uint8_t nonce[kCryptoNonceBytes];
@@ -120,7 +120,7 @@ CryptoResult CryptoSession::sealPacket(const uint8_t* plain, size_t plainLen, ui
   return cipher_->seal(plain, plainLen, nonce, out, outCap);
 }
 
-CryptoResult CryptoSession::openPacket(const uint8_t* sealed, size_t sealedLen, uint64_t counter,
+CryptoResult cCryptoSession::openPacket(const uint8_t* sealed, size_t sealedLen, uint64_t counter,
                                        uint8_t* out, size_t outCap) {
   if (isPlaintext()) return {CryptoError::NotImplemented, 0};
   // Verify-then-commit (review F-L1): the replay window is only PEEKED
@@ -128,7 +128,7 @@ CryptoResult CryptoSession::openPacket(const uint8_t* sealed, size_t sealedLen, 
   // opens the packet. The old accept-before-open order let a single
   // unauthenticated packet with counter = highest + 1,000,000 shift the
   // window past every legitimate packet and kill the session. (With the
-  // v1 NullCipher this path returns NotImplemented above and never reaches
+  // v1 cNullCipher this path returns NotImplemented above and never reaches
   // here, so today's behavior is unchanged; the ordering is pinned by a
   // test with a fake cipher for the day a real backend lands.)
   if (!replay_.peek(counter)) return {CryptoError::AuthFailed, 0};  // replay gate first

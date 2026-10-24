@@ -7,38 +7,38 @@
 namespace litholattice {
 namespace net {
 
-// --- SnapshotClient ----------------------------------------------------------
+// --- cSnapshotClient ----------------------------------------------------------
 
-SnapshotClient::SnapshotClient(SnapshotConfig cfg) : cfg_(cfg) {
+cSnapshotClient::cSnapshotClient(SnapshotConfig cfg) : cfg_(cfg) {
   if (cfg_.snapshotHz == 0) cfg_.snapshotHz = 32;
   if (cfg_.historyDepth == 0) cfg_.historyDepth = 64;
   if (cfg_.maxPayloadBytes == 0) cfg_.maxPayloadBytes = 1200;
 }
 
-uint32_t SnapshotClient::divisor() const {
+uint32_t cSnapshotClient::divisor() const {
   const uint32_t d = (cfg_.simHz + cfg_.snapshotHz / 2) / cfg_.snapshotHz;
   return d == 0 ? 1 : d;
 }
 
-const Snapshot* SnapshotClient::findSnapshot(uint32_t seq) const {
+const Snapshot* cSnapshotClient::findSnapshot(uint32_t seq) const {
   for (auto it = history_.rbegin(); it != history_.rend(); ++it)
     if (it->seq == seq) return &(*it);
   return nullptr;
 }
 
-void SnapshotClient::evictThrough(uint32_t seq) {
+void cSnapshotClient::evictThrough(uint32_t seq) {
   // Drop everything strictly older than `seq`; the baseline entry itself stays.
   while (!history_.empty() && seqGreater(static_cast<uint16_t>(seq), static_cast<uint16_t>(history_.front().seq)))
     history_.pop_front();
 }
 
-std::vector<uint8_t> SnapshotClient::build(uint64_t tick,
+std::vector<uint8_t> cSnapshotClient::build(uint64_t tick,
                                            const std::vector<SnapshotEntity>& entities,
                                            size_t byteBudget) {
   return buildNormalized(normalizeForSnapshot(tick, entities), byteBudget);
 }
 
-Snapshot SnapshotClient::normalizeForSnapshot(uint64_t tick,
+Snapshot cSnapshotClient::normalizeForSnapshot(uint64_t tick,
                                               const std::vector<SnapshotEntity>& entities) {
   // Normalized working copy: atRest zeroes velocity, sorted by id. This is
   // exactly what the client will decode, so it is also the stored baseline.
@@ -54,7 +54,7 @@ Snapshot SnapshotClient::normalizeForSnapshot(uint64_t tick,
   return cur;
 }
 
-void SnapshotClient::requestFull() {
+void cSnapshotClient::requestFull() {
   if (forceFull_) return;  // a full is already pending: nothing to do
   // Rate-limit the client-driven path (audit LOW 2026-10-11): a malicious
   // client setting kFlagNeedFull on every ack gets forced fulls at ~1/s,
@@ -70,7 +70,7 @@ void SnapshotClient::requestFull() {
   everForcedFull_ = true;
 }
 
-std::vector<uint8_t> SnapshotClient::buildNormalized(const Snapshot& normalized,
+std::vector<uint8_t> cSnapshotClient::buildNormalized(const Snapshot& normalized,
                                                      size_t byteBudget) {
   ++buildCount_;
   const Snapshot& cur = normalized;  // caller-normalized: sorted, atRest zeroed
@@ -174,7 +174,7 @@ std::vector<uint8_t> SnapshotClient::buildNormalized(const Snapshot& normalized,
   return packet.buf;
 }
 
-void SnapshotClient::onAck(uint16_t ack, uint16_t ackBits) {
+void cSnapshotClient::onAck(uint16_t ack, uint16_t ackBits) {
   if (ack == 0) return;  // seq 0 is reserved; nothing acked yet
   // Newest acked snapshot we still hold: header ack first, then ackBits.
   uint16_t best = 0;
