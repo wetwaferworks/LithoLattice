@@ -363,10 +363,19 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
               const FaceMaterial& fm = mats.face(b, bm->materials[size_t(box.material)].slot, on);
               FaceLook fl = look.faceLookAt(def, st, FaceSlot::Top, on, in.cx * 16 + x, in.sy * 16 + y,
                                              in.cz * 16 + z);
-              if ((def.flags & kTransparent) && fl.mode == kShadeTex) fl.mode = kShadeCutout;  // sprite art: alpha-test
-              for (int f = 0; f < 6; ++f) writer.face(cell, f, box.min, box.max, fm, fl);
+              // 2026-10-24 (JD 6:12 PM, LED see-through ribbon): box models draw solid (no sprite
+              // alpha-test holes), and a face flush with the cell wall it mounts on is skipped (it
+              // z-fought the support's face: the slivers beside the block below a floor LED).
+              for (int f = 0; f < 6; ++f) {
+                const int* n = kFaces[f].n;
+                bool flush = false;
+                for (int a = 0; a < 3; ++a)
+                  if ((n[a] < 0 && box.min[a] <= 0) || (n[a] > 0 && box.max[a] >= 16)) flush = true;
+                if (flush) continue;
+                writer.face(cell, f, box.min, box.max, fm, fl);
+              }
             }
-            if (tilt) {
+            if (tilt && false) {  // 2026-10-24 (JD 6:12 PM): the shear twisted the LED into a ribbon; upright model, raised against the wall
               for (size_t i = tiltFrom; i < out.verts.size(); ++i) {
                 PackedVertex& v = out.verts[i];
                 const int ly = int(v.y) - y * 16;  // 3 (base) .. 13 (top)
