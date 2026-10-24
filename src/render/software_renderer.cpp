@@ -992,9 +992,9 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     if (!finReady) {
       fin.texData = textures_.data(); fin.texLayers = textures_.layers();
       {  // Cortana 2026-10-16 (BUG-0003): the colour array's runtime tile size
-        const uint32_t ts = uint32_t(textures_.tileSize());
-        fin.texShift = ts == 64 ? 6u : ts == 32 ? 5u : 4u;
-        fin.texMask = ts - 1; fin.texArea = ts * ts; fin.texScale = float(ts - 1);
+        const uint32_t tileSz = uint32_t(textures_.tileSize());
+        fin.texShift = tileSz == 64 ? 6u : tileSz == 32 ? 5u : 4u;
+        fin.texMask = tileSz - 1; fin.texArea = tileSz * tileSz; fin.texScale = float(tileSz - 1);
       }
       if (swP2(kP2Morton) && textures_.dataMorton()) { fin.texData = textures_.dataMorton(); fin.texMorton = true; }  // Pass 2 step 4 (16x16 only)
       fin.pbr = effectivePbrContext();
@@ -1070,9 +1070,9 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       }
       span.hasAo = s0->ao < 1.0f || s1->ao < 1.0f || s2->ao < 1.0f;  // == scalar loop's aoTri
       {  // Cortana 2026-10-16: runtime tile + per-triangle mip (BUG-0005)
-        const uint32_t ts = uint32_t(baseTile) >> S.mip;
-        span.tex = (S.mip ? textures_.mipData(S.mip) : fin.texData) + size_t(s0->layer) * size_t(ts * ts);
-        span.texShift = int(mipShift(ts)); span.texScale = float(ts - 1);
+        const uint32_t tileSz = uint32_t(baseTile) >> S.mip;
+        span.tex = (S.mip ? textures_.mipData(S.mip) : fin.texData) + size_t(s0->layer) * size_t(tileSz * tileSz);
+        span.texShift = int(mipShift(tileSz)); span.texScale = float(tileSz - 1);
       }
       span.morton = fin.texMorton;
     }
@@ -2547,7 +2547,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
         }
         // Pass 2 step 5 (kP2Dispatch): 4-wide SSE2/SSE4.1 quad transform (bit-identical).
         static_assert(sizeof(PackedVertex) % sizeof(uint16_t) == 0, "PackedVertex stride");
-        constexpr size_t kPvStride = sizeof(PackedVertex) / sizeof(uint16_t);
+        static constexpr size_t kPvStride = sizeof(PackedVertex) / sizeof(uint16_t);
         const float fbW = float(fb_.width), fbH = float(fb_.height);
         auto xformQuad = [&](size_t q) {
           if (tq4) tq4(reinterpret_cast<const uint16_t*>(&mv[q * 4]), kPvStride, mvp.m, dst + q * 16, fbW, fbH);

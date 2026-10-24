@@ -132,12 +132,23 @@ if(MSVC)
   add_link_options(/STACK:8388608)
 endif()
 
+# Stricter warnings (review 2026-10-24 W-4): on top of /W4 / -Wall -Wextra, the
+# undefined-behaviour class (shift count out of range, missing return, uninitialised
+# local) is now an error (zero hits on MSVC today); a polymorphic class with a non-virtual
+# destructor warns (C4265 / -Wnon-virtual-dtor), and so does a shadowed name on GCC/Clang
+# (-Wshadow; MSVC /W4 already reports C4456-C4459). Native builds only: the Emscripten
+# web build keeps its flags.
 function(litholattice_module_options target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive- $<$<BOOL:${LITHOLATTICE_WERROR}>:/WX>)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /w14265 /we4293 /we4715 /we4716 /we4700
+                           $<$<BOOL:${LITHOLATTICE_WERROR}>:/WX>)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra $<$<NOT:$<CONFIG:Debug>>:-O2>
                            $<$<BOOL:${LITHOLATTICE_WERROR}>:-Werror>)
+    if(NOT EMSCRIPTEN)
+      target_compile_options(${target} PRIVATE -Wshadow -Wnon-virtual-dtor
+                             -Werror=shift-count-overflow -Werror=return-type)
+    endif()
   endif()
 endfunction()
 
