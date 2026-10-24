@@ -81,9 +81,9 @@ enum class StructureTrust {
 const char* structureTrustName(StructureTrust t);
 
 /// Engine-level structure registry (process-wide singleton).
-class StructureRegistry {
+class cStructureReg {
  public:
-  static StructureRegistry& instance();
+  static cStructureReg& instance();
 
   /// Register an entry. Computes the fingerprint, validates the name
   /// (^[a-z0-9_]+:[a-z0-9_]+$), and — when `sig` is given — verifies the
@@ -138,7 +138,7 @@ class StructureRegistry {
   void resetForTests();
 
  private:
-  StructureRegistry() = default;
+  cStructureReg() = default;
   bool registerEntryImpl(StructureEntry e, const StructureEntry::Signature* sig, std::string* err,
                          bool bypassSeal);
   static bool verifySignatureBytes(const StructureEntry::Signature& sig,
@@ -154,7 +154,7 @@ class StructureRegistry {
 /// Mod API: register a named structure during mod init (before the registry seals).
 /// Returns false when sealed or the name is taken.
 inline bool registerStructure(StructureEntry e) {
-  return StructureRegistry::instance().registerEntry(std::move(e));
+  return cStructureReg::instance().registerEntry(std::move(e));
 }
 
 }  // namespace litholattice::procgen

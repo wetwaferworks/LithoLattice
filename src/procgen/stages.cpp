@@ -311,7 +311,7 @@ WormCaveCarver::WormCaveCarver(WormCaveSettings s) : s_(std::move(s)) {
   s_.branchRadiusFrac = std::clamp(s_.branchRadiusFrac, 0.05f, 1.f);
 }
 
-void WormCaveCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void WormCaveCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
@@ -409,7 +409,7 @@ RavineCarver::RavineCarver(RavineSettings s) : s_(std::move(s)) {
   s_.bottomMargin = std::max(1, s_.bottomMargin);
 }
 
-void RavineCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void RavineCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
@@ -486,7 +486,7 @@ CavernCarver::CavernCarver(CavernSettings s) : s_(std::move(s)) {
   s_.coreFrac = std::clamp(s_.coreFrac, 0.f, 1.f);
 }
 
-void CavernCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void CavernCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
@@ -653,7 +653,7 @@ cCheeseCarver::cCheeseCarver(CheeseSettings s) : s_(std::move(s)) {
   s_.surfaceMargin = std::max(2, s_.surfaceMargin);
 }
 
-void cCheeseCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cCheeseCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
@@ -680,33 +680,33 @@ void cCheeseCarver::carve(StageContext& ctx) const {
     }
 }
 
-SpaghettiCarver::SpaghettiCarver() : SpaghettiCarver(TubeCaveSettings{}) {}
+cSpaghettiCarver::cSpaghettiCarver() : cSpaghettiCarver(TubeCaveSettings{}) {}
 
-SpaghettiCarver::SpaghettiCarver(TubeCaveSettings s) : s_(std::move(s)) { sanitizeTubeSettings(s_, 1.f / 20.f); }
+cSpaghettiCarver::cSpaghettiCarver(TubeCaveSettings s) : s_(std::move(s)) { sanitizeTubeSettings(s_, 1.f / 20.f); }
 
-void SpaghettiCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cSpaghettiCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void SpaghettiCarver::carve(StageContext& ctx) const {
+void cSpaghettiCarver::carve(StageContext& ctx) const {
   carveNoiseTubes(ctx, s_, "spaghetti_a", "spaghetti_b",
                   deriveSeed(ctx.chunk.dimensionSeed, nameHash("spaghetti_gate")));
 }
 
-NoodleCarver::NoodleCarver() : NoodleCarver([] {
+cNoodleCarver::cNoodleCarver() : cNoodleCarver([] {
   TubeCaveSettings s;
   s.tubeRadius = 0.125f;      // tighter than spaghetti's 0.14
   s.frequency = 1.f / 13.f;   // higher-frequency wander than spaghetti's 1/20
   return s;
 }()) {}
 
-NoodleCarver::NoodleCarver(TubeCaveSettings s) : s_(std::move(s)) { sanitizeTubeSettings(s_, 1.f / 13.f); }
+cNoodleCarver::cNoodleCarver(TubeCaveSettings s) : s_(std::move(s)) { sanitizeTubeSettings(s_, 1.f / 13.f); }
 
-void NoodleCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cNoodleCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void NoodleCarver::carve(StageContext& ctx) const {
+void cNoodleCarver::carve(StageContext& ctx) const {
   carveNoiseTubes(ctx, s_, "noodle_a", "noodle_b", deriveSeed(ctx.chunk.dimensionSeed, nameHash("noodle_gate")));
 }
 
@@ -1402,7 +1402,7 @@ std::optional<StructureFeature::Base> StructureFeature::baseForCell(uint64_t fea
   return b;
 }
 
-void StructureFeature::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void StructureFeature::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // features, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
@@ -1564,7 +1564,7 @@ RiverCarver::RiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutp
   reach_ = int(std::ceil(maxLen / float(s_.cellSize))) + 1;
 }
 
-void RiverCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void RiverCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline (the river spawn density gate).
   // The pipeline outlives its carvers, so the raw pointer is safe. An explicitly set probe
   // (tests, tools) is left alone.
@@ -1752,7 +1752,7 @@ std::optional<cLithoStampFeature::Base> cLithoStampFeature::baseForCell(uint64_t
   return b;
 }
 
-void cLithoStampFeature::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cLithoStampFeature::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Same discipline as StructureFeature: the pipeline outlives its features.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }

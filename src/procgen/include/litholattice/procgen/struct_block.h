@@ -5,7 +5,7 @@
 //   CORNER (0): two corners mark a capture region.
 //   SAVE   (1): captures the region between the two CORNER blocks into sorted
 //              blueprint cells and registers them under a name in the
-//              StructureRegistry. The name travels with the action (UI/console),
+//              cStructureReg. The name travels with the action (UI/console),
 //              not in block state.
 //   LOAD   (2): places a named structure from the registry at the block's position.
 //

@@ -1,4 +1,4 @@
-// Bridge from procgen to chunk columns: a dimension's GeneratorPipeline (built from generator
+// Bridge from procgen to chunk columns: a dimension's cGenPipeline (built from generator
 // JSON, materials named by block texture key) plus the conversion to ChunkColumn sub-chunks.
 // The built-in generators are assets/worldgen/*.json, embedded at build time.
 #pragma once
@@ -28,7 +28,7 @@ class ColumnGenerator {
     friend class ColumnGenerator;
     Passkey() = default;
   };
-  ColumnGenerator(Passkey, std::unique_ptr<const procgen::GeneratorPipeline> p, uint64_t dimensionSeed,
+  ColumnGenerator(Passkey, std::unique_ptr<const procgen::cGenPipeline> p, uint64_t dimensionSeed,
                   const BlockRegistry* blocks)
       : pipeline_(std::move(p)), dimensionSeed_(dimensionSeed), blocks_(blocks) {}
   /// Builds a dimension's generator from JSON. Noise is seeded with
@@ -59,10 +59,10 @@ class ColumnGenerator {
   /// sibling systems (trees, ruins, pulse) query through this overload.
   std::unique_ptr<ChunkColumn> generate(int cx, int cz, procgen::ColumnMaps* mapsOut = nullptr) const;
   uint64_t dimensionSeed() const { return dimensionSeed_; }
-  const procgen::GeneratorPipeline& pipeline() const { return *pipeline_; }
+  const procgen::cGenPipeline& pipeline() const { return *pipeline_; }
 
  private:
-  std::unique_ptr<const procgen::GeneratorPipeline> pipeline_;
+  std::unique_ptr<const procgen::cGenPipeline> pipeline_;
   uint64_t dimensionSeed_;
   // Registry for translating worldgen material ids (BlockIds) to the StableId
   // currency of sub-chunk voxel storage. Set by create(); owned by the game.

@@ -1,4 +1,4 @@
-// Builds a GeneratorPipeline from a generator JSON file (graph + stage configuration); see
+// Builds a cGenPipeline from a generator JSON file (graph + stage configuration); see
 // docs/PROCGEN.md for the format. Material names are resolved by the caller (the world knows
 // its block registry), keeping procgen free of block types.
 #pragma once
@@ -36,31 +36,31 @@ using ModelResolver = std::function<std::optional<LithoStampModel>(std::string_v
 
 /// Parses and validates a generator. Graph noise is seeded from `dimensionSeed`. Returns nullptr
 /// and sets `err` (prefixed with the failing section) on any error.
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials, std::string& err);
 /// Same, from JSON text.
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials, std::string& err);
 /// Same, plus `extraSurface` rules appended after the JSON-configured surface rules. Lets
 /// game code attach ISurfaceRules that JSON material names cannot express (e.g. rules that
 /// place block ids directly instead of going through the material resolver).
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        std::string& err);
 /// Same, from JSON text.
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        std::string& err);
 /// Same, plus an optional `models` resolver for "lithoform_stamp" features. When null
 /// (the default), that feature type fails to load with a clear error.
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        ModelResolver models, std::string& err);
 /// Same, from JSON text.
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        ModelResolver models, std::string& err);

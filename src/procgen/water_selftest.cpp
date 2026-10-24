@@ -85,18 +85,18 @@ void constantsChecks(Checker& check) {
 }
 
 void depthFormulaChecks(Checker& check) {
-  check(OceanFillRule::depthForUnit(0.f, 196, -1) == 49, "depthForUnit(0, unset min) == 196/4 == 49 (legacy derive)");
-  check(OceanFillRule::depthForUnit(1.f, 196, -1) == 196, "depthForUnit(1) == 196 (configured max reachable)");
-  check(OceanFillRule::depthForUnit(-2.f, 196, -1) == 49, "depthForUnit clamps below 0");
-  check(OceanFillRule::depthForUnit(2.f, 196, -1) == 196, "depthForUnit clamps above 1");
-  check(OceanFillRule::depthForUnit(0.f, 300, 10) == 10, "depthForUnit(0, explicit min 10) == 10");
-  check(OceanFillRule::depthForUnit(1.f, 300, 10) == 300, "depthForUnit(1, max 300) == 300 (above the old cap)");
-  check(OceanFillRule::depthForUnit(0.5f, 300, 10) == 10 + int(0.5f * 290.f),
+  check(cOceanFillRule::depthForUnit(0.f, 196, -1) == 49, "depthForUnit(0, unset min) == 196/4 == 49 (legacy derive)");
+  check(cOceanFillRule::depthForUnit(1.f, 196, -1) == 196, "depthForUnit(1) == 196 (configured max reachable)");
+  check(cOceanFillRule::depthForUnit(-2.f, 196, -1) == 49, "depthForUnit clamps below 0");
+  check(cOceanFillRule::depthForUnit(2.f, 196, -1) == 196, "depthForUnit clamps above 1");
+  check(cOceanFillRule::depthForUnit(0.f, 300, 10) == 10, "depthForUnit(0, explicit min 10) == 10");
+  check(cOceanFillRule::depthForUnit(1.f, 300, 10) == 300, "depthForUnit(1, max 300) == 300 (above the old cap)");
+  check(cOceanFillRule::depthForUnit(0.5f, 300, 10) == 10 + int(0.5f * 290.f),
         "depthForUnit interpolates [minDepth, maxDepth]");
   bool mono = true, bounded = true;
   int prev = -1;
   for (int k = 0; k <= 100; ++k) {
-    const int d = OceanFillRule::depthForUnit(k / 100.f, 196, -1);
+    const int d = cOceanFillRule::depthForUnit(k / 100.f, 196, -1);
     mono = mono && d >= prev;
     bounded = bounded && d >= 49 && d <= 196;
     prev = d;
@@ -110,27 +110,27 @@ void clampChecks(Checker& check) {
   // above the old caps survives intact; only sanity floors remain.
   OceanSettings os;
   os.maxDepth = 500;
-  check(OceanFillRule(os).settings().maxDepth == 500, "OceanSettings maxDepth 500 is kept (no cap clamp)");
+  check(cOceanFillRule(os).settings().maxDepth == 500, "OceanSettings maxDepth 500 is kept (no cap clamp)");
   LakeSettings ls;
   ls.maxDepth = 500;
-  check(LakeFillRule(ls).settings().maxDepth == 500, "LakeSettings maxDepth 500 is kept (no cap clamp)");
+  check(cLakeFillRule(ls).settings().maxDepth == 500, "LakeSettings maxDepth 500 is kept (no cap clamp)");
   OceanSettings zero;
   zero.maxDepth = 0;
-  check(OceanFillRule(zero).settings().maxDepth == 1, "OceanSettings maxDepth 0 sanity-floors to 1");
+  check(cOceanFillRule(zero).settings().maxDepth == 1, "OceanSettings maxDepth 0 sanity-floors to 1");
   LakeSettings zeroLake;
   zeroLake.maxDepth = 0;
-  check(LakeFillRule(zeroLake).settings().maxDepth == 1, "LakeSettings maxDepth 0 sanity-floors to 1");
+  check(cLakeFillRule(zeroLake).settings().maxDepth == 1, "LakeSettings maxDepth 0 sanity-floors to 1");
   OceanSettings badMin;
   badMin.maxDepth = 100;
   badMin.minDepth = 250;
-  check(OceanFillRule(badMin).settings().minDepth == 100, "explicit minDepth clamps into [0, maxDepth] (sanity)");
+  check(cOceanFillRule(badMin).settings().minDepth == 100, "explicit minDepth clamps into [0, maxDepth] (sanity)");
   OceanSettings noWater;
   noWater.water = kAirMaterial;
-  check(OceanFillRule(noWater).settings().water == kAirMaterial, "ocean rule without water material no-ops");
+  check(cOceanFillRule(noWater).settings().water == kAirMaterial, "ocean rule without water material no-ops");
 }
 
 // Builds the standard ocean test generator: constant-height rock terrain, one biome.
-std::unique_ptr<const GeneratorPipeline> oceanGen(const std::string& heightNode, uint64_t seed,
+std::unique_ptr<const cGenPipeline> oceanGen(const std::string& heightNode, uint64_t seed,
                                                   const std::string& waterJson, std::string& err) {
   const std::string text = std::string(R"({"graph": {"nodes": {"h": )") + heightNode +
                        R"(}, "outputs": {"height": "h"}},)"
@@ -336,7 +336,7 @@ void borderChecks(Checker& check) {
   auto graph = NoiseGraph::compile(desc, seed, err);
   check(graph != nullptr, "border graph compiles");
   if (!graph) return;
-  GeneratorPipeline::Builder b(graph);
+  cGenPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), kRock, 0));
   b.biomes(std::make_unique<MultiNoiseBiomeSelector>(std::vector<BiomePoint>{{"ocean"}}));
   OceanSettings os;
@@ -346,8 +346,8 @@ void borderChecks(Checker& check) {
   os.seed = seed;
   os.biomes.density.fill(0.f);
   os.biomes.density[0] = 1.f;
-  auto rule = std::make_unique<OceanFillRule>(os);
-  const OceanFillRule* rulePtr = rule.get();
+  auto rule = std::make_unique<cOceanFillRule>(os);
+  const cOceanFillRule* rulePtr = rule.get();
   b.surface(std::move(rule));
   auto pipeline = b.build();
   check(pipeline != nullptr, "border pipeline builds");
@@ -505,7 +505,7 @@ void parameterizationChecks(Checker& check) {
   base.biomes.density[0] = 1.f;
   OceanSettings withMin = base;
   withMin.minDepth = 10;
-  const OceanFillRule derived(base), explicitMin(withMin);
+  const cOceanFillRule derived(base), explicitMin(withMin);
   int maxDerived = -1, maxExplicit = -1;
   for (int wz = 0; wz < 64; ++wz)
     for (int wx = 0; wx < 64; ++wx) {

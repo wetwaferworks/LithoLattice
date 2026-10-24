@@ -185,7 +185,7 @@ class WormCaveCarver final : public ICarver {
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
   explicit WormCaveCarver(WormCaveSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
 
  private:
@@ -215,7 +215,7 @@ class RavineCarver final : public ICarver {
   RavineCarver();  // defaults, so {"type": "ravine"} keeps working
   explicit RavineCarver(RavineSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
 
  private:
@@ -246,7 +246,7 @@ class CavernCarver final : public ICarver {
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
   explicit CavernCarver(CavernSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
 
  private:
@@ -278,7 +278,7 @@ class cCheeseCarver final : public ICarver {
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
   explicit cCheeseCarver(CheeseSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
   const CheeseSettings& settings() const { return s_; }
 
@@ -304,13 +304,13 @@ struct TubeCaveSettings {
   std::vector<float> density;    ///< per-biome carve gate multiplier; missing entries = 1
 };
 
-class SpaghettiCarver final : public ICarver {
+class cSpaghettiCarver final : public ICarver {
  public:
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  SpaghettiCarver();  // spaghetti tier defaults, so {"type": "spaghetti"} works bare
-  explicit SpaghettiCarver(TubeCaveSettings s);
+  cSpaghettiCarver();  // spaghetti tier defaults, so {"type": "spaghetti"} works bare
+  explicit cSpaghettiCarver(TubeCaveSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
   const TubeCaveSettings& settings() const { return s_; }
 
@@ -319,14 +319,14 @@ class SpaghettiCarver final : public ICarver {
   BiomeProbe probe_;
 };
 
-/// Noodle tier: tubeRadius 0.125, frequency 1/13 in NoodleCarver's default settings.
-class NoodleCarver final : public ICarver {
+/// Noodle tier: tubeRadius 0.125, frequency 1/13 in cNoodleCarver's default settings.
+class cNoodleCarver final : public ICarver {
  public:
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  NoodleCarver();  // noodle tier defaults (tighter, higher-frequency than spaghetti)
-  explicit NoodleCarver(TubeCaveSettings s);
+  cNoodleCarver();  // noodle tier defaults (tighter, higher-frequency than spaghetti)
+  explicit cNoodleCarver(TubeCaveSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
   const TubeCaveSettings& settings() const { return s_; }
 
@@ -454,7 +454,7 @@ class RiverCarver final : public ICarver {
   /// `heightOutput`: graph output index used for downhill routing (see caveat above).
   RiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s);
   void carve(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// Override the biome probe (used for the per-biome spawn density). Bound to the
   /// pipeline automatically by onPipelineBuilt when left null; null = no biome gate.
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
@@ -671,7 +671,7 @@ enum class AnchorMode : uint8_t {
 struct StructureSettings {
   std::string seedName;      ///< salts the cell RNG (defaults to the feature name)
   std::string structureName; ///< registry name ("jd:watchtower"); when set, variants come
-                             ///< from the StructureRegistry instead of an inline blueprint
+                             ///< from the cStructureReg instead of an inline blueprint
   int cellSize = 64;         ///< candidate lattice spacing in blocks; at most one base per cell
   float density = 0.05f;     ///< per-cell placement probability, before the biome gate
   BiomeDensity biomes;       ///< per-biome multiplier, gated on the dominant biome at the base
@@ -727,7 +727,7 @@ class StructureFeature final : public IFeature {
   /// in the loader). Explicit JSON fields in `s` override the entry's rules.
   StructureFeature(StructureSettings s, std::vector<Variant> variants, BiomeProbe probe = nullptr);
   void place(StageContext& ctx, Rng& rng) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// CANDIDATE base (x, z) positions with any part inside [x0, x1) x [z0, z1),
   /// for `dimensionSeed` (P3-2 B-L6: renamed semantics — this returns
   /// candidates, not confirmed placements). It shares the cell resolution
@@ -800,7 +800,7 @@ class cLithoStampFeature final : public IFeature {
   cLithoStampFeature(LithoStampSettings s, std::vector<LithoStampVoxel> cells,
                     BiomeProbe probe = nullptr);
   void place(StageContext& ctx, Rng& rng) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// Horizontal blocks the model can reach past its base.
   int reach() const { return reach_; }
   const LithoStampSettings& settings() const { return s_; }

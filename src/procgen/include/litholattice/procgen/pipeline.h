@@ -94,7 +94,7 @@ class IClimateStage {
   virtual void sample(StageContext& ctx) const = 0;
 };
 
-class GeneratorPipeline;  // defined below; IFeature::onPipelineBuilt takes it
+class cGenPipeline;  // defined below; IFeature::onPipelineBuilt takes it
 
 /// Picks a biome per column from its climate; also owns the biome table.
 class IBiomeSelector {
@@ -121,9 +121,9 @@ class IBiomePostStage {
  public:
   virtual ~IBiomePostStage() = default;
   virtual void process(StageContext& ctx) const = 0;
-  /// Called once the pipeline is fully built (by GeneratorPipeline::Builder::build()).
+  /// Called once the pipeline is fully built (by cGenPipeline::Builder::build()).
   /// Default: no-op.
-  virtual void onPipelineBuilt(const GeneratorPipeline* pipeline) { (void)pipeline; }
+  virtual void onPipelineBuilt(const cGenPipeline* pipeline) { (void)pipeline; }
 };
 
 /// One mob's spawn entry in a biome's fauna table. Data for the entity system to read
@@ -154,11 +154,11 @@ class ICarver {
  public:
   virtual ~ICarver() = default;
   virtual void carve(StageContext& ctx) const = 0;
-  /// Called once the pipeline is fully built (by GeneratorPipeline::Builder::build(), so
+  /// Called once the pipeline is fully built (by cGenPipeline::Builder::build(), so
   /// every pipeline gets it automatically), letting a carver bind pipeline services it
   /// cannot take at construction time. RiverCarver uses it to bind its biome probe.
   /// Default: no-op.
-  virtual void onPipelineBuilt(const GeneratorPipeline* pipeline) { (void)pipeline; }
+  virtual void onPipelineBuilt(const cGenPipeline* pipeline) { (void)pipeline; }
 };
 
 /// Dominant biome-table index at a world column; bound to the finished pipeline by
@@ -170,11 +170,11 @@ class IFeature {
  public:
   virtual ~IFeature() = default;
   virtual void place(StageContext& ctx, Rng& rng) const = 0;
-  /// Called once the pipeline is fully built (by GeneratorPipeline::Builder::build(), so
+  /// Called once the pipeline is fully built (by cGenPipeline::Builder::build(), so
   /// every pipeline gets it automatically), letting a feature bind pipeline services it
   /// cannot take at construction time. StructureFeature uses it to bind its dominant-biome
   /// probe to the finished pipeline. Default: no-op.
-  virtual void onPipelineBuilt(const GeneratorPipeline* pipeline) { (void)pipeline; }
+  virtual void onPipelineBuilt(const cGenPipeline* pipeline) { (void)pipeline; }
 };
 
 /// Named features in placement order. Each feature's RNG seed is
@@ -198,18 +198,18 @@ class cFeatureReg {
   std::vector<Entry> features_;
 };
 
-/// A configured generator: one graph plus stages. Build with GeneratorPipeline::Builder or from
+/// A configured generator: one graph plus stages. Build with cGenPipeline::Builder or from
 /// JSON (generator_loader.h). Immutable once built.
-class GeneratorPipeline {
+class cGenPipeline {
  public:
   class Builder;
-  /// Construction token: only GeneratorPipeline's own factory can make one, so it can use make_unique / make_shared.
+  /// Construction token: only cGenPipeline's own factory can make one, so it can use make_unique / make_shared.
   class Passkey {
-    friend class GeneratorPipeline;
+    friend class cGenPipeline;
     friend class Builder;
     Passkey() = default;
   };
-  explicit GeneratorPipeline(Passkey) {}
+  explicit cGenPipeline(Passkey) {}
 
   /// Generates one chunk column. Thread-safe.
   ColumnBuffer generate(const ChunkInfo& chunk, ColumnMaps* mapsOut = nullptr) const;
@@ -245,7 +245,7 @@ class GeneratorPipeline {
 };
 
 /// Assembles a pipeline; graph and terrain are required, every other stage is optional.
-class GeneratorPipeline::Builder {
+class cGenPipeline::Builder {
  public:
   explicit Builder(std::shared_ptr<const NoiseGraph> graph);
   Builder& climate(std::unique_ptr<IClimateStage> s);
@@ -260,10 +260,10 @@ class GeneratorPipeline::Builder {
   /// Returns false (and leaves the registry unchanged) on a duplicate name.
   bool feature(std::string name, std::unique_ptr<IFeature> f);
   /// nullptr if the terrain stage is missing.
-  std::unique_ptr<const GeneratorPipeline> build();
+  std::unique_ptr<const cGenPipeline> build();
 
  private:
-  std::unique_ptr<GeneratorPipeline> p_;
+  std::unique_ptr<cGenPipeline> p_;
 };
 
 }  // namespace litholattice::procgen

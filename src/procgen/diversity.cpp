@@ -136,7 +136,7 @@ void cRockFormationFeature::place(StageContext& ctx, Rng&) const {
 
 // ---- 3. biome transition bands -----------------------------------------------------
 
-void cBiomeTransitionStage::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cBiomeTransitionStage::onPipelineBuilt(const cGenPipeline* pipeline) {
   // The un-transitioned dominant biome at any world column. The pipeline's biomeAt uses
   // only the selector, so this cannot recurse into process().
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };

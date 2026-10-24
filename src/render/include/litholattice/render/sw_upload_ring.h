@@ -4,7 +4,7 @@
 //
 // A single-producer / single-consumer lock-free ring that stages chunk-mesh
 // uploads between the game's upload phase (producer: the main thread — Game's
-// uploadMeshes/retire paths and BenchStreamer::update all run there) and the
+// uploadMeshes/retire paths and cBenchStreamer::update all run there) and the
 // software renderer's mesh store (consumer: the band pool's detached executor,
 // which drains the ring at the frame seal, immediately before renderFrame
 // builds its draw order). JD's ruling 4: nobody waits in line on the CPU —

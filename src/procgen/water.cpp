@@ -24,7 +24,7 @@ int clampLevel(int level, int top) { return std::clamp(level, 1, top); }
 
 // ---- oceans
 
-OceanFillRule::OceanFillRule(OceanSettings s) : s_(std::move(s)) {
+cOceanFillRule::cOceanFillRule(OceanSettings s) : s_(std::move(s)) {
   // No engine cap (2026-10-13 parameterization): maxDepth is a settings value.
   // Sanity only: a depth must be positive, and an explicit minDepth must lie in
   // [0, maxDepth]. (The loader validates seaLevel vs maxDepth vs minSolidBelow.)
@@ -35,7 +35,7 @@ OceanFillRule::OceanFillRule(OceanSettings s) : s_(std::move(s)) {
   relief_ = makeWaterNoise(s_.seed, "litholattice.procgen.ocean");
 }
 
-int OceanFillRule::depthForUnit(float u, int maxDepth, int minDepth) {
+int cOceanFillRule::depthForUnit(float u, int maxDepth, int minDepth) {
   const float uc = std::clamp(u, 0.f, 1.f);
   // minDepth < 0 = unset: derive maxDepth/4 -- exactly the pre-parameterization
   // behaviour (196/4 = 49 at the LithoKraft default).
@@ -43,7 +43,7 @@ int OceanFillRule::depthForUnit(float u, int maxDepth, int minDepth) {
   return minD + int(uc * float(maxDepth - minD));  // == maxDepth at u == 1, monotone
 }
 
-int OceanFillRule::floorTarget(int wx, int wz, int seaLevel) const {
+int cOceanFillRule::floorTarget(int wx, int wz, int seaLevel) const {
   const float d01 =
       (relief_->sample2(float(wx) * s_.depthFrequency, float(wz) * s_.depthFrequency) + 1.f) * 0.5f;
   const int depth = depthForUnit(d01, s_.maxDepth, s_.minDepth);
@@ -52,7 +52,7 @@ int OceanFillRule::floorTarget(int wx, int wz, int seaLevel) const {
   return std::clamp(seaLevel - depth, 0, seaLevel - 1);
 }
 
-void OceanFillRule::apply(StageContext& ctx) const {
+void cOceanFillRule::apply(StageContext& ctx) const {
   if (s_.water == kAirMaterial) return;
   const int n = ctx.chunk.size, top = ctx.blocks.height() - 1;
   const int sea = clampLevel(s_.seaLevel, top);
@@ -92,18 +92,18 @@ void OceanFillRule::apply(StageContext& ctx) const {
 
 // ---- lakes
 
-LakeFillRule::LakeFillRule(LakeSettings s) : s_(std::move(s)) {
+cLakeFillRule::cLakeFillRule(LakeSettings s) : s_(std::move(s)) {
   s_.maxDepth = std::max(1, s_.maxDepth);  // settings value, no engine cap; sanity: positive
   s_.threshold = std::clamp(s_.threshold, 0.f, 1.f);
   if (!(s_.frequency > 0.f) || !std::isfinite(s_.frequency)) s_.frequency = 1.f / 64.f;
   mask_ = makeWaterNoise(s_.seed, "litholattice.procgen.lake");
 }
 
-float LakeFillRule::maskAt(int wx, int wz) const {
+float cLakeFillRule::maskAt(int wx, int wz) const {
   return (mask_->sample2(float(wx) * s_.frequency, float(wz) * s_.frequency) + 1.f) * 0.5f;
 }
 
-void LakeFillRule::apply(StageContext& ctx) const {
+void cLakeFillRule::apply(StageContext& ctx) const {
   if (s_.water == kAirMaterial) return;
   const int n = ctx.chunk.size, top = ctx.blocks.height() - 1;
   const int wt = clampLevel(s_.waterTable, top);
@@ -142,7 +142,7 @@ ShorelineRule::ShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, Lak
   if (s_.band < 0) s_.band = 0;
   if (s_.depth < 0) s_.depth = 0;
   if (hasLake_) {
-    // Normalize the same way LakeFillRule does, so the mask test here reproduces the
+    // Normalize the same way cLakeFillRule does, so the mask test here reproduces the
     // fill rule's field exactly.
     lake_.maxDepth = std::max(1, lake_.maxDepth);
     lake_.threshold = std::clamp(lake_.threshold, 0.f, 1.f);

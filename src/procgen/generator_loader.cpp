@@ -335,8 +335,8 @@ std::unique_ptr<ICarver> loadCarver(Loader& l, const Json& j, const std::vector<
   if (type == "ruins") return loadRuinsCarver(l, j, biomeNames);
   if (type == "river") return loadRiverCarver(l, j, biomeNames);
   if (type == "cheese") return loadCheeseCarver(l, j, biomeNames);
-  if (type == "spaghetti") return loadTubeCarver<SpaghettiCarver>(l, j, biomeNames, "carver 'spaghetti'");
-  if (type == "noodle") return loadTubeCarver<NoodleCarver>(l, j, biomeNames, "carver 'noodle'");
+  if (type == "spaghetti") return loadTubeCarver<cSpaghettiCarver>(l, j, biomeNames, "carver 'spaghetti'");
+  if (type == "noodle") return loadTubeCarver<cNoodleCarver>(l, j, biomeNames, "carver 'noodle'");
   if (type != "worm_cave") {
     l.fail("carvers",
            "unknown type '" + type + "' (worm_cave, ravine, cavern, ruins, river, cheese, spaghetti, noodle)");
@@ -516,7 +516,7 @@ std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
     return l.fail(section, "'structure' and 'blueprint' are mutually exclusive"), nullptr;
   if (!structName.empty()) {
     // Registry-backed: resolve the name now; the feature copies variants + rules.
-    const StructureEntry* e = StructureRegistry::instance().find(structName);
+    const StructureEntry* e = cStructureReg::instance().find(structName);
     if (!e) return l.fail(section, "unknown structure '" + structName + "' (not in the registry)"), nullptr;
     // Merge: explicit JSON rule fields override the entry's rules. (A field is
     // "explicit" when present in the JSON; otherwise the entry's value stands.)
@@ -656,7 +656,7 @@ std::unique_ptr<IFeature> loadWorleyOreFeature(Loader& l, const Json& j,
 
 /// Parses "biome_transitions": [{"a": name, "b": name, "result": name, "width": n}].
 bool loadBiomeTransitions(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
-                          GeneratorPipeline::Builder& b) {
+                          cGenPipeline::Builder& b) {
   const Json* list = json.get("biome_transitions");
   if (!list) return true;
   constexpr const char* section = "biome_transitions";
@@ -681,7 +681,7 @@ bool loadBiomeTransitions(Loader& l, const Json& json, const std::vector<std::st
 
 /// Parses "fauna": {"<biome>": [{"mob": id, "weight": w, "pack": [min, max]}]}.
 bool loadFauna(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
-               GeneratorPipeline::Builder& b) {
+               cGenPipeline::Builder& b) {
   const Json* fauna = json.get("fauna");
   if (!fauna) return true;
   constexpr const char* section = "fauna";
@@ -715,7 +715,7 @@ bool loadFauna(Loader& l, const Json& json, const std::vector<std::string>& biom
 }
 
 /// Parses "snowcap": {"snow": mat, "base_line": y, "latitude_falloff": f, ...}.
-bool loadSnowCap(Loader& l, const Json& json, GeneratorPipeline::Builder& b) {
+bool loadSnowCap(Loader& l, const Json& json, cGenPipeline::Builder& b) {
   const Json* sc = json.get("snowcap");
   if (!sc) return true;
   constexpr const char* section = "snowcap";
@@ -736,7 +736,7 @@ bool loadSnowCap(Loader& l, const Json& json, GeneratorPipeline::Builder& b) {
 
 /// Parses "sand_drifts": {"sand": mat, "frequency": f, "threshold": t, "depth": n, "biomes": {...}}.
 bool loadSandDrifts(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
-                     GeneratorPipeline::Builder& b) {
+                     cGenPipeline::Builder& b) {
   const Json* sd = json.get("sand_drifts");
   if (!sd) return true;
   constexpr const char* section = "sand_drifts";
@@ -939,19 +939,19 @@ bool loadShorelineSettings(Loader& l, const Json& j, const std::vector<std::stri
 
 std::string_view toString(ClimateParam p) { return kClimateNames[size_t(p)]; }
 
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials, std::string& err) {
   return loadGenerator(json, dimensionSeed, materials, {}, err);
 }
 
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        std::string& err) {
   return loadGenerator(json, dimensionSeed, materials, std::move(extraSurface), ModelResolver{}, err);
 }
 
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        ModelResolver models, std::string& err) {
@@ -969,7 +969,7 @@ std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_
     l.fail("graph", graphErr);
     return nullptr;
   }
-  GeneratorPipeline::Builder b(l.graph);
+  cGenPipeline::Builder b(l.graph);
   auto terrain = loadTerrain(l, *terrainJson);
   if (!terrain) return nullptr;
   const auto* biomeTerrain = dynamic_cast<const cBiomeHeightmapTerrain*>(terrain.get());
@@ -1049,12 +1049,12 @@ std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_
   bool haveOcean = false, haveLake = false;
   if (const Json* oj = json.get("oceans")) {
     if (!loadOceanSettings(l, *oj, biomeNames, dimensionSeed, oceanSettings)) return nullptr;
-    b.surface(std::make_unique<OceanFillRule>(oceanSettings));
+    b.surface(std::make_unique<cOceanFillRule>(oceanSettings));
     haveOcean = true;
   }
   if (const Json* lj = json.get("lakes")) {
     if (!loadLakeSettings(l, *lj, biomeNames, dimensionSeed, lakeSettings)) return nullptr;
-    b.surface(std::make_unique<LakeFillRule>(lakeSettings));
+    b.surface(std::make_unique<cLakeFillRule>(lakeSettings));
     haveLake = true;
   }
   if (haveOcean || haveLake || json.get("shoreline")) {
@@ -1087,12 +1087,12 @@ std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_
   return b.build();
 }
 
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials, std::string& err) {
   return loadGenerator(text, dimensionSeed, materials, {}, err);
 }
 
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        std::string& err) {
@@ -1100,7 +1100,7 @@ std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, 
   if (!Json::parse(text, j, &err)) return nullptr;
   return loadGenerator(j, dimensionSeed, materials, std::move(extraSurface), err);
 }
-std::unique_ptr<const GeneratorPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
+std::unique_ptr<const cGenPipeline> loadGenerator(const std::string& text, uint64_t dimensionSeed,
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        ModelResolver models, std::string& err) {

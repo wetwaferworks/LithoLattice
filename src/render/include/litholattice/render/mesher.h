@@ -65,7 +65,7 @@ bool leavesFancy();
 /// 2026-10-18 (Crew Canopy, F-B): render.foliage_density. 0 = full (the default;
 /// today's meshing exactly, bit-identical output), 1 = sparse: in FANCY leaf mode
 /// (render.leaves), leaf cubes in columns beyond the near ring (Chebyshev distance
-/// from the focus column > 2, the BenchStreamer LOD's full-detail edge) are thinned
+/// from the focus column > 2, the cBenchStreamer LOD's full-detail edge) are thinned
 /// by a deterministic density model - a far leaf voxel is kept iff
 /// splitmix64(packPos(world pos)) % 1024 < 512 (density 1/2); an unkept far leaf
 /// voxel emits nothing, and a leaf-to-leaf interface is culled only when BOTH

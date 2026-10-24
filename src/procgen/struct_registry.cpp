@@ -1,4 +1,4 @@
-// StructureRegistry implementation: validation + identity + signing.
+// cStructureReg implementation: validation + identity + signing.
 //
 // Identity: every entry gets a SHA-256 content fingerprint at registration
 // (see computeFingerprint for the byte-exact spec). Signing: optional Ed25519
@@ -57,19 +57,19 @@ const char* structureTrustName(StructureTrust t) {
   return "?";
 }
 
-StructureRegistry& StructureRegistry::instance() {
-  static StructureRegistry reg;
+cStructureReg& cStructureReg::instance() {
+  static cStructureReg reg;
   return reg;
 }
 
-bool StructureRegistry::isValidName(std::string_view name) {
+bool cStructureReg::isValidName(std::string_view name) {
   const size_t colon = name.find(':');
   if (colon == std::string_view::npos) return false;
   if (name.find(':', colon + 1) != std::string_view::npos) return false;  // exactly one
   return validSegment(name.substr(0, colon)) && validSegment(name.substr(colon + 1));
 }
 
-std::string StructureRegistry::computeFingerprint(const std::vector<StructureVariant>& variants) {
+std::string cStructureReg::computeFingerprint(const std::vector<StructureVariant>& variants) {
   struct Cell {
     int32_t dx, dy, dz;
     uint16_t material;
@@ -105,7 +105,7 @@ std::string StructureRegistry::computeFingerprint(const std::vector<StructureVar
   return crypto::toHex(s.final().data(), 32);
 }
 
-bool StructureRegistry::verifySignatureBytes(const StructureEntry::Signature& sig,
+bool cStructureReg::verifySignatureBytes(const StructureEntry::Signature& sig,
                                              const std::string& fingerprintHex) {
   std::array<uint8_t, 32> pub{};
   std::array<uint8_t, 64> signature{};
@@ -120,14 +120,14 @@ bool StructureRegistry::verifySignatureBytes(const StructureEntry::Signature& si
   return crypto::ed25519::verify(edSig, fpBytes.data(), fpBytes.size(), pubKey);
 }
 
-bool StructureRegistry::registerEntry(StructureEntry e, const StructureEntry::Signature* sig,
+bool cStructureReg::registerEntry(StructureEntry e, const StructureEntry::Signature* sig,
                                       std::string* err) {
   return registerEntryImpl(std::move(e), sig, err, false);
 }
-bool StructureRegistry::registerInGame(StructureEntry e, std::string* err) {
+bool cStructureReg::registerInGame(StructureEntry e, std::string* err) {
   return registerEntryImpl(std::move(e), nullptr, err, true);
 }
-bool StructureRegistry::registerEntryImpl(StructureEntry e, const StructureEntry::Signature* sig,
+bool cStructureReg::registerEntryImpl(StructureEntry e, const StructureEntry::Signature* sig,
                                           std::string* err, bool bypassSeal) {
   auto fail = [&](const char* reason) {
     if (err) *err = reason;
@@ -173,24 +173,24 @@ bool StructureRegistry::registerEntryImpl(StructureEntry e, const StructureEntry
   return true;
 }
 
-const StructureEntry* StructureRegistry::find(std::string_view name) const {
+const StructureEntry* cStructureReg::find(std::string_view name) const {
   const auto it = index_.find(std::string(name));
   return it == index_.end() ? nullptr : &entries_[it->second];
 }
 
-const StructureEntry* StructureRegistry::findByFingerprint(std::string_view fingerprintHex) const {
+const StructureEntry* cStructureReg::findByFingerprint(std::string_view fingerprintHex) const {
   const auto it = fingerprintIndex_.find(std::string(fingerprintHex));
   return it == fingerprintIndex_.end() ? nullptr : &entries_[it->second];
 }
 
-std::vector<std::string> StructureRegistry::list() const {
+std::vector<std::string> cStructureReg::list() const {
   std::vector<std::string> out;
   out.reserve(entries_.size());
   for (const auto& e : entries_) out.push_back(e.name);
   return out;
 }
 
-std::vector<const StructureEntry*> StructureRegistry::findByNamespace(std::string_view ns) const {
+std::vector<const StructureEntry*> cStructureReg::findByNamespace(std::string_view ns) const {
   std::vector<const StructureEntry*> out;
   for (const auto& e : entries_) {
     const size_t colon = e.name.find(':');
@@ -199,7 +199,7 @@ std::vector<const StructureEntry*> StructureRegistry::findByNamespace(std::strin
   return out;
 }
 
-std::vector<const StructureEntry*> StructureRegistry::findByPrefix(std::string_view prefix) const {
+std::vector<const StructureEntry*> cStructureReg::findByPrefix(std::string_view prefix) const {
   std::vector<const StructureEntry*> out;
   for (const auto& e : entries_) {
     if (e.name.compare(0, prefix.size(), prefix) == 0) out.push_back(&e);
@@ -207,7 +207,7 @@ std::vector<const StructureEntry*> StructureRegistry::findByPrefix(std::string_v
   return out;
 }
 
-StructureTrust StructureRegistry::verifyEntry(std::string_view name) const {
+StructureTrust cStructureReg::verifyEntry(std::string_view name) const {
   const StructureEntry* e = find(name);
   if (!e || !e->signature.has_value()) return StructureTrust::Unsigned;
   if (!verifySignatureBytes(*e->signature, e->fingerprintHex)) return StructureTrust::Invalid;
@@ -219,7 +219,7 @@ StructureTrust StructureRegistry::verifyEntry(std::string_view name) const {
   return pub == trustedKey_ ? StructureTrust::Trusted : StructureTrust::SignedByUnknownKey;
 }
 
-void StructureRegistry::setTrustedPublicKeyHex(std::string hex) {
+void cStructureReg::setTrustedPublicKeyHex(std::string hex) {
   std::array<uint8_t, 32> key{};
   if (crypto::fromHex(hex, key.data(), key.size())) {
     trustedKey_ = key;
@@ -229,7 +229,7 @@ void StructureRegistry::setTrustedPublicKeyHex(std::string hex) {
   }
 }
 
-void StructureRegistry::resetForTests() {
+void cStructureReg::resetForTests() {
   index_.clear();
   fingerprintIndex_.clear();
   entries_.clear();

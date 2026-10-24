@@ -1,5 +1,5 @@
 // Cortana 2026-10-15 0450: PORT MSVC narrowing cast
-// Self-test for the StructureRegistry, placement-solver upgrades, and the
+// Self-test for the cStructureReg, placement-solver upgrades, and the
 // structure block capture/place helpers. Determinism is the invariant under
 // test: same seed, same world, bit-identical.
 #include <array>
@@ -48,7 +48,7 @@ StructureEntry testEntry(const std::string& name) {
 }
 
 void registryChecks(Check& check) {
-  auto& reg = StructureRegistry::instance();
+  auto& reg = cStructureReg::instance();
   reg.resetForTests();
 
   check(reg.registerEntry(testEntry("jd:hut")), "registry: register ok");
@@ -189,7 +189,7 @@ void structBlockChecks(Check& check) {
   check(identical, "structure block: capture -> place round-trip identical");
 
   // SAVE/LOAD via the registry.
-  auto& reg = StructureRegistry::instance();
+  auto& reg = cStructureReg::instance();
   reg.resetForTests();
   check(saveStructureAs(reader, "jd:testcube", 2, 2, 2, 3, 3, 3, kStructMat),
         "structure block: SAVE registers the capture");
@@ -216,7 +216,7 @@ void structBlockChecks(Check& check) {
 
 void loaderNameChecks(Check& check) {
   // The "structure": "<name>" JSON field resolves through the registry.
-  auto& reg = StructureRegistry::instance();
+  auto& reg = cStructureReg::instance();
   reg.resetForTests();
   check(reg.registerEntry(testEntry("jd:watchtower")), "loader: test structure registered");
 
@@ -263,7 +263,7 @@ void loaderNameChecks(Check& check) {
 }
 
 void identityChecks(Check& check) {
-  auto& reg = StructureRegistry::instance();
+  auto& reg = cStructureReg::instance();
   reg.resetForTests();
 
   // Deterministic test keypairs (fixed seeds — no RNG anywhere in tests).
@@ -294,8 +294,8 @@ void identityChecks(Check& check) {
   StructureVariant v;
   v.cells = testCells();
   v.weight = 1.f;
-  const std::string fp1 = StructureRegistry::computeFingerprint({v});
-  const std::string fp2 = StructureRegistry::computeFingerprint({v});
+  const std::string fp1 = cStructureReg::computeFingerprint({v});
+  const std::string fp2 = cStructureReg::computeFingerprint({v});
   check(fp1 == fp2 && fp1.size() == 64, "identity: fingerprint deterministic, 64 hex chars");
 
   // Reordered input cells -> same fingerprint.
@@ -304,21 +304,21 @@ void identityChecks(Check& check) {
   auto rc = testCells();
   std::reverse(rc.begin(), rc.end());
   vr.cells = rc;
-  check(StructureRegistry::computeFingerprint({vr}) == fp1, "identity: reordered cells, same hash");
+  check(cStructureReg::computeFingerprint({vr}) == fp1, "identity: reordered cells, same hash");
 
   // Different blueprint -> different fingerprint.
   StructureVariant vd;
   vd.weight = 1.f;
   vd.cells = testCells();
   vd.cells.push_back({9, 9, 9, MaterialId{3}, 0.f});
-  check(StructureRegistry::computeFingerprint({vd}) != fp1, "identity: different blueprint, different hash");
+  check(cStructureReg::computeFingerprint({vd}) != fp1, "identity: different blueprint, different hash");
 
   // --- name validation ---
-  check(StructureRegistry::isValidName("jd:watchtower"), "identity: good name ok");
-  check(StructureRegistry::isValidName("a:b_c9"), "identity: good name ok 2");
+  check(cStructureReg::isValidName("jd:watchtower"), "identity: good name ok");
+  check(cStructureReg::isValidName("a:b_c9"), "identity: good name ok 2");
   for (const char* bad : {"nocolon", "UPPER:name", "jd:", ":name", "a:b:c", "jd:watch tower",
                           "", "jd:watch-tower", "jd:name!"}) {
-    check(!StructureRegistry::isValidName(bad),
+    check(!cStructureReg::isValidName(bad),
           std::string("identity: bad name rejected: '") + bad + "'");
   }
   {
@@ -354,7 +354,7 @@ void identityChecks(Check& check) {
   {
     // Signed by the trusted key -> Trusted.
     StructureEntry e = testEntry("jd:signed");
-    const std::string fp = StructureRegistry::computeFingerprint(e.variants);
+    const std::string fp = cStructureReg::computeFingerprint(e.variants);
     auto sig = signFp(fp, sec1, pub1);
     std::string err;
     check(reg.registerEntry(std::move(e), &sig, &err), "identity: signed registration ok");
@@ -363,7 +363,7 @@ void identityChecks(Check& check) {
   {
     // Tampered: signature over a DIFFERENT blueprint -> registration refused.
     StructureEntry e = testEntry("jd:tampered");
-    const std::string otherFp = StructureRegistry::computeFingerprint({vd});
+    const std::string otherFp = cStructureReg::computeFingerprint({vd});
     auto sig = signFp(otherFp, sec1, pub1);
     std::string err;
     check(!reg.registerEntry(std::move(e), &sig, &err) && !err.empty(),
@@ -373,7 +373,7 @@ void identityChecks(Check& check) {
   {
     // Valid signature, unknown key -> registers, reports SignedByUnknownKey.
     StructureEntry e = testEntry("jd:selfsigned");
-    const std::string fp = StructureRegistry::computeFingerprint(e.variants);
+    const std::string fp = cStructureReg::computeFingerprint(e.variants);
     auto sig = signFp(fp, sec2, pub2);
     std::string err;
     check(reg.registerEntry(std::move(e), &sig, &err), "identity: unknown-key sig registers");

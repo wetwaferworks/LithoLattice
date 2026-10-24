@@ -44,7 +44,7 @@
 //
 // Positional vs global (audio): POSITIONAL by construction. The engine's mix
 // is already the listener's mix — the game computes per-voice distance gain
-// from the listener position (SoundDirector) before posting commands, so
+// from the listener position (cSoundDirector) before posting commands, so
 // the tap hears what the pilot's ears hear, with the 3D spatial mix baked
 // in. There is no global mix to tap. Multi-pilot caveat (v1): the engine
 // mixes for one listener (the local player); per-pilot mixes arrive with

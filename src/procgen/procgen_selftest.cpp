@@ -1004,7 +1004,7 @@ ChunkInfo treeChunk(int cx, int cz, uint64_t dimSeed) {
 }
 
 /// Flat (y 64) rock fixture with one feature, built in code via Builder::feature().
-std::unique_ptr<const GeneratorPipeline> makeTreePipeline(uint64_t dimSeed, TraceTreeSettings ts) {
+std::unique_ptr<const cGenPipeline> makeTreePipeline(uint64_t dimSeed, TraceTreeSettings ts) {
   GraphDesc desc;
   std::string err;
   if (!GraphDesc::parse(R"({"nodes": {"h": {"type": "constant", "value": 64}}, "outputs": {"height": "h"}})", desc,
@@ -1012,7 +1012,7 @@ std::unique_ptr<const GeneratorPipeline> makeTreePipeline(uint64_t dimSeed, Trac
     return nullptr;
   auto graph = NoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
-  GeneratorPipeline::Builder b(graph);
+  cGenPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
   return b.build();
@@ -1449,7 +1449,7 @@ class FixedBlendSelector final : public IBiomeSelector {
   float w0_;
 };
 
-std::unique_ptr<const GeneratorPipeline> makeBlendPipeline(uint64_t dimSeed, float w0, TraceTreeSettings ts) {
+std::unique_ptr<const cGenPipeline> makeBlendPipeline(uint64_t dimSeed, float w0, TraceTreeSettings ts) {
   GraphDesc desc;
   std::string err;
   if (!GraphDesc::parse(R"({"nodes": {"h": {"type": "constant", "value": 64}}, "outputs": {"height": "h"}})", desc,
@@ -1457,7 +1457,7 @@ std::unique_ptr<const GeneratorPipeline> makeBlendPipeline(uint64_t dimSeed, flo
     return nullptr;
   auto graph = NoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
-  GeneratorPipeline::Builder b(graph);
+  cGenPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   b.biomes(std::make_unique<FixedBlendSelector>(w0));
   if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
@@ -1501,7 +1501,7 @@ void blendChecks(Checker& check) {
   const auto half = makeBlendPipeline(dimSeed, 0.5f, ts);
   check(full && half, "blend: blended and one-hot pipelines build");
   if (!full || !half) return;
-  auto bases = [&](const GeneratorPipeline& g, bool checkWeights) {
+  auto bases = [&](const cGenPipeline& g, bool checkWeights) {
     std::set<std::pair<int, int>> s;
     for (int cz = 0; cz < 4; ++cz)
       for (int cx = 0; cx < 4; ++cx) {
@@ -1557,7 +1557,7 @@ constexpr const char* kStructureGeneratorText = R"({
                               {"d": [0, 1, 0], "m": "ore"}, {"d": [0, 0, 1], "m": "turf", "decay": 0.5}]}]
 })";
 
-const StructureFeature* findStructure(const GeneratorPipeline& pipe, const char* name) {
+const StructureFeature* findStructure(const cGenPipeline& pipe, const char* name) {
   const StructureFeature* out = nullptr;
   pipe.visitFeatures([&](std::string_view n, const IFeature& f) {
     if (n == name) out = dynamic_cast<const StructureFeature*>(&f);
@@ -1720,7 +1720,7 @@ void structureChecks(Checker& check) {
 
 /// Flat rock fixture (surface y=64) with code-built carvers; no biome selector, so a bound
 /// biome probe always reads biome 0.
-std::unique_ptr<const GeneratorPipeline> makeCarverPipeline(uint64_t dimSeed,
+std::unique_ptr<const cGenPipeline> makeCarverPipeline(uint64_t dimSeed,
                                                             std::vector<std::unique_ptr<ICarver>> carvers) {
   GraphDesc desc;
   std::string err;
@@ -1729,7 +1729,7 @@ std::unique_ptr<const GeneratorPipeline> makeCarverPipeline(uint64_t dimSeed,
     return nullptr;
   auto graph = NoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
-  GeneratorPipeline::Builder b(graph);
+  cGenPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   for (auto& cv : carvers) b.carver(std::move(cv));
   return b.build();
@@ -1813,7 +1813,7 @@ struct ReplicaChamber {
 /// Independent replica of CavernCarver for one coarse cell. `gen` supplies biomeAt for the
 /// density gate (null = no gate, exactly like the carver without a bound pipeline).
 void replicaCavern(uint64_t dimSeed, int ccx, int ccz, const CavernSettings& st,
-                   const GeneratorPipeline* gen, int tcx, int tcz, int yLimit,
+                   const cGenPipeline* gen, int tcx, int tcz, int yLimit,
                    std::set<std::tuple<int, int, int>>& out,
                    std::vector<ReplicaChamber>* records = nullptr) {
   const int n = 16, cell = st.cellSize;
@@ -2325,7 +2325,7 @@ struct RegionCarve {
   int pillarColumns = 0;                      // columns with no carved cell in the band
 };
 
-RegionCarve regionCarve(const GeneratorPipeline& gen, uint64_t dimSeed, int bandLo, int bandHi) {
+RegionCarve regionCarve(const cGenPipeline& gen, uint64_t dimSeed, int bandLo, int bandHi) {
   RegionCarve out;
   for (int cz = 0; cz < 2; ++cz)
     for (int cx = 0; cx < 2; ++cx) {
@@ -2412,8 +2412,8 @@ void noiseFieldCarverChecks(Checker& check) {
   // ---- spaghetti / noodle: thin connected tubes (bounded thickness, no isolates)
   const auto tubeStats = [&](bool noodle, uint64_t dimSeed) {
     std::vector<std::unique_ptr<ICarver>> cv;
-    if (noodle) cv.push_back(std::make_unique<NoodleCarver>(NoodleCarver().settings()));
-    else cv.push_back(std::make_unique<SpaghettiCarver>(SpaghettiCarver().settings()));
+    if (noodle) cv.push_back(std::make_unique<cNoodleCarver>(cNoodleCarver().settings()));
+    else cv.push_back(std::make_unique<cSpaghettiCarver>(cSpaghettiCarver().settings()));
     const auto gen = makeCarverPipeline(dimSeed, std::move(cv));
     if (!gen) return std::tuple<long, int, double, uint64_t, int>{-1, 0, 1.0, 0, 0};
     const RegionCarve rc = regionCarve(*gen, dimSeed, bandLo, bandHi);
@@ -2645,7 +2645,7 @@ ChunkInfo mountainChunk(int cx, int cz, uint64_t dimSeed) {
 }
 
 /// Height at one world column (generates the owning chunk).
-int mountainHeightAt(const GeneratorPipeline& gen, uint64_t seed, int wx, int wz) {
+int mountainHeightAt(const cGenPipeline& gen, uint64_t seed, int wx, int wz) {
   const int cx = wx >= 0 ? wx / 16 : (wx - 15) / 16;  // floor division for negatives
   const int cz = wz >= 0 ? wz / 16 : (wz - 15) / 16;
   ColumnMaps maps;

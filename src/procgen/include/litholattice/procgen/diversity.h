@@ -96,7 +96,7 @@ class cBiomeTransitionStage final : public IBiomePostStage {
   using Probe = BiomeProbe;  ///< dominant un-transitioned biome at a world column
   explicit cBiomeTransitionStage(std::vector<BiomeTransition> rules) : rules_(std::move(rules)) {}
   void process(StageContext& ctx) const override;
-  void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
+  void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setProbe(Probe probe) { probe_ = std::move(probe); }
   const std::vector<BiomeTransition>& rules() const { return rules_; }
 
@@ -140,7 +140,7 @@ class cWorleyOreVeinFeature final : public IFeature {
 // dimension from its JSON; see the cosmic/underwafer example profiles in the selftest.)
 //
 // FaunaEntry lives in pipeline.h (pipeline-owned data). The query API is
-// GeneratorPipeline::faunaForBiome / faunaAt -- the entity system's spawn hook.
+// cGenPipeline::faunaForBiome / faunaAt -- the entity system's spawn hook.
 
 // ---- 7. weather-shaped generation --------------------------------------------------
 

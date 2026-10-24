@@ -1,9 +1,9 @@
 // Lakes and oceans: still-water fill stages for the generator pipeline.
 //
 // Two ISurfaceRule stages (they run after terrain, so ColumnMaps::height is known):
-//   OceanFillRule  - vast water for ocean-designated biomes: noise-driven floor relief
+//   cOceanFillRule  - vast water for ocean-designated biomes: noise-driven floor relief
 //                    (capped), water filled flat to sea level.
-//   LakeFillRule   - still-water bodies in terrain depressions below a water table,
+//   cLakeFillRule   - still-water bodies in terrain depressions below a water table,
 //                    inside smooth noise-mask regions, filled flat to the spill level.
 //   ShorelineRule  - sand/gravel-ish rim around both, applied after the game's surface
 //                    rules so it wins at the waterline.
@@ -61,7 +61,7 @@ inline constexpr int kDefaultSeaLevel = kGroundLevel;
 /// FluidState.level written for worldgen water: 16 = source, still (fluid.h).
 inline constexpr uint8_t kStillWaterLevel = 16;
 
-/// Settings for OceanFillRule. maxDepth is a plain settings value: construction
+/// Settings for cOceanFillRule. maxDepth is a plain settings value: construction
 /// only enforces sanity (maxDepth >= 1, 0 <= minDepth <= maxDepth when set);
 /// there is no engine cap. The generator loader additionally checks
 /// seaLevel - maxDepth >= minSolidBelow (both data).
@@ -82,7 +82,7 @@ struct OceanSettings {
   uint64_t seed = 0;                ///< dimension seed; the relief noise derives from it
 };
 
-/// Settings for LakeFillRule. maxDepth is a plain settings value (no engine cap);
+/// Settings for cLakeFillRule. maxDepth is a plain settings value (no engine cap);
 /// construction only enforces sanity (maxDepth >= 1).
 struct LakeSettings {
   MaterialId water = kAirMaterial;  ///< resolved "water" material; kAirMaterial = rule no-ops
@@ -103,9 +103,9 @@ struct LakeSettings {
 /// with floorMaterial (or the column's own surface block) so the water surface stays flat
 /// at seaLevel. Columns whose floor reaches seaLevel stay dry (islands).
 /// Water is written with state kStillWaterLevel. Thread-safe.
-class OceanFillRule final : public ISurfaceRule {
+class cOceanFillRule final : public ISurfaceRule {
  public:
-  explicit OceanFillRule(OceanSettings s);
+  explicit cOceanFillRule(OceanSettings s);
   void apply(StageContext& ctx) const override;
   const OceanSettings& settings() const { return s_; }
   /// Ocean liquid depth for unit noise u in [0, 1]: maps to [minDepth, maxDepth],
@@ -129,9 +129,9 @@ class OceanFillRule final : public ISurfaceRule {
 /// pits hold exactly maxDepth of water with air above, never more. Solid terrain is never
 /// modified, only air becomes water, so lakes introduce no terrain steps. Water is written
 /// with state kStillWaterLevel. Thread-safe.
-class LakeFillRule final : public ISurfaceRule {
+class cLakeFillRule final : public ISurfaceRule {
  public:
-  explicit LakeFillRule(LakeSettings s);
+  explicit cLakeFillRule(LakeSettings s);
   void apply(StageContext& ctx) const override;
   const LakeSettings& settings() const { return s_; }
   /// Lake mask in [0, 1] at a world column (test seam).

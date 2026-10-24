@@ -78,12 +78,12 @@ bool saveStructureAs(BlockReader reader, std::string_view name, int32_t minX, in
   v.cells = std::move(cells);
   v.weight = 1.f;
   e.variants.push_back(std::move(v));
-  return StructureRegistry::instance().registerInGame(std::move(e));
+  return cStructureReg::instance().registerInGame(std::move(e));
 }
 
 size_t loadStructureAt(std::string_view name, BlockWriter writer, int32_t bx, int32_t by,
                        int32_t bz, int rot) {
-  const StructureEntry* e = StructureRegistry::instance().find(name);
+  const StructureEntry* e = cStructureReg::instance().find(name);
   if (!e || e->variants.empty()) return 0;
   return placeCells(writer, e->variants.front().cells, bx, by, bz, rot);
 }

@@ -33,7 +33,7 @@ void cFeatureReg::forEach(const std::function<void(std::string_view, const IFeat
   for (const Entry& e : features_) fn(e.name, *e.feature);
 }
 
-ColumnBuffer GeneratorPipeline::generate(const ChunkInfo& chunk, ColumnMaps* mapsOut) const {
+ColumnBuffer cGenPipeline::generate(const ChunkInfo& chunk, ColumnMaps* mapsOut) const {
   const int n = chunk.size;
   const size_t columns = size_t(n) * size_t(n);
   std::vector<float> xs(columns), ys(columns, 0.f), zs(columns), ws(columns, 0.f);
@@ -102,66 +102,66 @@ void selectBiomesAt(const IClimateStage* climate, const IBiomeSelector* biomes,
 }
 }  // namespace
 
-uint8_t GeneratorPipeline::biomeAt(int32_t wx, int32_t wz) const {
+uint8_t cGenPipeline::biomeAt(int32_t wx, int32_t wz) const {
   uint8_t out = 0;
   selectBiomesAt(climate_.get(), biomes_.get(), &wx, &wz, 1, &out);
   return out;
 }
 
-void GeneratorPipeline::sampleBiomes(const int32_t* xs, const int32_t* zs, size_t n, uint8_t* out) const {
+void cGenPipeline::sampleBiomes(const int32_t* xs, const int32_t* zs, size_t n, uint8_t* out) const {
   if (n == 0) return;
   selectBiomesAt(climate_.get(), biomes_.get(), xs, zs, n, out);
 }
 
-void GeneratorPipeline::visitFeatures(const std::function<void(std::string_view, const IFeature&)>& fn) const {
+void cGenPipeline::visitFeatures(const std::function<void(std::string_view, const IFeature&)>& fn) const {
   features_.forEach(fn);
 }
 
-const std::vector<FaunaEntry>& GeneratorPipeline::faunaForBiome(uint8_t biome) const {
+const std::vector<FaunaEntry>& cGenPipeline::faunaForBiome(uint8_t biome) const {
   static const std::vector<FaunaEntry> kEmpty;
   return biome < fauna_.size() ? fauna_[biome] : kEmpty;
 }
 
-std::vector<FaunaEntry> GeneratorPipeline::faunaAt(int32_t wx, int32_t wz) const {
+std::vector<FaunaEntry> cGenPipeline::faunaAt(int32_t wx, int32_t wz) const {
   return faunaForBiome(biomeAt(wx, wz));
 }
 
-GeneratorPipeline::Builder::Builder(std::shared_ptr<const NoiseGraph> graph)
-    : p_(std::make_unique<GeneratorPipeline>(Passkey{})) {
+cGenPipeline::Builder::Builder(std::shared_ptr<const NoiseGraph> graph)
+    : p_(std::make_unique<cGenPipeline>(Passkey{})) {
   p_->graph_ = std::move(graph);
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::climate(std::unique_ptr<IClimateStage> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::climate(std::unique_ptr<IClimateStage> s) {
   p_->climate_ = std::move(s);
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::biomes(std::unique_ptr<IBiomeSelector> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::biomes(std::unique_ptr<IBiomeSelector> s) {
   p_->biomes_ = std::move(s);
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::terrain(std::unique_ptr<ITerrainStage> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::terrain(std::unique_ptr<ITerrainStage> s) {
   p_->terrain_ = std::move(s);
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::biomePost(std::unique_ptr<IBiomePostStage> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::biomePost(std::unique_ptr<IBiomePostStage> s) {
   p_->biomePost_.push_back(std::move(s));
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::fauna(std::vector<std::vector<FaunaEntry>> tables) {
+cGenPipeline::Builder& cGenPipeline::Builder::fauna(std::vector<std::vector<FaunaEntry>> tables) {
   p_->fauna_ = std::move(tables);
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::surface(std::unique_ptr<ISurfaceRule> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::surface(std::unique_ptr<ISurfaceRule> s) {
   p_->surface_.push_back(std::move(s));
   return *this;
 }
-GeneratorPipeline::Builder& GeneratorPipeline::Builder::carver(std::unique_ptr<ICarver> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::carver(std::unique_ptr<ICarver> s) {
   p_->carvers_.push_back(std::move(s));
   return *this;
 }
-bool GeneratorPipeline::Builder::feature(std::string name, std::unique_ptr<IFeature> f) {
+bool cGenPipeline::Builder::feature(std::string name, std::unique_ptr<IFeature> f) {
   return p_->features_.add(std::move(name), std::move(f));
 }
-std::unique_ptr<const GeneratorPipeline> GeneratorPipeline::Builder::build() {
+std::unique_ptr<const cGenPipeline> cGenPipeline::Builder::build() {
   if (!p_ || !p_->terrain_ || !p_->graph_) return nullptr;
   // Let features bind pipeline services (StructureFeature's biome probe); every pipeline
   // built through the Builder gets this automatically, including test pipelines.
