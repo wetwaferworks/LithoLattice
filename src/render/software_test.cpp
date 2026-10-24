@@ -434,7 +434,7 @@ int testSoftwareRenderer() {
     traceMixPulseColor(0, 10, biome, o);
     const bool blue = o[2] > o[0] && o[2] > o[1] && std::fabs(o[2] - 0.9f) < 1e-5f;
     traceMixPulseColor(5, 5, biome, o);
-    const float m0 = (1.f + 0x2F / 255.f) / 2.f, m2 = (0x4B / 255.f + 1.f) / 2.f;  // weighted mean before peak rescale
+    const float m0 = (1.f + 0x2F / 255.f) / 2.f, m2 = (0x1E / 255.f + 1.f) / 2.f;  /* 2026-10-24: red peak #FF1C1E */  // weighted mean before peak rescale
     const bool mix = std::fabs(o[0] / o[2] - m0 / m2) < 1e-4f;
     std::printf("Trace-mix pulse colour: none=%d red=%d blue=%d mix=%d\n", none, red, blue, mix);
     if (!(none && red && blue && mix)) return 1;
