@@ -10,7 +10,7 @@
 // Layering (locked):
 //   - The server NEVER touches engine subsystems directly. Every data source
 //     is an injectable seam interface declared below (ISimStatus, IWorldReader,
-//     ...). The game adapts its real classes (SimThread, cModLoader, ChunkMap,
+//     ...). The game adapts its real classes (cSimThread, cModLoader, ChunkMap,
 //     cEntityMgr, cConsoleReg, cTextIndexer, cDefragService, ...) to
 //     these seams; the self-tests use stub seams. Consequence: the mcp library
 //     has no link dependencies on any other engine module — it only reads
@@ -20,8 +20,8 @@
 //     already the engine's agent-query seam.
 //   - Threading: the server does its work on whatever thread calls
 //     handleMessage()/runStdio(). Seam implementations must therefore be
-//     thread-safe for the server's thread (e.g. copy SimThread stats through
-//     its lock-free triple buffer; use SimThread::getBlock for single reads).
+//     thread-safe for the server's thread (e.g. copy cSimThread stats through
+//     its lock-free triple buffer; use cSimThread::getBlock for single reads).
 //     Concurrent handleMessage() calls are NOT supported; run one server per
 //     connection/thread. grantPermissions()/revokePermissions() are internally
 //     synchronized so the console thread can approve while the server runs.
@@ -209,11 +209,11 @@ class IVisionCapture;
 class IAudioCapture;
 
 /// player control: lets an approved agent pilot the local player through the
-/// REAL input path. The game adapts this seam against its InputSystem: each
+/// REAL input path. The game adapts this seam against its cInputSystem: each
 /// submitted frame becomes synthetic InputEvents merged with the backend's
-/// events at the next InputSystem::update() — the exact point keyboard input
+/// events at the next cInputSystem::update() — the exact point keyboard input
 /// enters. The model plays by the same rules as a keyboard player: the same
-/// physics in Player::update, the same reach/interact checks in
+/// physics in cPlayer::update, the same reach/interact checks in
 /// handleWorldActions, the same sim-thread marshaling for world edits.
 ///
 /// MULTI-PILOT (locked 2026-10-11): the surface is per-pilot from day one.
@@ -228,7 +228,7 @@ class IAudioCapture;
 /// permission involved (internal pilots bypass the agent grant flow).
 ///
 /// ANTI-CHEAT NOTE (locked): a model-driven player is still a player. This
-/// seam grants NO new capabilities: movement goes through Player::update
+/// seam grants NO new capabilities: movement goes through cPlayer::update
 /// (speed caps, no-faster-diagonals), and break/place/use go through the
 /// game's normal action handling into sim_->edit() at tick boundaries (reach
 /// checks, interactable checks, creative rules — all enforced). What it does
@@ -290,7 +290,7 @@ class IEntityView {
   virtual bool get(uint64_t id, Ent& out) = 0;
 };
 
-/// world/block.h: single block read (game: SimThread::getBlock or ChunkMap).
+/// world/block.h: single block read (game: cSimThread::getBlock or ChunkMap).
 class IWorldReader {
  public:
   virtual ~IWorldReader() = default;
@@ -302,8 +302,8 @@ class IWorldReader {
 ///
 /// DETERMINISM GUARD (research §6): the write MUST be applied on the sim
 /// thread — never on the MCP/HTTP thread. The game adapts this seam against
-/// SimThread by pushing an EditCmd::Command (a game-defined SimCommand
-/// carrying x/y/z/block id) through SimThread::edit(); the sim thread
+/// cSimThread by pushing an EditCmd::Command (a game-defined SimCommand
+/// carrying x/y/z/block id) through cSimThread::edit(); the sim thread
 /// drains it in applyEdits() at a deterministic point of the tick, applies
 /// the write there, then signals the completion this call is blocked on.
 /// Edit-drain order is tick-deterministic, so an agent's writes land in the
@@ -425,14 +425,14 @@ struct McpBackends {
   std::shared_ptr<ILoreProvider> lore;
   /// Phase 4: single-block write, marshaled onto the sim thread (null = the
   /// world_set_block tool reports "not wired"; the game adapts this against
-  /// SimThread::edit — see IWorldWriter).
+  /// cSimThread::edit — see IWorldWriter).
   std::shared_ptr<IWorldWriter> writer;
   /// Phase 4: agent-scoped lithoscript execution (null = the lithoscript_exec
   /// tool reports "not wired"; runs at the AGENT's mask, never the player's).
   std::shared_ptr<IConsoleExec> consoleExec;
-  /// Player control: model pilots the local player through the real input
+  /// cPlayer control: model pilots the local player through the real input
   /// path (null = the player_* tools report "not wired"; the game adapts
-  /// this against its InputSystem — see IPlayerController).
+  /// this against its cInputSystem — see IPlayerController).
   std::shared_ptr<IPlayerController> controller;
   /// Pilot senses: agent vision (software-renderer frames from the pilot's
   /// camera, downgraded) and agent audio (mixed-output tap at a downgraded
@@ -652,7 +652,7 @@ class cMcpServer {
   void registerPhase3Prompts();
   /// Phase 4: the gated write tools (world_set_block, lithoscript_exec).
   void registerPhase4WriteTools();
-  /// Player control tools (player_move/look/action/hotbar/release): the
+  /// cPlayer control tools (player_move/look/action/hotbar/release): the
   /// model pilots the local player through the real input path. Gated on
   /// kPermPlayerControl, rate-limited by the control bucket.
   void registerPlayerControlTools();
@@ -684,7 +684,7 @@ class cMcpServer {
   /// session/stateless identity, exactly as the research plan requires.
   cMcpTokenBucket toolCalls_{kMcpToolCallLimitPerSec, kMcpToolCallBurst};
   cMcpTokenBucket blockWrites_{kMcpBlockWriteLimitPerSec, kMcpBlockWriteBurst};
-  /// Player-control frames, keyed by pilot id (multi-pilot, locked
+  /// cPlayer-control frames, keyed by pilot id (multi-pilot, locked
   /// 2026-10-11): each pilot gets its own 120/sec sustained, burst 240.
   /// The frame pump is the natural limiter (one staged batch per frame per
   /// pilot), but this bucket stops a model vibrating a player with

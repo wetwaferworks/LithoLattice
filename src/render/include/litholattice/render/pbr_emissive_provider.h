@@ -114,7 +114,7 @@ class cChunkEmissiveProvider final : public IEmissiveProvider {
  public:
   /// Maps a voxel's StableId to a compact cMaterialReg ID. Used ONLY when a voxel's
   /// material byte resolves to the built-in default (no producer assigned it yet). The game
-  /// builds this from its BlockRegistry (e.g. tex key -> "<ns>:" + tex -> stable id).
+  /// builds this from its cBlockReg (e.g. tex key -> "<ns>:" + tex -> stable id).
   /// StableId currency: sub-chunk voxels store StableIds (Infinite Registry, phase 1).
   using BlockMaterialFn = std::function<uint16_t(StableId)>;
 

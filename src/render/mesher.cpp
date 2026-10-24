@@ -253,7 +253,7 @@ namespace {
 // the definitions-epoch guard.
 ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
   ChunkMesh out; out.cx = in.cx; out.sy = in.sy; out.cz = in.cz; out.epoch = in.epoch; out.seq = in.seq; out.batch = in.batch; out.batchSize = in.batchSize;
-  const BlockRegistry& reg = ctx.blocks;
+  const cBlockReg& reg = ctx.blocks;
   const BlockMaterials& mats = ctx.materials;
   const IBlockAppearance& look = ctx.appearance ? *ctx.appearance : kPlainAppearance;
   MeshWriter writer(out.verts);

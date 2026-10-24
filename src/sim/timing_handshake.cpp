@@ -80,7 +80,7 @@ cTimingHandshakeAuthority::~cTimingHandshakeAuthority() {
   if (!stop()) {
     // C2 contract: a poisoned authority must not be destroyed while a
     // worker is outstanding — its members are exactly what the worker
-    // dereferences. Owners that must outlive a stuck worker (SimThread)
+    // dereferences. Owners that must outlive a stuck worker (cSimThread)
     // deliberately LEAK the authority instead of destroying it. Reaching
     // this destructor with a worker outstanding is a caller bug: fail
     // loudly here rather than use-after-free in the member teardown.
@@ -272,7 +272,7 @@ void cTimingHandshakeAuthority::convertPendingFailureIfAny() {
     if (!pendingFailure_.present) return;
     f = pendingFailure_;
   }
-  // Mirror SimThread's tickGuard: rebuild the exception from the recorded
+  // Mirror cSimThread's tickGuard: rebuild the exception from the recorded
   // text (the original object died on the worker thread) and take the
   // standard fail-fast path — report, then abort. Never log-and-continue:
   // the world may be half-updated by the throwing component.
@@ -540,7 +540,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // stamp, and the barrier still gates the commit.
   for (Comp* c : affine) runItem(*c, phase, cycleTick);
   // C3: an affine throw is converted here too (bare-authority callers have
-  // no tickGuard); in SimThread the abort simply happens one frame earlier
+  // no tickGuard); in cSimThread the abort simply happens one frame earlier
   // than the guard's, through the same simFailFastFromException path.
   convertPendingFailureIfAny();
 

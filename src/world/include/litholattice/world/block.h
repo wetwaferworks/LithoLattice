@@ -1,4 +1,4 @@
-// Block types are data: one BlockDef row per block in a BlockRegistry instance that the game builds
+// Block types are data: one BlockDef row per block in a cBlockReg instance that the game builds
 // at startup and passes to the engine systems that need it (worldgen, sim thread, mesher,
 // materials). The engine knows exactly one block, kAir (id 0, always present); every other block,
 // its id, its game-specific role and its flags above kFirstGameFlag belong to the game.
@@ -67,7 +67,7 @@ enum BlockFlags : uint32_t {
   kTransparent = 1u << 2,  // light/vision passes through
   kDirectional = 1u << 5,  // aimed on placement (facing = player's horizontal look direction)
   kInteractive = 1u << 6,  // right-click uses it (Shift + right-click still places)
-  kRandomTicks = 1u << 7,  // opts in to random ticks (IWorldSimulation::onRandomTick)
+  kRandomTicks = 1u << 7,  // opts in to random ticks (IWorldSim::onRandomTick)
   kAttachable  = 1u << 8,
   kFlatPick    = 1u << 9,  // picked (raycast / selection) as a 1/16 plate: on the floor, or under the ceiling when hanging  // mounts on a neighbour's face (attach face in the cell state); pops off with it
   kLeaves      = 1u << 10,  // 2026-10-16 (JD leaf pass): cutout foliage; render.leaves fancy/fast decides culling
@@ -162,11 +162,11 @@ struct ItemDef {
 };
 
 /// Typed view over a cContentReg, filtered to blocks. This is the phase-1
-/// BlockRegistry API, unchanged: the 109+ game call sites, ChunkMap, the mesher
+/// cBlockReg API, unchanged: the 109+ game call sites, ChunkMap, the mesher
 /// path and the tests keep working with zero churn. Owns its registry when
 /// default-constructed; views an external one when given.
-class BlockRegistry;
-/// Typed view over a cContentReg, filtered to items. Mirrors the BlockRegistry
+class cBlockReg;
+/// Typed view over a cContentReg, filtered to items. Mirrors the cBlockReg
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
 class cItemReg;
@@ -179,7 +179,7 @@ class cItemReg;
 /// over kinds; per-kind def storage is a small typed wrapper around it.
 ///
 /// Threading: built single-threaded at startup (mod-init window), then shared
-/// read-only — same contract as the phase-1 BlockRegistry. The contract is
+/// read-only — same contract as the phase-1 cBlockReg. The contract is
 /// ENFORCED, not just documented (review F-M3): in debug builds every
 /// mutator asserts it runs on the one thread that first mutated the
 /// registry (see noteMutatorThread()); in all builds the def vectors'
@@ -260,7 +260,7 @@ class cContentReg {
   std::optional<StableId> stableIdOf(EntryKind kind, std::string_view id) const;
 
   // ---- typed views ----
-  BlockRegistry blocks();
+  cBlockReg blocks();
   cItemReg items();
 
   // ---- seal & hot-swap (debug prototyping) ----
@@ -278,7 +278,7 @@ class cContentReg {
   /// the new definition with no remap after refresh.
   bool stageBlockUpdate(BlockId id, const BlockDef& newDef);
   /// Apply all staged updates. Caller must be between ticks
-  /// (SimThread::runBetweenTicks pauses the tick, applies, resumes).
+  /// (cSimThread::runBetweenTicks pauses the tick, applies, resumes).
   /// Bumps definitionEpoch(). Returns the number of definitions applied.
   size_t refreshStaged();
   /// Bumped by every refreshStaged() that applies updates. Caches (mesher, UI
@@ -743,15 +743,15 @@ inline std::optional<StableId> cContentReg::stableIdOf(EntryKind kind,
 }
 
 /// Typed view over a cContentReg, filtered to blocks. This is the phase-1
-/// BlockRegistry API, unchanged: the 109+ game call sites, ChunkMap, the mesher
+/// cBlockReg API, unchanged: the 109+ game call sites, ChunkMap, the mesher
 /// path and the tests keep working with zero churn. Owns its registry when
 /// default-constructed; views an external one when given.
-class BlockRegistry {
+class cBlockReg {
  public:
-  BlockRegistry() : owned_(std::make_unique<cContentReg>()), reg_(owned_.get()) {}
-  explicit BlockRegistry(cContentReg& content) : reg_(&content) {}
-  BlockRegistry(BlockRegistry&&) noexcept = default;
-  BlockRegistry& operator=(BlockRegistry&&) noexcept = default;
+  cBlockReg() : owned_(std::make_unique<cContentReg>()), reg_(owned_.get()) {}
+  explicit cBlockReg(cContentReg& content) : reg_(&content) {}
+  cBlockReg(cBlockReg&&) noexcept = default;
+  cBlockReg& operator=(cBlockReg&&) noexcept = default;
 
   /// Appends a block and returns its id (ids are dense, in registration order).
   /// The stable id is FNV-1a-64("block:" + string id) (deterministic).
@@ -809,7 +809,7 @@ class BlockRegistry {
   cContentReg* reg_;
 };
 
-/// Typed view over a cContentReg, filtered to items. Mirrors the BlockRegistry
+/// Typed view over a cContentReg, filtered to items. Mirrors the cBlockReg
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
 class cItemReg {
@@ -844,7 +844,7 @@ class cItemReg {
   cContentReg* reg_;
 };
 
-inline BlockRegistry cContentReg::blocks() { return BlockRegistry(*this); }
+inline cBlockReg cContentReg::blocks() { return cBlockReg(*this); }
 inline cItemReg cContentReg::items() { return cItemReg(*this); }
 
 }  // namespace litholattice

@@ -1,5 +1,5 @@
 // Voxel mesher: MeshInput snapshot (world) -> ChunkMesh (render). Pure function, runs on
-// worker threads. Shapes come from the game's BlockRegistry, texture layers from BlockMaterials,
+// worker threads. Shapes come from the game's cBlockReg, texture layers from BlockMaterials,
 // and everything game-specific (custom shapes, shader modes) from its IBlockAppearance.
 #pragma once
 #include <functional>
@@ -34,7 +34,7 @@ using TraceParamsFn = std::function<void(int chunkX, int chunkZ, float t0[4], fl
 /// them while meshes are in flight (they are built at load and treated as
 /// immutable thereafter — the same standing contract as before).
 struct MeshContext {
-  const BlockRegistry& blocks;
+  const cBlockReg& blocks;
   const BlockMaterials& materials;
   const IBlockAppearance* appearance = nullptr;  ///< nullptr: plain textured shapes
   const TraceStrengthBuffer* strengths = nullptr;  ///< Step 1: slot per trace cell (null = bake strength)

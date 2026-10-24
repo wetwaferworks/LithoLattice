@@ -636,7 +636,7 @@ void ruinsChecks(Checker& check) {
         "ruins: no large air pockets (largest " + std::to_string(largestAir) + ", total " + std::to_string(totalAir) + ")");
 }
 
-void pipelineChecks(Checker& check, JobPool& pool) {
+void pipelineChecks(Checker& check, cJobPool& pool) {
   std::string err;
   const auto gen = loadGenerator(std::string(kGeneratorText), dimensionSeed(1, "test"), testMaterial, err);
   check(gen != nullptr, "pipeline: generator JSON loads" + (err.empty() ? std::string() : " (" + err + ")"));
@@ -3096,7 +3096,7 @@ void riverChecks(Checker& check) {
 
 }  // namespace
 
-int runProcgenSelfTest(JobPool& pool) {
+int runProcgenSelfTest(cJobPool& pool) {
   std::printf("Procgen self-test (noise, graph, pipeline)\n");
   Checker check;
   noiseChecks(check);

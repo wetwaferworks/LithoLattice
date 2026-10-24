@@ -1,6 +1,6 @@
 // Timing Handshake authority (pull-tick integration, hs-design.md §1;
 // promoted to the standard sim timing path 2026-10-14 by JD's directive).
-// The authority (owned by SimThread) publishes phase windows; pull worker
+// The authority (owned by cSimThread) publishes phase windows; pull worker
 // threads poll via pollPhase() (canTick() is the same poll, exposed as the
 // design's public query — ONE implementation, used by the workers
 // themselves), execute their shard's due components against the phase
@@ -145,9 +145,9 @@ class cTimingHandshakeAuthority {
     // Per-group phase windows (review A-M2): each group is budgeted from
     // its OWN period instead of one double-divided master-rate figure.
     // Group 1 (Signal): phasesPerCycle phases run per world tick, so
-    // SimThread sets this to (world-tick period / phasesPerCycle).
+    // cSimThread sets this to (world-tick period / phasesPerCycle).
     // Group 2 (clock domains): one phase runs per master step, so
-    // SimThread sets this to the master-step period (no division).
+    // cSimThread sets this to the master-step period (no division).
     // 0 = fall back to phaseBudget for that group.
     std::chrono::nanoseconds phaseBudgetGroup1{0};
     std::chrono::nanoseconds phaseBudgetGroup2{0};
@@ -211,13 +211,13 @@ class cTimingHandshakeAuthority {
   // protocol (P0a / review C2, supersedes hs-design D4's detach): a worker
   // still stuck inside a component after its per-worker bounded grace
   // (ceiling x 2, per worker, saturating) is NEVER detached — detaching
-  // left it dereferencing the authority / SimThread / world after those
+  // left it dereferencing the authority / cSimThread / world after those
   // owners could be destroyed (use-after-free), and stop() is also the
   // save path, so a detached worker could mutate world state during a
   // supposedly consistent snapshot. Instead stop() returns false, the
   // worker stays joinable and owned by this authority, and the authority
   // is POISONED: workersOutstanding() is true, start() refuses, and the
-  // owner (SimThread) refuses to destroy this authority (it deliberately
+  // owner (cSimThread) refuses to destroy this authority (it deliberately
   // leaks it) while any worker is outstanding. stop() is retryable: once
   // the stuck component returns, a later stop() joins the worker and
   // clears the poison. Idempotent when it succeeds.
@@ -238,7 +238,7 @@ class cTimingHandshakeAuthority {
   // pass kAllGroups to fire every group (A-M1).
   bool runPhase(uint64_t phase, uint64_t cycleTick, uint32_t group = 0);
   // Invokes the registered freeze callback with lastFreeze(). Called by the
-  // owner (SimThread) after runPhase returned false, per hs-design §1.7.
+  // owner (cSimThread) after runPhase returned false, per hs-design §1.7.
   void notifyFreeze() const { if (freezeFn_) freezeFn_(lastFreeze_); }
   bool frozen() const { return frozen_.load(std::memory_order_acquire); }
   const HsFreezeInfo& lastFreeze() const { return lastFreeze_; }
@@ -334,7 +334,7 @@ class cTimingHandshakeAuthority {
   // First failure wins. Sets the pending-failure record + the freeze latch
   // (no further phase may commit); runPhase converts the record via
   // simFailFastFromException at the next phase boundary (before any
-  // commit), mirroring SimThread's tickGuard.
+  // commit), mirroring cSimThread's tickGuard.
   void recordFailure(const Comp& c, uint64_t phase, uint64_t cycleTick, const char* what);
   // If a worker failure is pending, convert it now (noreturn in practice:
   // simFailFastFromException aborts after logging the report).

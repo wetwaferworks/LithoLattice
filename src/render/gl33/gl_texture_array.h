@@ -14,7 +14,7 @@ class cGlTextureArray final : public ITextureArray {
   cGlTextureArray(const cGlTextureArray&) = delete;
   cGlTextureArray& operator=(const cGlTextureArray&) = delete;
 
-  bool upload(const TextureRegistry& textures) override;
+  bool upload(const cTextureReg& textures) override;
   int layerCount() const override { return layers_; }
   int tileSize() const override { return tile_; }
 

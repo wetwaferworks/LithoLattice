@@ -1,6 +1,6 @@
 // Actions: the input vocabulary game code asks about. The engine defines none; the game declares
 // its actions in an ActionSet (id = index, usually an enum of its own) and passes enum values or
-// ids to ActionMap / InputSystem.
+// ids to ActionMap / cInputSystem.
 #pragma once
 #include <cstdint>
 #include <optional>

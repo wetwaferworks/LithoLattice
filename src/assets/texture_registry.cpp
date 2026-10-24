@@ -3,12 +3,12 @@
 
 namespace litholattice {
 
-TextureRegistry::TextureRegistry(int tileSize) : tile_(tileSize) {
+cTextureReg::cTextureReg(int tileSize) : tile_(tileSize) {
   textures_.push_back({"missing", "", Image::checker(tileSize)});
   byName_.emplace("missing", uint16_t{0});
 }
 
-std::optional<TextureId> TextureRegistry::add(std::string name, Image image, std::string origin, std::string* err) {
+std::optional<TextureId> cTextureReg::add(std::string name, Image image, std::string origin, std::string* err) {
   auto fail = [&](std::string why) -> std::optional<TextureId> {
     if (err) *err = "'" + name + "': " + why;
     if (byName_.emplace(name, uint16_t{0}).second) missing_.push_back(name);
@@ -25,7 +25,7 @@ std::optional<TextureId> TextureRegistry::add(std::string name, Image image, std
   return id;
 }
 
-std::optional<AnimationId> TextureRegistry::addAnimation(std::string name, const Image& strip, AnimationTiming timing,
+std::optional<AnimationId> cTextureReg::addAnimation(std::string name, const Image& strip, AnimationTiming timing,
                                                          std::string origin, std::string* err) {
   if (strip.width() != tile_ || strip.height() % tile_ != 0 || strip.height() == 0) {
     if (err) *err = "'" + name + "': animation strip must be " + std::to_string(tile_) + " wide and a multiple of " +
@@ -57,7 +57,7 @@ std::optional<AnimationId> TextureRegistry::addAnimation(std::string name, const
   return id;
 }
 
-PaletteId TextureRegistry::addPalette(std::string name, const Image& image, std::string origin) {
+PaletteId cTextureReg::addPalette(std::string name, const Image& image, std::string origin) {
   Palette p{std::move(name), std::move(origin), {}};
   for (int x = 0; x < image.width() && image.height() > 0; ++x) {
     const uint8_t* c = image.pixel(x, 0);
@@ -73,22 +73,22 @@ PaletteId TextureRegistry::addPalette(std::string name, const Image& image, std:
   return id;
 }
 
-std::optional<TextureId> TextureRegistry::find(std::string_view name) const {
+std::optional<TextureId> cTextureReg::find(std::string_view name) const {
   const auto it = byName_.find(std::string(name));
   return it == byName_.end() ? std::nullopt : std::optional(TextureId{it->second});
 }
 
-std::optional<PaletteId> TextureRegistry::findPalette(std::string_view name) const {
+std::optional<PaletteId> cTextureReg::findPalette(std::string_view name) const {
   const auto it = paletteByName_.find(std::string(name));
   return it == paletteByName_.end() ? std::nullopt : std::optional(PaletteId{it->second});
 }
 
-std::optional<AnimationId> TextureRegistry::findAnimation(std::string_view name) const {
+std::optional<AnimationId> cTextureReg::findAnimation(std::string_view name) const {
   const auto it = animByName_.find(std::string(name));
   return it == animByName_.end() ? std::nullopt : std::optional(AnimationId{it->second});
 }
 
-int TextureRegistry::paletteWidth() const {
+int cTextureReg::paletteWidth() const {
   size_t w = 1;
   for (const Palette& p : palettes_) w = std::max(w, p.colors.size());
   return int(w);
@@ -111,7 +111,7 @@ std::string RegistryDiff::summary(size_t maxNames) const {
   return s;
 }
 
-RegistryDiff diffRegistries(const TextureRegistry& before, const TextureRegistry& after) {
+RegistryDiff diffRegistries(const cTextureReg& before, const cTextureReg& after) {
   RegistryDiff d;
   std::unordered_map<std::string, uint64_t> old;
   for (const Texture& t : before.textures()) old.emplace(t.name, t.image.hash());

@@ -2,7 +2,7 @@
 // log(string), and whatever the game binds through the allowlist — no file,
 // network, or system access). Runaway scripts are aborted after a time budget.
 //
-// One ScriptEngine = one mod's sandbox. It carries that mod's permission
+// One cScriptEngine = one mod's sandbox. It carries that mod's permission
 // bitmask (cScriptBindingAllowlist + LithoLatticeModPermission) and its quotas:
 // a CPU budget per tick (overrun -> throttled for a few ticks -> suspended,
 // with a logged reason, per mod_safety.h) and a memory quota (overrun ->
@@ -24,18 +24,18 @@ namespace litholattice {
 namespace detail {
 /// Quota accounting control block (defined here so both the engine and the
 /// memory hook see it). Allocation headers hold a shared_ptr to this, never a
-/// raw ScriptEngine*, so post-destruction credits can't UAF the engine.
+/// raw cScriptEngine*, so post-destruction credits can't UAF the engine.
 struct QuotaAccount {
   int64_t bytes = 0;
 };
 }
 
-class ScriptEngine {
+class cScriptEngine {
  public:
-  ScriptEngine() = default;
-  ~ScriptEngine() { shutdown(); }
-  ScriptEngine(const ScriptEngine&) = delete;
-  ScriptEngine& operator=(const ScriptEngine&) = delete;
+  cScriptEngine() = default;
+  ~cScriptEngine() { shutdown(); }
+  cScriptEngine(const cScriptEngine&) = delete;
+  cScriptEngine& operator=(const cScriptEngine&) = delete;
 
   bool init();      // engine + message callback + core API (string, log)
   /// Fix 3c (Elfie P2): a binding in both calling conventions (see script_generic.h,
@@ -193,7 +193,7 @@ class ScriptEngine {
 
  private:
   enum class QuotaState { kNormal, kThrottled, kSuspended };
-  static void scriptLog(const std::string& msg, ScriptEngine* self);
+  static void scriptLog(const std::string& msg, cScriptEngine* self);
   static void messageCallback(const asSMessageInfo* m, void* self);
   /// Builds `sources` (name, code) into a staging module; swaps it in only on success.
   bool buildModule(const std::vector<std::pair<std::string, std::string>>& sources);

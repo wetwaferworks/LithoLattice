@@ -1,18 +1,18 @@
 // Hierarchical per-tick budgets for extensions (worker 3).
 //
 // Survey result (2026-10-11): the sibling hardening agent landed its per-mod
-// quota system mid-task inside ScriptEngine (script/script_engine.h): per-mod
+// quota system mid-task inside cScriptEngine (script/script_engine.h): per-mod
 // CPU 1024µs + script-heap memory 1MiB quotas, throttle-8-then-suspend — but
 // it is script-hook-specific (AngelScript allocations via memory shims), not
 // a general native-mod framework. Extensions are native IMod children, so
 // this file stays a standalone cExtensionBudget tracker with a concrete
 // consumption seam for the hardening agent:
-//   (a) kDefaultModTickBudgetUs == ScriptEngine::kDefaultModBudgetUs (both
+//   (a) kDefaultModTickBudgetUs == cScriptEngine::kDefaultModBudgetUs (both
 //       1024µs = 2^10): the top-level numbers already agree;
 //   (b) drive cExtensionBudget::recordUsage()/noteMemoryBytes() from the
 //       agent's own measurement points and the throttle/suspend state machine
 //       below applies unchanged — or promote this class to the shared
-//       implementation behind ScriptEngine's QuotaState.
+//       implementation behind cScriptEngine's QuotaState.
 //
 // Policy (JD's call, 2026-10-11): budgets are parent-declared and
 // engine-enforced. An extension's CPU/memory quota is carved out of ITS
@@ -44,7 +44,7 @@ namespace litholattice {
 inline constexpr uint64_t kDefaultModTickBudgetUs = 1024;
 
 /// Default per-mod memory ceiling, in bytes (2^26 = 64 MiB). This is the
-/// NATIVE-extension analogue of ScriptEngine::kDefaultModMemoryQuotaBytes
+/// NATIVE-extension analogue of cScriptEngine::kDefaultModMemoryQuotaBytes
 /// (1 MiB, which covers only the AngelScript heap via allocation shims —
 /// far too small for native code). v1 is accounting-only (the extension
 /// reports via noteMemoryBytes); the hardening agent wires real measurement

@@ -13,12 +13,12 @@ class ChunkMap {
  public:
   /// The registry used to translate between the BlockId currency of get()/set()
   /// and the StableId currency of sub-chunk voxel storage. Must be installed
-  /// before any get()/set() call (the owner installs it once at startup; SimThread
+  /// before any get()/set() call (the owner installs it once at startup; cSimThread
   /// installs it for the map it is given). get()/set() assert without it: there
   /// is no meaningful translation otherwise. Full migration of game logic to
   /// StableIds is WS1 (future work).
-  void setRegistry(const BlockRegistry* registry) { registry_ = registry; }
-  const BlockRegistry* registry() const { return registry_; }
+  void setRegistry(const cBlockReg* registry) { registry_ = registry; }
+  const cBlockReg* registry() const { return registry_; }
 
   /// Edit notification (P0 nav-invalidation feed, 2026-10-14): after any
   /// structural change to a column -- a successful set(), an erase(), an
@@ -111,7 +111,7 @@ class ChunkMap {
 
  private:
   std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> columns_;
-  const BlockRegistry* registry_ = nullptr;
+  const cBlockReg* registry_ = nullptr;
   std::function<void(int cx, int cz)> editListener_;
 };
 

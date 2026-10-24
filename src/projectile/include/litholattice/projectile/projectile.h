@@ -49,7 +49,7 @@
 // Seams (all optional; an unset seam degrades honestly):
 //  - voxel seam (setVoxelQuery): solidity + density per voxel. Unset =
 //    every voxel is air (projectiles fly unimpeded). The game implements
-//    it over SimThread::getBlock + the block registry, like its entity
+//    it over cSimThread::getBlock + the block registry, like its entity
 //    behaviors do.
 //  - entity seam (setEntityQuery): returns the id of an entity at a
 //    point (0 = none). Unset = no entity hits.

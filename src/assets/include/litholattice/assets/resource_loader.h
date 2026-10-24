@@ -17,7 +17,7 @@
 namespace litholattice {
 
 struct ResourceSet {
-  TextureRegistry textures;
+  cTextureReg textures;
   BlockModelSet models;
   std::vector<std::string> warnings;  ///< bad entries, missing files (all non-fatal)
 };

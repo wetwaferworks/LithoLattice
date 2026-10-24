@@ -113,43 +113,43 @@ cPlayerMgr::cPlayerMgr() : abilities_(stats_) {
 
 cPlayerMgr::~cPlayerMgr() = default;
 
-Player& cPlayerMgr::ensurePlayer(uint64_t playerId) {
+cPlayer& cPlayerMgr::ensurePlayer(uint64_t playerId) {
   const auto it = players_.find(playerId);
   if (it != players_.end()) return *it->second;
-  auto p = std::make_unique<Player>(playerId, "", vitals_, stats_, abilities_);
+  auto p = std::make_unique<cPlayer>(playerId, "", vitals_, stats_, abilities_);
   p->attachRouting();
-  Player& ref = *p;
+  cPlayer& ref = *p;
   players_.emplace(playerId, std::move(p));
   return ref;
 }
 
-Player& cPlayerMgr::addPlayer(uint64_t playerId, std::string displayName) {
+cPlayer& cPlayerMgr::addPlayer(uint64_t playerId, std::string displayName) {
   if (playerId == 0) {  // 0 is "nobody": hand out the next free id instead
     playerId = players_.empty() ? 1 : players_.rbegin()->first + 1;
     if (playerId == 0) playerId = 1;  // id space wrapped (theoretical)
   }
-  Player& p = ensurePlayer(playerId);
+  cPlayer& p = ensurePlayer(playerId);
   p.setDisplayName(std::move(displayName));
   return p;
 }
 
-Player& cPlayerMgr::localPlayer() { return ensurePlayer(localId_); }
+cPlayer& cPlayerMgr::localPlayer() { return ensurePlayer(localId_); }
 
 PlayerState& cPlayerMgr::local() { return localPlayer().state(); }
 
 const PlayerState& cPlayerMgr::get(uint64_t playerId) const {
-  const Player* p = player(playerId);
+  const cPlayer* p = player(playerId);
   if (p) return p->state();
   static const PlayerState kNobody;  // playerId 0 sentinel
   return kNobody;
 }
 
-Player* cPlayerMgr::player(uint64_t playerId) {
+cPlayer* cPlayerMgr::player(uint64_t playerId) {
   const auto it = players_.find(playerId);
   return it == players_.end() ? nullptr : it->second.get();
 }
 
-const Player* cPlayerMgr::player(uint64_t playerId) const {
+const cPlayer* cPlayerMgr::player(uint64_t playerId) const {
   const auto it = players_.find(playerId);
   return it == players_.end() ? nullptr : it->second.get();
 }
@@ -172,7 +172,7 @@ uint32_t cPlayerMgr::healthVitalId() {
 
 void cPlayerMgr::addOrUpdate(const PlayerState& state) {
   if (state.playerId == 0) return;  // id 0 is "nobody": never a real player
-  Player& p = ensurePlayer(state.playerId);
+  cPlayer& p = ensurePlayer(state.playerId);
   p.state() = state;
   // Keep the health vital in step with the synced field (see header note).
   if (const uint32_t health = healthVitalId())
@@ -189,12 +189,12 @@ void cPlayerMgr::remove(uint64_t playerId) {
 void cPlayerMgr::tick(uint32_t dtTicks) { abilities_.tick(dtTicks); }
 
 void cPlayerMgr::notifyStateChanged(uint64_t playerId) {
-  if (Player* p = player(playerId)) p->notifyStateChanged();
+  if (cPlayer* p = player(playerId)) p->notifyStateChanged();
 }
 
 void cPlayerMgr::routeVitalChanged(uint64_t playerId, uint32_t vitalId, int32_t oldValue,
                                       int32_t newValue) {
-  Player* p = player(playerId);
+  cPlayer* p = player(playerId);
   if (!p) return;
   // Health mirror: the synced state field always carries the health vital.
   if (vitalId == healthVitalId())
@@ -204,13 +204,13 @@ void cPlayerMgr::routeVitalChanged(uint64_t playerId, uint32_t vitalId, int32_t 
 
 void cPlayerMgr::routeStatChanged(uint64_t playerId, uint32_t statId, int32_t oldValue,
                                      int32_t newValue) {
-  Player* p = player(playerId);
+  cPlayer* p = player(playerId);
   if (!p) return;
   p->dispatchStatChanged(statId, oldValue, newValue);
 }
 
 void cPlayerMgr::routeAbilityChanged(uint64_t playerId, uint32_t abilityId, bool active) {
-  if (Player* p = player(playerId)) p->dispatchAbilityChanged(abilityId, active);
+  if (cPlayer* p = player(playerId)) p->dispatchAbilityChanged(abilityId, active);
 }
 
 }  // namespace litholattice

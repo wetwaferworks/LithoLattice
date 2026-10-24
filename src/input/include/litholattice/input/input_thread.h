@@ -14,7 +14,7 @@
 // wait-free push, no allocation after construction). The TICK thread is the
 // single consumer: once per frame it calls drainInto(), which moves every queued
 // event (oldest first) into a vector. Fan-out to engine, window, and UI happens
-// on the tick thread from that one drained span — InputSystem::processFrame()
+// on the tick thread from that one drained span — cInputSystem::processFrame()
 // feeds the engine, frameEvents() feeds the UI — so there is exactly one
 // cross-thread queue, not one per consumer.
 //

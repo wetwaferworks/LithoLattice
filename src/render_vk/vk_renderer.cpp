@@ -122,7 +122,7 @@ class cVulkanRenderer final : public IRenderer {
     logInfo("vulkan: vertex arena %s, quad index buffer %s", cVertexArena::kindName(kind), kind == cVertexArena::Kind::Host ? "host-visible" : "device-local");
     if (!createStaticBuffers() || !createFrames() || !createDescriptors()) return fail(error, "frame resources");
     textures_ = std::make_unique<cVkTextureArray>(*dev_, pool_.get(), [this] { writeDescriptors(); });
-    if (!textures_->upload(TextureRegistry{})) return fail(error, "initial texture upload");
+    if (!textures_->upload(cTextureReg{})) return fail(error, "initial texture upload");
     logInfo("vulkan: using %s", dev_->description().c_str());
     return true;
   }

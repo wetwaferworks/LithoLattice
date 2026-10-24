@@ -78,7 +78,7 @@ class cWalkCache {
   /// `maxColumns` default 512 is JD-review-pending (0 = unbounded, the old
   /// behaviour). Memory per cached column ≈ 120 KiB planes + ~1.6 KiB
   /// struct + ~2 B per standable cell of span data.
-  cWalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
+  cWalkCache(const ChunkMap& world, const cBlockReg& blocks, NavRules rules,
             size_t maxColumns = 512);
   /// Bits of a cell (0 outside loaded columns / the world).
   /// Thread contract (B-H3 discipline, 2026-10-15): the cache structure
@@ -154,7 +154,7 @@ class cWalkCache {
   std::shared_ptr<const Column> column(int cx, int cz) const;
   uint8_t compute(int x, int y, int z) const;
   const ChunkMap& world_;
-  const BlockRegistry& blocks_;
+  const cBlockReg& blocks_;
   NavRules rules_;
   const size_t maxColumns_;
   mutable std::mutex m_;

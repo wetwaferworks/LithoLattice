@@ -5,7 +5,7 @@
 
 namespace litholattice {
 
-void flatPickRange(const ChunkMap& w, const BlockRegistry& blocks, int x, int y, int z, float& y0, float& y1) {
+void flatPickRange(const ChunkMap& w, const cBlockReg& blocks, int x, int y, int z, float& y0, float& y1) {
   const bool hanging = !blocks.has(w.get(x, y - 1, z), kSolid) && blocks.has(w.get(x, y + 1, z), kSolid);
   y0 = float(y) + (hanging ? 15.f / 16.f : 0.f);
   y1 = y0 + 1.f / 16.f;
@@ -24,7 +24,7 @@ static bool rayHitsBox(const float o[3], const float d[3], const float lo[3], co
 }
 
 bool raycast(const ChunkMap& w, float ox, float oy, float oz, float dx, float dy, float dz,
-             float maxDist, int hit[3], int prev[3], const BlockRegistry* blocks) {
+             float maxDist, int hit[3], int prev[3], const cBlockReg* blocks) {
   int c[3] = {int(std::floor(ox)), int(std::floor(oy)), int(std::floor(oz))};
   const float o[3] = {ox, oy, oz}, d[3] = {dx, dy, dz};
   int step[3]; float tMax[3], tDelta[3];

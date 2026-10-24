@@ -244,7 +244,7 @@ class cWireFollow final : public IMovementMode {
 };
 }  // namespace
 
-cWalkCache::cWalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
+cWalkCache::cWalkCache(const ChunkMap& world, const cBlockReg& blocks, NavRules rules,
                      size_t maxColumns)
     : world_(world), blocks_(blocks), rules_(std::move(rules)), maxColumns_(maxColumns) {
   if (!rules_.solid) rules_.solid = [this](BlockId b) { return blocks_.has(b, kSolid); };

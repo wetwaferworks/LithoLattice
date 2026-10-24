@@ -17,7 +17,7 @@ struct MeshInput {
   uint64_t seq = 0;     // newer snapshot of the same sub-chunk wins
   // Cortana 2026-10-15 1350 - handshake-coupled meshing, phase-boundary
   // publish (idea: JD; refinement: Cortana): every sub-chunk snapshotted by
-  // one SimThread::flushDirty() (one settled post-phase world state) shares
+  // one cSimThread::flushDirty() (one settled post-phase world state) shares
   // a batch id; batchSize = how many. 0 = not part of a publish batch.
   uint64_t batch = 0;
   uint32_t batchSize = 0;
@@ -37,12 +37,12 @@ struct MeshInput {
 /// ~24 KB MeshInput instead of make_shared-ing one per snapshot).
 /// `reg` translates the StableId voxel storage to the BlockId currency of MeshInput
 /// (resolved once per sub-chunk palette, then O(1) per voxel).
-void snapshotForMeshingInto(const ChunkMap& w, const BlockRegistry& reg, int cx, int sy, int cz,
+void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
                             uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out);
 
 /// Snapshot of sub-chunk (cx, sy, cz) with its border. Cells below y = 0 read as `belowWorld`
 /// (the dimension's fill block; a solid one keeps the world's bottom faces from being meshed).
-std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const BlockRegistry& reg, int cx, int sy,
+std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const cBlockReg& reg, int cx, int sy,
                                               int cz, uint32_t epoch, uint64_t seq,
                                               BlockId belowWorld = kAir);
 

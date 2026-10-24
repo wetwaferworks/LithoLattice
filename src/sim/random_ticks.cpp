@@ -10,13 +10,13 @@ uint64_t splitmix(uint64_t x) {
 }
 }  // namespace
 
-std::vector<uint8_t> randomTickableBlocks(const BlockRegistry& blocks) {
+std::vector<uint8_t> randomTickableBlocks(const cBlockReg& blocks) {
   std::vector<uint8_t> t(blocks.size(), 0);
   for (size_t i = 0; i < t.size(); ++i) t[i] = blocks.has(BlockId(i), kRandomTicks) ? 1 : 0;
   return t;
 }
 
-uint64_t runRandomTicks(const ChunkMap& world, const BlockRegistry& reg, const std::vector<uint8_t>& tickable,
+uint64_t runRandomTicks(const ChunkMap& world, const cBlockReg& reg, const std::vector<uint8_t>& tickable,
                         int pcx, int pcz, int radius, uint64_t tickIndex, int perSection, const RandomTickFn& fn,
                         RandomTickCache* cache, bool round, bool diamond) {  // F56-7 + diamond (JD 2026-10-23)
   if (perSection <= 0) return 0;

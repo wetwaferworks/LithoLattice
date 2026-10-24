@@ -23,7 +23,7 @@ struct Dimension {
   std::string id;      // registry key chosen by the game
   std::string name;    // display name
   std::vector<std::string> biomes;
-  std::shared_ptr<const ColumnGenerator> generator;  // shared with worldgen jobs
+  std::shared_ptr<const cColumnGen> generator;  // shared with worldgen jobs
   SetupFn setup = nullptr;
   int randomTicksPerSection = 8;  ///< random ticks per 16^3 section per world tick (0 = off)
   BlockId belowWorldFill = kAir;  ///< what meshing sees below y = 0 (a solid block hides the bottom faces)
@@ -32,11 +32,11 @@ struct Dimension {
   bool loaded = false;
   int lastLoadFailures = 0;  ///< columns whose generation threw during the last load()
 
-  Spawn load(JobPool& pool, int sizeChunks);  // parallel worldgen + structures
+  Spawn load(cJobPool& pool, int sizeChunks);  // parallel worldgen + structures
   void unload() {
     // Preserve the registry across the map reset (Infinite Registry): get()/set()
     // translate through it, and the replacement map needs it too.
-    const BlockRegistry* reg = chunks.registry();
+    const cBlockReg* reg = chunks.registry();
     chunks = ChunkMap{};
     chunks.setRegistry(reg);
     loaded = false;

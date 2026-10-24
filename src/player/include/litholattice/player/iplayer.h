@@ -10,7 +10,7 @@
 // NOTIFICATIONS: IPlayerListener is the change hook UI and network sync
 // consume. Vital, stat, and ability changes fire it automatically (routed
 // through the shared registries by cPlayerMgr, or fired directly by the
-// concrete Player's own mutators when no manager routes them). PlayerState
+// concrete cPlayer's own mutators when no manager routes them). PlayerState
 // is a plain struct, so direct state() edits cannot be intercepted — after
 // editing state, call notifyStateChanged(). Listeners are borrowed
 // pointers: removeListener() before the listener dies.

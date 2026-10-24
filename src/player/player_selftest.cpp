@@ -249,7 +249,7 @@ int main() {
   cPlayerMgr mgr;
   const StandardVitals mv = registerStandardVitals(mgr.vitals());
   RecordingListener listener;
-  Player& local = mgr.localPlayer();
+  cPlayer& local = mgr.localPlayer();
   check(local.playerId() == mgr.localId() && mgr.count() == 1, "manager: local created");
   local.addListener(&listener);
   check(&mgr.local() == &local.state(), "manager: local() is localPlayer().state()");
@@ -294,7 +294,7 @@ int main() {
   check(!mgr.abilities().isGranted(7, dash) && !mgr.abilities().isActive(7, dash),
         "manager: remove purges ability records");
 
-  // State-change notification + standalone Player direct-fire path.
+  // State-change notification + standalone cPlayer direct-fire path.
   local.state().x = 99;
   local.notifyStateChanged();
   check(listener.stateEvents == 1, "manager: notifyStateChanged fires listener");
@@ -304,7 +304,7 @@ int main() {
   cAbilityReg soloAbilities(soloStats);
   const StandardVitals sv = registerStandardVitals(soloVitals);
   const uint32_t soloMight = soloStats.registerStat(StatDef{0, "might", 0, 64, 64});
-  Player solo(9, "Solo", soloVitals, soloStats, soloAbilities);
+  cPlayer solo(9, "Solo", soloVitals, soloStats, soloAbilities);
   RecordingListener soloListener;
   solo.addListener(&soloListener);
   solo.setVital(sv.health, 10);

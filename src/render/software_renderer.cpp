@@ -51,7 +51,7 @@ static constexpr uint8_t kTwinkleLut[256] = {0,0,0,0,0,0,1,1,2,2,3,4,5,6,8,10,11
 // cCpuTextureArray
 // ---------------------------------------------------------------------------
 
-bool cCpuTextureArray::upload(const TextureRegistry& textures) {
+bool cCpuTextureArray::upload(const cTextureReg& textures) {
   const std::span<const Texture> src = textures.textures();
   layers_ = int(src.size());
   // Cortana 2026-10-16 (BUG-0003): keep the pack's own resolution (was a fixed 16x16 box

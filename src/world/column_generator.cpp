@@ -4,25 +4,25 @@
 
 namespace litholattice {
 
-std::shared_ptr<const ColumnGenerator> ColumnGenerator::create(const std::string& json, uint64_t worldSeed,
-                                                               std::string_view dimensionId, const BlockRegistry& blocks,
+std::shared_ptr<const cColumnGen> cColumnGen::create(const std::string& json, uint64_t worldSeed,
+                                                               std::string_view dimensionId, const cBlockReg& blocks,
                                                                std::string& err) {
   return create(json, worldSeed, dimensionId, blocks, err, {});
 }
 
-std::shared_ptr<const ColumnGenerator> ColumnGenerator::create(
-    const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const BlockRegistry& blocks,
+std::shared_ptr<const cColumnGen> cColumnGen::create(
+    const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const cBlockReg& blocks,
     std::string& err, std::vector<std::unique_ptr<procgen::ISurfaceRule>> extraSurface) {
   const uint64_t dimSeed = procgen::dimensionSeed(worldSeed, dimensionId);
   auto pipeline = procgen::loadGenerator(
       json, dimSeed, [&blocks](std::string_view name) { return resolveMaterial(blocks, name); },
       std::move(extraSurface), err);
   if (!pipeline) return nullptr;
-  return std::make_shared<const ColumnGenerator>(Passkey{}, std::move(pipeline), dimSeed, &blocks);
+  return std::make_shared<const cColumnGen>(Passkey{}, std::move(pipeline), dimSeed, &blocks);
 }
 
-std::shared_ptr<const ColumnGenerator> ColumnGenerator::create(
-    const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const BlockRegistry& blocks,
+std::shared_ptr<const cColumnGen> cColumnGen::create(
+    const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const cBlockReg& blocks,
     std::string& err, std::vector<std::unique_ptr<procgen::ISurfaceRule>> extraSurface,
     procgen::ModelResolver models) {
   const uint64_t dimSeed = procgen::dimensionSeed(worldSeed, dimensionId);
@@ -30,10 +30,10 @@ std::shared_ptr<const ColumnGenerator> ColumnGenerator::create(
       json, dimSeed, [&blocks](std::string_view name) { return resolveMaterial(blocks, name); },
       std::move(extraSurface), std::move(models), err);
   if (!pipeline) return nullptr;
-  return std::make_shared<const ColumnGenerator>(Passkey{}, std::move(pipeline), dimSeed, &blocks);
+  return std::make_shared<const cColumnGen>(Passkey{}, std::move(pipeline), dimSeed, &blocks);
 }
 
-std::optional<procgen::MaterialId> ColumnGenerator::resolveMaterial(const BlockRegistry& blocks, std::string_view name) {
+std::optional<procgen::MaterialId> cColumnGen::resolveMaterial(const cBlockReg& blocks, std::string_view name) {
   if (name == "air") return kAir;
   // Namespaced ids ("lithokraft:fossil_trace") resolve to the exact block first: texture keys
   // are shared ("fossil_trace" reuses the "dirt" texture), so a texture-only lookup would
@@ -42,7 +42,7 @@ std::optional<procgen::MaterialId> ColumnGenerator::resolveMaterial(const BlockR
   return blocks.findByTexture(name);
 }
 
-std::unique_ptr<ChunkColumn> ColumnGenerator::generate(int cx, int cz, procgen::ColumnMaps* mapsOut) const {
+std::unique_ptr<ChunkColumn> cColumnGen::generate(int cx, int cz, procgen::ColumnMaps* mapsOut) const {
   procgen::ChunkInfo info;
   info.cx = cx;
   info.cz = cz;

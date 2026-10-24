@@ -36,13 +36,13 @@
 //
 // Escalation (circuit breaker): the 8th consecutive suspension does NOT start
 // a cooldown. The mod stays suspended until an admin calls
-// ScriptEngine::resume(), which clears all policy state. Logged at Error
+// cScriptEngine::resume(), which clears all policy state. Logged at Error
 // level so it is unmissable in the console. This bounds a mod that would
 // otherwise ride auto-recovery forever.
 //
-// Driven by ScriptEngine (one policy per mod): suspend() -> onSuspended(),
+// Driven by cScriptEngine (one policy per mod): suspend() -> onSuspended(),
 // beginTick() -> onTick(), resume() -> reset(). Same threading assumptions as
-// ScriptEngine: driven from the mod's tick path on one thread; the log calls
+// cScriptEngine: driven from the mod's tick path on one thread; the log calls
 // themselves are thread-safe.
 #pragma once
 #include <cstdint>
@@ -72,7 +72,7 @@ class cSuspensionPolicy {
   /// manual re-enable at kMaxConsecutiveSuspensions. Logs the suspension
   /// (reason + numbers) and the cooldown/escalation decision.
   /// Returns true when auto-recovery is still armed; false when escalated.
-  /// Call once per suspension (ScriptEngine guards re-entry).
+  /// Call once per suspension (cScriptEngine guards re-entry).
   bool onSuspended(const std::string& reason);
 
   /// Advance one tick. `clean` = the previous tick ran with no quota overrun

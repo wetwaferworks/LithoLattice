@@ -54,7 +54,7 @@ class BlockMaterials {
   /// Resolves `models` (by BlockDef::tex of every block in `blocks`) against `textures`. Blocks
   /// without a model and unusable entries are reported in `warnings` and render as the missing
   /// texture. `appearance` (optional) fills the shader bindings from the models.
-  static BlockMaterials build(const BlockRegistry& blocks, const TextureRegistry& textures, const BlockModelSet& models,
+  static BlockMaterials build(const cBlockReg& blocks, const cTextureReg& textures, const BlockModelSet& models,
                               std::vector<std::string>* warnings, const IBlockAppearance* appearance = nullptr);
 
   const FaceMaterial& face(BlockId b, FaceSlot f, bool active) const {

@@ -124,7 +124,7 @@ cPayloadReg::cPayloadReg() {
   // voxel storage is translated through the registry at save/load. registry_ is
   // installed once at startup and only read afterwards (worker-thread safe).
   blocks.save = [this](const ChunkColumn& c) {
-    const BlockRegistry* reg = registry_;
+    const cBlockReg* reg = registry_;
     if (!reg) {
       // C-L4 (P3-2): with NO registry installed, a 64-bit-width palette's raw
       // index IS the StableId (up to 2^64 distinct values) — the old fallback

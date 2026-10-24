@@ -142,7 +142,7 @@ void mergeSlice(int a, int d, int i, const uint64_t in[4], const uint8_t* materi
 // between buildFaceMasks and mergeSlice; the bit iteration is trivial next to the
 // merge itself. Only faces whose emitter carries kTransparent are candidates, so
 // non-flagged translucents (e.g. leaves) keep their internal faces like the classic path.
-void cullSameTransparentFaces(const MeshInput& in, const BlockRegistry& reg, FaceMasks& m) {
+void cullSameTransparentFaces(const MeshInput& in, const cBlockReg& reg, FaceMasks& m) {
   for (int a = 0; a < 3; ++a)
     for (int d = 0; d < 2; ++d)
       for (int i = 0; i < kN; ++i)
@@ -190,7 +190,7 @@ size_t binaryMeshChunk16(const uint8_t* solid, const uint8_t* material, std::vec
 
 size_t binaryMeshSubChunk(const MeshInput& in, const MeshContext& ctx, const uint8_t* material,
                           std::vector<BinaryQuad>& out) {
-  const BlockRegistry& reg = ctx.blocks;
+  const cBlockReg& reg = ctx.blocks;
   uint8_t emit16[kN * kN * kN];
   uint8_t cull18[(kN + 2) * (kN + 2) * (kN + 2)];
   for (int x = 0; x < kN + 2; ++x)
@@ -216,7 +216,7 @@ size_t binaryMeshSubChunk(const MeshInput& in, const MeshContext& ctx, const uin
 // alpha-blend tiers need back-to-front sorting of the transparent quads, not yet done.
 size_t binaryMeshSubChunkTransparent(const MeshInput& in, const MeshContext& ctx, const uint8_t* material,
                                      std::vector<BinaryQuad>& out) {
-  const BlockRegistry& reg = ctx.blocks;
+  const cBlockReg& reg = ctx.blocks;
   uint8_t emit16[kN * kN * kN];
   uint8_t cull18[(kN + 2) * (kN + 2) * (kN + 2)];
   for (int x = 0; x < kN + 2; ++x)

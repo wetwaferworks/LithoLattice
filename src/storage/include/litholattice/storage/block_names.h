@@ -26,7 +26,7 @@ namespace litholattice::storage {
 
 constexpr uint32_t kBlockNamesVersion = 1;
 
-bool writeBlockNames(const std::filesystem::path& file, const BlockRegistry& blocks, std::string* err);
+bool writeBlockNames(const std::filesystem::path& file, const cBlockReg& blocks, std::string* err);
 
 struct BlockRemap {
   std::vector<BlockId> map;     ///< saved id -> current id (identity for a legacy save)
@@ -35,7 +35,7 @@ struct BlockRemap {
   bool identity = true;         ///< nothing to rewrite
 };
 /// nullopt + `err` if the table is unreadable (bad magic, version, CRC); a missing file is legacy.
-std::optional<BlockRemap> readBlockRemap(const std::filesystem::path& file, const BlockRegistry& blocks, std::string* err);
+std::optional<BlockRemap> readBlockRemap(const std::filesystem::path& file, const cBlockReg& blocks, std::string* err);
 /// Infinite Registry (phase 1): the save-time -> StableId version of BlockRemap.
 /// The BLKS decoder parks save-time BlockIds in each sub-chunk's load scratch;
 /// remapColumn() consumes the scratch into the StableId paletted voxel storage.
@@ -47,7 +47,7 @@ struct StableRemap {
 };
 /// Builds a StableRemap from the LLBN table (format unchanged). nullopt + `err`
 /// if the table is unreadable; a missing file is legacy.
-std::optional<StableRemap> readStableRemap(const std::filesystem::path& file, const BlockRegistry& blocks,
+std::optional<StableRemap> readStableRemap(const std::filesystem::path& file, const cBlockReg& blocks,
                                            std::string* err);
 /// Consumes every sub-chunk's load scratch: translates save-time BlockIds through
 /// `remap` into the StableId paletted voxel storage and clears the scratch.

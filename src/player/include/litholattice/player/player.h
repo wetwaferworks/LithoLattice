@@ -1,10 +1,10 @@
-// Player: the concrete IPlayer. Owns the PlayerState and display name;
+// cPlayer: the concrete IPlayer. Owns the PlayerState and display name;
 // borrows the shared cVitalReg/cStatReg/cAbilityReg it is
 // keyed into.
 //
 // Notification routing: when a cPlayerMgr owns this player it installs
 // the registries' change callbacks and routes them here (attachRouting()).
-// A standalone Player has no routing, so its own mutators fire listeners
+// A standalone cPlayer has no routing, so its own mutators fire listeners
 // directly — the two paths are mutually exclusive (routed players never
 // direct-fire), so a listener never hears the same change twice.
 #pragma once
@@ -19,9 +19,9 @@
 
 namespace litholattice {
 
-class Player final : public IPlayer {
+class cPlayer final : public IPlayer {
  public:
-  Player(uint64_t playerId, std::string displayName, cVitalReg& vitals, cStatReg& stats,
+  cPlayer(uint64_t playerId, std::string displayName, cVitalReg& vitals, cStatReg& stats,
          cAbilityReg& abilities);
 
   uint64_t playerId() const override { return state_.playerId; }

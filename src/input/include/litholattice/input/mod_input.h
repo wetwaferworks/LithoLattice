@@ -4,14 +4,14 @@
 // OS keystrokes or device state. The rules, enforced in code:
 //
 //   1. No raw device handles: the mod API surface (LithoLatticeModApi in
-//      litholattice/mods/mod_interface.h) exposes no InputSystem*, no
+//      litholattice/mods/mod_interface.h) exposes no cInputSystem*, no
 //      IInputBackend*, no cDeviceState*, no key/mouse/gamepad state query at
 //      all. The only input-related entry points are registerInputAction
 //      (strings in, void out) and the engine->mod onInputEvent hook.
 //      Audited in mods_selftest.cpp (testModApiUiInputAudit).
 //   2. One-directional flow: this router is the engine-side record of mod
 //      input actions and the delivery-policy check. It holds no cInputPump*,
-//      no InputSystem*, no IInputBackend*, no cDeviceState* — there is no
+//      no cInputSystem*, no IInputBackend*, no cDeviceState* — there is no
 //      method here that can place an event into the engine's input pipeline,
 //      by construction. Engine -> mod is a call the GAME makes; mod -> engine
 //      input does not exist.
@@ -29,8 +29,8 @@
 //   a. cReplayInputBackend::push() — the replay/testing seam. The backend
 //      object is owned by cInputPump (private unique_ptr); the mod API
 //      surface exposes no path to it.
-//   b. InputSystem::processFrame() — replay/tests. Mods never receive an
-//      InputSystem*.
+//   b. cInputSystem::processFrame() — replay/tests. Mods never receive an
+//      cInputSystem*.
 // The script binding allowlist (Worker A) additionally contains no
 // input-injection binding, so script mods cannot reach these either.
 // Honest scope, as with the net confinement: for native (C++) mods the API
@@ -51,7 +51,7 @@
 namespace litholattice {
 
 /// Engine-side registry of mod input actions + the delivery-policy check.
-/// Owned by the game (which also owns the InputSystem); the mod API's
+/// Owned by the game (which also owns the cInputSystem); the mod API's
 /// registerInputAction binds here AFTER the engine checks kPermInput.
 class cModInputRouter {
  public:
@@ -87,7 +87,7 @@ class cModInputRouter {
   // this class. The only engine->mod input path is the game's explicit call
   // of the mod's onInputEvent hook; this router keeps the books and the
   // policy, and it cannot place events into the engine pipeline — it holds
-  // no cInputPump*, InputSystem*, IInputBackend*, or cDeviceState*.
+  // no cInputPump*, cInputSystem*, IInputBackend*, or cDeviceState*.
 
  private:
   static bool isValidId(std::string_view id);

@@ -55,19 +55,19 @@ class TripleBuffer {
 /// Fixed set of worker threads draining one FIFO of jobs. Exception-safe: a job that throws is
 /// logged and counted (failedJobs()) instead of terminating the process, and the in-flight count
 /// is always released, so waitIdle() and JobBatch::wait() can never hang on a failed job.
-class JobPool {
+class cJobPool {
  public:
-  explicit JobPool(unsigned n) {
+  explicit cJobPool(unsigned n) {
     workers_.reserve(n);
     for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this] { run(); });
   }
-  ~JobPool() {
+  ~cJobPool() {
     { std::lock_guard l(m_); stop_ = true; }
     cv_.notify_all();
     for (auto& t : workers_) t.join();
   }
-  JobPool(const JobPool&) = delete;
-  JobPool& operator=(const JobPool&) = delete;
+  cJobPool(const cJobPool&) = delete;
+  cJobPool& operator=(const cJobPool&) = delete;
 
   void submit(std::function<void()> job) {
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; jobs_.push_back(std::move(job)); }  // 0.0.1.60 timing (diagnostic)
@@ -117,11 +117,11 @@ class JobPool {
   std::atomic<uint64_t> failed_{0};
 };
 
-/// A group of jobs on a JobPool that can be waited on by itself (other pool work keeps running).
+/// A group of jobs on a cJobPool that can be waited on by itself (other pool work keeps running).
 /// Each job's exception is caught here; wait() reports how many jobs of this batch failed.
 class JobBatch {
  public:
-  explicit JobBatch(JobPool& pool) : pool_(pool) {}
+  explicit JobBatch(cJobPool& pool) : pool_(pool) {}
   ~JobBatch() { wait(); }  // jobs reference this object: never let it die before they finish
   JobBatch(const JobBatch&) = delete;
   JobBatch& operator=(const JobBatch&) = delete;
@@ -145,7 +145,7 @@ class JobBatch {
   }
 
  private:
-  JobPool& pool_;
+  cJobPool& pool_;
   std::mutex m_;
   std::condition_variable cv_;
   int pending_ = 0, failed_ = 0;

@@ -4,14 +4,14 @@
 
 namespace litholattice {
 
-const TextInput InputSystem::kNoText{};
-const InputSystem::ActionState InputSystem::kNoAction{};
+const TextInput cInputSystem::kNoText{};
+const cInputSystem::ActionState cInputSystem::kNoAction{};
 
 void cReplayInputBackend::poll(std::vector<InputEvent>& out) {
   while (next_ < events_.size() && events_[next_].time <= now_) out.push_back(events_[next_++]);
 }
 
-InputSystem::InputSystem(ActionMap map, std::vector<ContextRules> contexts)
+cInputSystem::cInputSystem(ActionMap map, std::vector<ContextRules> contexts)
     : map_(std::move(map)), contexts_(std::move(contexts)) {
   active_.assign(contexts_.size(), 0);
   pending_.assign(contexts_.size(), 0);
@@ -20,7 +20,7 @@ InputSystem::InputSystem(ActionMap map, std::vector<ContextRules> contexts)
   applyContexts();
 }
 
-void InputSystem::setMap(ActionMap m) {
+void cInputSystem::setMap(ActionMap m) {
   map_ = std::move(m);
   const size_t n = map_.actions().size();
   enabled_.resize(n, 0);
@@ -28,7 +28,7 @@ void InputSystem::setMap(ActionMap m) {
   out_.resize(n);
 }
 
-void InputSystem::update(IInputBackend& backend) {
+void cInputSystem::update(IInputBackend& backend) {
   frame_.clear();
   backend.poll(frame_);
   {  // Model control (MCP player_control): synthetic events merge here,
@@ -41,12 +41,12 @@ void InputSystem::update(IInputBackend& backend) {
   processFrame(frame_);
 }
 
-void InputSystem::stageSyntheticEvents(std::vector<InputEvent> events) {
+void cInputSystem::stageSyntheticEvents(std::vector<InputEvent> events) {
   std::lock_guard<std::mutex> lk(syntheticMutex_);
   synthetic_.insert(synthetic_.end(), events.begin(), events.end());
 }
 
-void InputSystem::processFrame(std::span<const InputEvent> events) {
+void cInputSystem::processFrame(std::span<const InputEvent> events) {
   applyContexts();
   devices_.beginFrame();
   for (const InputEvent& e : events) devices_.apply(e);
@@ -64,7 +64,7 @@ void InputSystem::processFrame(std::span<const InputEvent> events) {
 
 // Snapshot the context stack for this frame: each action belongs to the highest active context
 // listing it, unless an opaque context above hides it. Text goes to the highest text context.
-void InputSystem::applyContexts() {
+void cInputSystem::applyContexts() {
   active_ = pending_;
   std::fill(enabled_.begin(), enabled_.end(), uint8_t(0));
   std::vector<uint8_t> decided(enabled_.size(), 0);
@@ -80,7 +80,7 @@ void InputSystem::applyContexts() {
   }
 }
 
-float InputSystem::bindingValue(const Binding& b) const {
+float cInputSystem::bindingValue(const Binding& b) const {
   const AnalogSettings& s = map_.analog();
   using S = Binding::Source;
   switch (b.source) {
@@ -120,7 +120,7 @@ float InputSystem::bindingValue(const Binding& b) const {
   return 0.f;
 }
 
-InputSystem::ActionState InputSystem::resolveButton(ActionId a, bool& rawHeld) const {
+cInputSystem::ActionState cInputSystem::resolveButton(ActionId a, bool& rawHeld) const {
   const float threshold = map_.analog().pressThreshold;
   ActionState s;
   bool edgeDown = false, edgeUp = false, pulse = false;
@@ -153,7 +153,7 @@ InputSystem::ActionState InputSystem::resolveButton(ActionId a, bool& rawHeld) c
   return s;
 }
 
-AxisValue InputSystem::axisOf(ActionId a, float dt) const {
+AxisValue cInputSystem::axisOf(ActionId a, float dt) const {
   if (a >= enabled_.size() || !enabled_[a]) return {};
   const AnalogSettings& s = map_.analog();
   AxisValue v;

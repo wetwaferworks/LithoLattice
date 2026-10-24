@@ -2,7 +2,7 @@
 // Tick scheduler / simulation thread: owns the active dimension's ChunkMap while running.
 // Fixed-timestep world tick (32/64/128/256 TPS, runtime-selectable), clock domains the game
 // declares (each at its own power-of-two rate), player edits, raycast for the block highlight,
-// the game's IWorldSimulation, and remesh snapshots. No GL, no render types: remeshing is
+// the game's IWorldSim, and remesh snapshots. No GL, no render types: remeshing is
 // requested through the SubmitMesh callback with an immutable MeshInput.
 #pragma once
 #include "litholattice/core/lock_timing.h"
@@ -42,9 +42,9 @@ constexpr int kDefaultTps = 32;
 
 struct RayInput { float ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = 1; };  // render -> sim
 
-// Player actions (render -> sim). Break/Place act on the current ray hit (reach kReach);
+// cPlayer actions (render -> sim). Break/Place act on the current ray hit (reach kReach);
 // Use carries an explicit cell (right-click on an interactive block); Command is game-defined
-// and goes to IWorldSimulation::command.
+// and goes to IWorldSim::command.
 // Cortana 2026-10-15 2215 [ENGINE]: kReach is the sim's MAXIMUM edit reach (creative 16, JD D5);
 // games gate tighter per mode (LithoKraft survival 5) with SimStats::hitDist before sending edits.
 constexpr float kReach = 16.f, kLookRange = 64.f;
@@ -53,7 +53,7 @@ struct EditCmd {
   BlockId block = 0; uint8_t facing = 0;   // Place
   int x = 0, y = 0, z = 0;                 // Use (and copied into Command)
   // Place: x == kPlaceReceipt asks the sim for an outcome receipt (applied or
-  // rejected), drained in order by SimThread::drainPlaceReceipts (2026-10-16:
+  // rejected), drained in order by cSimThread::drainPlaceReceipts (2026-10-16:
   // the game refunds the item a rejected place consumed). Command: x == kPlaceReceipt
   // receipts whether the command's target cell (command.x/y/z) changed (walk-bridging).
   SimCommand command{};                    // Command
@@ -71,7 +71,7 @@ inline constexpr int kPlaceReceipt = 1;
 
 constexpr int kMaxClockDomains = 4;
 
-/// Everything SimThread needs besides the world and the game's simulation.
+/// Everything cSimThread needs besides the world and the game's simulation.
 struct SimConfig {
   int tickRate = kDefaultTps;      ///< world TPS (one of kTickModes)
   int radiusChunks = 8;            ///< tick radius around the player
@@ -83,7 +83,7 @@ struct SimConfig {
   std::vector<ClockDomain> domains;  ///< up to kMaxClockDomains, power-of-two rates
   // Timing Handshake (hs-design §5): DEFAULT ON since 2026-10-14 (JD's
   // promotion directive — the handshake is the standard timing path). An
-  // unconfigured SimThread constructs the authority; legacy mode is the
+  // unconfigured cSimThread constructs the authority; legacy mode is the
   // explicit opt-out (timingHandshake = false), which constructs no
   // authority and runs the legacy path byte-for-byte.
   bool timingHandshake = true;
@@ -98,7 +98,7 @@ struct SimStats {              // sim -> render, every wake-up (lock-free triple
   int targetTps = 0, masterHz = 0;
   float tps = 0.f, tickMs = 0.f, tickMaxMs = 0.f, budgetPct = 0.f;  // tick ms: avg/max over last 1 s
   uint64_t droppedTicks = 0;
-  uint32_t active = 0;                     // IWorldSimulation::activeCount()
+  uint32_t active = 0;                     // IWorldSim::activeCount()
   uint64_t randomTicks = 0;                // opted-in cells random-ticked so far
   struct Domain { int hz = 0; float achieved = 0.f; bool enabled = false; };
   std::array<Domain, kMaxClockDomains> domains{};  // in SimConfig::domains order
@@ -108,16 +108,16 @@ struct SimStats {              // sim -> render, every wake-up (lock-free triple
   bool hsFrozen = false;          // watchdog freeze latch
   bool hit = false, inReach = false; float hitDist = 0;  // looked-at block (up to kLookRange)
   int hx = 0, hy = 0, hz = 0; BlockId hitBlock = 0; CellState hitState = 0;
-  char hitInfo[256] = {};  ///< look-at inspector line from IWorldSimulation::inspect
+  char hitInfo[256] = {};  ///< look-at inspector line from IWorldSim::inspect
 };
 
-class SimThread {
+class cSimThread {
  public:
   using SubmitMesh = std::function<void(std::shared_ptr<MeshInput>)>;
   /// `simulation` is used on the sim thread only; `blocks` must outlive the thread.
-  SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_ptr<IWorldSimulation> simulation,
+  cSimThread(ChunkMap& chunks, const cBlockReg& blocks, std::unique_ptr<IWorldSim> simulation,
             SimConfig config, SubmitMesh submit);
-  ~SimThread();
+  ~cSimThread();
   void start();
   // Stops the sim thread, then the handshake authority. Returns false in
   // handshake mode when the authority's no-detach stop() failed: a pull
@@ -233,7 +233,7 @@ class SimThread {
   void drainEvents(std::vector<SimEvent>& out) { events_.drainInto(out); }
   /// The game's simulation. Touch it only while the thread is stopped (before start() or after
   /// stop()), e.g. to save or restore its state; start() may be called again afterwards.
-  IWorldSimulation& simulation() { return *sim_; }
+  IWorldSim& simulation() { return *sim_; }
   /// Timing Handshake authority (null in legacy mode). Registration is
   /// pre-start only; test harnesses may add components before start().
   cTimingHandshakeAuthority* handshakeAuthority() { return handshake_.get(); }
@@ -347,8 +347,8 @@ class SimThread {
     blockMutex_.lock();
     locktiming::setBlockHolder(locktiming::kHolderSimTick);
   }
-  const BlockRegistry& blocks_;
-  std::unique_ptr<IWorldSimulation> sim_;
+  const cBlockReg& blocks_;
+  std::unique_ptr<IWorldSim> sim_;
   const int radius_;
   const bool round_;  ///< F56-7
   const bool diamond_;  ///< diamond (Manhattan) tick area (JD 2026-10-23)
@@ -369,7 +369,7 @@ class SimThread {
   TripleBuffer<RayInput> ray_;  // presentation only (HUD look-at); edit resolution uses stampedRay_
   // The serialized control stream: every sim-affecting control input
   // crosses here (edits, the stamped ray, the player chunk). Constructed
-  // with the SimThread; producers submit from any thread; the sim thread
+  // with the cSimThread; producers submit from any thread; the sim thread
   // alone stamps (PRE) and extracts (POST).
   std::unique_ptr<cControlStream> control_;
   std::unordered_set<uint64_t> changedCols_;  // sim thread (or caller while stopped)
@@ -387,7 +387,7 @@ class SimThread {
   RayInput stampedRay_{};
   uint64_t areaChunkKey_ = 0;  // ChunkKey::make(0, 0), as the old atomic default
   // Pooled MeshInput buffers: the pool is shared with the submit() deleter so it
-  // outlives any in-flight snapshot (a SimThread may die while mesh workers still
+  // outlives any in-flight snapshot (a cSimThread may die while mesh workers still
   // hold snapshots). Cap bounds the retained memory (~64 x 24 KB).
   struct MeshInputPool {
     std::mutex m;
@@ -404,7 +404,7 @@ class SimThread {
   // window state survive the routine stop/start cycles of every save and
   // stream pump, so keyed random streams (seeded by world tick) never
   // replay, edit stamps never regress, and SimStats.worldTick never goes
-  // backwards across a restart. A freshly constructed SimThread still
+  // backwards across a restart. A freshly constructed cSimThread still
   // starts at 0 — only restarts changed. (Wall-clock pacing — the `last`
   // timestamp in run() — stays a run() local, re-based on each start.)
   uint64_t masterStep_ = 0, worldTickN_ = 0, dropped_ = 0;

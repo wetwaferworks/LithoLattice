@@ -3,14 +3,14 @@
 
 namespace litholattice {
 
-Spawn Dimension::load(JobPool& pool, int sizeChunks) {
+Spawn Dimension::load(cJobPool& pool, int sizeChunks) {
   unload();
   cHandoffQueue<std::unique_ptr<ChunkColumn>> out;
   int failed = 0;
   if (!generator) {
     logError("dimension '%s': no terrain generator; loading empty", id.c_str());
   } else {
-    const std::shared_ptr<const ColumnGenerator> gen = generator;
+    const std::shared_ptr<const cColumnGen> gen = generator;
     JobBatch batch(pool);
     for (int cz = 0; cz < sizeChunks; ++cz)
       for (int cx = 0; cx < sizeChunks; ++cx)

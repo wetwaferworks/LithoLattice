@@ -14,13 +14,13 @@
 //   swallowed. The production tick loop owns the conversion into a death:
 //
 //   1. If the production tick loop calls cDeterministicScheduler::runTick
-//      directly (headless harness / SimThread integration), the catch site is
+//      directly (headless harness / cSimThread integration), the catch site is
 //      the innermost loop body around the runTick call: catch std::exception,
 //      then call simFailFastFromException(e, "det_sched", <running tick>).
 //      Logging-and-continuing is a violation: the world may be half-updated,
 //      so continuing would write a corrupted world.
 //
-//   2. SimThread::run HAS an exception boundary (landed 2026-10-12;
+//   2. cSimThread::run HAS an exception boundary (landed 2026-10-12;
 //      widened to the whole loop body 2026-10-13, review CH-H6): the
 //      entire loop body — the tick pipeline, the paused branch's
 //      applyEdits, publishEvents/takeEvents, the stats calls

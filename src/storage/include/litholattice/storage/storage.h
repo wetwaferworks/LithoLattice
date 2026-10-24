@@ -87,8 +87,8 @@ class cPayloadReg {
   /// storage and the BlockId disk codec (the on-disk BLKS format is unchanged).
   /// Installed once at startup (the registry outlives the stores; it is only
   /// ever read after boot, so worker-thread saves are safe).
-  void setRegistry(const BlockRegistry* registry) { registry_ = registry; }
-  const BlockRegistry* registry() const { return registry_; }
+  void setRegistry(const cBlockReg* registry) { registry_ = registry; }
+  const cBlockReg* registry() const { return registry_; }
   const PayloadType* find(uint32_t tag) const { auto it = types_.find(tag); return it == types_.end() ? nullptr : &it->second; }
   /// Column -> chunk record (all registered payloads, each with its version).
   Bytes encode(const ChunkColumn& c) const;
@@ -96,7 +96,7 @@ class cPayloadReg {
   std::unique_ptr<ChunkColumn> decode(const Bytes& record, std::string* err) const;
  private:
   std::map<uint32_t, PayloadType> types_;
-  const BlockRegistry* registry_ = nullptr;
+  const cBlockReg* registry_ = nullptr;
 };
 
 /// One region file: 32 x 32 columns, a fixed index of {offset, size, crc} and appended records.

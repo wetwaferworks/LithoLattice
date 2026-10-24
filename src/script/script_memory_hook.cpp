@@ -7,7 +7,7 @@
 // (and any other standard-container memory) go through the global operator
 // new, bypassing the AngelScript memory functions, so unbounded strings
 // escaped the quota. This file closes it by extending the same thread-local
-// attribution (tlsScriptAllocOwner, set around ScriptEngine::run()) to the
+// attribution (tlsScriptAllocOwner, set around cScriptEngine::run()) to the
 // global operators.
 //
 // Design:
@@ -49,7 +49,7 @@
 namespace litholattice {
 
 // One definition; declared extern in script_memory_internal.h.
-thread_local ScriptEngine* tlsScriptAllocOwner = nullptr;
+thread_local cScriptEngine* tlsScriptAllocOwner = nullptr;
 
 thread_local unsigned tlsQuotaHookDepth = 0;
 
@@ -67,7 +67,7 @@ constexpr std::size_t kHeaderSize = sizeof(QuotaHeader);
 void* quotaAllocate(std::size_t n, std::size_t alignment, bool nothrow) {
   if (alignment < alignof(void*) || (alignment & (alignment - 1)) != 0)
     alignment = alignof(std::max_align_t);  // defensive: align_val_t is always a power of two
-  ScriptEngine* owner = tlsScriptAllocOwner;
+  cScriptEngine* owner = tlsScriptAllocOwner;
   const std::size_t pad = kHeaderSize + alignment;
   if (n > static_cast<std::size_t>(-1) - pad) {  // padded total would overflow
     if (nothrow) return nullptr;

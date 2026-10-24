@@ -21,7 +21,7 @@ bool cSuspensionPolicy::onSuspended(const std::string& reason) {
   logWarn("modsys: suspended mod '%s': %s", displayId(), reason.c_str());
   if (consecutiveSuspensions_ >= kMaxConsecutiveSuspensions) {
     // Circuit breaker: no cooldown, no auto-recovery. An admin must call
-    // ScriptEngine::resume(). Logged at Error: this must be unmissable.
+    // cScriptEngine::resume(). Logged at Error: this must be unmissable.
     state_ = State::kEscalated;
     cooldownRemaining_ = 0;
     probationRemaining_ = 0;

@@ -1115,7 +1115,7 @@ void cMcpServer::registerPhase1Tools() {
 // touches world state; the call blocks until the sim thread applies it (or
 // the timeout expires -> isError, never a hang). See IWorldWriter in
 // server.h for the marshaling contract and MCP-GAME-SEAM.md §9 for the
-// game's SimThread::edit adapter recipe.
+// game's cSimThread::edit adapter recipe.
 //
 // lithoscript_exec: one lithoscript line via cConsoleReg::executeLine,
 // output captured into the result. Runs at the AGENT's permission mask,
@@ -1236,7 +1236,7 @@ void cMcpServer::registerPhase4WriteTools() {
 }
 
 // ---------------------------------------------------------------------------
-// Player control tools: the model pilots the local player through the REAL
+// cPlayer control tools: the model pilots the local player through the REAL
 // input path (synthetic InputEvents merged where the keyboard enters).
 // Gated on kPermPlayerControl (deny-by-default), rate-limited by the
 // per-connection control bucket (120/sec, burst 240). Every frame pump

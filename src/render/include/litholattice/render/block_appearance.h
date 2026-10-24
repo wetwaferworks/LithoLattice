@@ -23,14 +23,14 @@ struct FaceLook {
 /// A Shape::Custom cell being meshed: its id, state and read access to its 1-cell neighbourhood.
 struct CustomBlock {
   const MeshInput& in;
-  const BlockRegistry& blocks;
+  const cBlockReg& blocks;
   const BlockMaterials& materials;
   BlockId id = kAir;
   CellState state = 0;
   int x = 0, y = 0, z = 0;  ///< cell inside the sub-chunk (0..15)
   BlockId neighbor(int dx, int dy, int dz) const { return in.id[meshPadIndex(x + 1 + dx, y + 1 + dy, z + 1 + dz)]; }
   CellState neighborState(int dx, int dy, int dz) const { return in.st[meshPadIndex(x + 1 + dx, y + 1 + dy, z + 1 + dz)]; }
-  BlockDef def() const { return blocks.def(id); }  // by value: BlockRegistry::def() returns by value
+  BlockDef def() const { return blocks.def(id); }  // by value: cBlockReg::def() returns by value
 };
 
 /// Writes quads for a custom block (implemented by the mesher).

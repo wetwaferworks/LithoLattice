@@ -1,6 +1,6 @@
 // Random ticks: every world tick, `perSection` cells of each non-empty 16^3 section around the
 // player are picked at random; cells whose block opted in (kRandomTicks) are handed to the
-// game (IWorldSimulation::onRandomTick). Runs at the world TPS only (never in the faster clock
+// game (IWorldSim::onRandomTick). Runs at the world TPS only (never in the faster clock
 // domains, so beacons / chip domains do not scale it). Deterministic per (tick, section).
 #pragma once
 #include <cstdint>
@@ -14,7 +14,7 @@ namespace litholattice {
 constexpr int kDefaultRandomTicksPerSection = 8;
 
 /// tickable[id] != 0 for blocks with kRandomTicks.
-std::vector<uint8_t> randomTickableBlocks(const BlockRegistry& blocks);
+std::vector<uint8_t> randomTickableBlocks(const cBlockReg& blocks);
 
 /// Called for each picked opted-in cell: world position, its block and a per-pick random value.
 using RandomTickFn = std::function<void(int x, int y, int z, BlockId block, uint32_t rnd)>;
@@ -41,7 +41,7 @@ struct RandomTickCache {
 /// hash lookups on ticks where the area didn't change (may be nullptr).
 /// `reg` translates the StableId voxel storage to the BlockId currency of `tickable`
 /// and `fn` (palette resolved once per sub-chunk, then O(1) per pick).
-uint64_t runRandomTicks(const ChunkMap& world, const BlockRegistry& reg, const std::vector<uint8_t>& tickable,
+uint64_t runRandomTicks(const ChunkMap& world, const cBlockReg& reg, const std::vector<uint8_t>& tickable,
                         int pcx, int pcz, int radius, uint64_t tickIndex, int perSection, const RandomTickFn& fn,
                         RandomTickCache* cache = nullptr, bool round = false, bool diamond = false);  // F56-7: round = disc r^2+r; diamond = Manhattan (JD 2026-10-23)
 

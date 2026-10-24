@@ -32,9 +32,9 @@ void lineCallback(asIScriptContext* ctx, Budget* b) {
 // stays 16-aligned (malloc returns 16-aligned storage on this platform).
 //
 // Review F-M2: the header holds a shared_ptr<QuotaAccount> — exactly like
-// the operator-new hook's QuotaHeader — NEVER a raw ScriptEngine*. The old
+// the operator-new hook's QuotaHeader — NEVER a raw cScriptEngine*. The old
 // raw owner pointer was dereferenced by freeShim unconditionally, so an AS
-// allocation retained past ScriptEngine destruction (a ref-counted script
+// allocation retained past cScriptEngine destruction (a ref-counted script
 // object/string held by a binding) freed into dead engine memory.
 // Review F-M1: this account is also the SINGLE quota counter (see
 // script_engine.h): the shims charge/credit it directly, and no second
@@ -48,7 +48,7 @@ static_assert(sizeof(AllocHeader) % 16 == 0, "AllocHeader must keep the payload 
 
 }  // namespace
 
-void* ScriptEngine::allocShim(size_t n) {
+void* cScriptEngine::allocShim(size_t n) {
   void* raw = std::malloc(sizeof(AllocHeader) + n);
   if (!raw) return nullptr;
   auto* h = static_cast<AllocHeader*>(raw);
@@ -56,7 +56,7 @@ void* ScriptEngine::allocShim(size_t n) {
   // The header sits in raw malloc'd memory: the shared_ptr must be
   // placement-new constructed (assigning to unconstructed storage is UB),
   // mirroring the operator-new hook's QuotaHeader.
-  ScriptEngine* owner = tlsScriptAllocOwner;
+  cScriptEngine* owner = tlsScriptAllocOwner;
   new (&h->account) std::shared_ptr<detail::QuotaAccount>(owner ? owner->quotaAccount() : nullptr);
   h->reserved = 0;
   if (h->account) {
@@ -76,7 +76,7 @@ void* ScriptEngine::allocShim(size_t n) {
   return static_cast<char*>(raw) + sizeof(AllocHeader);
 }
 
-void ScriptEngine::freeShim(void* p) {
+void cScriptEngine::freeShim(void* p) {
   if (!p) return;
   auto* h = reinterpret_cast<AllocHeader*>(static_cast<char*>(p) - sizeof(AllocHeader));
   const size_t n = h->n;
@@ -96,20 +96,20 @@ void ScriptEngine::freeShim(void* p) {
 // Global operator new/delete hook support (script_memory_hook.cpp). Charge and
 // credit are pure integer arithmetic: they never allocate, so they are safe
 // to call from inside the replaceable global operators.
-void ScriptEngine::quotaCharge(size_t bytes) noexcept {
+void cScriptEngine::quotaCharge(size_t bytes) noexcept {
   // The single counter (F-M1): charge the shared account; there is no
   // per-engine mirror left for this path to overwrite.
   quotaAccount_->bytes += static_cast<int64_t>(bytes);
 }
 
-void ScriptEngine::quotaCredit(size_t bytes) noexcept {
+void cScriptEngine::quotaCredit(size_t bytes) noexcept {
   quotaAccount_->bytes -= static_cast<int64_t>(bytes);
   if (quotaAccount_->bytes < 0) quotaAccount_->bytes = 0;
 }
 
 // May log (which allocates): the hook calls this only with its reentrancy
 // guard held, so nested allocations charge but do not re-enforce.
-void ScriptEngine::quotaEnforce() {
+void cScriptEngine::quotaEnforce() {
   if (quotaAccount_->bytes > static_cast<int64_t>(memoryQuotaBytes_) &&
       quotaState_ != QuotaState::kSuspended) {
     suspend("memory quota exceeded: " + std::to_string(quotaAccount_->bytes) +
@@ -117,17 +117,17 @@ void ScriptEngine::quotaEnforce() {
   }
 }
 
-void ScriptEngine::installMemoryShims() {
+void cScriptEngine::installMemoryShims() {
   static std::once_flag once;
   std::call_once(once, [] {
     // Installed before the first engine exists (init() runs first), so every
     // AngelScript allocation in the process goes through the accounting shims.
-    asSetGlobalMemoryFunctions(&ScriptEngine::allocShim, &ScriptEngine::freeShim);
+    asSetGlobalMemoryFunctions(&cScriptEngine::allocShim, &cScriptEngine::freeShim);
   });
 }
 
-void ScriptEngine::messageCallback(const asSMessageInfo* m, void* selfPtr) {
-  auto* self = static_cast<ScriptEngine*>(selfPtr);
+void cScriptEngine::messageCallback(const asSMessageInfo* m, void* selfPtr) {
+  auto* self = static_cast<cScriptEngine*>(selfPtr);
   const char* kind = m->type == asMSGTYPE_ERROR ? "error" : (m->type == asMSGTYPE_WARNING ? "warning" : "info");
   if (m->type == asMSGTYPE_ERROR) {
     logError("[script] %s (%d,%d) %s: %s", m->section, m->row, m->col, kind, m->message);
@@ -138,13 +138,13 @@ void ScriptEngine::messageCallback(const asSMessageInfo* m, void* selfPtr) {
   }
 }
 
-void ScriptEngine::scriptLog(const std::string& msg, ScriptEngine* self) {
+void cScriptEngine::scriptLog(const std::string& msg, cScriptEngine* self) {
   logInfo("[script] %s", msg.c_str());
   ++self->logCount_;
   self->lastLog_ = msg;
 }
 
-bool ScriptEngine::init() {
+bool cScriptEngine::init() {
   installMemoryShims();
   cScriptBindingAllowlist::registerBuiltins();
   engine_ = asCreateScriptEngine();
@@ -169,19 +169,19 @@ namespace {
 std::atomic<bool> g_forceGenericCalls{false};  // fix 3c test hook
 }  // namespace
 
-bool ScriptEngine::useGenericCalls() {
+bool cScriptEngine::useGenericCalls() {
   static const bool portable = std::strstr(asGetLibraryOptions(), "AS_MAX_PORTABILITY") != nullptr;
   return portable || g_forceGenericCalls.load();
 }
 
-void ScriptEngine::forceGenericCalls(bool on) { g_forceGenericCalls.store(on); }
+void cScriptEngine::forceGenericCalls(bool on) { g_forceGenericCalls.store(on); }
 
-int ScriptEngine::bindFunction(const char* decl, const ScriptFn& fn, void* obj) {
+int cScriptEngine::bindFunction(const char* decl, const ScriptFn& fn, void* obj) {
   return useGenericCalls() ? bindGlobalFunction(decl, fn.generic, asCALL_GENERIC, obj)
                            : bindGlobalFunction(decl, fn.native, fn.nativeConv, obj);
 }
 
-int ScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, asDWORD callConv, void* obj) {
+int cScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, asDWORD callConv, void* obj) {
   if (!engine_) return asERROR;
   if (!cScriptBindingAllowlist::isAllowlisted(decl)) {
     logError("[script] binding refused: '%s' is not on the script binding allowlist", decl);
@@ -230,7 +230,7 @@ int ScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, a
   return r;
 }
 
-void ScriptEngine::beginTick() {
+void cScriptEngine::beginTick() {
   cpuUsedUs_ = 0;
   // A clean tick feeds the suspension-policy decay clock: no overrun last tick
   // and the mod was running normally (not throttled, not suspended). Evaluated
@@ -253,7 +253,7 @@ void ScriptEngine::beginTick() {
   }
 }
 
-void ScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
+void cScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
   cpuUsedUs_ += elapsedUs;
   if (quotaState_ == QuotaState::kSuspended) return;
   // Probation halves the effective budget (see cSuspensionPolicy).
@@ -279,7 +279,7 @@ void ScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
            what, static_cast<unsigned long long>(cpuUsedUs_), modBudgetUs_, throttleCount_, throttleTicks_);
 }
 
-void ScriptEngine::suspend(const std::string& reason) {
+void cScriptEngine::suspend(const std::string& reason) {
   if (quotaState_ == QuotaState::kSuspended) return;  // single suspend per incident
   quotaState_ = QuotaState::kSuspended;
   suspendReason_ = reason;
@@ -295,7 +295,7 @@ void ScriptEngine::suspend(const std::string& reason) {
   if (executingCtx_) executingCtx_->Abort();
 }
 
-void ScriptEngine::resume() {
+void cScriptEngine::resume() {
   quotaState_ = QuotaState::kNormal;
   throttleTicksRemaining_ = 0;
   throttleCount_ = 0;
@@ -307,13 +307,13 @@ void ScriptEngine::resume() {
   logInfo("[script] mod quotas reset (admin resume)");
 }
 
-void ScriptEngine::setModPermissions(uint32_t perms) {
+void cScriptEngine::setModPermissions(uint32_t perms) {
   if (perms == modPermissions_) return;
   modPermissions_ = perms;
   syncBindings();  // revocation takes effect now, not at the next bind
 }
 
-void ScriptEngine::syncBindings() {
+void cScriptEngine::syncBindings() {
   if (!engine_) return;
   bool revoked = false;
   for (auto& b : bindings_) {
@@ -336,13 +336,13 @@ void ScriptEngine::syncBindings() {
   if (revoked) rebuildSandbox();  // the only true unregister AngelScript allows
 }
 
-void ScriptEngine::unbindAll() {
+void cScriptEngine::unbindAll() {
   bindings_.clear();
   rebuildSandbox();
   logInfo("[script] all bindings dropped; reload required to bring scripts back");
 }
 
-void ScriptEngine::rebuildSandbox() {
+void cScriptEngine::rebuildSandbox() {
   // AngelScript has no unregister for global functions: a revoked binding's
   // engine registration would otherwise stay reachable (a reload would
   // re-expose it without going through the gate). The only sound unbind is
@@ -380,12 +380,12 @@ void ScriptEngine::rebuildSandbox() {
   logError("[script] sandbox rebuilt after permission revocation; reload required");
 }
 
-void ScriptEngine::shutdown() {
+void cScriptEngine::shutdown() {
   bindings_.clear();
   if (engine_) { engine_->ShutDownAndRelease(); engine_ = nullptr; module_ = nullptr; }
 }
 
-bool ScriptEngine::buildModule(const std::vector<std::pair<std::string, std::string>>& sources) {
+bool cScriptEngine::buildModule(const std::vector<std::pair<std::string, std::string>>& sources) {
   buildErrors_.clear();
   asIScriptModule* staging = engine_->GetModule("game.staging", asGM_ALWAYS_CREATE);
   for (const auto& [name, code] : sources)
@@ -404,7 +404,7 @@ bool ScriptEngine::buildModule(const std::vector<std::pair<std::string, std::str
   return true;
 }
 
-bool ScriptEngine::loadDirectory(const std::string& dir) {
+bool cScriptEngine::loadDirectory(const std::string& dir) {
   namespace fs = std::filesystem;
   std::error_code ec;
   if (!engine_ || !fs::is_directory(dir, ec)) { logError("scripts folder not found: %s", dir.c_str()); return false; }
@@ -423,14 +423,14 @@ bool ScriptEngine::loadDirectory(const std::string& dir) {
   return buildModule(sources);
 }
 
-bool ScriptEngine::reload() { return !dir_.empty() && loadDirectory(dir_); }
+bool cScriptEngine::reload() { return !dir_.empty() && loadDirectory(dir_); }
 
-bool ScriptEngine::loadSource(const std::string& sectionName, const std::string& code) {
+bool cScriptEngine::loadSource(const std::string& sectionName, const std::string& code) {
   if (!engine_) return false;
   return buildModule({{sectionName, code}});
 }
 
-bool ScriptEngine::callHook(const char* decl) {
+bool cScriptEngine::callHook(const char* decl) {
   if (quotaState_ == QuotaState::kSuspended) return false;  // suspended: never executes
   if (quotaState_ == QuotaState::kThrottled) return true;   // throttled: skip this tick, not an error
   if (!module_) return true;
@@ -439,7 +439,7 @@ bool ScriptEngine::callHook(const char* decl) {
   return run(fn, decl, nullptr, budgets_.hookMs);
 }
 
-bool ScriptEngine::callWithString(const std::string& decl, const std::string& arg) {
+bool cScriptEngine::callWithString(const std::string& decl, const std::string& arg) {
   if (quotaState_ == QuotaState::kSuspended) return false;
   if (quotaState_ == QuotaState::kThrottled) return true;
   if (!module_) return false;
@@ -452,7 +452,7 @@ bool ScriptEngine::callWithString(const std::string& decl, const std::string& ar
   return run(fn, decl.c_str(), &copy, budgets_.handlerMs);
 }
 
-bool ScriptEngine::run(asIScriptFunction* fn, const char* what, std::string* arg, int budgetMs) {
+bool cScriptEngine::run(asIScriptFunction* fn, const char* what, std::string* arg, int budgetMs) {
   // RequestContext reuses pooled contexts (no allocation per call after the first).
   asIScriptContext* ctx = engine_->RequestContext();
   if (!ctx) { logError("[script] %s: no script context", what); return false; }

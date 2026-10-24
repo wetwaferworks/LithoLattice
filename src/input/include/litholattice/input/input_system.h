@@ -1,4 +1,4 @@
-// InputSystem: the one place the game asks about input. Each frame (main thread):
+// cInputSystem: the one place the game asks about input. Each frame (main thread):
 //   backend.poll() -> InputEvent queue -> cDeviceState -> bindings -> actions -> context gating
 // Context pushes / pops take effect at the next frame, so the key that opens a mode is never
 // seen again by the mode it opened.
@@ -15,10 +15,10 @@
 
 namespace litholattice {
 
-class InputSystem {
+class cInputSystem {
  public:
   /// `contexts`: the game's input contexts in priority order (see input_context.h).
-  InputSystem(ActionMap map, std::vector<ContextRules> contexts);
+  cInputSystem(ActionMap map, std::vector<ContextRules> contexts);
 
   /// Once per frame: polls `backend` and processes its events.
   void update(IInputBackend& backend);

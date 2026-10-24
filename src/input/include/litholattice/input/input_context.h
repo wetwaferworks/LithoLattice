@@ -14,7 +14,7 @@ struct ContextRules {
   std::string name;
   bool opaque = false;         ///< hides lower contexts' actions
   bool wantsText = false;      ///< receives the text channel
-  bool activeAtStart = false;  ///< pushed when the InputSystem is created
+  bool activeAtStart = false;  ///< pushed when the cInputSystem is created
   std::vector<ActionId> actions;
 };
 

@@ -12,10 +12,10 @@
 // always, independent of chunk borders, thread scheduling and generation order.
 //
 // Worldgen <-> fluid-sim seam (no channel existed; defined here): water is an ordinary
-// material id resolved from the "water" material name against the game's BlockRegistry,
+// material id resolved from the "water" material name against the game's cBlockReg,
 // exactly like every other worldgen material. Each water block's ColumnBuffer state byte
 // carries the FluidState level (1..kMaxFluidLevel); worldgen always writes
-// kStillWaterLevel (16 = source, still, never falling). ColumnGenerator copies the byte
+// kStillWaterLevel (16 = source, still, never falling). cColumnGen copies the byte
 // into the chunk's CellState, so the sim reads the level with stValue(state) (block.h)
 // and identifies water by block id (game-defined: BlockDef behavior/flags).
 #pragma once

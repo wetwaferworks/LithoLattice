@@ -95,7 +95,7 @@ cVkTextureArray::cVkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, s
   arraySampler_ = UniqueSampler(dev.device(), s);
 }
 
-std::optional<Image> cVkTextureArray::uploadArray(const TextureRegistry& textures, uint32_t mipLevels) const {
+std::optional<Image> cVkTextureArray::uploadArray(const cTextureReg& textures, uint32_t mipLevels) const {
   const uint32_t tile = uint32_t(textures.tileSize()), layers = uint32_t(textures.textures().size());
   const VkDeviceSize layerBytes = VkDeviceSize(tile) * tile * 4;
   auto staging = stagingBuffer(dev_, layerBytes * layers);
@@ -193,7 +193,7 @@ std::optional<Image> cVkTextureArray::uploadArray(const TextureRegistry& texture
   return image;
 }
 
-bool cVkTextureArray::upload(const TextureRegistry& textures) {
+bool cVkTextureArray::upload(const cTextureReg& textures) {
   vkDeviceWaitIdle(dev_.device());  // the old images may still be in use by frames in flight
   const uint32_t tile = uint32_t(std::max(1, textures.tileSize()));
   const uint32_t mips = uint32_t(std::bit_width(tile));  // down to 1x1, like glGenerateMipmap

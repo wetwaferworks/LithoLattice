@@ -32,7 +32,7 @@ void writePng(const fs::path& p, int w, int h, uint32_t rgba) {
   Image(w, h, std::move(px)).savePng(p, nullptr);
 }
 
-uint8_t red(const TextureRegistry& r, std::string_view name) { return r.texture(r.id(name)).image.pixel(0, 0)[0]; }
+uint8_t red(const cTextureReg& r, std::string_view name) { return r.texture(r.id(name)).image.pixel(0, 0)[0]; }
 
 }  // namespace
 
@@ -85,7 +85,7 @@ int runAssetsSelfTest() {
   for (const fs::path& p : {base, mod, player})
     if (auto pack = ResourcePack::open(p, &err)) stack.push(std::move(*pack));
   const ResourceSet rs = loadResources(stack);
-  const TextureRegistry& reg = rs.textures;
+  const cTextureReg& reg = rs.textures;
   auto warned = [&](std::string_view needle) {
     for (const auto& w : rs.warnings) if (w.find(needle) != std::string::npos) return true;
     return false;

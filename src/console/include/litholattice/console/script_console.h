@@ -2,7 +2,7 @@
 //
 // Scripts get three functions, all allowlist-gated on kPermConsole — a script
 // whose mod was not granted the "console" permission cannot bind them at all
-// (ScriptEngine::bindGlobalFunction refuses), so there is no unpermitted path:
+// (cScriptEngine::bindGlobalFunction refuses), so there is no unpermitted path:
 //
 //   void   consoleCmd(const string &in line)            -- execute a console line
 //   string consoleCvar(const string &in name)           -- read a cvar ("" when missing)
@@ -10,9 +10,9 @@
 //
 // `registerConsoleScriptBindings()` adds those declarations to the
 // cScriptBindingAllowlist (idempotent; call once at startup). Afterwards the
-// game (or a mod host) calls bindConsoleToScripts() per ScriptEngine — the
+// game (or a mod host) calls bindConsoleToScripts() per cScriptEngine — the
 // per-mod permission check happens inside bindGlobalFunction. Keep the
-// returned ConsoleScriptContext alive as long as the ScriptEngine.
+// returned ConsoleScriptContext alive as long as the cScriptEngine.
 #pragma once
 
 #include <memory>
@@ -31,9 +31,9 @@ void registerConsoleScriptBindings();
 
 /// Binds consoleCmd / consoleCvar / consoleSetCvar into `se` against
 /// `registry`. Returns the context the bindings close over (null on
-/// failure); the caller keeps it alive for the ScriptEngine's lifetime.
+/// failure); the caller keeps it alive for the cScriptEngine's lifetime.
 /// False/null when the allowlist or the mod's permissions refuse.
-std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se,
+std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(cScriptEngine& se,
                                                            cConsoleReg& registry,
                                                            const std::string& modId);
 

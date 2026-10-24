@@ -7,7 +7,7 @@
 //
 // HOW:
 // - SoundEvent: position + type + volume + timestamp
-// - Player: distance attenuation (1/d), stereo panning, wall occlusion
+// - cPlayer: distance attenuation (1/d), stereo panning, wall occlusion
 // - AI: query "what sounds can mob at X hear?" (with occlusion + hearing range)
 // - Reverb: estimated from nearby solid blocks (small room = more reverb)
 // - cOcclusionField: flood-fill visibility baked once per tick from the

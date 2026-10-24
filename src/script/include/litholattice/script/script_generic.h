@@ -3,7 +3,7 @@
 // AngelScript built with AS_MAX_PORTABILITY (every WASM build) has no native calling conventions:
 // registering asCALL_CDECL / asCALL_CDECL_OBJLAST returns asNOT_SUPPORTED (-7). These templates
 // turn a plain C++ function into an asCALL_GENERIC thunk, so each binding carries both forms and
-// ScriptEngine::bindFunction() picks one (native unless the library is portable or the engine is
+// cScriptEngine::bindFunction() picks one (native unless the library is portable or the engine is
 // forced generic for testing). ObjLast<&f>: the last C++ parameter is the auxiliary object passed
 // to bindFunction (asCALL_CDECL_OBJLAST); Cdecl<&f>: no auxiliary. Supported argument / return
 // types: std::string (by value or const&), bool, float, double, 8/16/32/64-bit integers, void.
@@ -83,7 +83,7 @@ struct Cdecl<F> {
 
 /// Both forms of a binding whose last C++ parameter is the auxiliary object.
 #define LL_SCRIPT_FN_OBJLAST(f) \
-  (::litholattice::ScriptEngine::ScriptFn{asFUNCTION(f), asFUNCTION((::litholattice::scriptgen::ObjLast<&f>::call)), asCALL_CDECL_OBJLAST})
+  (::litholattice::cScriptEngine::ScriptFn{asFUNCTION(f), asFUNCTION((::litholattice::scriptgen::ObjLast<&f>::call)), asCALL_CDECL_OBJLAST})
 /// Both forms of a plain cdecl binding.
 #define LL_SCRIPT_FN_CDECL(f) \
-  (::litholattice::ScriptEngine::ScriptFn{asFUNCTION(f), asFUNCTION((::litholattice::scriptgen::Cdecl<&f>::call)), asCALL_CDECL})
+  (::litholattice::cScriptEngine::ScriptFn{asFUNCTION(f), asFUNCTION((::litholattice::scriptgen::Cdecl<&f>::call)), asCALL_CDECL})

@@ -7,7 +7,7 @@
 
 namespace litholattice::ai {
 
-cAiWorld::cAiWorld(const cWalkCache& nav, AiConfig cfg, JobPool* pool) : nav_(nav), cfg_(cfg), hpa_(nav), pool_(pool) {
+cAiWorld::cAiWorld(const cWalkCache& nav, AiConfig cfg, cJobPool* pool) : nav_(nav), cfg_(cfg), hpa_(nav), pool_(pool) {
   cfg_.hz = std::clamp(cfg_.hz, 8, 16);
   cfg_.mobCap = std::clamp(cfg_.mobCap, 1, 128);
   cfg_.planRange = std::clamp(cfg_.planRange, 32, 64);
@@ -134,7 +134,7 @@ void cAiWorld::tick() {
   }
   // B-H3 (2026-10-15): prewarm, HERE on the tick thread, every column a
   // pooled search can touch BEFORE any job is submitted -- the invariant
-  // is that a JobPool worker never triggers a first-compute of a column
+  // is that a cJobPool worker never triggers a first-compute of a column
   // (a first-compute reads the live ChunkMap, which the mutating owner
   // thread may be writing concurrently: a data race, UB -- see the
   // cWalkCache thread contract in nav.h). The search box: findPath keeps
@@ -178,7 +178,7 @@ void cAiWorld::tick() {
     size_t left = n;
     for (size_t i = 0; i < n; ++i)
       pool_->submit([&, i] {
-        // Decrement even if job() throws (JobPool catches): otherwise a single
+        // Decrement even if job() throws (cJobPool catches): otherwise a single
         // throwing path job hangs cv.wait forever.
         struct DoneGuard {
           std::mutex& mx;

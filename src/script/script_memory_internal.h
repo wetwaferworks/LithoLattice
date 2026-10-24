@@ -8,13 +8,13 @@
 
 namespace litholattice {
 
-class ScriptEngine;
+class cScriptEngine;
 
 // The mod whose hooks are currently executing on this thread (scripts run on
 // the main thread only, per mod_safety.h). While set, both the AngelScript
 // memory shims and the global operator new/delete hook attribute allocations
 // to it, charging its memory quota. Null outside mod execution.
-extern thread_local ScriptEngine* tlsScriptAllocOwner;
+extern thread_local cScriptEngine* tlsScriptAllocOwner;
 
 // Reentrancy guard for the global operator-new hook. While nonzero the hook
 // still writes its per-allocation header (so delete stays balanced) and still
@@ -24,9 +24,9 @@ extern thread_local unsigned tlsQuotaHookDepth;
 
 // RAII: attribute this thread's allocations to `engine` until scope end.
 struct ModAttribution {
-  explicit ModAttribution(ScriptEngine* e) : prev(tlsScriptAllocOwner) { tlsScriptAllocOwner = e; }
+  explicit ModAttribution(cScriptEngine* e) : prev(tlsScriptAllocOwner) { tlsScriptAllocOwner = e; }
   ~ModAttribution() { tlsScriptAllocOwner = prev; }
-  ScriptEngine* prev;
+  cScriptEngine* prev;
 };
 
 // RAII: hold the operator-new hook's reentrancy guard for a scope.

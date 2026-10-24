@@ -114,7 +114,7 @@ AnimationTiming parseTiming(const Json* j, AnimationTiming t) {
 
 class ModelParser {
  public:
-  ModelParser(const TextureRegistry& reg, std::vector<std::string>& warn) : reg_(reg), warn_(warn) {}
+  ModelParser(const cTextureReg& reg, std::vector<std::string>& warn) : reg_(reg), warn_(warn) {}
 
   BlockModel parse(const std::string& name, const Def& def) {
     BlockModel m;
@@ -202,7 +202,7 @@ class ModelParser {
     }
   }
 
-  const TextureRegistry& reg_;
+  const cTextureReg& reg_;
   std::vector<std::string>& warn_;
   std::string where_;
 };
@@ -482,8 +482,8 @@ Provenance verifyTextureProvenance(const cPackStack& stack, const std::string& r
 ResourceSet loadResources(const cPackStack& stack) {
   std::vector<std::string> warn;
   const Merged m = mergeManifests(stack, warn);
-  ResourceSet rs{TextureRegistry(m.tileSize), {}, {}};
-  TextureRegistry& reg = rs.textures;
+  ResourceSet rs{cTextureReg(m.tileSize), {}, {}};
+  cTextureReg& reg = rs.textures;
   std::string err, origin;
 
   for (const auto& [name, def] : m.textures) {

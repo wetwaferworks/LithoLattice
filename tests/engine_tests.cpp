@@ -136,9 +136,9 @@ void check(bool ok, const char* what) {
 
 // ---- fixture "game": three blocks
 constexpr BlockId kRock = 1, kHalf = 2, kPlant = 3;
-const BlockRegistry& fixtureBlocks() {
-  static const BlockRegistry reg = [] {
-    BlockRegistry r;
+const cBlockReg& fixtureBlocks() {
+  static const cBlockReg reg = [] {
+    cBlockReg r;
     r.reserve(4);
     r.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
     r.add({"Half", kSolid, Shape::Slab, "half"});
@@ -151,7 +151,7 @@ const BlockRegistry& fixtureBlocks() {
 // Identity name remap for a registry: save-time BlockId i -> its StableId.
 // Mirrors what readStableRemap() produces when the save's name table matches the
 // live registry exactly (used for round-trip tests that skip the LLBN file).
-storage::StableRemap identityStableRemap(const BlockRegistry& reg) {
+storage::StableRemap identityStableRemap(const cBlockReg& reg) {
   storage::StableRemap r;
   r.map.reserve(reg.size());
   for (size_t i = 0; i < reg.size(); ++i) r.map.push_back(reg.stableIdOf(BlockId(i)));
@@ -168,7 +168,7 @@ template <class F> bool waitUntil(F pred) {
   return true;
 }
 
-ChunkMap worldWithColumns(int n, const BlockRegistry* reg = nullptr) {
+ChunkMap worldWithColumns(int n, const cBlockReg* reg = nullptr) {
   ChunkMap w;
   w.setRegistry(reg);  // Infinite Registry: get()/set() translate BlockId <-> StableId
   for (int cz = 0; cz < n; ++cz)
@@ -246,7 +246,7 @@ void testCore() {
     check(got.size() == 40000 && sum == 40000LL * 39999 / 2, "hand-off queue: 4 producers, nothing lost or duplicated");
   }
   {
-    JobPool pool(3);
+    cJobPool pool(3);
     std::atomic<int> n{0};
     for (int i = 0; i < 1000; ++i) pool.submit([&n] { ++n; });
     pool.waitIdle();
@@ -702,7 +702,7 @@ void testInfiniteRegistryWorld() {
         "registry: kAirStableId = FNV-1a-64(\"block:litholattice:air\")");
 
   // Stable IDs: deterministic across sessions, found by id, first-wins on dup.
-  BlockRegistry r1, r2;
+  cBlockReg r1, r2;
   const BlockId rock1 = r1.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
   const BlockId rock2 = r2.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
   const StableId rockSid = stableIdFor("block", "test:rock");
@@ -735,7 +735,7 @@ void testInfiniteRegistryWorld() {
   }
   const uint32_t crcA = r1.crcOf(rock1);
   const uint32_t crcB = r2.crcOf(rock2);
-  BlockRegistry r3;
+  cBlockReg r3;
   const BlockId rock3 = r3.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
   const BlockId hardRock = r3.add({"HardRock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.2f, false, 0, "test:hardrock"});
   check(crcA == crcB && crcA == r3.crcOf(rock3) && crcA != 0,
@@ -744,7 +744,7 @@ void testInfiniteRegistryWorld() {
         "registry: different content (friction) -> different CRC");
   {
     // Same content, different string id: the CRC must not move (id is identity, not content).
-    BlockRegistry r4;
+    cBlockReg r4;
     const BlockId same1 = r4.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
     const BlockId same2 = r4.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock-alias"});
     check(r4.crcOf(same1) == r4.crcOf(same2) && r4.stableIdOf(same1) != r4.stableIdOf(same2),
@@ -789,7 +789,7 @@ void testInfiniteRegistryWorld() {
     check(f.at(0) == kAirStableId && f.paletteSize() == 1 && f.width() == VoxelPalette::Width::W1,
           "palette: clear resets to fresh");
     // resolveBlockIds: palette -> BlockId LUT through a registry.
-    BlockRegistry lr;
+    cBlockReg lr;
     const BlockId a = lr.add({"A", kSolid, Shape::Cube, "a", {}, 0, 0, 0, 0.8f, false, 0, "t:a"});
     const BlockId b = lr.add({"B", kSolid, Shape::Cube, "b", {}, 0, 0, 0, 0.8f, false, 0, "t:b"});
     VoxelPalette v(kSubChunkVolume);
@@ -804,7 +804,7 @@ void testInfiniteRegistryWorld() {
 
   // SubChunk over the palette: StableId set/at, nonAir accounting.
   {
-    BlockRegistry lr;
+    cBlockReg lr;
     const BlockId a = lr.add({"A", kSolid, Shape::Cube, "a", {}, 0, 0, 0, 0.8f, false, 0, "t:a"});
     SubChunk s;
     s.set(3, 5, 7, lr.stableIdOf(a));
@@ -816,7 +816,7 @@ void testInfiniteRegistryWorld() {
 
   // ChunkMap translates through its registry (BlockId currency preserved for game logic).
   {
-    BlockRegistry lr;
+    cBlockReg lr;
     const BlockId a = lr.add({"A", kSolid, Shape::Cube, "a", {}, 0, 0, 0, 0.8f, false, 0, "t:a"});
     ChunkMap w = worldWithColumns(1, &lr);
     w.set(8, 65, 8, a);
@@ -848,7 +848,7 @@ void testInfiniteRegistryPhase2() {
 
   cContentReg cr;
   // Typed views share the registry underneath.
-  BlockRegistry blocks(cr);
+  cBlockReg blocks(cr);
   cItemReg items(cr);
   check(&blocks.content() == &cr && &items.content() == &cr,
         "registry: typed views share one ContentRegistry");
@@ -1029,9 +1029,9 @@ void testInfiniteRegistryPhase2() {
     check(sr.refreshStaged() == 0, "registry: refreshStaged no-ops when sealed with empty stage");
   }
 
-  // BlockRegistry facade owning mode (phase-1 construction style still works).
+  // cBlockReg facade owning mode (phase-1 construction style still works).
   {
-    BlockRegistry ro;
+    cBlockReg ro;
     const BlockId a = ro.add({"A", kSolid, Shape::Cube, "a", {}, 0, 0, 0, 0.8f, false, 0, "t:a"});
     check(a == 1 && ro.size() == 2 && ro.kindOf(ro.stableIdOf(a)) == EntryKind::Block,
           "registry: owning BlockRegistry facade behaves as before");
@@ -1051,7 +1051,7 @@ void testInfiniteRegistryPhase2() {
   // release the kind-filtered findByStableId maps the offender to kAir instead.
   {
     cContentReg kr;
-    BlockRegistry kb(kr);
+    cBlockReg kb(kr);
     cItemReg ki(kr);
     const BlockId b = kb.add({"B", kSolid, Shape::Cube, "b", {}, 0, 0, 0, 0.8f, false, 0, "t:b"});
     const ItemId it = ki.add({"I", 64, 0, {}, "t:i"});
@@ -1113,7 +1113,7 @@ std::map<FaceKey, int> binaryFaces(const std::vector<BinaryQuad>& quads) {
 
 void testBinaryMesher() {
   std::printf("render: binary greedy mesher (agreement with the classic mesher)\n");
-  const BlockRegistry& reg = fixtureBlocks();
+  const cBlockReg& reg = fixtureBlocks();
   const BlockMaterials mats(reg.size());
   const MeshContext ctx{reg, mats};
 
@@ -1231,7 +1231,7 @@ void testBinaryMesher() {
 // id are culled (glass-against-glass, mirroring the classic mesher).
 void testBinaryMesherTransparent() {
   std::printf("render: binary mesher transparent pass\n");
-  BlockRegistry reg;
+  cBlockReg reg;
   reg.reserve(4);
   const BlockId rock = reg.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
   const BlockId glass = reg.add({"Glass", kSolid | kTransparent, Shape::Cube, "glass"});
@@ -3185,7 +3185,7 @@ void testPbrGlWiring() {
     const uint16_t torchId = reg.idFor("lithokraft:torch");
     const uint16_t stoneId = reg.idFor("lithokraft:stone");
     check(torchId != cMaterialReg::kInvalidMaterialId, "pbr-gl: torch registered");
-    const BlockRegistry& breg = fixtureBlocks();
+    const cBlockReg& breg = fixtureBlocks();
     ChunkMap w = worldWithColumns(1, &breg);
     ChunkColumn* col = w.column(0, 0);
     col->materialPalette.assign({stoneId, torchId});
@@ -3388,7 +3388,7 @@ void testPbrTrueRefraction() {
   // chain; the GL33 backend stores it in pbrTier_).
   {
     struct TexArray final : ITextureArray {
-      bool upload(const TextureRegistry&) override { return true; }
+      bool upload(const cTextureReg&) override { return true; }
       int layerCount() const override { return 0; }
       int tileSize() const override { return 0; }
     };
@@ -3855,7 +3855,7 @@ int testVkSpriteConversion() {
 
 void testRender() {
   std::printf("render: mesher (fixture blocks, no game appearance)\n");
-  const BlockRegistry& reg = fixtureBlocks();
+  const cBlockReg& reg = fixtureBlocks();
   const BlockMaterials mats(reg.size());
   auto mesh = [&](std::initializer_list<std::pair<std::array<int, 3>, BlockId>> cells, BlockId fill = kAir) {
     ChunkMap w = worldWithColumns(1, &reg);
@@ -3960,8 +3960,8 @@ void testRender() {
   testPbrTrueRefraction();
 }
 
-// ---- fixture simulation for SimThread
-struct FixtureSim final : IWorldSimulation {
+// ---- fixture simulation for cSimThread
+struct FixtureSim final : IWorldSim {
   std::atomic<int>* scans; std::atomic<int>* ticks; std::atomic<int>* changes; std::atomic<int>* commands;
   void scan(const ChunkMap&) override { ++*scans; }
   bool canPlace(const ChunkMap&, int, int, int, BlockId b) const override { return b != kHalf; }
@@ -3974,7 +3974,7 @@ struct FixtureSim final : IWorldSimulation {
 };
 
 // Changes cells from tick() (column 1,0), randomTick() (column 2,0) and command() (column 0,2).
-struct ChangingSim final : IWorldSimulation {
+struct ChangingSim final : IWorldSim {
   int ticks = 0, randoms = 0;
   void scan(const ChunkMap&) override {}
   void onBlockChanged(ChunkMap&, int, int, int, BlockId) override {}
@@ -3991,7 +3991,7 @@ void testChangedColumns() {
   w.set(8, 10, 8, kRock);
   SimConfig cfg;
   cfg.tickRate = 64; cfg.radiusChunks = 4;
-  SimThread st(w, fixtureBlocks(), std::make_unique<ChangingSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+  cSimThread st(w, fixtureBlocks(), std::make_unique<ChangingSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
   st.setPlayerChunk(0, 0);
   st.setRay({8.5f, 14.5f, 8.5f, 0, -1, 0});
   st.start();
@@ -4013,7 +4013,7 @@ void testChangedColumns() {
 }
 
 // Random ticks: a full section of an opted-in block; every pick reaches onRandomTick.
-struct RandomSim final : IWorldSimulation {
+struct RandomSim final : IWorldSim {
   std::atomic<int>* worldTicks; std::atomic<int>* picks;
   void scan(const ChunkMap&) override {}
   void onBlockChanged(ChunkMap&, int, int, int, BlockId) override {}
@@ -4027,7 +4027,7 @@ struct RandomSim final : IWorldSimulation {
 
 void testRandomTicks() {
   std::printf("sim: random ticks (opt-in, per section, deterministic, dirty)\n");
-  BlockRegistry reg;
+  cBlockReg reg;
   const BlockId grass = reg.add({"Grass", kSolid | kOpaque | kRandomTicks, Shape::Cube});
   const BlockId stone = reg.add({"Stone", kSolid | kOpaque, Shape::Cube});
   ChunkMap w = worldWithColumns(2, &reg);
@@ -4051,7 +4051,7 @@ void testRandomTicks() {
   sim->worldTicks = &worldTicks; sim->picks = &picks;
   SimConfig cfg; cfg.tickRate = 64; cfg.radiusChunks = 2;
   cfg.domains.push_back({"fast", 512, true});  // a fast clock domain must not scale random ticks
-  SimThread st(w, reg, std::move(sim), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+  cSimThread st(w, reg, std::move(sim), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
   st.start();
   waitUntil([&] { return worldTicks > 8; });
   st.stop();
@@ -4067,7 +4067,7 @@ struct StepRec {
   std::vector<uint64_t> randomIdx;  // tickIndex of every randomTick call, in order
 };
 
-struct StepSim final : IWorldSimulation {
+struct StepSim final : IWorldSim {
   StepRec* rec;
   int pauseAtTick = -1;  // live arm: pause the sim from inside this tick (exact, not racy)
   std::function<void()> onPauseTick;
@@ -4091,7 +4091,7 @@ struct StepSim final : IWorldSimulation {
 
 void testStepTicks() {
   std::printf("sim: tick stepper exactness, stepped/live equivalence, stop/start continuity\n");
-  const auto makeWorld = [](BlockRegistry& reg) {
+  const auto makeWorld = [](cBlockReg& reg) {
     const BlockId grass = reg.add({"Grass", kSolid | kOpaque | kRandomTicks, Shape::Cube});
     const BlockId stone = reg.add({"Stone", kSolid | kOpaque, Shape::Cube});
     ChunkMap w = worldWithColumns(2, &reg);
@@ -4119,11 +4119,11 @@ void testStepTicks() {
 
   // ---- stepped arm: stepTicks BEFORE start, so the sim starts paused and
   // only stepped ticks ever run.
-  BlockRegistry regA;
+  cBlockReg regA;
   ChunkMap wA = makeWorld(regA);
   StepRec recA;
   auto simA = std::make_unique<StepSim>(); simA->rec = &recA;
-  SimThread stA(wA, regA, std::move(simA), makeCfg(), [](std::shared_ptr<MeshInput>) {});
+  cSimThread stA(wA, regA, std::move(simA), makeCfg(), [](std::shared_ptr<MeshInput>) {});
   stA.setPlayerChunk(0, 0);
   stA.stepTicks(3);
   stA.start();
@@ -4145,13 +4145,13 @@ void testStepTicks() {
   // ---- live arm: same setup, 20 live ticks. The fixture pauses the sim
   // from inside tick 20 (at most one world tick runs per loop iteration at
   // worldDiv 16 with the 16-step catch-up cap), so the count is exact.
-  BlockRegistry regB;
+  cBlockReg regB;
   ChunkMap wB = makeWorld(regB);
   StepRec recB;
   auto simB = std::make_unique<StepSim>(); simB->rec = &recB; simB->pauseAtTick = 20;
-  SimThread* stBP = nullptr;
+  cSimThread* stBP = nullptr;
   simB->onPauseTick = [&] { if (stBP) stBP->setPaused(true); };
-  SimThread stB(wB, regB, std::move(simB), makeCfg(), [](std::shared_ptr<MeshInput>) {});
+  cSimThread stB(wB, regB, std::move(simB), makeCfg(), [](std::shared_ptr<MeshInput>) {});
   stBP = &stB;
   stB.setPlayerChunk(0, 0);
   stB.start();
@@ -4357,7 +4357,7 @@ void testDetSched() {
     });
     sched.addSystem(std::make_unique<PushSystem>("P", kLog, std::vector<uint64_t>{11, 12}));
     sched.addSystem(std::make_unique<PushSystem>("Q", kLog + 1, std::vector<uint64_t>{21}));
-    JobPool pool(2);  // P and Q push concurrently into their own private buffers
+    cJobPool pool(2);  // P and Q push concurrently into their own private buffers
     sched.runTick(0, &w, pool);
     const bool ok = w.drainLog == std::vector<uint64_t>{11, 12, (1ULL << 32) | 21};
     check(ok, "det-sched: command buffers drain in (system, seq) order even when pushed from parallel systems");
@@ -4373,7 +4373,7 @@ void testDetSched() {
       sched.addSystem(std::make_unique<ObserveSystem>());
       const auto& st = sched.stages();
       ok = ok && st.size() == 2 && st[0] == std::vector<size_t>{0} && st[1] == std::vector<size_t>{1};
-      JobPool pool(threads);
+      cJobPool pool(threads);
       sched.runTick(5, &w, pool);
       ok = ok && w.entities == std::vector<uint64_t>{777} && w.stage1Observed == 1;
     }
@@ -4410,7 +4410,7 @@ void testDetSched() {
       sched.addSystem(std::make_unique<FoldSystem>());
       const auto& st = sched.stages();  // lo+hi parallel, fold after
       const bool layout = st.size() == 2 && st[0].size() == 2 && st[1] == std::vector<size_t>{2};
-      JobPool pool(threads);
+      cJobPool pool(threads);
       sched.runTicks(0, ticks, &w, pool);
       return std::make_pair(layout, schedWorldHash(w));
     };
@@ -4425,7 +4425,7 @@ void testDetSched() {
     check(ok, "det-sched: 64-tick run with keyed RNG + cross-stage checksum hashes bit-identical on 1, 2, 4 threads");
   }
 
-  // --- cJobSystem backend: threaded runs hash bit-identical to the JobPool path ---
+  // --- cJobSystem backend: threaded runs hash bit-identical to the cJobPool path ---
   {
     auto runWorldJs = [](unsigned threads, uint64_t ticks) {
       SchedWorld w;
@@ -4444,7 +4444,7 @@ void testDetSched() {
       sched.addSystem(std::make_unique<AccSystem>("lo", kCellsLo, 0));
       sched.addSystem(std::make_unique<AccSystem>("hi", kCellsHi, 128));
       sched.addSystem(std::make_unique<FoldSystem>());
-      JobPool pool(1);
+      cJobPool pool(1);
       sched.runTicks(0, 64, &w, pool);
       return schedWorldHash(w);
     };
@@ -4532,7 +4532,7 @@ void testTraceJitCompose() {
       const uint64_t graphId = raw->graph().id;
       sched.addSystem(std::move(sys));
       SchedWorld w;
-      JobPool pool(threads);
+      cJobPool pool(threads);
       sched.runTicks(0, 8, &w, pool);
       ok = ok && jit.compiles == 1 && jit.executes == 8 && raw->ticksExecuted() == 8 &&
            jit.lastExecutedId == graphId && jit.frees == 0;
@@ -4550,7 +4550,7 @@ void testTraceJitCompose() {
     cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
     sched.addSystem(std::move(sys));
     SchedWorld w;
-    JobPool pool(1);
+    cJobPool pool(1);
     sched.runTick(0, &w, pool);
     const bool sawFirst = jit.lastExecutedId == id1;
     raw->recompile(nullptr, 0);  // between ticks: legal
@@ -4712,11 +4712,11 @@ void testBlockNames() {
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "ll_blocknames_test";
   fs::remove_all(dir);
-  BlockRegistry a;
+  cBlockReg a;
   const BlockId rockA = a.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
   const BlockId plantA = a.add({"Plant", kTransparent, Shape::Cross, "plant", {}, 0, 0, 0, 0.8f, false, 0, "test:plant"});
   const BlockId goneA = a.add({"Gone", kSolid, Shape::Cube, "gone", {}, 0, 0, 0, 0.8f, false, 0, "test:gone"});
-  BlockRegistry b;  // a later version: new block first, order changed, "gone" removed
+  cBlockReg b;  // a later version: new block first, order changed, "gone" removed
   const BlockId newB = b.add({"New", kSolid, Shape::Cube, "new", {}, 0, 0, 0, 0.8f, false, 0, "test:new"});
   const BlockId plantB = b.add({"Plant", kTransparent, Shape::Cross, "plant", {}, 0, 0, 0, 0.8f, false, 0, "test:plant"});
   const BlockId rockB = b.add({"Rock", kSolid, Shape::Cube, "rock", {}, 0, 0, 0, 0.8f, false, 0, "test:rock"});
@@ -4773,7 +4773,7 @@ void testAttachables() {
             stValue(withAttach(makeState(5, 2, 1, true), 4)) == 5 && stOn(withAttach(makeState(5, 2, 1, true), 4)),
         "attach face: lives in state bits 13-15 without touching value / facing / on");
 
-  BlockRegistry reg;
+  cBlockReg reg;
   const BlockId rock = reg.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
   reg.add({"Pad", kSolid, Shape::Cube, "pad"});  // keeps the knob's id clear of FixtureSim's vetoed kHalf
   reg.add({"Pad2", kSolid, Shape::Cube, "pad2"});
@@ -4781,7 +4781,7 @@ void testAttachables() {
   ChunkMap w = worldWithColumns(1, &reg);
   w.set(8, 10, 8, rock);
   // The game removes blocks through command() here (a script / sim removal, not a player break).
-  struct RemoverSim final : IWorldSimulation {
+  struct RemoverSim final : IWorldSim {
     void scan(const ChunkMap&) override {}
     void onBlockChanged(ChunkMap&, int, int, int, BlockId) override {}
     void tick(ChunkMap&, const TickArea&, const DirtyFn&) override {}
@@ -4792,7 +4792,7 @@ void testAttachables() {
   w.set(20, 12, 8, knob); w.setState(20, 12, 8, withAttach(0, 1));  // mounted on the first knob (cascade)
   SimConfig cfg; cfg.tickRate = 64; cfg.radiusChunks = 2;
   cfg.domains.push_back({"fixture", 64, true});
-  SimThread st(w, reg, std::make_unique<RemoverSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+  cSimThread st(w, reg, std::make_unique<RemoverSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
   st.setPlayerChunk(0, 0);
   st.setRay({4.5f, 10.5f, 8.5f, 1, 0, 0});  // looking +X at the rock's -X face
   st.start();
@@ -4852,7 +4852,7 @@ void testAreaShape() {
   check(minimal && diamondExact,
         "area shape: the covering radius is minimal; diamond-in-diamond and any-in-square need exactly r");
   // Golden: diamond tick area, fixed world + ticks. Update deliberately only.
-  BlockRegistry reg;
+  cBlockReg reg;
   const BlockId grass = reg.add({"Grass", kSolid | kOpaque | kRandomTicks, Shape::Cube});
   ChunkMap w = worldWithColumns(9, &reg);
   for (int cz = 0; cz < 9; ++cz)
@@ -4887,7 +4887,7 @@ void testSim() {
   SimConfig cfg;
   cfg.tickRate = 64; cfg.radiusChunks = 2; cfg.epoch = 3;
   cfg.domains.push_back({"fixture", 128, true});
-  SimThread st(w, fixtureBlocks(), std::move(sim), std::move(cfg), [&](std::shared_ptr<MeshInput> in) { if (in->epoch == 3) ++meshes; });
+  cSimThread st(w, fixtureBlocks(), std::move(sim), std::move(cfg), [&](std::shared_ptr<MeshInput> in) { if (in->epoch == 3) ++meshes; });
   st.setPlayerChunk(0, 0);
   st.setRay({8.5f, 14.5f, 8.5f, 0, -1, 0});
   st.start();
@@ -5561,7 +5561,7 @@ void testStorage() {
   std::printf("storage: codec, region files, payload migration, sparse world\n");
   const auto dir = std::filesystem::temp_directory_path() / "litholattice_storage_test";
   std::filesystem::remove_all(dir);
-  const BlockRegistry& reg = fixtureBlocks();
+  const cBlockReg& reg = fixtureBlocks();
   // Two-phase load contract (same as the game): decode parks the voxels, remapColumn installs them.
   const storage::StableRemap idremap = identityStableRemap(reg);
   auto column = [&](int cx, int cz) {
@@ -5715,7 +5715,7 @@ void testMods() {
 void testAi() {
   using namespace litholattice::ai;
   std::printf("ai: walk cache, movement modes, A* hops, senses, brains, tick budget / LOD / cap, determinism\n");
-  BlockRegistry reg;
+  cBlockReg reg;
   const BlockId rock = reg.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
   const BlockId wire = reg.add({"Track", kTransparent, Shape::Custom, "track"});
   ChunkMap w = worldWithColumns(8, &reg);  // 8x8 columns: x, z in 0..127
@@ -5806,7 +5806,7 @@ void testAi() {
   world.setWaypoint("arena", {30, 10, 40});
   check(world.waypoint("arena") && !world.waypoint("nowhere"), "ai: named waypoint targets");
 
-  auto run = [&](JobPool* pool, std::vector<Cell>& end) {
+  auto run = [&](cJobPool* pool, std::vector<Cell>& end) {
     AiConfig c; c.pathsPerTick = 8; c.seed = 42;
     cAiWorld aw(nav, c, pool);
     aw.setWaypoint("arena", {100, 10, 100});
@@ -5828,7 +5828,7 @@ void testAi() {
   };
   std::vector<Cell> e1, e4;
   const int deferred = run(nullptr, e1);
-  JobPool pool(4);
+  cJobPool pool(4);
   run(&pool, e4);
   bool moved = false;
   for (size_t i = 0; i < e1.size(); ++i) moved = moved || !(e1[i] == (Cell{2 + int(i % 8) * 3, 10, 2 + int(i / 8) * 3}));
@@ -5896,7 +5896,7 @@ void testAi() {
   }
   {
     // Leap fixture: its own small world (floor y=9, walk at y=10).
-    BlockRegistry reg2;
+    cBlockReg reg2;
     const BlockId rock2 = reg2.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
     const BlockId ladder = reg2.add({"Ladder", kTransparent, Shape::Cross, "ladder"});
     ChunkMap lw = worldWithColumns(4, &reg2);  // x, z in 0..63
@@ -6091,7 +6091,7 @@ void testAi() {
     // Dijkstra optimum 11512 (verified against the pre-fix heuristic in a
     // reference search; the 600 overcharge is the diagonal overestimate);
     // the post-fix octile heuristic must match Dijkstra exactly.
-    BlockRegistry regH;
+    cBlockReg regH;
     const BlockId rockH = regH.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
     ChunkMap hw = worldWithColumns(2, &regH);  // x, z in 0..31
     for (int z = 0; z < 32; ++z)
@@ -6152,7 +6152,7 @@ void testAi() {
     // leg (16,10,8) -> (31,10,8) is cached by the first query; then ONLY
     // that leg's corridor is walled (one interior column at x=24 --
     // portals and the winning portal route are untouched).
-    BlockRegistry regC;
+    cBlockReg regC;
     const BlockId rockC = regC.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
     ChunkMap cw2 = worldWithColumns(3, &regC);  // x, z in 0..47
     for (int z = 0; z < 48; ++z)
@@ -6185,7 +6185,7 @@ void testAi() {
     // Cliff border at x=15/16 across the whole map: west plateau standable
     // at y=13 (floor y=12), east lowland standable at y=10 (floor y=9) --
     // dy = -3 in the canonical west -> east direction.
-    BlockRegistry regD;
+    cBlockReg regD;
     const BlockId rockD = regD.add({"Rock", kSolid | kOpaque, Shape::Cube, "rock"});
     ChunkMap dw = worldWithColumns(2, &regD);  // x, z in 0..31
     for (int z = 0; z < 32; ++z) {
@@ -7129,7 +7129,7 @@ static void stubPwn(const std::string&) {}
 static int stubSetBlock(int, int, int, uint16_t) { return 0; }
 static uint64_t stubWorldTick() { return 42; }
 // fix 3c: string / bool / float / int args, string return, auxiliary object last.
-static std::string stubGenEcho(const std::string& s, bool b, float f, int i, ScriptEngine* se) {
+static std::string stubGenEcho(const std::string& s, bool b, float f, int i, cScriptEngine* se) {
   return s + (b ? "T" : "F") + std::to_string(int(f * 10.f)) + std::to_string(i) + (se ? "!" : "?");
 }
 static uint64_t stubGenTick() { return 4242; }
@@ -7152,7 +7152,7 @@ void testScriptSandbox() {
 
   // --- allowlist: the script host refuses unlisted / unpermitted bindings ----
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModPermissions(0xFFFFFFFFu);  // all permissions: only the allowlist can refuse
     check(se.bindGlobalFunction("void pwn(const string &in)", asFUNCTION(stubPwn), asCALL_CDECL) < 0,
@@ -7170,22 +7170,22 @@ void testScriptSandbox() {
           "allowlist: worldTick binds with world-read permission");
   }
   {  // fix 3c (Elfie P2): the generic calling convention (WASM / AS_MAX_PORTABILITY) forced natively
-    ScriptEngine::forceGenericCalls(true);
+    cScriptEngine::forceGenericCalls(true);
     cScriptBindingAllowlist::registerBinding({"string genEcho(const string &in, bool, float, int)", 0, "fix 3c generic test"});
-    ScriptEngine se;
-    bool ok = se.init() && ScriptEngine::useGenericCalls();
+    cScriptEngine se;
+    bool ok = se.init() && cScriptEngine::useGenericCalls();
     se.setModPermissions(kPermWorldRead);
     ok = ok && se.bindFunction("string genEcho(const string &in, bool, float, int)", LL_SCRIPT_FN_OBJLAST(stubGenEcho), &se) >= 0;
     ok = ok && se.bindFunction("uint64 worldTick()", LL_SCRIPT_FN_CDECL(stubGenTick)) >= 0;
     ok = ok && se.loadSource("gen", "void onLoad() { log(genEcho(\"x\", true, 2.5f, 7)); log(\"t\" + worldTick()); }") &&
          se.callHook("void onLoad()");
-    ScriptEngine::forceGenericCalls(false);
+    cScriptEngine::forceGenericCalls(false);
     check(ok && se.logCount() == 2 && se.lastLog() == "t4242", "script generic path: log + uint64 cdecl binding run through asCALL_GENERIC");
-    ScriptEngine se2;
+    cScriptEngine se2;
     bool ok2 = se2.init();
     ok2 = ok2 && se2.bindFunction("string genEcho(const string &in, bool, float, int)", LL_SCRIPT_FN_OBJLAST(stubGenEcho), &se2) >= 0;
     ok2 = ok2 && se2.loadSource("gen", "void onLoad() { log(genEcho(\"x\", true, 2.5f, 7)); }") && se2.callHook("void onLoad()");
-    check(ok && ok2 && se2.lastLog() == "xT257!" && !ScriptEngine::useGenericCalls(),
+    check(ok && ok2 && se2.lastLog() == "xT257!" && !cScriptEngine::useGenericCalls(),
           "script generic path: OBJLAST string/bool/float/int binding matches the native result");
   }
 
@@ -7206,7 +7206,7 @@ void testScriptSandbox() {
 
   // --- syncBindings: revocation truly unbinds (sandbox rebuild) ----------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModPermissions(0);  // nothing granted: the refusal is recorded
     check(se.bindGlobalFunction("int setBlock(int, int, int, uint16)", asFUNCTION(stubSetBlock),
@@ -7230,18 +7230,18 @@ void testScriptSandbox() {
 
   // --- quotas: defaults are powers of two -------------------------------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     check(isPow2(se.modBudgetUs()) && isPow2(se.modMemoryQuotaBytes()) && isPow2(se.throttleTicks()) &&
               isPow2(se.maxThrottles()),
           "quotas: defaults are powers of two (1024 us CPU, 1 MiB memory, 8-tick throttle, 4 throttles)");
-    check(se.modBudgetUs() == ScriptEngine::kDefaultModBudgetUs &&
-              se.modMemoryQuotaBytes() == ScriptEngine::kDefaultModMemoryQuotaBytes,
+    check(se.modBudgetUs() == cScriptEngine::kDefaultModBudgetUs &&
+              se.modMemoryQuotaBytes() == cScriptEngine::kDefaultModMemoryQuotaBytes,
           "quotas: defaults match the kDefault* constants");
   }
 
   // --- quotas: CPU overrun -> throttle (skip ticks) -> suspend ----------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModBudgetUs(64);  // tiny budget: the busy hook always exceeds it
     se.setThrottleTicks(2);
@@ -7272,7 +7272,7 @@ void testScriptSandbox() {
 
   // --- quotas: memory overrun -> suspend --------------------------------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModMemoryQuotaBytes(4096);  // tiny quota
     // A chain of 500 script objects: script class instances are allocated
@@ -7295,7 +7295,7 @@ void testScriptSandbox() {
 
   // --- run(): a C++ exception from a bound callback is contained (F-L10) ------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModPermissions(kPermWorldRead);
     check(se.bindGlobalFunction("uint64 worldTick()", asFUNCTION(stubThrowTick), asCALL_CDECL) >= 0,
@@ -7311,7 +7311,7 @@ void testScriptSandbox() {
 
   // --- quotas: std::string heap buffers count (string blind spot closed) ------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModMemoryQuotaBytes(4096);  // tiny quota
     // 64-char chunks defeat SSO (libstdc++ SSO capacity is 15): every +=
@@ -7334,7 +7334,7 @@ void testScriptSandbox() {
 
   // --- quotas: the operator-new hook leaves engine allocations alone ---------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     check(se.modMemoryBytes() == 0, "quotas: fresh engine has nothing attributed");
     {
@@ -7368,7 +7368,7 @@ void testScriptSandbox() {
 
   // --- quotas: alloc/free cycles balance (no leak, no double-count) ----------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModMemoryQuotaBytes(1 << 20);  // roomy: nothing here should suspend
     // 400 iterations of heap-string alloc + realloc + free inside one hook.
@@ -7401,7 +7401,7 @@ void testScriptSandbox() {
 
   // --- quotas: a well-behaved mod is untouched --------------------------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     // Ample CPU budget: this test is about "inside its budgets", not about
     // racing the wall clock — accountCpu() measures wall-clock time, so a
@@ -7431,7 +7431,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: cooldown -> auto-recovery -> probation -------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModId("policy-probe");
     se.setModBudgetUs(64);  // tiny budget: the busy hook always exceeds it
@@ -7465,7 +7465,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: throttling alone opens no record -------------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModBudgetUs(64);
     se.setMaxThrottles(4);  // ladder: overruns throttle before suspending
@@ -7482,7 +7482,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: clean ticks decay the consecutive count ------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModId("policy-decay");
     se.setModBudgetUs(64);
@@ -7506,7 +7506,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: 8 consecutive suspensions escalate to manual -------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModId("policy-escalate");
     se.setModBudgetUs(64);
@@ -7545,7 +7545,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: resume() clears mid-record state -------------------
   {
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModId("policy-resume");
     se.setModBudgetUs(64);
@@ -7570,7 +7570,7 @@ void testScriptSandbox() {
   // --- suspension policy: every transition lands in the engine log tap -------
   {
     engineLogTap().clear();
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModId("policy-tap");
     se.setModBudgetUs(64);
@@ -8254,7 +8254,7 @@ int runModule(const std::string& m) {
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();
-  else if (m == "procgen") { JobPool pool(2); g_fails += procgen::runProcgenSelfTest(pool); }
+  else if (m == "procgen") { cJobPool pool(2); g_fails += procgen::runProcgenSelfTest(pool); }
   else if (m == "trees") g_fails += procgen::runTreeGenSelfTest();
   else if (m == "shrubs") g_fails += procgen::runShrubsSelfTest();
   else if (m == "water") g_fails += procgen::runWaterSelfTest();

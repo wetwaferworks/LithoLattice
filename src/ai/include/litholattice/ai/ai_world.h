@@ -93,7 +93,7 @@ struct AiStats {
 
 class cAiWorld {
  public:
-  cAiWorld(const cWalkCache& nav, AiConfig cfg, JobPool* pool = nullptr);
+  cAiWorld(const cWalkCache& nav, AiConfig cfg, cJobPool* pool = nullptr);
   /// nullopt when the cap is reached.
   std::optional<uint32_t> spawn(Cell at, const IMovementMode* mode, BtPtr brain = nullptr);
   bool despawn(uint32_t id);
@@ -129,7 +129,7 @@ class cAiWorld {
   Cell flowGoal_{};
   uint64_t flowGen_ = ~uint64_t(0);
   bool flowOk_ = false;
-  JobPool* pool_;
+  cJobPool* pool_;
   std::map<uint32_t, Mob> mobs_;  // id order = deterministic order
   // Despawns requested DURING tick() (e.g. a brain despawning itself) are
   // deferred to the end of tick: erasing mid-iteration would invalidate the

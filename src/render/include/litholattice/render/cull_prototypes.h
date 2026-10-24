@@ -114,7 +114,7 @@ class cVelocityTracker {
     havePrev_ = false;
   }
 
-  // yaw/pitch in radians (Player::forward convention), time in seconds
+  // yaw/pitch in radians (cPlayer::forward convention), time in seconds
   // (monotonic). First sample or a non-monotonic clock arms without emitting
   // velocity; yaw wrap at +/-pi is handled.
   void update(float yawRad, float pitchRad, double timeSec) {
@@ -156,7 +156,7 @@ class cVelocityTracker {
   bool havePrev_ = false;
 };
 
-// cCamera basis from yaw/pitch (same convention as Player::forward()).
+// cCamera basis from yaw/pitch (same convention as cPlayer::forward()).
 inline Vec3 cullCamForward(float yawRad, float pitchRad) {
   const float cp = std::cos(pitchRad);
   return Vec3{cp * std::cos(yawRad), std::sin(pitchRad), cp * std::sin(yawRad)};

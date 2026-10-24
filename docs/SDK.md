@@ -8,7 +8,7 @@ Legend: **[EXISTS]** is in the code today (the class or function named is real).
 ## 1. Goals
 
 - **Half-Life-style SDK.** The LithoLattice core (world, sim thread, renderers, storage, platform, audio, UI, procgen, script host) is a **closed, proprietary** library. Modders get public headers, the import/static libraries for the engine, documentation, and the full source of a sample game. Like the HL1 SDK, the "game" layer is the documented extension point, and the engine internals are not.
-- **Public virtual interfaces and stubs.** Every extension point is an abstract class (`I...`) or a registry that takes plain data or a factory. Optional hooks have default no-op bodies (stubs), so a mod overrides only what it needs. `IWorldSimulation::randomTick` is the pattern: it was added with an empty default, and existing code did not have to change.
+- **Public virtual interfaces and stubs.** Every extension point is an abstract class (`I...`) or a registry that takes plain data or a factory. Optional hooks have default no-op bodies (stubs), so a mod overrides only what it needs. `IWorldSim::randomTick` is the pattern: it was added with an empty default, and existing code did not have to change.
 - **LithoKraft is mod #1.** LithoKraft (`lithokraft::`) uses only the public engine API. Anything LithoKraft needs that third-party mods cannot get is an SDK bug. The engine holds no game content: `kAir` plus generic types only. **[EXISTS]** since the engine/game split.
 - **Not open source.** The SDK license allows building and distributing mods. It does not allow redistributing engine binaries outside the game, or the engine source (none is shipped). The sample-game source ships under a separate permissive mod license (open question Q1).
 - **Non-goals for v1:** a stable C ABI for every module, DLL hot-swap at runtime, and a console/marketplace distribution pipeline.
@@ -18,14 +18,14 @@ Legend: **[EXISTS]** is in the code today (the class or function named is real).
 Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `storage::`). Game/mod = its own namespace (`lithokraft::` for mod #1).
 
 ### 2.1 Blocks: registry and block types (`world`)
-- **[EXISTS]** `BlockRegistry` (`world/block.h`): dense `BlockId` table. `add(BlockDef)` returns the id. `def()`, `has()`, `hasAll()`, and `findByTexture()` are used by worldgen JSON. Row 0 is `kAir`. It is built once at startup, then shared read-only across threads.
+- **[EXISTS]** `cBlockReg` (`world/block.h`): dense `BlockId` table. `add(BlockDef)` returns the id. `def()`, `has()`, `hasAll()`, and `findByTexture()` are used by worldgen JSON. Row 0 is `kAir`. It is built once at startup, then shared read-only across threads.
 - **[EXISTS]** `BlockDef`: `name`, `flags` (engine `BlockFlags` plus game bits), `Shape {None, Cube, Cross, Slab, Custom}`, `tex` (pack key), `behavior` (a name the engine never reads), and opaque game payload fields `role`, `channel`, `tier`.
 - **[EXISTS]** `CellState`, a per-cell 16-bit state with helpers (`stOn`, facing via `makeState`), plus the `kDirectional` flag.
-- **[EXISTS]** *Namespaced ids* (decision Q5): `BlockDef::id` (`"lithokraft:lamp"`; air is `"litholattice:air"`), `BlockRegistry::idOf()` / `findById()`. Numeric ids stay dense at runtime. Saves write a **block name table** (`storage/block_names.h`, `blocks.names`, "LLBN" v1, CRC-checked, atomic tmp + rename). Loads remap saved ids by name (`readBlockRemap` + `remapColumn`): a reordered or extended registry reopens old worlds correctly, and removed blocks load as air with a log line. A save without the table (written before this change) is migrated as the current order, and the next save writes the table. Engine and game tests cover the remap, removed blocks, identity, legacy migration and a damaged table.
-- **[EXISTS]** *Attach-face state* for attachables (switch, torches): 3 bits (13-15) of `CellState` (`stAttach` / `withAttach` / `attachOffset` / `attachFaceFor`, 1 below, 2 above, 3 -Z, 4 +Z, 5 -X, 6 +X; 0 = free-standing/legacy), the `kAttachable` flag, and `IWorldSimulation::canAttach(world, x, y, z, block, face)`. Placement mounts on the clicked face; `SimThread` pops attachables off (to air) when the player breaks their support. LithoKraft rules: torches on top or sides (not ceilings), switches on top, sides or bottom; an attached switch strongly powers its support and, when on top, the dust directly below the support; a wall torch inverts its support.
+- **[EXISTS]** *Namespaced ids* (decision Q5): `BlockDef::id` (`"lithokraft:lamp"`; air is `"litholattice:air"`), `cBlockReg::idOf()` / `findById()`. Numeric ids stay dense at runtime. Saves write a **block name table** (`storage/block_names.h`, `blocks.names`, "LLBN" v1, CRC-checked, atomic tmp + rename). Loads remap saved ids by name (`readBlockRemap` + `remapColumn`): a reordered or extended registry reopens old worlds correctly, and removed blocks load as air with a log line. A save without the table (written before this change) is migrated as the current order, and the next save writes the table. Engine and game tests cover the remap, removed blocks, identity, legacy migration and a damaged table.
+- **[EXISTS]** *Attach-face state* for attachables (switch, torches): 3 bits (13-15) of `CellState` (`stAttach` / `withAttach` / `attachOffset` / `attachFaceFor`, 1 below, 2 above, 3 -Z, 4 +Z, 5 -X, 6 +X; 0 = free-standing/legacy), the `kAttachable` flag, and `IWorldSim::canAttach(world, x, y, z, block, face)`. Placement mounts on the clicked face; `cSimThread` pops attachables off (to air) when the player breaks their support. LithoKraft rules: torches on top or sides (not ceilings), switches on top, sides or bottom; an attached switch strongly powers its support and, when on top, the dust directly below the support; a wall torch inverts its support.
 
 ### 2.2 Sim: components and behaviors (`sim` + game)
-- **[EXISTS]** `IWorldSimulation` (`sim/world_simulation.h`) is the game's simulation, called only on the sim thread:
+- **[EXISTS]** `IWorldSim` (`sim/world_simulation.h`) is the game's simulation, called only on the sim thread:
   - `scan(world)`: once, when a dimension becomes active
   - `canPlace(...)`: veto
   - `onBlockChanged(...)`
@@ -34,14 +34,14 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
   - `tick(world, TickArea, dirty)`
   - `randomTick(world, area, tickIndex, dirty)`: **stub**, default no-op
   - `activeCount()`, `takeEvents()`
-- **[EXISTS]** `SimThread`: fixed-step loop and `ClockDomain`s. A clock domain is a game-named rate (power of two, up to 512 Hz) with a `step` callback. It also handles edits from the main thread, remesh snapshots, and `takeChangedColumns()` for partial saves.
+- **[EXISTS]** `cSimThread`: fixed-step loop and `ClockDomain`s. A clock domain is a game-named rate (power of two, up to 512 Hz) with a `step` callback. It also handles edits from the main thread, remesh snapshots, and `takeChangedColumns()` for partial saves.
 - **[EXISTS, game side]** LithoKraft's `cBlockBehavior` / `cCompBehavior` (`tick(inputs, state, mem) -> ComponentStep`, `emitToward`, `use`, `describe`) and `cBehaviorCatalog` (name -> behaviour, bound through `BlockDef::behavior`). These live in `lithokraft::`, so the engine has no notion of "component".
 - **[PROPOSED]** Promote a generic `IBlockBehavior` / `BehaviorRegistry` into the SDK (`sdk/sim/behavior.h`) so that script and native mods can add components without patching LithoKraft's catalog. LithoKraft's `cCompBehavior` becomes one *kind* of behavior registered by mod #1.
-- **[EXISTS] Random ticks** (`sim/random_ticks.h`): every world tick the engine picks **8 random cells per non-empty 16x16x16 section** (`kDefaultRandomTicksPerSection`) in the tick square around the player. The rate is per dimension (`Dimension::randomTicksPerSection`, passed as `SimConfig::randomTicksPerSection`, 0 = off). It runs at the world TPS only, not in clock domains (so beacons do not scale it), and the picks are deterministic per (tick, section). Blocks opt in with `kRandomTicks`. Each pick of an opted-in block goes to `IWorldSimulation::onRandomTick(world, x, y, z, block, rnd, dirty)`, a stub by default. Cells changed through `dirty` are marked for saves. Measured worst case (every block opted in, 32x32 wafer): 0.13 ms per tick at radius 8 and 0.27 ms at radius 12. The whole-area `randomTick` hook stays as a low-level escape hatch. LithoKraft has no block opted in yet, so gameplay is unchanged.
+- **[EXISTS] Random ticks** (`sim/random_ticks.h`): every world tick the engine picks **8 random cells per non-empty 16x16x16 section** (`kDefaultRandomTicksPerSection`) in the tick square around the player. The rate is per dimension (`Dimension::randomTicksPerSection`, passed as `SimConfig::randomTicksPerSection`, 0 = off). It runs at the world TPS only, not in clock domains (so beacons do not scale it), and the picks are deterministic per (tick, section). Blocks opt in with `kRandomTicks`. Each pick of an opted-in block goes to `IWorldSim::onRandomTick(world, x, y, z, block, rnd, dirty)`, a stub by default. Cells changed through `dirty` are marked for saves. Measured worst case (every block opted in, 32x32 wafer): 0.13 ms per tick at radius 8 and 0.27 ms at radius 12. The whole-area `randomTick` hook stays as a low-level escape hatch. LithoKraft has no block opted in yet, so gameplay is unchanged.
 
 ### 2.3 Dimensions, procgen generators and noise nodes (`world`, `procgen`)
-- **[EXISTS]** `Dimension` (id, name, biomes, `ColumnGenerator`, `SetupFn` for structures and spawn, `belowWorldFill`) and `cDimensionReg` (`add`, `addAlias`, `find`).
-- **[EXISTS]** `ColumnGenerator::create(json, worldSeed, dimensionId, blocks, err)`: generators are data (JSON graphs) and thread-safe.
+- **[EXISTS]** `Dimension` (id, name, biomes, `cColumnGen`, `SetupFn` for structures and spawn, `belowWorldFill`) and `cDimensionReg` (`add`, `addAlias`, `find`).
+- **[EXISTS]** `cColumnGen::create(json, worldSeed, dimensionId, blocks, err)`: generators are data (JSON graphs) and thread-safe.
 - **[EXISTS]** Pipeline stage interfaces (`procgen/pipeline.h`): `IClimateStage`, `IBiomeSel`, `ITerrainStage`, `ISurfaceRule`, `ICarver`, and `IFeature::place(ctx, rng)`, with built-in implementations in `stages.h` (`cHeightmapTerrain`, `cDensityTerrain`, `cLayeredSurface`, `cWormCaveCarver`, `cRavineCarver`, `cMultiNoiseBiomeSel`, ...).
 - **[EXISTS]** Noise: `INoise` (`sample2/3/4`, `sampleBatch`), `NoiseType`, `NoiseSettings`, and the JSON node graph (`cNoiseGraph`, `NodeDesc`, `GraphDesc`, `GraphContext`).
 - **[PROPOSED]** `NoiseNodeRegistry` and `StageRegistry`, so mods add node types (`"mymod:terrace"`) and stages by name. The JSON loader resolves names through these registries instead of a built-in switch.
@@ -59,11 +59,11 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[EXISTS]** Display modes (`platform/window.h`: `DisplayMode`, `DisplayDesc`, Alt+Enter) are engine and app settings, not mod API.
 
 ### 2.5 Assets and resource packs (`assets`)
-- **[EXISTS]** `ResourcePack`, `ResourceLoader`, `TextureRegistry`, `ShaderLibrary` (GL GLSL only), `Image::decode` (hardened), and pack `manifest.json` plus `pack.json`.
+- **[EXISTS]** `ResourcePack`, `ResourceLoader`, `cTextureReg`, `ShaderLibrary` (GL GLSL only), `Image::decode` (hardened), and pack `manifest.json` plus `pack.json`.
 - **[PROPOSED]** A pack stack with priority: base game, then mods in load order, then user resource packs. A later pack overrides keys. The existing hot-reload diff (`hot reload diff` selftest) extends to the stack.
 
 ### 2.6 Input: actions and contexts (`input`)
-- **[EXISTS]** `ActionSet` (named actions, `ActionKind {cButton, Axis2D}`), `ActionMap` / `Binding` (keys, mouse, pad, rebinding), `InputContext` and `ContextRules` (which actions a context blocks or passes; raw UI and text channels), `InputSystem`, `cDeviceState`, and `IInputBackend`.
+- **[EXISTS]** `ActionSet` (named actions, `ActionKind {cButton, Axis2D}`), `ActionMap` / `Binding` (keys, mouse, pad, rebinding), `InputContext` and `ContextRules` (which actions a context blocks or passes; raw UI and text channels), `cInputSystem`, `cDeviceState`, and `IInputBackend`.
 - **[PROPOSED]** Mods register an `ActionSet` fragment with namespaced names and default bindings. The engine detects and reports binding conflicts (including the reserved Alt+Enter) in the controls panel.
 
 ### 2.7 Audio: synth voices (`audio`)
@@ -75,11 +75,11 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[PROPOSED]** `WidgetFactory::registerType("mymod:gauge", factory)` for native widget types. Script mods compose existing widgets from JSON and bind events to AngelScript handlers.
 
 ### 2.9 Storage: payload serializers and migrations (`storage`)
-- **[EXISTS]** `PayloadType {tag fourcc, version, save, load, migrate[v] -> v+1}` and `cPayloadReg` (the engine registers `BLKS`; LithoKraft registers `SGNL`). Also `cRegionFile` (32x32 columns, CRC, atomic swap), `cWorldStore` (I/O thread, `saveAsync`, `enqueue`), and partial saves driven by `SimThread::takeChangedColumns()`.
+- **[EXISTS]** `PayloadType {tag fourcc, version, save, load, migrate[v] -> v+1}` and `cPayloadReg` (the engine registers `BLKS`; LithoKraft registers `SGNL`). Also `cRegionFile` (32x32 columns, CRC, atomic swap), `cWorldStore` (I/O thread, `saveAsync`, `enqueue`), and partial saves driven by `cSimThread::takeChangedColumns()`.
 - **[PROPOSED]** A mod-scoped tag namespace (fourcc plus mod id in the record header). A save-level manifest records the mods and versions it was written with, plus the block-name palette (2.1). Unknown payloads are *kept verbatim* (not dropped) so that removing a mod and adding it back loses nothing (today they are skipped).
 
 ### 2.10 Scripting: AngelScript (`script`)
-- **[EXISTS]** `ScriptEngine`: sandboxed (only `string`, `log`, plus what the game binds), wall-clock budgets per call, `loadDirectory`/`reload` with keep-previous-on-failure, and `raw()` for the game to bind its API.
+- **[EXISTS]** `cScriptEngine`: sandboxed (only `string`, `log`, plus what the game binds), wall-clock budgets per call, `loadDirectory`/`reload` with keep-previous-on-failure, and `raw()` for the game to bind its API.
 - **[PROPOSED]** A stable script API layer: `ll::` (engine: blocks, world queries, UI, sfx, timers) and `<modid>::` (bindings a native or base mod exports). It is versioned with the SDK (section 3.3). Each script mod gets its own module, so names don't collide.
 
 ### 2.11 AI [EXISTS: core] (`src/ai`, `litholattice::ai`)
@@ -88,7 +88,7 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[EXISTS]** `findPath`: bounded, deterministic A* (box `planRange` 32-64, node budget); unreachable or far goals return a hop (`hopToward`), replanned on arrival.
 - **[EXISTS]** Senses: `canSee` (voxel DDA, occluded, range + view cone: no wallhacks), `hear` (falloff, halved per occluder), `senseField` (signal / heat sampled by the game).
 - **[EXISTS]** Brains: utility AI (`UtilityAction`, `pickUtility`) with `ILearnedScorer` (stub `cNullLearnedScorer`), behaviour-tree nodes (sequence, selector, inverter, condition, action, utility leaf).
-- **[EXISTS]** `cAiWorld`: 8-16 Hz tick (`advance` from world ticks), per-tick path budget (excess waits in id order), distance LOD (think every 1/2/4 ticks), mob cap 64 (up to 128), waypoints, per-mob deterministic RNG; path searches run on a `JobPool` and apply in id order, so results do not depend on thread count. All AI state lives in `cAiWorld` (server-authoritative friendly).
+- **[EXISTS]** `cAiWorld`: 8-16 Hz tick (`advance` from world ticks), per-tick path budget (excess waits in id order), distance LOD (think every 1/2/4 ticks), mob cap 64 (up to 128), waypoints, per-mob deterministic RNG; path searches run on a `cJobPool` and apply in id order, so results do not depend on thread count. All AI state lives in `cAiWorld` (server-authoritative friendly).
 - **[EXISTS]** Final-boss slot: `IBossSlot` (`allowDrop` drop gating, `surge` activity multiplier, `learnedScorer`), `cSurgeSchedule`.
 - **[PROPOSED]** Wiring into LithoKraft (mob types, spawning, rendering, saving mobs), incremental (sliced) A*, script-defined behaviours.
 All **[PROPOSED]**: an engine module `ai`, with mobs and NPCs as game code.
@@ -97,7 +97,7 @@ All **[PROPOSED]**: an engine module `ai`, with mobs and NPCs as game code.
 - `IConsideration` (utility curve over blackboard keys, 0..1) and `IAction`. The utility selector picks the top-scored action.
 - Behavior-tree nodes: `IBtNode` (`cSequence`, `cSelector`, `Parallel`, `Decorator`, leaf actions), registered by name and authored in JSON.
 - **Learned-model hook**: `IScoreModel::adjust(span<const float> features, span<float> scores)`, called after the utility scoring. The Daemon combat model plugs in here. It is optional, with no-op stubs.
-- **Waypoints**: a waypoint block or tag plus `IPathfinder` (A* over the voxel grid, budgeted per tick). Player-built NPCs get direct actions (step, use) and `goTo(waypoint|tag)`.
+- **Waypoints**: a waypoint block or tag plus `IPathfinder` (A* over the voxel grid, budgeted per tick). cPlayer-built NPCs get direct actions (step, use) and `goTo(waypoint|tag)`.
 - AI runs on its own fixed-rate step (8-16 Hz) inside the sim thread, using a `ClockDomain`-like scheduler.
 
 ## 3. Public vs internal boundary
@@ -121,7 +121,7 @@ include/litholattice/sdk/
   script/ bindings.h
   ai/     agent.h  utility.h  bt.h  pathing.h
 ```
-  These SDK headers wrap or re-export the subset of module headers that is stable. Everything else (renderers, `SimThread` internals, `JobPool`, region file layout) stays internal and is not shipped.
+  These SDK headers wrap or re-export the subset of module headers that is stable. Everything else (renderers, `cSimThread` internals, `cJobPool`, region file layout) stays internal and is not shipped.
 
 ### 3.2 ABI strategy
 - **v1 (recommended): static linking only.** Native mods are compiled together with the game, the way LithoKraft is today, against a matching SDK version. C++20 types (std::string, std::function, std::vector) are allowed across the API because there is one compiler, one CRT, and one build.
@@ -168,7 +168,7 @@ include/litholattice/sdk/
 | Hook | Thread | Budget | Notes |
 |---|---|---|---|
 | `IMod::onRegister` (registries) | main, at startup | unbounded (load screen) | the only time registries are writable |
-| `IWorldSimulation::scan` | sim thread (before start) | one-off, up to 100 ms | |
+| `IWorldSim::scan` | sim thread (before start) | one-off, up to 100 ms | |
 | `tick`, `randomTick`, `onRandomTick`, `use`, `command`, `onBlockChanged`, behaviour `tick` | **sim thread** | world tick total under 25% of the step (7.8 ms at 32 TPS; under 0.5 ms per 512 Hz domain step) | only the active `ChunkMap`; report changes through `dirty`; never block or do I/O |
 | `ClockDomain::step` | sim thread | under 1/(2 x rate) | the high-rate domains get the tightest budget |
 | AI agents (proposed) | sim thread, 8-16 Hz scheduler | about 1 ms per AI step for all agents, sliced | pathfinding is incremental |
@@ -177,7 +177,7 @@ include/litholattice/sdk/
 | Payload `save` / `load` / `migrate` | **storage I/O thread** | about 1 ms per column | operate on the column copy only (snapshot); no world access |
 | UI handlers, input, script UI | main thread (frame) | about 1 ms per frame per mod (script budget exists) | |
 | Audio voices (native only) | audio thread | real-time: no allocations or locks | scripts only send commands |
-- Cross-thread communication is through the engine queues only: `SimThread::edit` (main to sim), events (sim to main), and the audio command queue. Mods never share mutable state across threads by themselves.
+- Cross-thread communication is through the engine queues only: `cSimThread::edit` (main to sim), events (sim to main), and the audio command queue. Mods never share mutable state across threads by themselves.
 - Script hooks that run on the sim thread (proposed) use a separate script context per thread.
 
 ## 6. Diagrams
@@ -193,7 +193,7 @@ flowchart TB
   subgraph SDK["Public SDK: include/litholattice/sdk"]
     MODAPI["IMod / IModContext / version.h"]
     REG["Registries: blocks, behaviours, dimensions, stages, nodes, actions, sfx, widgets, payloads"]
-    IFC["Interfaces: IWorldSimulation, IBlockAppearance, INoise, I*Stage, cWidget, PayloadType, IAgent*"]
+    IFC["Interfaces: IWorldSim, IBlockAppearance, INoise, I*Stage, cWidget, PayloadType, IAgent*"]
   end
   subgraph Core["Closed core: litholattice"]
     WORLD[world] --- SIM[sim]
@@ -248,12 +248,12 @@ classDiagram
     +onWorldLoad(World&)
     +onShutdown()
   }
-  class BlockRegistry {
+  class cBlockReg {
     +add(BlockDef) BlockId
     +def(BlockId) BlockDef
     +findByTexture(tex)
   }
-  class IWorldSimulation {
+  class IWorldSim {
     <<interface>>
     +scan(world)
     +canPlace(world,x,y,z,b) bool
@@ -295,8 +295,8 @@ classDiagram
   class IConsideration { <<proposed>> +score(bb) float }
   class IBtNode { <<proposed>> +tick(bb) Status }
   class IScoreModel { <<proposed>> +adjust(features,scores) }
-  IMod ..> BlockRegistry : registers
-  IMod ..> IWorldSimulation : provides
+  IMod ..> cBlockReg : registers
+  IMod ..> IWorldSim : provides
   IMod ..> IBlockAppearance : provides
   IMod ..> PayloadType : registers
   ITerrainStage ..> INoise : samples

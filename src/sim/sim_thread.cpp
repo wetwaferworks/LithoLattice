@@ -36,7 +36,7 @@ bool isPow2Rate(int v) { return v > 0 && (v & (v - 1)) == 0; }
 }
 }  // namespace
 
-void SimThread::validateTickRate(int tps) {
+void cSimThread::validateTickRate(int tps) {
   // Review A-L1: a bare pow2 check accepted rates like 2^30, whose master
   // step Ns(1e9/masterHz) rounds to 0 — the catch-up clamp then divided by
   // that zero step (SIGFPE, the class badRate exists to prevent). The world
@@ -51,7 +51,7 @@ void SimThread::validateTickRate(int tps) {
             "must be one of the supported tick modes (32/64/128/256/512)");
 }
 
-SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_ptr<IWorldSimulation> simulation,
+cSimThread::cSimThread(ChunkMap& chunks, const cBlockReg& blocks, std::unique_ptr<IWorldSim> simulation,
                      SimConfig config, SubmitMesh submit)
     : chunks_(chunks), blocks_(blocks), sim_(std::move(simulation)), radius_(config.radiusChunks), round_(config.roundArea), diamond_(config.diamondArea), epoch_(config.epoch),
       belowWorld_(config.belowWorldFill), submit_(std::move(submit)), requestedTps_(config.tickRate) {
@@ -147,7 +147,7 @@ SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_
   }
 }
 
-void SimThread::handleHandshakeFreeze() {
+void cSimThread::handleHandshakeFreeze() {
   if (!handshake_ || !handshake_->frozen()) {
     // A-M5: the latch was cleared elsewhere (a routine stop/start clears
     // it in cTimingHandshakeAuthority::start()) — the report-once flag
@@ -160,11 +160,11 @@ void SimThread::handleHandshakeFreeze() {
   handshake_->notifyFreeze();  // logs the SimCorruptionReport (never simFailFast)
 }
 
-SimThread::~SimThread() {
+cSimThread::~cSimThread() {
   stop();
   if (handshakeWorkersOutstanding()) {
     // C2: never destroy an authority a live pull worker still
-    // dereferences (its WorkFn captures reach this SimThread and the
+    // dereferences (its WorkFn captures reach this cSimThread and the
     // world). Deliberately leak it — process-lifetime, logged, and safe —
     // rather than use-after-free in teardown.
     logError("sim_thread: destroying a SimThread with a handshake worker still outstanding — "
@@ -176,36 +176,36 @@ SimThread::~SimThread() {
 // ---- control producers (any thread): everything sim-affecting crosses
 // the serialized control stream; the wake bump keeps a parked paused loop
 // responsive to arrivals, as the old direct edit() did.
-void SimThread::setPlayerChunk(int cx, int cz) {
+void cSimThread::setPlayerChunk(int cx, int cz) {
   control_->submit(ControlEvent::chunkEvent(cx, cz));
   notifyWake();
 }
 
-void SimThread::setRay(const RayInput& r) {
+void cSimThread::setRay(const RayInput& r) {
   ray_.writeSlot() = r;  // presentation slot (HUD look-at): latest wins
   ray_.publish();
   control_->submit(ControlEvent::rayEvent(r));  // stamped copy: edit resolution
   notifyWake();
 }
 
-void SimThread::edit(EditCmd c) {
+void cSimThread::edit(EditCmd c) {
   control_->submit(ControlEvent::editEvent(c));
   notifyWake();
 }
 
-std::vector<uint8_t> SimThread::drainPlaceReceipts() {
+std::vector<uint8_t> cSimThread::drainPlaceReceipts() {
   std::lock_guard<std::mutex> lk(receiptM_);
   std::vector<uint8_t> out;
   out.swap(receipts_);
   return out;
 }
 
-void SimThread::runBetweenTicks(std::function<void()> fn) {
+void cSimThread::runBetweenTicks(std::function<void()> fn) {
   const bool wasPaused = paused();
   setPaused(true);
   // RAII pause guard: if fn() throws, the sim must not stay paused forever.
   struct PauseGuard {
-    SimThread* self;
+    cSimThread* self;
     bool wasPaused;
     ~PauseGuard() { if (!wasPaused) self->setPaused(false); }
   } guard{this, wasPaused};
@@ -214,7 +214,7 @@ void SimThread::runBetweenTicks(std::function<void()> fn) {
   { locktiming::TimedGuard l(blockMutex_, locktiming::kBlock); fn(); }  // 0.0.1.60 timing (diagnostic)
 }
 
-bool SimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) {
+bool cSimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) {
   // Waits out any in-flight iteration (ticks + post-tick flush both hold
   // blockMutex_). The sim thread keeps running; it simply cannot start its
   // next iteration until hold is released. A frozen or poisoned handshake
@@ -234,7 +234,7 @@ bool SimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) {
   return true;
 }
 
-void SimThread::start() {
+void cSimThread::start() {
   if (handshakeWorkersOutstanding()) {
     // C2 poison: a pull worker from a failed stop() is still running
     // against the world; starting again would run two pools against it.
@@ -253,7 +253,7 @@ void SimThread::start() {
   thread_ = std::thread([this] { raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
 }
 
-bool SimThread::stop() {
+bool cSimThread::stop() {
   const bool wasRunning = running_.exchange(false);
   if (wasRunning) notifyWake();  // A-M7: a parked paused loop must wake to see the stop
   if (wasRunning && thread_.joinable()) thread_.join();
@@ -261,7 +261,7 @@ bool SimThread::stop() {
   return true;
 }
 
-bool SimThread::waitLoops(uint64_t n, std::chrono::milliseconds timeout) const {
+bool cSimThread::waitLoops(uint64_t n, std::chrono::milliseconds timeout) const {
   const uint64_t target = loops() + n;
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (loops() < target) {
@@ -273,7 +273,7 @@ bool SimThread::waitLoops(uint64_t n, std::chrono::milliseconds timeout) const {
   return true;
 }
 
-void SimThread::markDirty(int x, int y, int z) {
+void cSimThread::markDirty(int x, int y, int z) {
   // Own sub-chunk, plus neighbours when the cell sits on a border (face culling / AO).
   const int cx = x >> 4, sy = y >> 4, cz = z >> 4;
   const int lx = x & 15, ly = y & 15, lz = z & 15;
@@ -287,7 +287,7 @@ void SimThread::markDirty(int x, int y, int z) {
       }
 }
 
-void SimThread::flushDirty() {
+void cSimThread::flushDirty() {
   // Cortana 2026-10-15 1350: one flush = one settled post-phase state = one
   // publish batch (the game lands a batch's meshes in the same frame).
   uint32_t batchN = 0;
@@ -322,7 +322,7 @@ void SimThread::flushDirty() {
   dirtySubs_.clear();
 }
 
-void SimThread::castRay(const RayInput& ray) {
+void cSimThread::castRay(const RayInput& ray) {
   ChunkMap& w = chunks_;
   hit_ = raycast(w, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, kLookRange, hit_xyz_, prev_xyz_, &blocks_);
   const float dx = hit_xyz_[0] + 0.5f - ray.ox, dy = hit_xyz_[1] + 0.5f - ray.oy, dz = hit_xyz_[2] + 0.5f - ray.oz;
@@ -336,13 +336,13 @@ void SimThread::castRay(const RayInput& ray) {
 // applyEdits: the stamp discipline is identical (stamped at drain with
 // the current tick, applied at that tick's step head), extended from
 // edits-only to every sim-affecting control kind, with sequence numbers.
-bool SimThread::applyControlEvents(uint64_t tick) {
+bool cSimThread::applyControlEvents(uint64_t tick) {
   // Fast path: nothing due — no extraction, no raycast (the caller keeps
   // the HUD highlight live from the raw ray slot).
   if (!control_->hasDue(tick)) return false;
   controlDue_.clear();
   control_->extractDue(tick, controlDue_);
-  const IWorldSimulation::DirtyFn dirty = [this](int x, int y, int z) { simChanged(x, y, z); };
+  const IWorldSim::DirtyFn dirty = [this](int x, int y, int z) { simChanged(x, y, z); };
   bool anyEdit = false;
   bool castValid = false;  // hit_ currently reflects stampedRay_ + the world as it stands
   for (ControlEvent& e : controlDue_) {
@@ -363,7 +363,7 @@ bool SimThread::applyControlEvents(uint64_t tick) {
       case ControlKind::Locomotion:
       case ControlKind::ControlFrame:
         // No sim-thread consumer today: locomotion steps on the game
-        // thread and pilot frames merge into the game's InputSystem
+        // thread and pilot frames merge into the game's cInputSystem
         // upstream of this boundary. The events are in the stream (and
         // the record) so IDemoRecord sees every control source; they are
         // consumed here — extracted in order, accounted in the stream
@@ -377,7 +377,7 @@ bool SimThread::applyControlEvents(uint64_t tick) {
 // One edit against the current stamped-ray cast. Returns true when the
 // world changed (the caller re-casts before the next edit, exactly as
 // the old loop re-cast after each mutating edit).
-bool SimThread::applyOneEdit(EditCmd& e, const IWorldSimulation::DirtyFn& dirty) {
+bool cSimThread::applyOneEdit(EditCmd& e, const IWorldSim::DirtyFn& dirty) {
   ChunkMap& w = chunks_;
   if (e.kind == EditCmd::Kind::Use) {
     sim_->use(w, e.x, e.y, e.z, dirty);
@@ -418,9 +418,9 @@ bool SimThread::applyOneEdit(EditCmd& e, const IWorldSimulation::DirtyFn& dirty)
 
 // The Place branch of applyOneEdit (unchanged rules, split out so every
 // outcome can be receipted). True when the block was placed.
-bool SimThread::applyPlace(EditCmd& e) {
+bool cSimThread::applyPlace(EditCmd& e) {
   ChunkMap& w = chunks_;
-  const BlockRegistry& reg = blocks_;
+  const cBlockReg& reg = blocks_;
   if (!hit_ || hitDist_ > kReach + 0.5f) return false;
   const int x = prev_xyz_[0], y = prev_xyz_[1], z = prev_xyz_[2];
   if (w.get(x, y, z) != kAir) return false;
@@ -440,13 +440,13 @@ bool SimThread::applyPlace(EditCmd& e) {
 
 // A cell changed on the sim thread (player edit, game sim, random tick, script command): mark it
 // dirty, and when it no longer holds a solid block, pop off attachables mounted on it.
-void SimThread::simChanged(int x, int y, int z) {
+void cSimThread::simChanged(int x, int y, int z) {
   markDirty(x, y, z);
   if (!blocks_.has(chunks_.get(x, y, z), kSolid)) popAttached(x, y, z);
 }
 
 // The support at (x, y, z) is gone: attachables mounted on it pop off.
-void SimThread::popAttached(int x, int y, int z) {
+void cSimThread::popAttached(int x, int y, int z) {
   static constexpr int n6[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
   for (const auto& d : n6) {
     const int nx = x + d[0], ny = y + d[1], nz = z + d[2];
@@ -469,7 +469,7 @@ void SimThread::popAttached(int x, int y, int z) {
   }
 }
 
-void SimThread::publishEvents() {
+void cSimThread::publishEvents() {
   sim_->takeEvents(eventBuf_);
   for (const SimEvent& e : eventBuf_) events_.push(e);
   eventBuf_.clear();
@@ -485,7 +485,7 @@ static void waitUntil(Clock::time_point t) {
   }
 }
 
-void SimThread::run() {
+void cSimThread::run() {
   const HighResTimerScope timerResolution;  // 1 ms sleeps for the high-rate domains
   // CH-H8: masterStep_/worldTickN_/dropped_/acc_/window state are MEMBERS,
   // initialised once at construction — this function deliberately does NOT

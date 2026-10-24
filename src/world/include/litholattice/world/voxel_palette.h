@@ -146,7 +146,7 @@ class VoxelPalette {
   /// palette entry, never per voxel. (In release builds the assert compiles out
   /// and the kind-filtered findByStableId below maps it to kAir instead: loud in
   /// dev, safe in prod.)
-  void resolveBlockIds(const BlockRegistry& reg, std::vector<BlockId>& lut) const {
+  void resolveBlockIds(const cBlockReg& reg, std::vector<BlockId>& lut) const {
     lut.clear();
     if (width_ == Width::W64) return;
     lut.reserve(palette_.size());

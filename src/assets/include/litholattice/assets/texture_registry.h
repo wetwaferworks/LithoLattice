@@ -1,4 +1,4 @@
-// TextureRegistry: every texture, animation frame, palette and mask a pack set provides, under
+// cTextureReg: every texture, animation frame, palette and mask a pack set provides, under
 // stable handles. A TextureId is the texture-array layer the GPU side uploads it to; id 0 is
 // always the magenta "missing" checker, so an unknown name never breaks rendering.
 #pragma once
@@ -60,12 +60,12 @@ struct AnimatedTexture {
   AnimationTiming timing;
 };
 
-class TextureRegistry {
+class cTextureReg {
  public:
   static constexpr int kMaxLayers = 2048;  ///< // Cortana 2026-10-15 1628: CA-03 [ENGINE] chunk vertices carry a 16-bit layer; 2048 = common GL_MAX_ARRAY_TEXTURE_LAYERS
 
   /// Starts with the missing texture at id 0, sized `tileSize`.
-  explicit TextureRegistry(int tileSize = 16);
+  explicit cTextureReg(int tileSize = 16);
 
   int tileSize() const { return tile_; }
 
@@ -112,6 +112,6 @@ struct RegistryDiff {
   /// "3 changed (a, b, c), 1 added (d)" or "no texture changes".
   std::string summary(size_t maxNames = 8) const;
 };
-RegistryDiff diffRegistries(const TextureRegistry& before, const TextureRegistry& after);
+RegistryDiff diffRegistries(const cTextureReg& before, const cTextureReg& after);
 
 }  // namespace litholattice

@@ -43,7 +43,7 @@
 //  - Matrices: core/math.h — column-major Mat4, OpenGL clip space;
 //    viewProjection = mul(perspective(...), view) exactly like Game and the
 //    MCP senses adapter build it.
-//  - Yaw/pitch are RADIANS, Player::forward convention:
+//  - Yaw/pitch are RADIANS, cPlayer::forward convention:
 //    forward = {cos(pitch)cos(yaw), sin(pitch), cos(pitch)sin(yaw)}
 //    (yaw measured from +X toward +Z, pitch positive = looking up).
 //  - FOV is DEGREES (the MCP CameraPose convention), clamped to [10, 120].
@@ -77,7 +77,7 @@ class ICameraTarget {
   /// Eye position relative to the anchor (first person). Default: standing
   /// eye height of the game's player proportions.
   virtual Vec3 eyeOffset() const { return {0.f, 1.625f, 0.f}; }
-  /// Facing direction, radians, Player::forward convention (see header).
+  /// Facing direction, radians, cPlayer::forward convention (see header).
   virtual float facingYaw() const = 0;
   virtual float facingPitch() const { return 0.f; }
   /// World velocity, blocks/second. Drives FOV kick, follow look-ahead and

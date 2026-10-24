@@ -1,5 +1,5 @@
 // Deterministic parallelism scheduler: conflict-DAG stage building,
-// per-stage parallel dispatch on a JobPool, and ordered command-buffer drains.
+// per-stage parallel dispatch on a cJobPool, and ordered command-buffer drains.
 #include "litholattice/sim/det_sched.h"
 
 #include "litholattice/core/bitops.h"
@@ -94,7 +94,7 @@ void cDeterministicScheduler::drainStage(void* world) {
   drainTmp_.clear();
 }
 
-void cDeterministicScheduler::runTick(uint64_t tick, void* world, JobPool& pool) {
+void cDeterministicScheduler::runTick(uint64_t tick, void* world, cJobPool& pool) {
   const uint64_t failedBefore = pool.failedJobs();
   for (size_t s = 0; s < stages_.size(); ++s) {
     for (const size_t id : stages_[s]) {

@@ -1,5 +1,5 @@
 // Script binding allowlist: the definitive registry of AngelScript APIs a mod's
-// scripts may receive. The script host (ScriptEngine) refuses to bind anything
+// scripts may receive. The script host (cScriptEngine) refuses to bind anything
 // not on this list, and refuses bindings the mod's permission bitmask does not
 // grant (see LithoLatticeModPermission in litholattice/mods/mod_interface.h).
 //
@@ -7,7 +7,7 @@
 // A malicious or buggy mod's scripts must never reach outside the sandbox:
 // no raw file I/O, no network, no process/system calls, no wall-clock, no
 // unseeded RNG. The allowlist is the enforcement point for that:
-//  1. Deny-by-default: ScriptEngine::bindGlobalFunction() only forwards to
+//  1. Deny-by-default: cScriptEngine::bindGlobalFunction() only forwards to
 //     AngelScript when the exact declaration string is on the allowlist AND
 //     the mod's granted permissions cover the entry's required bits.
 //  2. No dangerous bindings exist in the list. Registration of new entries
@@ -15,7 +15,7 @@
 //     known-dangerous tokens (file, socket, system, exec, ...) as a
 //     defense-in-depth heuristic; the primary control is code review of every
 //     entry added here or at runtime by the game.
-//  3. The raw asIScriptEngine* is NOT exposed (ScriptEngine::raw() was
+//  3. The raw asIScriptEngine* is NOT exposed (cScriptEngine::raw() was
 //     removed); the game registers its API through the gated bind call, so
 //     there is no bypass path around the allowlist.
 // Entries are reviewed against mod_safety.h: deterministic engine APIs only.
@@ -37,7 +37,7 @@ struct ScriptBindingEntry {
 class cScriptBindingAllowlist {
  public:
   /// Registers the built-in table (core + standard game/mod API). Idempotent;
-  /// called by ScriptEngine::init() so scripts always have a complete list.
+  /// called by cScriptEngine::init() so scripts always have a complete list.
   static void registerBuiltins();
 
   /// Registers one game-specific binding. Refused (false, logged) when:

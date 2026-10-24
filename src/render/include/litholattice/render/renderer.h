@@ -116,7 +116,7 @@ struct ChunkMesh {
   uint64_t seq = 0;
   // Cortana 2026-10-15 1350 - handshake-coupled meshing, phase-boundary
   // publish (idea: JD; refinement: Cortana): every sub-chunk snapshotted by
-  // one SimThread::flushDirty() (one settled post-phase world state) shares
+  // one cSimThread::flushDirty() (one settled post-phase world state) shares
   // a batch id; batchSize = how many. 0 = not part of a publish batch.
   uint64_t batch = 0;
   uint32_t batchSize = 0;
@@ -181,7 +181,7 @@ struct FrameParams {
   int width = 0, height = 0;
   Mat4 viewProj;
   Vec3 camPos, sky;
-  float yawRad = 0.f, pitchRad = 0.f;  ///< camera orientation, radians (Player::forward convention);
+  float yawRad = 0.f, pitchRad = 0.f;  ///< camera orientation, radians (cPlayer::forward convention);
                                        ///< feeds the velocity-adaptive culling prototype (all off by default)
   float fogEnd = 200.f;
   bool highlight = false; int hx = 0, hy = 0, hz = 0;  // outlined block
@@ -259,7 +259,7 @@ class IRenderer {
   virtual std::string deviceInfo() const = 0;  // e.g. GL vendor | renderer | version
   /// How frames are presented (Vulkan: fifo / mailbox / immediate; GL: the window's swap interval).
   virtual std::string presentMode() const { return "swap-interval"; }
-  /// The block texture array (layer = TextureId). Upload a TextureRegistry to it on (re)load.
+  /// The block texture array (layer = TextureId). Upload a cTextureReg to it on (re)load.
   virtual ITextureArray& textureArray() = 0;
   /// Material uniforms (mask layers, palette rows, animations) from the block models.
   virtual void setMaterials(const BlockMaterials& materials) = 0;

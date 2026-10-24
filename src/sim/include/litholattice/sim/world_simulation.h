@@ -1,4 +1,4 @@
-// The game's world simulation, as the engine's tick scheduler (SimThread) sees it. SimThread owns
+// The game's world simulation, as the engine's tick scheduler (cSimThread) sees it. cSimThread owns
 // the dimension's ChunkMap on its own thread and calls these hooks; the game implements them
 // (LithoKraft: the signal sim). Everything here runs on the sim thread only.
 #pragma once
@@ -44,14 +44,14 @@ struct TickArea {
 // Cortana 2026-10-15 1505 (ENGINE, audit F-1): CONTRACT: post-tick callbacks and inspect()/
 // activeCount() run while the sim holds its block mutex. Callbacks must be non-blocking and must never
 // wait on (or call back into code that waits on) the game thread, or the sim can deadlock.
-class IWorldSimulation {
+class IWorldSim {
  public:
   using DirtyFn = std::function<void(int x, int y, int z)>;  ///< a cell's look changed (remesh it)
-  virtual ~IWorldSimulation() = default;
+  virtual ~IWorldSim() = default;
 
   /// Indexes the freshly loaded world (called once, before the first tick).
   virtual void scan(const ChunkMap& world) = 0;
-  /// Timing Handshake (hs-design §3.1): called once by SimThread
+  /// Timing Handshake (hs-design §3.1): called once by cSimThread
   /// after scan() when handshake mode is on, so the simulation can register
   /// its phase components with the authority. Default: no-op — simulations
   /// that do not opt in are never touched by the handshake, and in legacy
@@ -73,7 +73,7 @@ class IWorldSimulation {
   virtual void onBlockPopped(ChunkMap& /*world*/, int /*x*/, int /*y*/, int /*z*/, BlockId /*was*/) {}
   /// Right-click on an interactive block. Returns false if nothing happened.
   virtual bool use(ChunkMap& /*world*/, int /*x*/, int /*y*/, int /*z*/, const DirtyFn& /*dirty*/) { return false; }
-  /// A game-defined command (SimThread::edit with EditCmd::Kind::Command).
+  /// A game-defined command (cSimThread::edit with EditCmd::Kind::Command).
   virtual void command(ChunkMap& /*world*/, const SimCommand& /*cmd*/, const DirtyFn& /*dirty*/) {}
   /// One world tick over `area`.
   virtual void tick(ChunkMap& world, const TickArea& area, const DirtyFn& dirty) = 0;

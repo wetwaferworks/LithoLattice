@@ -68,7 +68,7 @@ void scriptConsoleSetCvar(const std::string& name, const std::string& value, Con
 
 struct BindingDecl {
   const char* decl;
-  ScriptEngine::ScriptFn fn;  // fix 3c: native + generic forms
+  cScriptEngine::ScriptFn fn;  // fix 3c: native + generic forms
   const char* description;
 };
 
@@ -87,7 +87,7 @@ void registerConsoleScriptBindings() {
     cScriptBindingAllowlist::registerBinding({b.decl, uint32_t(kPermConsole), b.description});
 }
 
-std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se, cConsoleReg& registry,
+std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(cScriptEngine& se, cConsoleReg& registry,
                                                            const std::string& modId) {
   auto ctx = std::make_shared<ConsoleScriptContext>();
   ctx->registry = &registry;

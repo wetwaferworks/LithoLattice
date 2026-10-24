@@ -152,7 +152,7 @@ void testModInputConfinement(const auto& check) {
   check(!cModInputRouter::shouldDeliverToMod(true),
         "mod input: key events withheld while a system modal/text field has focus");
 
-  // No raw device access: the router works with no InputSystem,
+  // No raw device access: the router works with no cInputSystem,
   // IInputBackend, or cDeviceState anywhere near it  -  a mod holding only the
   // router (or the C API) cannot observe device state. The API-surface half
   // of this is audit-pinned in mods_selftest (no device/input-injection
@@ -166,12 +166,12 @@ void testModInputConfinement(const auto& check) {
   }
 
   // Anti-cheat: there is no injection path. The router exposes no method
-  // taking an InputEvent and holds no cInputPump/InputSystem/IInputBackend -
+  // taking an InputEvent and holds no cInputPump/cInputSystem/IInputBackend -
   // a synthetic key event is inexpressible here, so routing a game key event
   // to a mod (the game's explicit onInputEvent call) must leave the engine
   // pipeline exactly as it was.
   {
-    InputSystem sys(testDefaults(), testContexts());
+    cInputSystem sys(testDefaults(), testContexts());
     ScriptedBackend backend({});
     sys.update(backend);  // empty frame: nothing pressed anywhere
     // The game would now call the mod's onInputEvent(key, down) directly -
@@ -216,7 +216,7 @@ int runInputSelfTest() {
           "game-declared ActionSet: names, kinds, intended shared input, bindings JSON round trip over defaults");
   }
   {
-    InputSystem in(testDefaults(), testContexts());
+    cInputSystem in(testDefaults(), testContexts());
     cReplayInputBackend backend;
     double t = 0;
     auto frame = [&](std::initializer_list<InputEvent> evs) {

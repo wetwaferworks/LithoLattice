@@ -13,9 +13,9 @@
 
 namespace litholattice {
 
-class Player;  // concrete IPlayer (player.h); the manager owns instances
+class cPlayer;  // concrete IPlayer (player.h); the manager owns instances
 
-/// Player state, synced in multiplayer. Powers of two where it makes sense.
+/// cPlayer state, synced in multiplayer. Powers of two where it makes sense.
 struct PlayerState {
   uint64_t playerId = 0;  ///< unique per player
   double x = 0, y = 0, z = 0;      ///< position
@@ -37,9 +37,9 @@ struct PlayerState {
   uint32_t deserialize(const uint8_t* in, uint32_t len);
 };
 
-/// Player manager: tracks all players (local + remote in multiplayer).
+/// cPlayer manager: tracks all players (local + remote in multiplayer).
 /// Owns the shared cVitalReg/cStatReg/cAbilityReg and one
-/// concrete Player per participant, and routes registry change callbacks
+/// concrete cPlayer per participant, and routes registry change callbacks
 /// into each player's IPlayerListeners.
 ///
 /// HEALTH MIRROR: PlayerState::health is the net-synced field; the health
@@ -60,9 +60,9 @@ class cPlayerMgr {
   /// (playerId 0): check the id when it matters, or use player()/has().
   const PlayerState& get(uint64_t playerId) const;
   /// Insert or overwrite a player's state (from network / save load).
-  /// Also creates the Player object when the id is new.
+  /// Also creates the cPlayer object when the id is new.
   void addOrUpdate(const PlayerState& state);
-  /// Remove a player entirely: state, Player object, and every vital /
+  /// Remove a player entirely: state, cPlayer object, and every vital /
   /// stat / ability record keyed to them are purged.
   void remove(uint64_t playerId);
 
@@ -75,13 +75,13 @@ class cPlayerMgr {
   const cAbilityReg& abilities() const { return abilities_; }
 
   /// The local player as an IPlayer (created on first call).
-  Player& localPlayer();
+  cPlayer& localPlayer();
   /// Add a player with a display name; returns the existing one when the
   /// id is already present (name updated). Id 0 is reserved ("nobody") and
   /// is mapped to a fresh id — check the returned playerId().
-  Player& addPlayer(uint64_t playerId, std::string displayName);
-  Player* player(uint64_t playerId);
-  const Player* player(uint64_t playerId) const;
+  cPlayer& addPlayer(uint64_t playerId, std::string displayName);
+  cPlayer* player(uint64_t playerId);
+  const cPlayer* player(uint64_t playerId) const;
   bool has(uint64_t playerId) const { return players_.count(playerId) != 0; }
   size_t count() const { return players_.size(); }
   /// All player ids, ascending (deterministic iteration order).
@@ -94,7 +94,7 @@ class cPlayerMgr {
   void notifyStateChanged(uint64_t playerId);
 
  private:
-  Player& ensurePlayer(uint64_t playerId);
+  cPlayer& ensurePlayer(uint64_t playerId);
   /// The health vital's id, resolved once and cached in vitalsHealth_
   /// (0 until the standard vitals are registered). PLY-4.
   uint32_t healthVitalId();
@@ -105,7 +105,7 @@ class cPlayerMgr {
   cVitalReg vitals_;
   cStatReg stats_;
   cAbilityReg abilities_;
-  std::map<uint64_t, std::unique_ptr<Player>> players_;  // id order
+  std::map<uint64_t, std::unique_ptr<cPlayer>> players_;  // id order
   uint64_t localId_ = 1;  // 0 is reserved; the first real player is 1
   uint32_t vitalsHealth_ = 0;  // health vital id once vitals are registered
 };

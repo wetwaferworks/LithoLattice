@@ -22,7 +22,7 @@ class cVkTextureArray final : public ITextureArray {
   cVkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced);
 
   /// Waits for the device to go idle, then replaces both images. Keeps the old ones on failure.
-  bool upload(const TextureRegistry& textures) override;
+  bool upload(const cTextureReg& textures) override;
   int layerCount() const override { return layers_; }
   int tileSize() const override { return tile_; }
 
@@ -30,7 +30,7 @@ class cVkTextureArray final : public ITextureArray {
   VkDescriptorImageInfo paletteDescriptor() const;
 
  private:
-  std::optional<Image> uploadArray(const TextureRegistry& textures, uint32_t mipLevels) const;
+  std::optional<Image> uploadArray(const cTextureReg& textures, uint32_t mipLevels) const;
 
   const cVulkanDevice& dev_;
   VkCommandPool pool_;

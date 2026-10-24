@@ -5,7 +5,7 @@
 
 namespace litholattice::procgen {
 /// Prints one PASS / FAIL line per check; returns the number of failures.
-int runProcgenSelfTest(JobPool& pool);
+int runProcgenSelfTest(cJobPool& pool);
 /// Structure registry, placement solver, structure block (struct_registry_selftest.cpp).
 int runStructRegistrySelfTest();
 }  // namespace litholattice::procgen

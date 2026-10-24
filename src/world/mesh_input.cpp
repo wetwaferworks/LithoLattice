@@ -4,7 +4,7 @@
 
 namespace litholattice {
 
-void snapshotForMeshingInto(const ChunkMap& w, const BlockRegistry& reg, int cx, int sy, int cz,
+void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
                             uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out) {
   MeshInput* in = &out;
   in->cx = cx; in->sy = sy; in->cz = cz; in->epoch = epoch; in->seq = seq;
@@ -49,7 +49,7 @@ void snapshotForMeshingInto(const ChunkMap& w, const BlockRegistry& reg, int cx,
       }
 }
 
-std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const BlockRegistry& reg, int cx, int sy,
+std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const cBlockReg& reg, int cx, int sy,
                                               int cz, uint32_t epoch, uint64_t seq, BlockId belowWorld) {
   auto in = std::make_shared<MeshInput>();
   snapshotForMeshingInto(w, reg, cx, sy, cz, epoch, seq, belowWorld, *in);

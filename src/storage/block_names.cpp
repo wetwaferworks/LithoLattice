@@ -42,7 +42,7 @@ bool tableFootprintExists(const std::filesystem::path& file) {
 }
 }  // namespace
 
-bool writeBlockNames(const std::filesystem::path& file, const BlockRegistry& blocks, std::string* err) {
+bool writeBlockNames(const std::filesystem::path& file, const cBlockReg& blocks, std::string* err) {
   ByteWriter w;
   w.u32(kMagic);
   w.u32(kBlockNamesVersion);
@@ -60,7 +60,7 @@ bool writeBlockNames(const std::filesystem::path& file, const BlockRegistry& blo
   return writeFileAtomic(file, w.out, err);
 }
 
-std::optional<BlockRemap> readBlockRemap(const std::filesystem::path& file, const BlockRegistry& blocks, std::string* err) {
+std::optional<BlockRemap> readBlockRemap(const std::filesystem::path& file, const cBlockReg& blocks, std::string* err) {
   BlockRemap r;
   if (!tableFootprintExists(file)) {
     r.legacy = true;
@@ -102,7 +102,7 @@ std::optional<BlockRemap> readBlockRemap(const std::filesystem::path& file, cons
   return r;
 }
 
-std::optional<StableRemap> readStableRemap(const std::filesystem::path& file, const BlockRegistry& blocks,
+std::optional<StableRemap> readStableRemap(const std::filesystem::path& file, const cBlockReg& blocks,
                                            std::string* err) {
   auto base = readBlockRemap(file, blocks, err);
   if (!base) return std::nullopt;

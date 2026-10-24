@@ -21,7 +21,7 @@ class cCpuTextureArray final : public ITextureArray {
   /// feed paths agree texel-for-texel). Palettes are not stored: the
   /// software fragment inputs carry no palette data — strip/palette shading
   /// on this path resolves from the vertex mode/value fields instead.
-  bool upload(const TextureRegistry& textures) override;
+  bool upload(const cTextureReg& textures) override;
   int layerCount() const override { return layers_; }
   /// The stored tile resolution (kTileSize), not the source registry's.
   int tileSize() const override { return tile_; }

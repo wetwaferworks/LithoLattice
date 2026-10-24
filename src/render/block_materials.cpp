@@ -12,7 +12,7 @@ BlockMaterials::BlockMaterials(size_t n) {
   swatch_.assign(n, {1.f, 0.f, 1.f});
 }
 
-BlockMaterials BlockMaterials::build(const BlockRegistry& reg, const TextureRegistry& textures, const BlockModelSet& models,
+BlockMaterials BlockMaterials::build(const cBlockReg& reg, const cTextureReg& textures, const BlockModelSet& models,
                                      std::vector<std::string>* warnings, const IBlockAppearance* appearance) {
   BlockMaterials m(reg.size());
   auto warn = [&](std::string w) { if (warnings) warnings->push_back(std::move(w)); };

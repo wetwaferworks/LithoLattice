@@ -1002,7 +1002,7 @@ int runConsoleSelfTest() {
     std::vector<std::string> seen;
     r.setOutput([&seen](const std::string& line) { seen.push_back(line); });
 
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModPermissions(uint32_t(kPermConsole));
     auto ctx = bindConsoleToScripts(se, r, "testmod");
@@ -1025,7 +1025,7 @@ int runConsoleSelfTest() {
     check(ok, "AngelScript: script calls a command and reads/writes a cvar");
 
     // Without kPermConsole the bindings are refused.
-    ScriptEngine seDenied;
+    cScriptEngine seDenied;
     seDenied.init();
     seDenied.setModPermissions(0);
     auto deniedCtx = bindConsoleToScripts(seDenied, r, "evilmod");
@@ -1049,7 +1049,7 @@ int runConsoleSelfTest() {
     std::vector<std::string> seen;
     r.setOutput([&seen](const std::string& line) { seen.push_back(line); });
 
-    ScriptEngine se;
+    cScriptEngine se;
     se.init();
     se.setModPermissions(uint32_t(kPermConsole));  // console access, no cheat grant
     auto ctx = bindConsoleToScripts(se, r, "testmod");

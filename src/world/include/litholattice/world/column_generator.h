@@ -21,36 +21,36 @@ struct WorldgenSettings {
   std::map<std::string, std::string, std::less<>> generators;
 };
 
-class ColumnGenerator {
+class cColumnGen {
  public:
-  /// Construction token: only ColumnGenerator's own factory can make one, so it can use make_unique / make_shared.
+  /// Construction token: only cColumnGen's own factory can make one, so it can use make_unique / make_shared.
   class Passkey {
-    friend class ColumnGenerator;
+    friend class cColumnGen;
     Passkey() = default;
   };
-  ColumnGenerator(Passkey, std::unique_ptr<const procgen::cGenPipeline> p, uint64_t dimensionSeed,
-                  const BlockRegistry* blocks)
+  cColumnGen(Passkey, std::unique_ptr<const procgen::cGenPipeline> p, uint64_t dimensionSeed,
+                  const cBlockReg* blocks)
       : pipeline_(std::move(p)), dimensionSeed_(dimensionSeed), blocks_(blocks) {}
   /// Builds a dimension's generator from JSON. Noise is seeded with
   /// procgen::dimensionSeed(worldSeed, dimensionId). nullptr and `err` on failure.
   /// Worldgen material names are block texture keys (plus "air"), resolved against `blocks`.
-  static std::shared_ptr<const ColumnGenerator> create(const std::string& json, uint64_t worldSeed,
-                                                       std::string_view dimensionId, const BlockRegistry& blocks,
+  static std::shared_ptr<const cColumnGen> create(const std::string& json, uint64_t worldSeed,
+                                                       std::string_view dimensionId, const cBlockReg& blocks,
                                                        std::string& err);
   /// Same, plus `extraSurface` rules appended after the JSON-configured surface rules (see
   /// procgen::loadGenerator). For rules that place block ids directly, which JSON material
   /// names cannot express.
-  static std::shared_ptr<const ColumnGenerator> create(
-      const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const BlockRegistry& blocks,
+  static std::shared_ptr<const cColumnGen> create(
+      const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const cBlockReg& blocks,
       std::string& err, std::vector<std::unique_ptr<procgen::ISurfaceRule>> extraSurface);
   /// Same, plus a `models` resolver for "lithoform_stamp" features (see procgen::loadGenerator).
   /// When null, that feature type fails to load with a clear error.
-  static std::shared_ptr<const ColumnGenerator> create(
-      const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const BlockRegistry& blocks,
+  static std::shared_ptr<const cColumnGen> create(
+      const std::string& json, uint64_t worldSeed, std::string_view dimensionId, const cBlockReg& blocks,
       std::string& err, std::vector<std::unique_ptr<procgen::ISurfaceRule>> extraSurface,
       procgen::ModelResolver models);
   /// Maps a worldgen material name (block texture key, or "air") to a block id of `blocks`.
-  static std::optional<procgen::MaterialId> resolveMaterial(const BlockRegistry& blocks, std::string_view name);
+  static std::optional<procgen::MaterialId> resolveMaterial(const cBlockReg& blocks, std::string_view name);
 
   /// Generates column (cx, cz); all-air sub-chunks stay null. Thread-safe.
   /// With `mapsOut`, also returns the pipeline's per-column maps (height, climate, biome).
@@ -66,7 +66,7 @@ class ColumnGenerator {
   uint64_t dimensionSeed_;
   // Registry for translating worldgen material ids (BlockIds) to the StableId
   // currency of sub-chunk voxel storage. Set by create(); owned by the game.
-  const BlockRegistry* blocks_ = nullptr;
+  const cBlockReg* blocks_ = nullptr;
 };
 
 }  // namespace litholattice

@@ -41,7 +41,7 @@
 //
 // CONVENTIONS:
 //  - Positions are Vec3 in world blocks; sizes are in blocks.
-//  - Yaw is RADIANS, Player::forward convention (yaw from +X toward +Z).
+//  - Yaw is RADIANS, cPlayer::forward convention (yaw from +X toward +Z).
 //  - Atlas UVs are in IMAGE space: u right, v DOWN from the atlas page's
 //    top-left, matching Image row order. A renderer uploading page images
 //    row-first pairs corner UVs with corners exactly as emitted.

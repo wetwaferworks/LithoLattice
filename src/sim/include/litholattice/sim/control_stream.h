@@ -7,7 +7,7 @@
 // cycle / the tick) it drains every producer's submissions and stamps
 // each event with (seq, tick) — seq a global order, tick the world tick
 // the event lands on. At the POST phase (inside the world-tick step,
-// after the handshake's domain phase, before IWorldSimulation::tick) the
+// after the handshake's domain phase, before IWorldSim::tick) the
 // events whose stamp has matured are applied in (tick, seq) order:
 // exhaustive, exactly-once, never silently dropped — a late event is
 // applied and ACCOUNTED, in the handshake's discipline language.

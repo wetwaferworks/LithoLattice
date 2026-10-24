@@ -12,7 +12,7 @@ cGlTextureArray::~cGlTextureArray() {
   if (palette_) glDeleteTextures(1, &palette_);
 }
 
-bool cGlTextureArray::upload(const TextureRegistry& textures) {
+bool cGlTextureArray::upload(const cTextureReg& textures) {
   if (!array_) glGenTextures(1, &array_);
   tile_ = textures.tileSize();
   layers_ = int(textures.textures().size());
@@ -25,7 +25,7 @@ bool cGlTextureArray::upload(const TextureRegistry& textures) {
     // Tile-geometry check (P3-3, Appendix D L1): glTexSubImage3D below
     // uploads tile_ x tile_ texels from the image's buffer unconditionally.
     // A smaller image would be an out-of-bounds host read fed to GL; a
-    // larger one a silent crop. TextureRegistry is expected to guarantee
+    // larger one a silent crop. cTextureReg is expected to guarantee
     // tile-sized images, but this upload is the last line of defence:
     // skip + log a mismatched layer (it stays zero-filled = black, and
     // the registry's own missing-texture path normally prevents this).

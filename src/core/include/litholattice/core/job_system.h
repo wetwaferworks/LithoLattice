@@ -6,7 +6,7 @@
 // deque. Dedicated I/O threads run blocking jobs so worker threads NEVER block.
 // A JobFence is the per-stage barrier the deterministic scheduler uses.
 //
-// Relationship to the existing JobPool (threading.h): JobPool stays exactly as it
+// Relationship to the existing cJobPool (threading.h): cJobPool stays exactly as it
 // is, for simple uses (a correct, obviously-right mutex FIFO; the procgen self-test
 // and several fixtures use it). cJobSystem is the high-performance substrate for the
 // sim, render, audio-adjacent and I/O work. Deliberately NOT a wrapper: the two
@@ -39,11 +39,11 @@
 // The system provides WHERE work runs; the cDeterministicScheduler (sim/det_sched.h)
 // declares the ORDER. A stage's systems are submitted behind a JobFence; the fence
 // is the stage barrier, so stages still run strictly in order and command buffers
-// still drain between stages exactly as on the JobPool path. Stealing only moves a
+// still drain between stages exactly as on the cJobPool path. Stealing only moves a
 // job to another thread — within one stage the systems provably write disjoint
 // resources, so placement cannot change the result. Threaded runs hash
 // bit-identical to single-threaded runs (see the det-sched self-tests, 1/2/4/8
-// workers, JobPool vs cJobSystem backends).
+// workers, cJobPool vs cJobSystem backends).
 //
 // Naming: litholattice:: namespace; I-prefix only for real interfaces (none here —
 // the -OR suffix is for game-style components, not engine infrastructure, and is
