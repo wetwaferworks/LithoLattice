@@ -4790,6 +4790,7 @@ void testAttachables() {
   w.set(20, 10, 8, rock);
   w.set(20, 11, 8, knob); w.setState(20, 11, 8, withAttach(0, 1));  // on top of the second rock
   w.set(20, 12, 8, knob); w.setState(20, 12, 8, withAttach(0, 1));  // mounted on the first knob (cascade)
+  w.set(24, 10, 8, rock); w.set(24, 11, 8, knob);  // 2026-10-24 (JD floating LEDs): legacy, no attach face recorded
   SimConfig cfg; cfg.tickRate = 64; cfg.radiusChunks = 2;
   cfg.domains.push_back({"fixture", 64, true});
   cSimThread st(w, reg, std::make_unique<RemoverSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
@@ -4807,12 +4808,16 @@ void testAttachables() {
   st.waitLoops(4);
   EditCmd remove{EditCmd::Kind::Command}; remove.command = SimCommand{1, 20, 10, 8, 0, 0};
   st.edit(remove);
+  EditCmd removeLegacy{EditCmd::Kind::Command}; removeLegacy.command = SimCommand{1, 24, 10, 8, 0, 0};
+  st.edit(removeLegacy);
   st.waitLoops(4);
   st.stop();
   check(placed && w.get(8, 10, 8) == kAir && w.get(7, 10, 8) == kAir,
         "attachables: placed on the clicked face with its attach face; pops off when the support breaks");
   check(w.get(20, 10, 8) == kAir && w.get(20, 11, 8) == kAir && w.get(20, 12, 8) == kAir,
         "attachables: pop off when the game / a script removes the support too, cascading to mounted ones");
+  check(w.get(24, 10, 8) == kAir && w.get(24, 11, 8) == kAir,
+        "attachables: a legacy one with no attach face counts as floor-mounted and pops when the block beneath goes");
 }
 
 // Fix run 3 (2026-10-23, JD t2262u): shared area-shape parser, containment

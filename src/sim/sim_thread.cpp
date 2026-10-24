@@ -460,7 +460,10 @@ void cSimThread::popAttached(int x, int y, int z) {
       continue;
     }
     int ox, oy, oz;
-    attachOffset(stAttach(chunks_.getState(nx, ny, nz)), ox, oy, oz);
+    // 2026-10-24 (JD playtest: floating LEDs): a legacy attachable with no mount face recorded
+    // (scene-placed, older saves) counts as floor-mounted, the same default the signal code uses.
+    const int mount = stAttach(chunks_.getState(nx, ny, nz));
+    attachOffset(mount ? mount : 1, ox, oy, oz);
     if (nx + ox != x || ny + oy != y || nz + oz != z) continue;  // mounted elsewhere (or legacy)
     chunks_.set(nx, ny, nz, kAir);
     sim_->onBlockChanged(chunks_, nx, ny, nz, kAir);
