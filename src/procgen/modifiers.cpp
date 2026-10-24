@@ -8,9 +8,9 @@
 namespace litholattice::procgen {
 namespace {
 
-class Fractal final : public INoise {
+class cFractal final : public INoise {
  public:
-  Fractal(std::shared_ptr<const INoise> source, const FractalSettings& s, uint64_t seed)
+  cFractal(std::shared_ptr<const INoise> source, const FractalSettings& s, uint64_t seed)
       : source_(std::move(source)), s_(s) {
     s_.octaves = std::clamp(s_.octaves, 1, 16);
     Rng rng(seed);
@@ -74,9 +74,9 @@ class Fractal final : public INoise {
   float norm_ = 0;
 };
 
-class DomainWarp final : public INoise {
+class cDomainWarp final : public INoise {
  public:
-  DomainWarp(std::shared_ptr<const INoise> source, std::shared_ptr<const INoise> warp, float amplitude, float frequency)
+  cDomainWarp(std::shared_ptr<const INoise> source, std::shared_ptr<const INoise> warp, float amplitude, float frequency)
       : source_(std::move(source)), warp_(std::move(warp)), amp_(amplitude), freq_(frequency) {}
 
   float sample2(float x, float y) const override {
@@ -113,12 +113,12 @@ constexpr std::array<std::pair<FractalType, std::string_view>, 6> kFractalNames{
 
 std::unique_ptr<INoise> createFractal(std::shared_ptr<const INoise> source, const FractalSettings& settings,
                                       uint64_t seed) {
-  return std::make_unique<Fractal>(std::move(source), settings, seed);
+  return std::make_unique<cFractal>(std::move(source), settings, seed);
 }
 
 std::unique_ptr<INoise> createDomainWarp(std::shared_ptr<const INoise> source, std::shared_ptr<const INoise> warp,
                                          float amplitude, float frequency) {
-  return std::make_unique<DomainWarp>(std::move(source), std::move(warp), amplitude, frequency);
+  return std::make_unique<cDomainWarp>(std::move(source), std::move(warp), amplitude, frequency);
 }
 
 CurlVec2 curlNoise2(const INoise& potential, float x, float y, float eps) {

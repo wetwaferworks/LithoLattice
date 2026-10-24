@@ -228,7 +228,7 @@ class Swim final : public Walk {
         out.push_back({{c.x + d[0], c.y + d[1], c.z + d[2]}, NavCost(1229), StepTag::kSwim});  // 1.2 * 1024
   }
 };
-class WireFollow final : public IMovementMode {
+class cWireFollow final : public IMovementMode {
  public:
   std::string_view name() const override { return "wire-follow"; }
   void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
@@ -385,7 +385,7 @@ std::unique_ptr<IMovementMode> makeClimb() { return std::make_unique<Climb>(); }
 std::unique_ptr<IMovementMode> makeLeap() { return std::make_unique<Leap>(); }
 std::unique_ptr<IMovementMode> makeFly() { return std::make_unique<Fly>(); }
 std::unique_ptr<IMovementMode> makeSwim() { return std::make_unique<Swim>(); }
-std::unique_ptr<IMovementMode> makeWireFollow() { return std::make_unique<WireFollow>(); }
+std::unique_ptr<IMovementMode> makeWireFollow() { return std::make_unique<cWireFollow>(); }
 
 Cell hopToward(Cell from, Cell goal, int hop) {
   const int dx = goal.x - from.x, dy = goal.y - from.y, dz = goal.z - from.z;
