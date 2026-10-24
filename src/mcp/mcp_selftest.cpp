@@ -40,7 +40,7 @@ class Checker {
   int fails_ = 0;
 };
 
-bool parsesOk(std::string_view text, JsonValue* out = nullptr) {
+bool parsesOk(std::string_view text, cJsonValue* out = nullptr) {
   ParseResult r = parseJson(text);
   if (r.ok && out) *out = r.value;
   return r.ok;
@@ -49,13 +49,13 @@ bool parsesOk(std::string_view text, JsonValue* out = nullptr) {
 bool parsesFail(std::string_view text) { return !parseJson(text).ok; }
 
 // Runs one RPC message through a router and returns the parsed response
-// (null JsonValue when no response was produced).
-JsonValue rpcRoundTrip(cRpcRouter& router, std::string_view text, bool* responded) {
+// (null cJsonValue when no response was produced).
+cJsonValue rpcRoundTrip(cRpcRouter& router, std::string_view text, bool* responded) {
   std::optional<std::string> resp = handleRpcMessage(text, router);
   *responded = resp.has_value();
-  if (!resp) return JsonValue::null();
+  if (!resp) return cJsonValue::null();
   ParseResult r = parseJson(*resp);
-  return r.ok ? r.value : JsonValue::null();
+  return r.ok ? r.value : cJsonValue::null();
 }
 
 std::string repeat(char c, std::size_t n) { return std::string(n, c); }
@@ -67,7 +67,7 @@ int runMcpSelfTest() {
 
   // ---- 1. valid documents ----
   {
-    JsonValue v;
+    cJsonValue v;
     check(parsesOk(R"({"jsonrpc":"2.0","method":"ping","id":1})", &v) && v.isObject(),
           "parse: simple request object");
     check(parsesOk("[1, 2.5, -3e4, true, false, null, \"s\", [], {}]"),
@@ -91,7 +91,7 @@ int runMcpSelfTest() {
 
   // ---- 2. escapes and unicode ----
   {
-    JsonValue v;
+    cJsonValue v;
     check(parsesOk(R"("a\"b\\c\/d\b\f\n\r\t")", &v) &&
               v.asString() == "a\"b\\c/d\b\f\n\r\t",
           "parse: all short escapes");
@@ -128,7 +128,7 @@ int runMcpSelfTest() {
     check(parsesFail("NaN"), "reject: NaN literal");
     check(parsesFail("Infinity"), "reject: Infinity literal");
     check(parsesFail("0x10"), "reject: hex literal");
-    JsonValue v;
+    cJsonValue v;
     check(parsesFail("1e400"), "reject: 1e400 overflows double (out of range)");
     check(parsesOk("99999999999999999999999", &v) && v.isDouble(),
           "parse: huge integer-form demotes to double, never wraps");
@@ -188,7 +188,7 @@ int runMcpSelfTest() {
     }
     check(vals, "serialize: non-canonical numbers reparse to the equal value");
     // object key order preserved
-    JsonValue v;
+    cJsonValue v;
     parsesOk("{\"z\":1,\"m\":2,\"a\":3}", &v);
     check(v.serialize() == "{\"z\":1,\"m\":2,\"a\":3}", "serialize: object order preserved");
     // unicode round-trip: parser produces UTF-8, serializer emits raw UTF-8
@@ -196,7 +196,7 @@ int runMcpSelfTest() {
     check(v.serialize() == std::string("\"\xc3\xa9\xf0\x9d\x84\x9e\""),
           "serialize: unicode round-trip as raw UTF-8");
     // escapes: control chars become \u00XX
-    v = JsonValue::string(std::string("a") + char(0x01) + "b");
+    v = cJsonValue::string(std::string("a") + char(0x01) + "b");
     check(v.serialize() == "\"a\\u0001b\"", "serialize: control char -> \\u00XX");
     // double round-trip through shortest representation
     parsesOk("0.30000000000000004", &v);
@@ -205,26 +205,26 @@ int runMcpSelfTest() {
     parsesOk("{\"k\":\"v\"}", &v);
     check(v.find("k") && v.find("k")->asString() == "v" && v.find("nope") == nullptr,
           "json: find() hits and misses");
-    v.getOrInsert("n") = JsonValue::integer(7);
+    v.getOrInsert("n") = cJsonValue::integer(7);
     check(v.find("n")->asInt() == 7, "json: getOrInsert() adds entry");
   }
 
   // ---- 6. RPC framing: requests, notifications, ids ----
   {
     cRpcRouter router;
-    router.registerHandler("ping", [](const JsonValue&) { return JsonValue::string("pong"); });
+    router.registerHandler("ping", [](const cJsonValue&) { return cJsonValue::string("pong"); });
     router.registerHandler("echo",
-                           [](const JsonValue& p) { return p; });  // params echo
-    router.registerHandler("add", [](const JsonValue& p) {
-      const JsonValue* a = p.find("a");
-      const JsonValue* b = p.find("b");
+                           [](const cJsonValue& p) { return p; });  // params echo
+    router.registerHandler("add", [](const cJsonValue& p) {
+      const cJsonValue* a = p.find("a");
+      const cJsonValue* b = p.find("b");
       if (!a || !b || !a->isInt() || !b->isInt())
-        throw RpcError(kRpcInvalidParams, rpcErrorMessage(kRpcInvalidParams));
-      return JsonValue::integer(a->asInt() + b->asInt());
+        throw cRpcError(kRpcInvalidParams, rpcErrorMessage(kRpcInvalidParams));
+      return cJsonValue::integer(a->asInt() + b->asInt());
     });
 
     bool responded = false;
-    JsonValue r = rpcRoundTrip(router, R"({"jsonrpc":"2.0","method":"ping","id":1})", &responded);
+    cJsonValue r = rpcRoundTrip(router, R"({"jsonrpc":"2.0","method":"ping","id":1})", &responded);
     check(responded && r.find("result") && r.find("result")->asString() == "pong" &&
               r.find("id")->asInt() == 1 && r.find("jsonrpc")->asString() == "2.0" &&
               !r.find("error"),
@@ -250,22 +250,22 @@ int runMcpSelfTest() {
   // ---- 7. RPC error codes ----
   {
     cRpcRouter router;
-    router.registerHandler("add", [](const JsonValue& p) {
-      const JsonValue* a = p.find("a");
-      if (!a || !a->isInt()) throw RpcError(kRpcInvalidParams, "need int param 'a'");
-      return JsonValue::integer(a->asInt());
+    router.registerHandler("add", [](const cJsonValue& p) {
+      const cJsonValue* a = p.find("a");
+      if (!a || !a->isInt()) throw cRpcError(kRpcInvalidParams, "need int param 'a'");
+      return cJsonValue::integer(a->asInt());
     });
-    router.registerHandler("boom", [](const JsonValue&) -> JsonValue {
+    router.registerHandler("boom", [](const cJsonValue&) -> cJsonValue {
       throw std::runtime_error("unexpected");
     });
-    router.registerHandler("coded", [](const JsonValue&) -> JsonValue {
-      throw RpcError(-32022, "nope", JsonValue::string("detail"));
+    router.registerHandler("coded", [](const cJsonValue&) -> cJsonValue {
+      throw cRpcError(-32022, "nope", cJsonValue::string("detail"));
     });
 
     bool responded = false;
     auto errCode = [&](std::string_view text) {
-      JsonValue r = rpcRoundTrip(router, text, &responded);
-      const JsonValue* e = r.find("error");
+      cJsonValue r = rpcRoundTrip(router, text, &responded);
+      const cJsonValue* e = r.find("error");
       return responded && e ? e->find("code")->asInt() : 0;
     };
     check(errCode("{bad json") == kRpcParseError, "rpc: -32700 parse error");
@@ -297,8 +297,8 @@ int runMcpSelfTest() {
     check(kRpcUnsupportedProtocolVersion == -32022, "rpc: kRpcUnsupportedProtocolVersion == -32022");
 
     // error response shape: jsonrpc/id/error{code,message,data}
-    JsonValue r = rpcRoundTrip(router, R"({"jsonrpc":"2.0","method":"coded","id":7})", &responded);
-    const JsonValue* e = r.find("error");
+    cJsonValue r = rpcRoundTrip(router, R"({"jsonrpc":"2.0","method":"coded","id":7})", &responded);
+    const cJsonValue* e = r.find("error");
     check(responded && e && e->find("message")->asString() == "nope" &&
               e->find("data")->asString() == "detail" && r.find("id")->asInt() == 7 &&
               !r.find("result"),
@@ -312,7 +312,7 @@ int runMcpSelfTest() {
     r = rpcRoundTrip(router, "[[[", &responded);
     check(responded && r.find("id")->isNull(), "rpc: parse-error response id is null");
     // handler registration: re-register replaces, hasHandler reflects it
-    router.registerHandler("add", [](const JsonValue&) { return JsonValue::integer(99); });
+    router.registerHandler("add", [](const cJsonValue&) { return cJsonValue::integer(99); });
     check(router.hasHandler("add") && !router.hasHandler("missing"), "rpc: hasHandler");
     r = rpcRoundTrip(router, R"({"jsonrpc":"2.0","method":"add","id":1})", &responded);
     check(responded && r.find("result")->asInt() == 99, "rpc: re-register replaces handler");
@@ -435,30 +435,30 @@ int runMcpSelfTest() {
       return b;
     };
 
-    auto roundTrip = [](McpServer& srv, std::string_view text, bool* responded) {
+    auto roundTrip = [](cMcpServer& srv, std::string_view text, bool* responded) {
       std::optional<std::string> resp = srv.handleMessage(text);
       *responded = resp.has_value();
-      if (!resp) return JsonValue::null();
+      if (!resp) return cJsonValue::null();
       ParseResult r = parseJson(*resp);
-      return r.ok ? r.value : JsonValue::null();
+      return r.ok ? r.value : cJsonValue::null();
     };
-    auto errCode = [](const JsonValue& resp) -> int {
-      const JsonValue* e = resp.find("error");
-      const JsonValue* c = e ? e->find("code") : nullptr;
+    auto errCode = [](const cJsonValue& resp) -> int {
+      const cJsonValue* e = resp.find("error");
+      const cJsonValue* c = e ? e->find("code") : nullptr;
       return (c && c->isInt()) ? static_cast<int>(c->asInt()) : 0;
     };
     // tools/call result helpers.
-    auto callTool = [&](McpServer& srv, const std::string& body) {
+    auto callTool = [&](cMcpServer& srv, const std::string& body) {
       bool responded = false;
-      JsonValue r = roundTrip(srv, body, &responded);
+      cJsonValue r = roundTrip(srv, body, &responded);
       return std::make_pair(responded, r);
     };
-    auto toolText = [](const JsonValue& resp, bool* isError) -> std::string {
-      const JsonValue* res = resp.find("result");
-      const JsonValue* err = res ? res->find("isError") : nullptr;
+    auto toolText = [](const cJsonValue& resp, bool* isError) -> std::string {
+      const cJsonValue* res = resp.find("result");
+      const cJsonValue* err = res ? res->find("isError") : nullptr;
       *isError = err && err->isBool() && err->asBool();
-      const JsonValue* content = res ? res->find("content") : nullptr;
-      const JsonValue* t0 =
+      const cJsonValue* content = res ? res->find("content") : nullptr;
+      const cJsonValue* t0 =
           (content && content->isArray() && !content->asArray().empty())
               ? content->asArray()[0].find("text")
               : nullptr;
@@ -470,10 +470,10 @@ int runMcpSelfTest() {
 
     // -- handshake: pre-init gate --
     {
-      McpServer srv(makeBackends());
+      cMcpServer srv(makeBackends());
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv, R"({"jsonrpc":"2.0","method":"tools/list","id":1})", &responded);
       check(responded && errCode(r) == kRpcInvalidRequest, "mcp: tools/list pre-init -> -32600");
       r = roundTrip(srv, R"({"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"sim_status"}})",
@@ -498,8 +498,8 @@ int runMcpSelfTest() {
           &responded);
       check(responded && errCode(r) == kRpcUnsupportedProtocolVersion && !srv.initialized(),
             "mcp: bad protocol version -> -32022");
-      const JsonValue* data = r.find("error") ? r.find("error")->find("data") : nullptr;
-      const JsonValue* sup = data ? data->find("supported") : nullptr;
+      const cJsonValue* data = r.find("error") ? r.find("error")->find("data") : nullptr;
+      const cJsonValue* sup = data ? data->find("supported") : nullptr;
       check(sup && sup->isArray() && !sup->asArray().empty() &&
                 sup->asArray()[0].asString() == kMcpProtocolVersion,
             "mcp: -32022 names supported versions");
@@ -512,21 +512,21 @@ int runMcpSelfTest() {
 
     // -- handshake: good initialize --
     {
-      McpServer srv(makeBackends());
+      cMcpServer srv(makeBackends());
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(srv, kInit, &responded);
-      const JsonValue* res = r.find("result");
+      cJsonValue r = roundTrip(srv, kInit, &responded);
+      const cJsonValue* res = r.find("result");
       check(responded && res && res->find("protocolVersion") &&
                 res->find("protocolVersion")->asString() == "2025-11-25",
             "mcp: initialize answers 2025-11-25");
-      const JsonValue* info = res ? res->find("serverInfo") : nullptr;
+      const cJsonValue* info = res ? res->find("serverInfo") : nullptr;
       check(info && info->find("name")->asString() == "litholattice",
             "mcp: serverInfo.name is litholattice");
       check(info && info->find("version")->asString() == mcpEngineVersionString() &&
                 mcpEngineVersionString() == "0.1.0",
             "mcp: serverInfo.version tracks engine version macros");
-      const JsonValue* caps = res ? res->find("capabilities") : nullptr;
+      const cJsonValue* caps = res ? res->find("capabilities") : nullptr;
       check(caps && caps->find("tools") && caps->find("resources"),
             "mcp: capabilities declare tools and resources");
       check(srv.initialized(), "mcp: initialized() true after initialize");
@@ -544,27 +544,27 @@ int runMcpSelfTest() {
 
     // -- tools/list shape --
     {
-      McpServer srv(makeBackends());
+      cMcpServer srv(makeBackends());
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
-      JsonValue r = roundTrip(srv, R"({"jsonrpc":"2.0","method":"tools/list","id":1})",
+      cJsonValue r = roundTrip(srv, R"({"jsonrpc":"2.0","method":"tools/list","id":1})",
                               &responded);
-      const JsonValue* list = r.find("result") ? r.find("result")->find("tools") : nullptr;
+      const cJsonValue* list = r.find("result") ? r.find("result")->find("tools") : nullptr;
       check(list && list->isArray() && list->asArray().size() == 20,
             "mcp: tools/list has 9 Phase 1 + 2 Phase 4 + 5 control + 4 senses tools");
       bool shapeOk = true, foundQuery = false, readOnlyHints = true, writeHintsOk = true;
       if (list && list->isArray()) {
         for (const auto& t : list->asArray()) {
-          const JsonValue* schema = t.find("inputSchema");
-          const JsonValue* ann = t.find("annotations");
+          const cJsonValue* schema = t.find("inputSchema");
+          const cJsonValue* ann = t.find("annotations");
           if (!t.find("name") || !t.find("description") || !schema ||
               !schema->find("type") || schema->find("type")->asString() != "object" ||
               !schema->find("properties") || !schema->find("required")) {
             shapeOk = false;
           }
-          const JsonValue* ro = ann ? ann->find("readOnlyHint") : nullptr;
-          const JsonValue* dh = ann ? ann->find("destructiveHint") : nullptr;
+          const cJsonValue* ro = ann ? ann->find("readOnlyHint") : nullptr;
+          const cJsonValue* dh = ann ? ann->find("destructiveHint") : nullptr;
           const std::string tname =
               (t.find("name") && t.find("name")->isString()) ? t.find("name")->asString() : "";
           const bool isWriteTool = (tname == "world_set_block" || tname == "lithoscript_exec");
@@ -606,7 +606,7 @@ int runMcpSelfTest() {
 
     // -- permission gating --
     {
-      McpServer srv(makeBackends(), McpAgent{"tester", 0});
+      cMcpServer srv(makeBackends(), McpAgent{"tester", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -642,14 +642,14 @@ int runMcpSelfTest() {
 
     // -- each read tool --
     {
-      McpServer srv(makeBackends(), McpAgent{"tester", 0});
+      cMcpServer srv(makeBackends(), McpAgent{"tester", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
       srv.grantPermissions(static_cast<uint32_t>(kPermWorldRead | kPermConsole));
       bool isErr = false;
       std::string text;
-      JsonValue v;
+      cJsonValue v;
 
       auto [s1, r1] =
           callTool(srv, R"({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"sim_status"}})");
@@ -759,7 +759,7 @@ int runMcpSelfTest() {
 
     // -- unwired backend degrades to isError --
     {
-      McpServer srv(McpBackends{}, McpAgent{"tester", 0});
+      cMcpServer srv(McpBackends{}, McpAgent{"tester", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -774,13 +774,13 @@ int runMcpSelfTest() {
 
     // -- resources --
     {
-      McpServer srv(makeBackends(), McpAgent{"tester", 0});
+      cMcpServer srv(makeBackends(), McpAgent{"tester", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
-      JsonValue r = roundTrip(srv, R"({"jsonrpc":"2.0","method":"resources/list","id":1})",
+      cJsonValue r = roundTrip(srv, R"({"jsonrpc":"2.0","method":"resources/list","id":1})",
                               &responded);
-      const JsonValue* list =
+      const cJsonValue* list =
           r.find("result") ? r.find("result")->find("resources") : nullptr;
       check(list && list->isArray() && list->asArray().size() == 6,
             "mcp: resources/list has the 6 Phase 1 resources");
@@ -792,10 +792,10 @@ int runMcpSelfTest() {
                 std::to_string(id) + ",\"params\":{\"uri\":\"" + uri + "\"}}",
             &responded);
       };
-      auto resText = [](const JsonValue& resp, bool* ok) -> std::string {
-        const JsonValue* res = resp.find("result");
-        const JsonValue* contents = res ? res->find("contents") : nullptr;
-        const JsonValue* t =
+      auto resText = [](const cJsonValue& resp, bool* ok) -> std::string {
+        const cJsonValue* res = resp.find("result");
+        const cJsonValue* contents = res ? res->find("contents") : nullptr;
+        const cJsonValue* t =
             (contents && contents->isArray() && !contents->asArray().empty())
                 ? contents->asArray()[0].find("text")
                 : nullptr;
@@ -830,7 +830,7 @@ int runMcpSelfTest() {
             "mcp: game://lore-glossary serves the injected text");
       r = readRes(8, "net://version");
       text = resText(r, &ok);
-      JsonValue v;
+      cJsonValue v;
       check(ok && parsesOk(text, &v) && v.find("engine")->asString() == "0.1.0" &&
                 v.find("mcp")->asString() == "2025-11-25" &&
                 v.find("protocol")->asInt() == 3,  // F-L3: kProtocolVersion, not V1
@@ -855,7 +855,7 @@ int runMcpSelfTest() {
         size_t pos_ = 0;
       };
 
-      McpServer srv(makeBackends(), McpAgent{"tester", 0});
+      cMcpServer srv(makeBackends(), McpAgent{"tester", 0});
       srv.setLogSink(nullptr);
       srv.grantPermissions(static_cast<uint32_t>(kPermWorldRead));
       ScriptTransport t({
@@ -867,21 +867,21 @@ int runMcpSelfTest() {
       srv.runStdio(t);
       check(t.out_.size() == 2, "mcp: stdio emits one line per request (blank/CR tolerated)");
       bool linesOk = t.out_.size() == 2;
-      JsonValue r0, r1;
+      cJsonValue r0, r1;
       if (linesOk) {
         linesOk = parsesOk(t.out_[0], &r0) && parsesOk(t.out_[1], &r1);
       }
       check(linesOk, "mcp: stdio response lines are valid JSON-RPC");
       if (linesOk) {
         bool isErr = false;
-        const JsonValue* res = r1.find("result");
-        const JsonValue* content = res ? res->find("content") : nullptr;
-        const JsonValue* txt =
+        const cJsonValue* res = r1.find("result");
+        const cJsonValue* content = res ? res->find("content") : nullptr;
+        const cJsonValue* txt =
             (content && content->isArray() && !content->asArray().empty())
                 ? content->asArray()[0].find("text")
                 : nullptr;
         isErr = res && res->find("isError") && res->find("isError")->asBool();
-        JsonValue v;
+        cJsonValue v;
         check(!isErr && txt && txt->isString() && parsesOk(txt->asString(), &v) &&
                   v.find("tick")->asInt() == 12345,
               "mcp: stdio round-trips a tool call end to end");
@@ -904,16 +904,16 @@ int runMcpSelfTest() {
     backends.sim = std::make_shared<StubSim>();
     backends.mods = std::make_shared<StubMods>();
 
-    auto roundTrip = [](McpServer& srv, std::string_view text, bool* responded) {
+    auto roundTrip = [](cMcpServer& srv, std::string_view text, bool* responded) {
       std::optional<std::string> resp = srv.handleMessage(text);
       *responded = resp.has_value();
-      if (!resp) return JsonValue::null();
+      if (!resp) return cJsonValue::null();
       ParseResult r = parseJson(*resp);
-      return r.ok ? r.value : JsonValue::null();
+      return r.ok ? r.value : cJsonValue::null();
     };
-    auto errCode = [](const JsonValue& resp) -> int {
-      const JsonValue* e = resp.find("error");
-      const JsonValue* c = e ? e->find("code") : nullptr;
+    auto errCode = [](const cJsonValue& resp) -> int {
+      const cJsonValue* e = resp.find("error");
+      const cJsonValue* c = e ? e->find("code") : nullptr;
       return (c && c->isInt()) ? static_cast<int>(c->asInt()) : 0;
     };
     // Builds a stateless-era request body: params carry _meta with the
@@ -928,38 +928,38 @@ int runMcpSelfTest() {
              version +
              "\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}";
     };
-    auto resultOf = [](const JsonValue& resp) -> const JsonValue* {
+    auto resultOf = [](const cJsonValue& resp) -> const cJsonValue* {
       return resp.find("result");
     };
 
     // -- server/discover: era-agnostic, answers pre-handshake --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv, R"({"jsonrpc":"2.0","id":1,"method":"server/discover"})",
           &responded);
-      const JsonValue* res = resultOf(r);
-      const JsonValue* vers = res ? res->find("supportedVersions") : nullptr;
+      const cJsonValue* res = resultOf(r);
+      const cJsonValue* vers = res ? res->find("supportedVersions") : nullptr;
       bool both = vers && vers->isArray() && vers->asArray().size() == 2 &&
                   vers->asArray()[0].asString() == "2025-11-25" &&
                   vers->asArray()[1].asString() == "2026-07-28";
       check(responded && res && both,
             "mcp3: server/discover advertises both protocol versions");
-      const JsonValue* info = res ? res->find("serverInfo") : nullptr;
+      const cJsonValue* info = res ? res->find("serverInfo") : nullptr;
       check(info && info->find("name")->asString() == "litholattice" &&
                 info->find("version")->asString() == mcpEngineVersionString(),
             "mcp3: server/discover carries server identity");
-      const JsonValue* caps = res ? res->find("capabilities") : nullptr;
+      const cJsonValue* caps = res ? res->find("capabilities") : nullptr;
       check(caps && caps->find("tools") && caps->find("resources") &&
                 caps->find("prompts"),
             "mcp3: server/discover capabilities declare tools/resources/prompts");
-      const JsonValue* instr = res ? res->find("instructions") : nullptr;
+      const cJsonValue* instr = res ? res->find("instructions") : nullptr;
       check(instr && instr->isString() && !instr->asString().empty(),
             "mcp3: server/discover has a non-empty instructions string");
-      const JsonValue* ttl = res ? res->find("ttlMs") : nullptr;
-      const JsonValue* scope = res ? res->find("cacheScope") : nullptr;
+      const cJsonValue* ttl = res ? res->find("ttlMs") : nullptr;
+      const cJsonValue* scope = res ? res->find("cacheScope") : nullptr;
       check(ttl && ttl->asInt() == kMcpListTtlMs && scope &&
                 scope->asString() == "public",
             "mcp3: server/discover carries ttlMs/cacheScope hints");
@@ -969,38 +969,38 @@ int runMcpSelfTest() {
 
     // -- stateless tools/list without any handshake --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(srv, statelessBody("tools/list", 1, ""), &responded);
-      const JsonValue* res = resultOf(r);
-      const JsonValue* list = res ? res->find("tools") : nullptr;
+      cJsonValue r = roundTrip(srv, statelessBody("tools/list", 1, ""), &responded);
+      const cJsonValue* res = resultOf(r);
+      const cJsonValue* list = res ? res->find("tools") : nullptr;
       check(responded && res && list && list->isArray() &&
                 list->asArray().size() == 20 && !srv.initialized(),
             "mcp3: stateless tools/list works with no initialize");
-      const JsonValue* rt = res ? res->find("resultType") : nullptr;
+      const cJsonValue* rt = res ? res->find("resultType") : nullptr;
       check(rt && rt->asString() == "complete",
             "mcp3: stateless result carries resultType \"complete\"");
-      const JsonValue* meta = res ? res->find("_meta") : nullptr;
-      const JsonValue* si =
+      const cJsonValue* meta = res ? res->find("_meta") : nullptr;
+      const cJsonValue* si =
           meta ? meta->find("io.modelcontextprotocol/serverInfo") : nullptr;
       check(si && si->find("name")->asString() == "litholattice",
             "mcp3: stateless result _meta carries server identity");
-      const JsonValue* pv =
+      const cJsonValue* pv =
           meta ? meta->find("io.modelcontextprotocol/protocolVersion") : nullptr;
       check(pv && pv->asString() == "2026-07-28",
             "mcp3: stateless result _meta carries the protocol version");
-      const JsonValue* ttl = res ? res->find("ttlMs") : nullptr;
+      const cJsonValue* ttl = res ? res->find("ttlMs") : nullptr;
       check(ttl && ttl->asInt() == kMcpListTtlMs,
             "mcp3: stateless tools/list carries ttlMs/cacheScope");
     }
 
     // -- lenient plain "protocolVersion" key also works --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv,
           R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"protocolVersion":"2026-07-28"}}})",
           &responded);
@@ -1010,17 +1010,17 @@ int runMcpSelfTest() {
 
     // -- unsupported version in _meta -> -32022 --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r =
+      cJsonValue r =
           roundTrip(srv, statelessBody("tools/list", 1, "", "2099-01-01"),
                     &responded);
       check(responded && errCode(r) == kRpcUnsupportedProtocolVersion,
             "mcp3: fictional protocol version -> -32022");
-      const JsonValue* data =
+      const cJsonValue* data =
           r.find("error") ? r.find("error")->find("data") : nullptr;
-      const JsonValue* sup = data ? data->find("supported") : nullptr;
+      const cJsonValue* sup = data ? data->find("supported") : nullptr;
       check(sup && sup->isArray() && sup->asArray().size() == 2,
             "mcp3: -32022 names both supported versions");
       // ... and the strict probe shape: discover with a fictional version.
@@ -1034,10 +1034,10 @@ int runMcpSelfTest() {
 
     // -- malformed _meta shapes --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv,
           R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":"nope"}})",
           &responded);
@@ -1066,7 +1066,7 @@ int runMcpSelfTest() {
 
     // -- stateless tools/call: deny-by-default identity still applies --
     {
-      McpServer srv(backends, McpAgent{"stateless-tester", 0});
+      cMcpServer srv(backends, McpAgent{"stateless-tester", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       auto callSim = [&](int id) {
@@ -1074,11 +1074,11 @@ int runMcpSelfTest() {
             srv, statelessBody("tools/call", id, R"("name":"sim_status")"),
             &responded);
       };
-      JsonValue r = callSim(1);
-      const JsonValue* res = resultOf(r);
-      const JsonValue* isErr = res ? res->find("isError") : nullptr;
-      const JsonValue* content = res ? res->find("content") : nullptr;
-      const JsonValue* t0 = (content && content->isArray() &&
+      cJsonValue r = callSim(1);
+      const cJsonValue* res = resultOf(r);
+      const cJsonValue* isErr = res ? res->find("isError") : nullptr;
+      const cJsonValue* content = res ? res->find("content") : nullptr;
+      const cJsonValue* t0 = (content && content->isArray() &&
                              !content->asArray().empty())
                                 ? content->asArray()[0].find("text")
                                 : nullptr;
@@ -1111,23 +1111,23 @@ int runMcpSelfTest() {
 
     // -- handshake-era regression: byte-identical legacy shapes --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(
           srv,
           R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}})",
           &responded);
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv, R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})", &responded);
-      const JsonValue* res = resultOf(r);
+      const cJsonValue* res = resultOf(r);
       check(responded && res && !res->find("resultType") && !res->find("_meta") &&
                 !res->find("ttlMs"),
             "mcp3: legacy tools/list has no stateless envelope fields");
       r = roundTrip(srv, R"({"jsonrpc":"2.0","id":3,"method":"prompts/list"})",
                     &responded);
       res = resultOf(r);
-      const JsonValue* list = res ? res->find("prompts") : nullptr;
+      const cJsonValue* list = res ? res->find("prompts") : nullptr;
       check(responded && list && list->isArray() &&
                 list->asArray().size() == 3 && !res->find("ttlMs"),
             "mcp3: legacy prompts/list works, no envelope fields");
@@ -1137,20 +1137,20 @@ int runMcpSelfTest() {
           R"({"jsonrpc":"2.0","id":4,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}})",
           &responded);
       res = resultOf(r);
-      const JsonValue* caps = res ? res->find("capabilities") : nullptr;
+      const cJsonValue* caps = res ? res->find("capabilities") : nullptr;
       check(caps && caps->find("prompts"),
             "mcp3: initialize capabilities now include prompts");
     }
 
     // -- prompts/list: the 3 prompts --
     {
-      McpServer srv(backends);
+      cMcpServer srv(backends);
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(srv, statelessBody("prompts/list", 1, ""),
+      cJsonValue r = roundTrip(srv, statelessBody("prompts/list", 1, ""),
                               &responded);
-      const JsonValue* res = resultOf(r);
-      const JsonValue* list = res ? res->find("prompts") : nullptr;
+      const cJsonValue* res = resultOf(r);
+      const cJsonValue* list = res ? res->find("prompts") : nullptr;
       bool namesOk = false, argsOk = false;
       if (list && list->isArray() && list->asArray().size() == 3) {
         namesOk = list->asArray()[0].find("name")->asString() ==
@@ -1158,8 +1158,8 @@ int runMcpSelfTest() {
                   list->asArray()[1].find("name")->asString() ==
                       "build_contraption" &&
                   list->asArray()[2].find("name")->asString() == "diagnose";
-        const JsonValue* a0 = list->asArray()[0].find("arguments");
-        const JsonValue* a2 = list->asArray()[2].find("arguments");
+        const cJsonValue* a0 = list->asArray()[0].find("arguments");
+        const cJsonValue* a2 = list->asArray()[2].find("arguments");
         argsOk =
             a0 && a0->isArray() && a0->asArray().size() == 1 &&
             a0->asArray()[0].find("name")->asString() == "name" &&
@@ -1176,24 +1176,24 @@ int runMcpSelfTest() {
 
     // -- prompts/get: rendering + validation --
     {
-      McpServer srv(backends, McpAgent{"p", 0});
+      cMcpServer srv(backends, McpAgent{"p", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       auto getPrompt = [&](int id, const std::string& paramsInner) {
         return roundTrip(
             srv, statelessBody("prompts/get", id, paramsInner), &responded);
       };
-      auto msgText = [](const JsonValue& resp, std::string* roleOut) {
-        const JsonValue* res = resp.find("result");
-        const JsonValue* msgs = res ? res->find("messages") : nullptr;
-        const JsonValue* m0 =
+      auto msgText = [](const cJsonValue& resp, std::string* roleOut) {
+        const cJsonValue* res = resp.find("result");
+        const cJsonValue* msgs = res ? res->find("messages") : nullptr;
+        const cJsonValue* m0 =
             (msgs && msgs->isArray() && !msgs->asArray().empty())
                 ? &msgs->asArray()[0]
                 : nullptr;
         if (roleOut && m0 && m0->find("role"))
           *roleOut = m0->find("role")->asString();
-        const JsonValue* c = m0 ? m0->find("content") : nullptr;
-        const JsonValue* t0 =
+        const cJsonValue* c = m0 ? m0->find("content") : nullptr;
+        const cJsonValue* t0 =
             (c && c->isArray() && !c->asArray().empty())
                 ? c->asArray()[0].find("text")
                 : nullptr;
@@ -1201,7 +1201,7 @@ int runMcpSelfTest() {
       };
 
       std::string role;
-      JsonValue r =
+      cJsonValue r =
           getPrompt(1, R"("name":"agent_onboarding","arguments":{"name":"Testy"})");
       std::string text = msgText(r, &role);
       check(responded && role == "user" && text.find("Testy") != std::string::npos &&
@@ -1250,14 +1250,14 @@ int runMcpSelfTest() {
 
     // -- stateless resources/read gets the private/no-cache envelope --
     {
-      McpServer srv(backends, McpAgent{"p", 0});
+      cMcpServer srv(backends, McpAgent{"p", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
-      JsonValue r = roundTrip(
+      cJsonValue r = roundTrip(
           srv,
           statelessBody("resources/list", 1, ""),
           &responded);
-      const JsonValue* res = resultOf(r);
+      const cJsonValue* res = resultOf(r);
       check(responded && res && res->find("ttlMs") &&
                 res->find("cacheScope")->asString() == "public",
             "mcp3: stateless resources/list is cacheScope public");
@@ -1265,7 +1265,7 @@ int runMcpSelfTest() {
           srv, statelessBody("resources/read", 2, R"("uri":"mods://list")"),
           &responded);
       res = resultOf(r);
-      const JsonValue* contents = res ? res->find("contents") : nullptr;
+      const cJsonValue* contents = res ? res->find("contents") : nullptr;
       check(responded && res && contents && contents->isArray() &&
                 !contents->asArray().empty() &&
                 res->find("ttlMs")->asInt() == 0 &&
@@ -1381,33 +1381,33 @@ int runMcpSelfTest() {
       }
     };
 
-    auto roundTrip = [](McpServer& srv, std::string_view text, bool* responded) {
+    auto roundTrip = [](cMcpServer& srv, std::string_view text, bool* responded) {
       std::optional<std::string> resp = srv.handleMessage(text);
       *responded = resp.has_value();
-      if (!resp) return JsonValue::null();
+      if (!resp) return cJsonValue::null();
       ParseResult r = parseJson(*resp);
-      return r.ok ? r.value : JsonValue::null();
+      return r.ok ? r.value : cJsonValue::null();
     };
-    auto errCode = [](const JsonValue& resp) -> int {
-      const JsonValue* e = resp.find("error");
-      const JsonValue* c = e ? e->find("code") : nullptr;
+    auto errCode = [](const cJsonValue& resp) -> int {
+      const cJsonValue* e = resp.find("error");
+      const cJsonValue* c = e ? e->find("code") : nullptr;
       return (c && c->isInt()) ? static_cast<int>(c->asInt()) : 0;
     };
-    auto toolText = [](const JsonValue& resp, bool* isError) -> std::string {
-      const JsonValue* res = resp.find("result");
-      const JsonValue* err = res ? res->find("isError") : nullptr;
+    auto toolText = [](const cJsonValue& resp, bool* isError) -> std::string {
+      const cJsonValue* res = resp.find("result");
+      const cJsonValue* err = res ? res->find("isError") : nullptr;
       *isError = err && err->isBool() && err->asBool();
-      const JsonValue* content = res ? res->find("content") : nullptr;
-      const JsonValue* t0 =
+      const cJsonValue* content = res ? res->find("content") : nullptr;
+      const cJsonValue* t0 =
           (content && content->isArray() && !content->asArray().empty())
               ? content->asArray()[0].find("text")
               : nullptr;
       return (t0 && t0->isString()) ? t0->asString() : std::string();
     };
-    auto callTool = [&](McpServer& srv, int id, const std::string& name,
+    auto callTool = [&](cMcpServer& srv, int id, const std::string& name,
                         const std::string& args) {
       bool responded = false;
-      JsonValue r = roundTrip(srv,
+      cJsonValue r = roundTrip(srv,
                               R"({"jsonrpc":"2.0","method":"tools/call","id":)" +
                                   std::to_string(id) + R"(,"params":{"name":")" + name +
                                   R"(","arguments":)" + args + "}}",
@@ -1425,7 +1425,7 @@ int runMcpSelfTest() {
       McpBackends b;
       b.writer = writer;
       b.consoleExec = exec;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1446,7 +1446,7 @@ int runMcpSelfTest() {
       auto writer = std::make_shared<FakeWriter>();
       McpBackends b;
       b.writer = writer;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1480,7 +1480,7 @@ int runMcpSelfTest() {
       auto writer = std::make_shared<FakeWriter>();
       McpBackends b;
       b.writer = writer;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1497,7 +1497,7 @@ int runMcpSelfTest() {
       writer->hang_ = true;  // the sim thread never completes the job
       McpBackends b;
       b.writer = writer;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1514,7 +1514,7 @@ int runMcpSelfTest() {
     // -- unwired writer backend -> isError naming the seam --
     {
       McpBackends b;  // no writer wired
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1531,7 +1531,7 @@ int runMcpSelfTest() {
       auto writer = std::make_shared<FakeWriter>();
       McpBackends b;
       b.writer = writer;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       int64_t now = 1000000;
       srv.setRateLimitClock([&]() { return now; });  // frozen clock: no refills
       srv.setLogSink(nullptr);
@@ -1565,7 +1565,7 @@ int runMcpSelfTest() {
       };
       McpBackends b;
       b.sim = std::make_shared<StubSim>();
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       int64_t now = 5000000;
       srv.setRateLimitClock([&]() { return now; });  // frozen clock: no refills
       srv.setLogSink(nullptr);
@@ -1596,7 +1596,7 @@ int runMcpSelfTest() {
     // -- token bucket unit checks (fake clock) --
     {
       int64_t now = 0;
-      McpTokenBucket bkt(32, 64, [&]() { return now; });
+      cMcpTokenBucket bkt(32, 64, [&]() { return now; });
       check(bkt.take(64), "mcp4: bucket starts full (burst 64)");
       check(!bkt.take(1), "mcp4: empty bucket refuses");
       now += 1000;  // 32 tokens/sec
@@ -1612,7 +1612,7 @@ int runMcpSelfTest() {
       auto exec = std::make_shared<FakeExec>();
       McpBackends b;
       b.consoleExec = exec;
-      McpServer srv(std::move(b), McpAgent{"phase4", 0});
+      cMcpServer srv(std::move(b), McpAgent{"phase4", 0});
       srv.setLogSink(nullptr);
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1641,7 +1641,7 @@ int runMcpSelfTest() {
       check(r4 && errCode(j4) == kRpcInvalidParams, "mcp4: >64 KiB line -> -32602");
       // Unwired exec backend -> isError.
       McpBackends b2;
-      McpServer srv2(std::move(b2), McpAgent{"phase4", 0});
+      cMcpServer srv2(std::move(b2), McpAgent{"phase4", 0});
       srv2.setLogSink(nullptr);
       roundTrip(srv2, kInit, &responded);
       srv2.grantPermissions(static_cast<uint32_t>(kPermConsole));
@@ -1659,7 +1659,7 @@ int runMcpSelfTest() {
       b.writer = writer;
       b.consoleExec = exec;
       std::vector<std::string> logLines;
-      McpServer srv(std::move(b), McpAgent{"audit", 0});
+      cMcpServer srv(std::move(b), McpAgent{"audit", 0});
       srv.setLogSink([&logLines](std::string_view l) { logLines.emplace_back(l); });
       bool responded = false;
       roundTrip(srv, kInit, &responded);
@@ -1816,9 +1816,9 @@ int runMcpSelfTest() {
           return true;
         }
       };
-      auto senseCall = [&](McpServer& srv, const std::string& body) {
+      auto senseCall = [&](cMcpServer& srv, const std::string& body) {
         bool responded = false;
-        JsonValue r = roundTrip(srv, body, &responded);
+        cJsonValue r = roundTrip(srv, body, &responded);
         return std::make_pair(responded, r);
       };
       auto makeSensesBackends = [&]() {
@@ -1834,7 +1834,7 @@ int runMcpSelfTest() {
 
       // Deny-by-default: mask 0 names the missing bit.
       {
-        McpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
+        cMcpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
         srv.setLogSink(nullptr);
         bool responded = false;
         roundTrip(srv, kInit, &responded);
@@ -1850,13 +1850,13 @@ int runMcpSelfTest() {
       }
       // Granted: vision returns a real PNG through the whole tool path.
       {
-        McpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
+        cMcpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
         srv.setLogSink(nullptr);
         bool responded = false;
         roundTrip(srv, kInit, &responded);
         srv.grantPermissions(static_cast<uint32_t>(kPermPilotSenses));
         bool isErr = false;
-        JsonValue v;
+        cJsonValue v;
         auto [r1, j1] = senseCall(srv, kVisionCall);
         std::string text = toolText(j1, &isErr);
         const bool ok = r1 && !isErr && parsesOk(text, &v) && v.find("width")->asInt() == 160 &&
@@ -1903,7 +1903,7 @@ int runMcpSelfTest() {
               "senses: vision.track_player returns to player tracking");
         // set_camera is deny-by-default too.
         {
-          McpServer srv2(makeSensesBackends(), McpAgent{"tester", 0});
+          cMcpServer srv2(makeSensesBackends(), McpAgent{"tester", 0});
           srv2.setLogSink(nullptr);
           bool resp = false;
           roundTrip(srv2, kInit, &resp);
@@ -1923,13 +1923,13 @@ int runMcpSelfTest() {
       }
       // Granted: audio returns tiered PCM.
       {
-        McpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
+        cMcpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
         srv.setLogSink(nullptr);
         bool responded = false;
         roundTrip(srv, kInit, &responded);
         srv.grantPermissions(static_cast<uint32_t>(kPermPilotSenses));
         bool isErr = false;
-        JsonValue v;
+        cJsonValue v;
         auto [r1, j1] = senseCall(srv, kAudioCall);
         std::string text = toolText(j1, &isErr);
         check(r1 && !isErr && parsesOk(text, &v) && v.find("sampleRate")->asInt() == 8000 &&
@@ -1951,7 +1951,7 @@ int runMcpSelfTest() {
       }
       // Not wired: null backends report it.
       {
-        McpServer srv(McpBackends{}, McpAgent{"tester", 0});
+        cMcpServer srv(McpBackends{}, McpAgent{"tester", 0});
         srv.setLogSink(nullptr);
         bool responded = false;
         roundTrip(srv, kInit, &responded);
@@ -1968,7 +1968,7 @@ int runMcpSelfTest() {
       }
       // Rate limits: per-pilot buckets (vision 4/sec burst 8, audio 8/sec burst 16).
       {
-        McpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
+        cMcpServer srv(makeSensesBackends(), McpAgent{"tester", 0});
         srv.setLogSink(nullptr);
         bool responded = false;
         roundTrip(srv, kInit, &responded);
@@ -2008,10 +2008,10 @@ int runMcpSelfTest() {
         int fds[2] = {-1, -1};
         if (_pipe(fds, 4096, _O_BINARY) != 0) break;
         _dup2(fds[0], 0);
-        auto srv = std::make_unique<McpServer>();
+        auto srv = std::make_unique<cMcpServer>();
         srv->setLogSink(nullptr);
         std::atomic<bool> done{false};
-        McpServer* raw = srv.get();
+        cMcpServer* raw = srv.get();
         std::thread th([raw, &done] { raw->runStdio(); done.store(true, std::memory_order_release); });
         std::this_thread::sleep_for(std::chrono::milliseconds(i % 2 ? 30 : 0));  // cancel before AND during the read
         const bool ok = stopStdioThread(th, done, std::chrono::milliseconds(3000));

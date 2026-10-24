@@ -22,27 +22,27 @@ std::string rpcErrorMessage(int code) {
   }
 }
 
-JsonValue buildSuccessResponse(const JsonValue& id, const JsonValue& result) {
-  JsonValue::Object o;
-  o.emplace_back("jsonrpc", JsonValue::string(kJsonRpcVersion));
+cJsonValue buildSuccessResponse(const cJsonValue& id, const cJsonValue& result) {
+  cJsonValue::Object o;
+  o.emplace_back("jsonrpc", cJsonValue::string(kJsonRpcVersion));
   o.emplace_back("result", result);
   o.emplace_back("id", id);
-  return JsonValue::object(std::move(o));
+  return cJsonValue::object(std::move(o));
 }
 
-JsonValue buildErrorResponse(const JsonValue& id, int code, std::string_view message,
-                             const JsonValue& data) {
-  JsonValue::Object err;
-  err.emplace_back("code", JsonValue::integer(code));
-  err.emplace_back("message", JsonValue::string(message));
+cJsonValue buildErrorResponse(const cJsonValue& id, int code, std::string_view message,
+                             const cJsonValue& data) {
+  cJsonValue::Object err;
+  err.emplace_back("code", cJsonValue::integer(code));
+  err.emplace_back("message", cJsonValue::string(message));
   if (!data.isNull()) {
     err.emplace_back("data", data);
   }
-  JsonValue::Object o;
-  o.emplace_back("jsonrpc", JsonValue::string(kJsonRpcVersion));
-  o.emplace_back("error", JsonValue::object(std::move(err)));
+  cJsonValue::Object o;
+  o.emplace_back("jsonrpc", cJsonValue::string(kJsonRpcVersion));
+  o.emplace_back("error", cJsonValue::object(std::move(err)));
   o.emplace_back("id", id);
-  return JsonValue::object(std::move(o));
+  return cJsonValue::object(std::move(o));
 }
 
 RpcParseOutcome parseRpcRequest(std::string_view text) {
@@ -52,51 +52,51 @@ RpcParseOutcome parseRpcRequest(std::string_view text) {
     out.ok = false;
     out.errorCode = kRpcParseError;
     out.errorMessage = rpcErrorMessage(kRpcParseError);
-    out.errorId = JsonValue::null();
+    out.errorId = cJsonValue::null();
     return out;
   }
-  const JsonValue& v = pr.value;
+  const cJsonValue& v = pr.value;
   // v1 decision (documented in jsonrpc.h): batch arrays are rejected.
   if (!v.isObject()) {
     out.ok = false;
     out.errorCode = kRpcInvalidRequest;
     out.errorMessage = rpcErrorMessage(kRpcInvalidRequest);
-    out.errorId = JsonValue::null();
+    out.errorId = cJsonValue::null();
     return out;
   }
-  const JsonValue* version = v.find("jsonrpc");
+  const cJsonValue* version = v.find("jsonrpc");
   if (!version || !version->isString() || version->asString() != kJsonRpcVersion) {
     out.ok = false;
     out.errorCode = kRpcInvalidRequest;
     out.errorMessage = rpcErrorMessage(kRpcInvalidRequest);
-    out.errorId = JsonValue::null();
+    out.errorId = cJsonValue::null();
     return out;
   }
-  const JsonValue* method = v.find("method");
+  const cJsonValue* method = v.find("method");
   if (!method || !method->isString()) {
     out.ok = false;
     out.errorCode = kRpcInvalidRequest;
     out.errorMessage = rpcErrorMessage(kRpcInvalidRequest);
-    out.errorId = JsonValue::null();
+    out.errorId = cJsonValue::null();
     return out;
   }
-  const JsonValue* id = v.find("id");
-  const JsonValue* params = v.find("params");
+  const cJsonValue* id = v.find("id");
+  const cJsonValue* params = v.find("params");
   if (params && !params->isNull() && !params->isObject() && !params->isArray()) {
     // Per spec, params MUST be Array or Object when present; a wrong type is
     // the handler's call, surfaced as Invalid params.
     out.ok = true;
     out.request.isNotification = (id == nullptr);
-    out.request.id = id ? *id : JsonValue::null();
+    out.request.id = id ? *id : cJsonValue::null();
     out.request.method = method->asString();
     out.request.params = *params;
     return out;
   }
   out.ok = true;
   out.request.isNotification = (id == nullptr);
-  out.request.id = id ? *id : JsonValue::null();
+  out.request.id = id ? *id : cJsonValue::null();
   out.request.method = method->asString();
-  out.request.params = params ? *params : JsonValue::null();
+  out.request.params = params ? *params : cJsonValue::null();
   return out;
 }
 
@@ -117,7 +117,7 @@ bool cRpcRouter::hasHandler(std::string_view method) const {
   return false;
 }
 
-std::optional<JsonValue> cRpcRouter::dispatch(const RpcRequest& request) {
+std::optional<cJsonValue> cRpcRouter::dispatch(const RpcRequest& request) {
   if (request.isNotification) {
     // Notifications still invoke the handler (fire and forget) but never
     // produce a response. Handler errors on a notification are swallowed:
@@ -137,18 +137,18 @@ std::optional<JsonValue> cRpcRouter::dispatch(const RpcRequest& request) {
     if (name == request.method) {
       try {
         return buildSuccessResponse(request.id, h(request.params));
-      } catch (const RpcError&) {
+      } catch (const cRpcError&) {
         throw;
       } catch (...) {
-        throw RpcError(kRpcInternalError, rpcErrorMessage(kRpcInternalError));
+        throw cRpcError(kRpcInternalError, rpcErrorMessage(kRpcInternalError));
       }
     }
   }
-  throw RpcError(kRpcMethodNotFound, rpcErrorMessage(kRpcMethodNotFound),
-                 JsonValue::string(request.method));
+  throw cRpcError(kRpcMethodNotFound, rpcErrorMessage(kRpcMethodNotFound),
+                 cJsonValue::string(request.method));
 }
 
-std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, cRpcRouter& router) {
+std::optional<cJsonValue> handleParsedRequest(const RpcRequest& req, cRpcRouter& router) {
   // Invalid params type (present but neither Array nor Object): -32602.
   if (!req.params.isNull() && !req.params.isObject() && !req.params.isArray()) {
     if (req.isNotification) return std::nullopt;  // notifications: no response, ever
@@ -156,7 +156,7 @@ std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, cRpcRouter& 
   }
   try {
     return router.dispatch(req);  // nullopt for notifications
-  } catch (const RpcError& e) {
+  } catch (const cRpcError& e) {
     return buildErrorResponse(req.id, e.code(), e.message(), e.data());
   }
 }
@@ -167,7 +167,7 @@ std::optional<std::string> handleRpcMessage(std::string_view text, cRpcRouter& r
     return buildErrorResponse(outcome.errorId, outcome.errorCode, outcome.errorMessage)
         .serialize();
   }
-  std::optional<JsonValue> resp = handleParsedRequest(outcome.request, router);
+  std::optional<cJsonValue> resp = handleParsedRequest(outcome.request, router);
   if (!resp) return std::nullopt;  // notification
   return resp->serialize();
 }

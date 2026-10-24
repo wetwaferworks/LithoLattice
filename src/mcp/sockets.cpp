@@ -90,16 +90,16 @@ bool cTcpConn::sendAll(std::string_view data) {
   return true;
 }
 
-TcpListener::TcpListener() = default;
-TcpListener::~TcpListener() { close(); }
-TcpListener::TcpListener(TcpListener&& other) noexcept
+cTcpListener::cTcpListener() = default;
+cTcpListener::~cTcpListener() { close(); }
+cTcpListener::cTcpListener(cTcpListener&& other) noexcept
     : sock_(other.sock_),
       boundAddress_(std::move(other.boundAddress_)),
       boundPort_(other.boundPort_) {
   other.sock_ = kInvalidSocketValue;
   other.boundPort_ = 0;
 }
-TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
+cTcpListener& cTcpListener::operator=(cTcpListener&& other) noexcept {
   if (this != &other) {
     close();
     sock_ = other.sock_;
@@ -110,14 +110,14 @@ TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
   }
   return *this;
 }
-void TcpListener::close() {
+void cTcpListener::close() {
   if (sock_ != kInvalidSocketValue) {
     closesocket(sock_);
     sock_ = kInvalidSocketValue;
     wsaRelease();
   }
 }
-bool TcpListener::bind(const std::string& address, std::uint16_t port,
+bool cTcpListener::bind(const std::string& address, std::uint16_t port,
                        std::string& error) {
   std::string wsaErr;
   if (!wsaEnsure(wsaErr)) {
@@ -168,7 +168,7 @@ bool TcpListener::bind(const std::string& address, std::uint16_t port,
   boundPort_ = actualPort;
   return true;
 }
-bool TcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
+bool cTcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
   WSAPOLLFD pfd{};
   pfd.fd = sock_;
   pfd.events = POLLRDNORM;
@@ -260,16 +260,16 @@ bool cTcpConn::sendAll(std::string_view data) {
   return true;
 }
 
-TcpListener::TcpListener() = default;
-TcpListener::~TcpListener() { close(); }
-TcpListener::TcpListener(TcpListener&& other) noexcept
+cTcpListener::cTcpListener() = default;
+cTcpListener::~cTcpListener() { close(); }
+cTcpListener::cTcpListener(cTcpListener&& other) noexcept
     : sock_(other.sock_),
       boundAddress_(std::move(other.boundAddress_)),
       boundPort_(other.boundPort_) {
   other.sock_ = kInvalidSocketValue;
   other.boundPort_ = 0;
 }
-TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
+cTcpListener& cTcpListener::operator=(cTcpListener&& other) noexcept {
   if (this != &other) {
     close();
     sock_ = other.sock_;
@@ -280,13 +280,13 @@ TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
   }
   return *this;
 }
-void TcpListener::close() {
+void cTcpListener::close() {
   if (sock_ != kInvalidSocketValue) {
     ::close(sock_);
     sock_ = kInvalidSocketValue;
   }
 }
-bool TcpListener::bind(const std::string& address, std::uint16_t port,
+bool cTcpListener::bind(const std::string& address, std::uint16_t port,
                        std::string& error) {
   int s = ::socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) {
@@ -324,7 +324,7 @@ bool TcpListener::bind(const std::string& address, std::uint16_t port,
   boundPort_ = actualPort;
   return true;
 }
-bool TcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
+bool cTcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
   pollfd pfd{};
   pfd.fd = sock_;
   pfd.events = POLLIN;

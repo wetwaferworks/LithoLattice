@@ -35,26 +35,26 @@ namespace {
 // Small JSON builders.
 // ---------------------------------------------------------------------------
 
-JsonValue strVec(const std::vector<std::string>& v) {
-  JsonValue::Array a;
+cJsonValue strVec(const std::vector<std::string>& v) {
+  cJsonValue::Array a;
   a.reserve(v.size());
-  for (const auto& s : v) a.emplace_back(JsonValue::string(s));
-  return JsonValue::array(std::move(a));
+  for (const auto& s : v) a.emplace_back(cJsonValue::string(s));
+  return cJsonValue::array(std::move(a));
 }
 
 // ---------------------------------------------------------------------------
 // Argument reader: strict, fail-fast validation of tool arguments.
-// Violations throw RpcError(-32602) -> a JSON-RPC protocol error (the call
+// Violations throw cRpcError(-32602) -> a JSON-RPC protocol error (the call
 // itself was malformed). Anything else (denials, missing data, backend
 // failures) becomes an isError tool result.
 // ---------------------------------------------------------------------------
 
 class ArgReader {
  public:
-  explicit ArgReader(const JsonValue& args) : args_(args) {}
+  explicit ArgReader(const cJsonValue& args) : args_(args) {}
 
   std::string reqString(const char* name) {
-    const JsonValue* v = req(name);
+    const cJsonValue* v = req(name);
     if (!v->isString()) fail(name, "string");
     return v->asString();
   }
@@ -64,23 +64,23 @@ class ArgReader {
     return s;
   }
   int64_t reqInt(const char* name) {
-    const JsonValue* v = req(name);
+    const cJsonValue* v = req(name);
     if (!v->isInt()) fail(name, "integer");
     return v->asInt();
   }
   double reqNumber(const char* name) {
-    const JsonValue* v = req(name);
+    const cJsonValue* v = req(name);
     if (!v->isNumber()) fail(name, "number");
     return v->isInt() ? static_cast<double>(v->asInt()) : v->asDouble();
   }
   int64_t optInt(const char* name, int64_t def, int64_t lo, int64_t hi) {
-    const JsonValue* v = args_.find(name);
+    const cJsonValue* v = args_.find(name);
     if (!v || v->isNull()) return def;
     if (!v->isInt() || v->asInt() < lo || v->asInt() > hi) fail(name, "integer in range");
     return v->asInt();
   }
   double optNumber(const char* name, double def, double lo, double hi) {
-    const JsonValue* v = args_.find(name);
+    const cJsonValue* v = args_.find(name);
     if (!v || v->isNull()) return def;
     double d = v->isInt() ? static_cast<double>(v->asInt())
                           : (v->isDouble() ? v->asDouble() : NAN);
@@ -88,53 +88,53 @@ class ArgReader {
     return d;
   }
   bool optBool(const char* name, bool def) {
-    const JsonValue* v = args_.find(name);
+    const cJsonValue* v = args_.find(name);
     if (!v || v->isNull()) return def;
     if (!v->isBool()) fail(name, "boolean");
     return v->asBool();
   }
 
  private:
-  const JsonValue* req(const char* name) {
-    const JsonValue* v = args_.find(name);
+  const cJsonValue* req(const char* name) {
+    const cJsonValue* v = args_.find(name);
     if (!v || v->isNull()) fail(name, "present");
     return v;
   }
   [[noreturn]] void fail(const char* name, const char* want) {
-    throw RpcError(kRpcInvalidParams,
+    throw cRpcError(kRpcInvalidParams,
                    std::string("invalid argument '") + name + "': expected " + want);
   }
-  const JsonValue& args_;
+  const cJsonValue& args_;
 };
 
-JsonValue buildInputSchema(const std::vector<ToolParam>& params) {
-  JsonValue::Object props;
-  JsonValue::Array required;
+cJsonValue buildInputSchema(const std::vector<ToolParam>& params) {
+  cJsonValue::Object props;
+  cJsonValue::Array required;
   for (const auto& p : params) {
-    JsonValue::Object pd;
-    pd.emplace_back("type", JsonValue::string(p.type));
-    pd.emplace_back("description", JsonValue::string(p.description));
-    if (p.hasMinimum) pd.emplace_back("minimum", JsonValue::number(p.minimum));
-    if (p.hasMaximum) pd.emplace_back("maximum", JsonValue::number(p.maximum));
-    props.emplace_back(p.name, JsonValue::object(std::move(pd)));
-    if (p.required) required.emplace_back(JsonValue::string(p.name));
+    cJsonValue::Object pd;
+    pd.emplace_back("type", cJsonValue::string(p.type));
+    pd.emplace_back("description", cJsonValue::string(p.description));
+    if (p.hasMinimum) pd.emplace_back("minimum", cJsonValue::number(p.minimum));
+    if (p.hasMaximum) pd.emplace_back("maximum", cJsonValue::number(p.maximum));
+    props.emplace_back(p.name, cJsonValue::object(std::move(pd)));
+    if (p.required) required.emplace_back(cJsonValue::string(p.name));
   }
-  JsonValue::Object schema;
-  schema.emplace_back("type", JsonValue::string("object"));
-  schema.emplace_back("properties", JsonValue::object(std::move(props)));
-  schema.emplace_back("required", JsonValue::array(std::move(required)));
-  return JsonValue::object(std::move(schema));
+  cJsonValue::Object schema;
+  schema.emplace_back("type", cJsonValue::string("object"));
+  schema.emplace_back("properties", cJsonValue::object(std::move(props)));
+  schema.emplace_back("required", cJsonValue::array(std::move(required)));
+  return cJsonValue::object(std::move(schema));
 }
 
-JsonValue toolResultJson(const ToolResult& r) {
-  JsonValue::Object text;
-  text.emplace_back("type", JsonValue::string("text"));
-  text.emplace_back("text", JsonValue::string(r.text));
-  JsonValue::Object out;
+cJsonValue toolResultJson(const ToolResult& r) {
+  cJsonValue::Object text;
+  text.emplace_back("type", cJsonValue::string("text"));
+  text.emplace_back("text", cJsonValue::string(r.text));
+  cJsonValue::Object out;
   out.emplace_back("content",
-                   JsonValue::array({JsonValue::object(std::move(text))}));
-  out.emplace_back("isError", JsonValue::boolean(r.isError));
-  return JsonValue::object(std::move(out));
+                   cJsonValue::array({cJsonValue::object(std::move(text))}));
+  out.emplace_back("isError", cJsonValue::boolean(r.isError));
+  return cJsonValue::object(std::move(out));
 }
 
 std::vector<std::string> permBitNameList(uint32_t mask) {
@@ -149,7 +149,7 @@ std::vector<std::string> permBitNameList(uint32_t mask) {
 // (notification). Lets handleMessage parse the body once and reuse the DOM
 // instead of re-parsing inside handleRpcMessage.
 std::optional<std::string> dispatchParsed(const RpcRequest& req, cRpcRouter& router) {
-  std::optional<JsonValue> resp = handleParsedRequest(req, router);
+  std::optional<cJsonValue> resp = handleParsedRequest(req, router);
   if (!resp) return std::nullopt;
   return resp->serialize();
 }
@@ -205,68 +205,68 @@ std::string mcpEngineVersionString() {
 namespace {
 
 /// data.supported payload shared by every -32022 we emit.
-JsonValue unsupportedVersionData() {
-  JsonValue::Array supported;
-  supported.emplace_back(JsonValue::string(kMcpProtocolVersion));
-  supported.emplace_back(JsonValue::string(kMcpProtocolVersionStateless));
-  JsonValue::Object data;
-  data.emplace_back("supported", JsonValue::array(std::move(supported)));
-  return JsonValue::object(std::move(data));
+cJsonValue unsupportedVersionData() {
+  cJsonValue::Array supported;
+  supported.emplace_back(cJsonValue::string(kMcpProtocolVersion));
+  supported.emplace_back(cJsonValue::string(kMcpProtocolVersionStateless));
+  cJsonValue::Object data;
+  data.emplace_back("supported", cJsonValue::array(std::move(supported)));
+  return cJsonValue::object(std::move(data));
 }
 
 }  // namespace
 
-McpEra classifyRequestEra(const JsonValue& params) {
+McpEra classifyRequestEra(const cJsonValue& params) {
   if (!params.isObject()) return McpEra::kLegacy;  // absent params: legacy
-  const JsonValue* meta = params.find("_meta");
+  const cJsonValue* meta = params.find("_meta");
   if (!meta || meta->isNull()) return McpEra::kLegacy;
   if (!meta->isObject()) {
-    throw RpcError(kRpcInvalidParams, "_meta must be an object");
+    throw cRpcError(kRpcInvalidParams, "_meta must be an object");
   }
   // Spec-namespaced key first, plain key as the lenient fallback.
-  const JsonValue* v = meta->find(kMetaProtocolVersion);
+  const cJsonValue* v = meta->find(kMetaProtocolVersion);
   if (!v || v->isNull()) v = meta->find("protocolVersion");
   if (!v || v->isNull()) {
-    throw RpcError(kRpcInvalidParams, "_meta: missing protocol version");
+    throw cRpcError(kRpcInvalidParams, "_meta: missing protocol version");
   }
   if (!v->isString()) {
-    throw RpcError(kRpcInvalidParams, "_meta: protocol version must be a string");
+    throw cRpcError(kRpcInvalidParams, "_meta: protocol version must be a string");
   }
   const std::string& ver = v->asString();
   if (ver == kMcpProtocolVersionStateless) return McpEra::kStateless;
   if (ver == kMcpProtocolVersion) return McpEra::kLegacy;
-  throw RpcError(kRpcUnsupportedProtocolVersion,
+  throw cRpcError(kRpcUnsupportedProtocolVersion,
                  "unsupported protocol version '" + ver + "'",
                  unsupportedVersionData());
 }
 
 // ---------------------------------------------------------------------------
-// McpServer.
+// cMcpServer.
 // ---------------------------------------------------------------------------
 
-McpServer::McpServer(McpBackends backends, McpAgent agent)
+cMcpServer::cMcpServer(McpBackends backends, McpAgent agent)
     : backends_(std::move(backends)), agent_(std::move(agent)) {
   logSink_ = [](std::string_view line) {
     std::fprintf(stderr, "mcp: %.*s\n", static_cast<int>(line.size()), line.data());
   };
   router_.registerHandler("initialize",
-                          [this](const JsonValue& p) { return onInitialize(p); });
+                          [this](const cJsonValue& p) { return onInitialize(p); });
   router_.registerHandler("server/discover",
-                          [this](const JsonValue& p) { return onDiscover(p); });
+                          [this](const cJsonValue& p) { return onDiscover(p); });
   router_.registerHandler("notifications/initialized",
-                          [](const JsonValue&) { return JsonValue::null(); });
+                          [](const cJsonValue&) { return cJsonValue::null(); });
   router_.registerHandler("tools/list",
-                          [this](const JsonValue& p) { return onToolsList(p); });
+                          [this](const cJsonValue& p) { return onToolsList(p); });
   router_.registerHandler("tools/call",
-                          [this](const JsonValue& p) { return onToolsCall(p); });
+                          [this](const cJsonValue& p) { return onToolsCall(p); });
   router_.registerHandler("resources/list",
-                          [this](const JsonValue& p) { return onResourcesList(p); });
+                          [this](const cJsonValue& p) { return onResourcesList(p); });
   router_.registerHandler("resources/read",
-                          [this](const JsonValue& p) { return onResourcesRead(p); });
+                          [this](const cJsonValue& p) { return onResourcesRead(p); });
   router_.registerHandler("prompts/list",
-                          [this](const JsonValue& p) { return onPromptsList(p); });
+                          [this](const cJsonValue& p) { return onPromptsList(p); });
   router_.registerHandler("prompts/get",
-                          [this](const JsonValue& p) { return onPromptsGet(p); });
+                          [this](const cJsonValue& p) { return onPromptsGet(p); });
   registerPhase1Tools();
   registerPhase1Resources();
   registerPhase3Prompts();
@@ -275,20 +275,20 @@ McpServer::McpServer(McpBackends backends, McpAgent agent)
   registerPilotSensesTools();
 }
 
-void McpServer::setLogSink(LogSink sink) {
+void cMcpServer::setLogSink(LogSink sink) {
   logSink_ = sink ? std::move(sink) : LogSink();
 }
 
-void McpServer::setRateLimitClock(McpTokenBucket::ClockFn fn) {
+void cMcpServer::setRateLimitClock(cMcpTokenBucket::ClockFn fn) {
   toolCalls_.setClock(fn);
   blockWrites_.setClock(fn);
 }
 
-void McpServer::log(std::string_view line) {
+void cMcpServer::log(std::string_view line) {
   if (logSink_) logSink_(line);
 }
 
-void McpServer::grantPermissions(uint32_t bits) {
+void cMcpServer::grantPermissions(uint32_t bits) {
   {
     std::lock_guard<std::mutex> lock(agentMutex_);
     agent_.permissionMask |= bits;
@@ -296,7 +296,7 @@ void McpServer::grantPermissions(uint32_t bits) {
   log("grant: +" + permMaskNames(bits));
 }
 
-void McpServer::revokePermissions(uint32_t bits) {
+void cMcpServer::revokePermissions(uint32_t bits) {
   {
     std::lock_guard<std::mutex> lock(agentMutex_);
     agent_.permissionMask &= ~bits;
@@ -304,22 +304,22 @@ void McpServer::revokePermissions(uint32_t bits) {
   log("revoke: -" + permMaskNames(bits));
 }
 
-uint32_t McpServer::permissionMask() const {
+uint32_t cMcpServer::permissionMask() const {
   std::lock_guard<std::mutex> lock(agentMutex_);
   return agent_.permissionMask;
 }
 
-void McpServer::setAgentName(std::string name) {
+void cMcpServer::setAgentName(std::string name) {
   std::lock_guard<std::mutex> lock(agentMutex_);
   agent_.name = std::move(name);
 }
 
-McpAgent McpServer::agent() const {
+McpAgent cMcpServer::agent() const {
   std::lock_guard<std::mutex> lock(agentMutex_);
   return agent_;
 }
 
-std::optional<std::string> McpServer::handleMessage(std::string_view text) {
+std::optional<std::string> cMcpServer::handleMessage(std::string_view text) {
   RpcParseOutcome outcome = parseRpcRequest(text);
   if (!outcome.ok) {
     return buildErrorResponse(outcome.errorId, outcome.errorCode,
@@ -334,7 +334,7 @@ std::optional<std::string> McpServer::handleMessage(std::string_view text) {
   McpEra era = McpEra::kLegacy;
   try {
     era = classifyRequestEra(req.params);
-  } catch (const RpcError& e) {
+  } catch (const cRpcError& e) {
     if (req.isNotification) return std::nullopt;
     return buildErrorResponse(req.id, e.code(), e.message(), e.data())
         .serialize();
@@ -375,68 +375,68 @@ std::optional<std::string> McpServer::handleMessage(std::string_view text) {
   return dispatchParsed(req, router_);
 }
 
-std::optional<std::string> McpServer::dispatchStateless(const RpcRequest& req) {
+std::optional<std::string> cMcpServer::dispatchStateless(const RpcRequest& req) {
   // The envelope merges into the response VALUE before serializing: no
   // serialize-then-re-parse round trip on the stateless hot path.
-  std::optional<JsonValue> resp = handleParsedRequest(req, router_);
+  std::optional<cJsonValue> resp = handleParsedRequest(req, router_);
   if (!resp) return std::nullopt;  // notification: no response, ever
   // Merge the stateless result envelope into the result object. Error
   // responses keep their JSON-RPC shape (-32022 already names the server's
   // supported versions in data.supported).
-  JsonValue& doc = *resp;
-  const JsonValue* rc = doc.find("result");
+  cJsonValue& doc = *resp;
+  const cJsonValue* rc = doc.find("result");
   if (!rc || !rc->isObject()) return doc.serialize();  // defensive; unreachable
   // Present (checked above), so getOrInsert cannot insert: it returns the
   // existing entry, mutably.
-  JsonValue& result = doc.getOrInsert("result");
+  cJsonValue& result = doc.getOrInsert("result");
   applyStatelessEnvelope(result, req.method);
   return doc.serialize();
 }
 
-void McpServer::applyStatelessEnvelope(JsonValue& result,
+void cMcpServer::applyStatelessEnvelope(cJsonValue& result,
                                        const std::string& method) {
   // SEP-2322: every 2026-07-28 result carries resultType. This server never
   // needs client input (no MRTR/elicitation in v1), so it always completes.
   if (!result.find("resultType")) {
-    result.getOrInsert("resultType") = JsonValue::string("complete");
+    result.getOrInsert("resultType") = cJsonValue::string("complete");
   }
   // Server identity: with the handshake gone, result _meta is the only
   // place a stateless client learns who answered.
-  JsonValue& meta = result.getOrInsert("_meta");
-  if (!meta.isObject()) meta = JsonValue::object({});
-  JsonValue::Object serverInfo;
-  serverInfo.emplace_back("name", JsonValue::string(kMcpServerName));
-  serverInfo.emplace_back("version", JsonValue::string(mcpEngineVersionString()));
-  JsonValue::Object& mo = meta.asObject();
+  cJsonValue& meta = result.getOrInsert("_meta");
+  if (!meta.isObject()) meta = cJsonValue::object({});
+  cJsonValue::Object serverInfo;
+  serverInfo.emplace_back("name", cJsonValue::string(kMcpServerName));
+  serverInfo.emplace_back("version", cJsonValue::string(mcpEngineVersionString()));
+  cJsonValue::Object& mo = meta.asObject();
   bool hasVer = false, hasInfo = false;
   for (const auto& [k, v] : mo) {
     if (k == kMetaProtocolVersion) hasVer = true;
     if (k == kMetaServerInfo) hasInfo = true;
   }
-  if (!hasVer) mo.emplace_back(kMetaProtocolVersion, JsonValue::string(kMcpProtocolVersionStateless));
-  if (!hasInfo) mo.emplace_back(kMetaServerInfo, JsonValue::object(std::move(serverInfo)));
+  if (!hasVer) mo.emplace_back(kMetaProtocolVersion, cJsonValue::string(kMcpProtocolVersionStateless));
+  if (!hasInfo) mo.emplace_back(kMetaServerInfo, cJsonValue::object(std::move(serverInfo)));
   // SEP-2549 cache hints: lists and discover are static per boot (public,
   // 1h); resources/read is live, permission-gated data (private, no cache).
   const bool isList = method == "tools/list" || method == "resources/list" ||
                       method == "prompts/list" || method == "server/discover";
   if (isList) {
     if (!result.find("ttlMs")) {
-      result.getOrInsert("ttlMs") = JsonValue::integer(kMcpListTtlMs);
+      result.getOrInsert("ttlMs") = cJsonValue::integer(kMcpListTtlMs);
     }
     if (!result.find("cacheScope")) {
-      result.getOrInsert("cacheScope") = JsonValue::string(kMcpCacheScopePublic);
+      result.getOrInsert("cacheScope") = cJsonValue::string(kMcpCacheScopePublic);
     }
   } else if (method == "resources/read") {
     if (!result.find("ttlMs")) {
-      result.getOrInsert("ttlMs") = JsonValue::integer(0);
+      result.getOrInsert("ttlMs") = cJsonValue::integer(0);
     }
     if (!result.find("cacheScope")) {
-      result.getOrInsert("cacheScope") = JsonValue::string(kMcpCacheScopePrivate);
+      result.getOrInsert("cacheScope") = cJsonValue::string(kMcpCacheScopePrivate);
     }
   }
 }
 
-void McpServer::runStdio(IStdioTransport& transport) {
+void cMcpServer::runStdio(IStdioTransport& transport) {
   std::string line;
   while (transport.readLine(line)) {
     if (line.size() > kMaxStdioLineBytes) {
@@ -458,7 +458,7 @@ void McpServer::runStdio(IStdioTransport& transport) {
   log("stdio: EOF, connection closed");
 }
 
-void McpServer::runStdio() {
+void cMcpServer::runStdio() {
   cFdStdioTransport transport;
   runStdio(transport);
 }
@@ -467,28 +467,28 @@ void McpServer::runStdio() {
 // Lifecycle handlers.
 // ---------------------------------------------------------------------------
 
-JsonValue McpServer::onInitialize(const JsonValue& params) {
-  const JsonValue* v = params.find("protocolVersion");
+cJsonValue cMcpServer::onInitialize(const cJsonValue& params) {
+  const cJsonValue* v = params.find("protocolVersion");
   const std::string want = (v && v->isString()) ? v->asString() : "";
   if (want != kMcpProtocolVersion) {
-    throw RpcError(kRpcUnsupportedProtocolVersion,
+    throw cRpcError(kRpcUnsupportedProtocolVersion,
                    "unsupported protocol version '" + want + "'",
                    unsupportedVersionData());
   }
   initialized_ = true;
   log("initialize: protocol " + want);
-  JsonValue::Object serverInfo;
-  serverInfo.emplace_back("name", JsonValue::string(kMcpServerName));
-  serverInfo.emplace_back("version", JsonValue::string(mcpEngineVersionString()));
-  JsonValue::Object capabilities;
-  capabilities.emplace_back("tools", JsonValue::object({}));
-  capabilities.emplace_back("resources", JsonValue::object({}));
-  capabilities.emplace_back("prompts", JsonValue::object({}));
-  JsonValue::Object result;
-  result.emplace_back("protocolVersion", JsonValue::string(kMcpProtocolVersion));
-  result.emplace_back("capabilities", JsonValue::object(std::move(capabilities)));
-  result.emplace_back("serverInfo", JsonValue::object(std::move(serverInfo)));
-  return JsonValue::object(std::move(result));
+  cJsonValue::Object serverInfo;
+  serverInfo.emplace_back("name", cJsonValue::string(kMcpServerName));
+  serverInfo.emplace_back("version", cJsonValue::string(mcpEngineVersionString()));
+  cJsonValue::Object capabilities;
+  capabilities.emplace_back("tools", cJsonValue::object({}));
+  capabilities.emplace_back("resources", cJsonValue::object({}));
+  capabilities.emplace_back("prompts", cJsonValue::object({}));
+  cJsonValue::Object result;
+  result.emplace_back("protocolVersion", cJsonValue::string(kMcpProtocolVersion));
+  result.emplace_back("capabilities", cJsonValue::object(std::move(capabilities)));
+  result.emplace_back("serverInfo", cJsonValue::object(std::move(serverInfo)));
+  return cJsonValue::object(std::move(result));
 }
 
 /// Short instructions string for server/discover: how an LLM client should
@@ -501,60 +501,60 @@ inline constexpr const char* kMcpDiscoverInstructions =
     "\"2025-11-25\". Stateless clients: put \"2026-07-28\" in "
     "params._meta on every request; no handshake, no session.";
 
-JsonValue McpServer::onDiscover(const JsonValue&) {
-  JsonValue::Array versions;
-  versions.emplace_back(JsonValue::string(kMcpProtocolVersion));
-  versions.emplace_back(JsonValue::string(kMcpProtocolVersionStateless));
-  JsonValue::Object serverInfo;
-  serverInfo.emplace_back("name", JsonValue::string(kMcpServerName));
-  serverInfo.emplace_back("version", JsonValue::string(mcpEngineVersionString()));
-  JsonValue::Object capabilities;
-  capabilities.emplace_back("tools", JsonValue::object({}));
-  capabilities.emplace_back("resources", JsonValue::object({}));
-  capabilities.emplace_back("prompts", JsonValue::object({}));
-  JsonValue::Object result;
+cJsonValue cMcpServer::onDiscover(const cJsonValue&) {
+  cJsonValue::Array versions;
+  versions.emplace_back(cJsonValue::string(kMcpProtocolVersion));
+  versions.emplace_back(cJsonValue::string(kMcpProtocolVersionStateless));
+  cJsonValue::Object serverInfo;
+  serverInfo.emplace_back("name", cJsonValue::string(kMcpServerName));
+  serverInfo.emplace_back("version", cJsonValue::string(mcpEngineVersionString()));
+  cJsonValue::Object capabilities;
+  capabilities.emplace_back("tools", cJsonValue::object({}));
+  capabilities.emplace_back("resources", cJsonValue::object({}));
+  capabilities.emplace_back("prompts", cJsonValue::object({}));
+  cJsonValue::Object result;
   result.emplace_back("supportedVersions",
-                      JsonValue::array(std::move(versions)));
-  result.emplace_back("capabilities", JsonValue::object(std::move(capabilities)));
-  result.emplace_back("serverInfo", JsonValue::object(std::move(serverInfo)));
-  result.emplace_back("instructions", JsonValue::string(kMcpDiscoverInstructions));
+                      cJsonValue::array(std::move(versions)));
+  result.emplace_back("capabilities", cJsonValue::object(std::move(capabilities)));
+  result.emplace_back("serverInfo", cJsonValue::object(std::move(serverInfo)));
+  result.emplace_back("instructions", cJsonValue::string(kMcpDiscoverInstructions));
   // server/discover is inherently modern: its result shape always carries
   // the SEP-2549 cache hints (the stateless envelope adds resultType/_meta
   // on top when the request itself was stateless).
-  result.emplace_back("ttlMs", JsonValue::integer(kMcpListTtlMs));
-  result.emplace_back("cacheScope", JsonValue::string(kMcpCacheScopePublic));
-  return JsonValue::object(std::move(result));
+  result.emplace_back("ttlMs", cJsonValue::integer(kMcpListTtlMs));
+  result.emplace_back("cacheScope", cJsonValue::string(kMcpCacheScopePublic));
+  return cJsonValue::object(std::move(result));
 }
 
-JsonValue McpServer::onPromptsList(const JsonValue&) {
-  JsonValue::Array list;
+cJsonValue cMcpServer::onPromptsList(const cJsonValue&) {
+  cJsonValue::Array list;
   for (const auto& p : prompts_) {
-    JsonValue::Array args;
+    cJsonValue::Array args;
     for (const auto& a : p.arguments) {
-      JsonValue::Object ao;
-      ao.emplace_back("name", JsonValue::string(a.name));
-      ao.emplace_back("description", JsonValue::string(a.description));
-      ao.emplace_back("required", JsonValue::boolean(a.required));
-      args.emplace_back(JsonValue::object(std::move(ao)));
+      cJsonValue::Object ao;
+      ao.emplace_back("name", cJsonValue::string(a.name));
+      ao.emplace_back("description", cJsonValue::string(a.description));
+      ao.emplace_back("required", cJsonValue::boolean(a.required));
+      args.emplace_back(cJsonValue::object(std::move(ao)));
     }
-    JsonValue::Object entry;
-    entry.emplace_back("name", JsonValue::string(p.name));
-    entry.emplace_back("description", JsonValue::string(p.description));
-    entry.emplace_back("arguments", JsonValue::array(std::move(args)));
-    list.emplace_back(JsonValue::object(std::move(entry)));
+    cJsonValue::Object entry;
+    entry.emplace_back("name", cJsonValue::string(p.name));
+    entry.emplace_back("description", cJsonValue::string(p.description));
+    entry.emplace_back("arguments", cJsonValue::array(std::move(args)));
+    list.emplace_back(cJsonValue::object(std::move(entry)));
   }
-  JsonValue::Object result;
-  result.emplace_back("prompts", JsonValue::array(std::move(list)));
-  return JsonValue::object(std::move(result));
+  cJsonValue::Object result;
+  result.emplace_back("prompts", cJsonValue::array(std::move(list)));
+  return cJsonValue::object(std::move(result));
 }
 
-JsonValue McpServer::onPromptsGet(const JsonValue& params) {
+cJsonValue cMcpServer::onPromptsGet(const cJsonValue& params) {
   if (!params.isObject()) {
-    throw RpcError(kRpcInvalidParams, "prompts/get: params must be an object");
+    throw cRpcError(kRpcInvalidParams, "prompts/get: params must be an object");
   }
-  const JsonValue* nv = params.find("name");
+  const cJsonValue* nv = params.find("name");
   if (!nv || !nv->isString() || nv->asString().empty()) {
-    throw RpcError(kRpcInvalidParams,
+    throw cRpcError(kRpcInvalidParams,
                    "prompts/get: 'name' must be a non-empty string");
   }
   const std::string name = nv->asString();
@@ -570,7 +570,7 @@ JsonValue McpServer::onPromptsGet(const JsonValue& params) {
   // tools/call, where the locked Phase 1 decision keeps unknown tools as
   // isError results.)
   if (!prompt) {
-    throw RpcError(kRpcInvalidParams, "unknown prompt: '" + name + "'");
+    throw cRpcError(kRpcInvalidParams, "unknown prompt: '" + name + "'");
   }
   McpAgent agentCopy;
   uint32_t missing;
@@ -580,21 +580,21 @@ JsonValue McpServer::onPromptsGet(const JsonValue& params) {
     agentCopy = agent_;
   }
   if (missing != 0) {
-    throw RpcError(kMcpPermissionDenied,
+    throw cRpcError(kMcpPermissionDenied,
                    "permission denied: agent '" + agentCopy.name +
                        "' is missing " + permMaskNames(missing) +
                        " for prompt '" + name + "'");
   }
   // arguments: object of strings, validated strictly against the descriptor.
-  const JsonValue* av = params.find("arguments");
+  const cJsonValue* av = params.find("arguments");
   if (av && !av->isObject() && !av->isNull()) {
-    throw RpcError(kRpcInvalidParams, "prompts/get: 'arguments' must be an object");
+    throw cRpcError(kRpcInvalidParams, "prompts/get: 'arguments' must be an object");
   }
   std::map<std::string, std::string> args;
   if (av && av->isObject()) {
     for (const auto& [k, v] : av->asObject()) {
       if (!v.isString()) {
-        throw RpcError(kRpcInvalidParams,
+        throw cRpcError(kRpcInvalidParams,
                        "prompts/get: argument '" + k + "' must be a string");
       }
       args[k] = v.asString();
@@ -602,7 +602,7 @@ JsonValue McpServer::onPromptsGet(const JsonValue& params) {
   }
   for (const auto& a : prompt->arguments) {
     if (a.required && args.find(a.name) == args.end()) {
-      throw RpcError(kRpcInvalidParams, "prompts/get: missing required argument '" +
+      throw cRpcError(kRpcInvalidParams, "prompts/get: missing required argument '" +
                                             a.name + "' for prompt '" + name + "'");
     }
   }
@@ -616,46 +616,46 @@ JsonValue McpServer::onPromptsGet(const JsonValue& params) {
       }
     }
     if (!known) {
-      throw RpcError(kRpcInvalidParams, "prompts/get: prompt '" + name +
+      throw cRpcError(kRpcInvalidParams, "prompts/get: prompt '" + name +
                                             "' takes no argument '" + k + "'");
     }
   }
   const std::string text = prompt->render(args);
-  JsonValue::Object content;
-  content.emplace_back("type", JsonValue::string("text"));
-  content.emplace_back("text", JsonValue::string(text));
-  JsonValue::Object message;
-  message.emplace_back("role", JsonValue::string("user"));
+  cJsonValue::Object content;
+  content.emplace_back("type", cJsonValue::string("text"));
+  content.emplace_back("text", cJsonValue::string(text));
+  cJsonValue::Object message;
+  message.emplace_back("role", cJsonValue::string("user"));
   message.emplace_back(
-      "content", JsonValue::array({JsonValue::object(std::move(content))}));
-  JsonValue::Object result;
-  result.emplace_back("description", JsonValue::string(prompt->description));
+      "content", cJsonValue::array({cJsonValue::object(std::move(content))}));
+  cJsonValue::Object result;
+  result.emplace_back("description", cJsonValue::string(prompt->description));
   result.emplace_back("messages",
-                      JsonValue::array({JsonValue::object(std::move(message))}));
-  return JsonValue::object(std::move(result));
+                      cJsonValue::array({cJsonValue::object(std::move(message))}));
+  return cJsonValue::object(std::move(result));
 }
 
-JsonValue McpServer::onToolsList(const JsonValue&) {
-  JsonValue::Array list;
+cJsonValue cMcpServer::onToolsList(const cJsonValue&) {
+  cJsonValue::Array list;
   for (const auto& t : tools_) {
-    JsonValue::Object annotations;
-    annotations.emplace_back("readOnlyHint", JsonValue::boolean(t.annotations.readOnlyHint));
-    annotations.emplace_back("destructiveHint", JsonValue::boolean(t.annotations.destructiveHint));
-    annotations.emplace_back("idempotentHint", JsonValue::boolean(t.annotations.idempotentHint));
-    annotations.emplace_back("openWorldHint", JsonValue::boolean(t.annotations.openWorldHint));
-    JsonValue::Object entry;
-    entry.emplace_back("name", JsonValue::string(t.name));
-    entry.emplace_back("description", JsonValue::string(t.description));
+    cJsonValue::Object annotations;
+    annotations.emplace_back("readOnlyHint", cJsonValue::boolean(t.annotations.readOnlyHint));
+    annotations.emplace_back("destructiveHint", cJsonValue::boolean(t.annotations.destructiveHint));
+    annotations.emplace_back("idempotentHint", cJsonValue::boolean(t.annotations.idempotentHint));
+    annotations.emplace_back("openWorldHint", cJsonValue::boolean(t.annotations.openWorldHint));
+    cJsonValue::Object entry;
+    entry.emplace_back("name", cJsonValue::string(t.name));
+    entry.emplace_back("description", cJsonValue::string(t.description));
     entry.emplace_back("inputSchema", buildInputSchema(t.params));
-    entry.emplace_back("annotations", JsonValue::object(std::move(annotations)));
-    list.emplace_back(JsonValue::object(std::move(entry)));
+    entry.emplace_back("annotations", cJsonValue::object(std::move(annotations)));
+    list.emplace_back(cJsonValue::object(std::move(entry)));
   }
-  JsonValue::Object result;
-  result.emplace_back("tools", JsonValue::array(std::move(list)));
-  return JsonValue::object(std::move(result));
+  cJsonValue::Object result;
+  result.emplace_back("tools", cJsonValue::array(std::move(list)));
+  return cJsonValue::object(std::move(result));
 }
 
-const ToolDescriptor* McpServer::findTool(const std::string& name) {
+const ToolDescriptor* cMcpServer::findTool(const std::string& name) {
   // tools_ only grows (all registration happens in the constructor's
   // register*() family), so a size check is enough to detect a stale index.
   if (toolIndexBuiltFor_ != tools_.size()) {
@@ -667,19 +667,19 @@ const ToolDescriptor* McpServer::findTool(const std::string& name) {
   return it == toolIndex_.end() ? nullptr : &tools_[it->second];
 }
 
-JsonValue McpServer::onToolsCall(const JsonValue& params) {
+cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
   if (!params.isNull() && !params.isObject()) {
-    throw RpcError(kRpcInvalidParams, "tools/call: params must be an object");
+    throw cRpcError(kRpcInvalidParams, "tools/call: params must be an object");
   }
-  const JsonValue emptyArgs = JsonValue::object({});
+  const cJsonValue emptyArgs = cJsonValue::object({});
   ArgReader args(params.isObject() ? params : emptyArgs);
   const std::string name = args.reqNonEmptyString("name");
-  const JsonValue* a = params.find("arguments");
+  const cJsonValue* a = params.find("arguments");
   if (a && !a->isObject() && !a->isNull()) {
-    throw RpcError(kRpcInvalidParams, "tools/call: 'arguments' must be an object");
+    throw cRpcError(kRpcInvalidParams, "tools/call: 'arguments' must be an object");
   }
-  const JsonValue callArgs =
-      (a && a->isObject()) ? *a : JsonValue::object({});
+  const cJsonValue callArgs =
+      (a && a->isObject()) ? *a : cJsonValue::object({});
 
   // Phase 4: per-connection tool-call rate cap. Consumed before the tool
   // lookup so even unknown-tool probes cost budget (a scanner burns its
@@ -728,7 +728,7 @@ JsonValue McpServer::onToolsCall(const JsonValue& params) {
         }
         r = tool->handler(callArgs, agentCopy);
         outcome = r.isError ? "error" : "ok";
-      } catch (const RpcError&) {
+      } catch (const cRpcError&) {
         throw;  // malformed arguments: protocol error, not a tool failure
       } catch (const std::exception& e) {
         // Backend blew up: model-actionable failure, never a protocol error.
@@ -744,24 +744,24 @@ JsonValue McpServer::onToolsCall(const JsonValue& params) {
   return toolResultJson(r);
 }
 
-JsonValue McpServer::onResourcesList(const JsonValue&) {
-  JsonValue::Array list;
+cJsonValue cMcpServer::onResourcesList(const cJsonValue&) {
+  cJsonValue::Array list;
   for (const auto& r : resources_) {
-    JsonValue::Object entry;
-    entry.emplace_back("uri", JsonValue::string(r.uri));
-    entry.emplace_back("name", JsonValue::string(r.name));
-    entry.emplace_back("description", JsonValue::string(r.description));
-    entry.emplace_back("mimeType", JsonValue::string(r.mimeType));
-    list.emplace_back(JsonValue::object(std::move(entry)));
+    cJsonValue::Object entry;
+    entry.emplace_back("uri", cJsonValue::string(r.uri));
+    entry.emplace_back("name", cJsonValue::string(r.name));
+    entry.emplace_back("description", cJsonValue::string(r.description));
+    entry.emplace_back("mimeType", cJsonValue::string(r.mimeType));
+    list.emplace_back(cJsonValue::object(std::move(entry)));
   }
-  JsonValue::Object result;
-  result.emplace_back("resources", JsonValue::array(std::move(list)));
-  return JsonValue::object(std::move(result));
+  cJsonValue::Object result;
+  result.emplace_back("resources", cJsonValue::array(std::move(list)));
+  return cJsonValue::object(std::move(result));
 }
 
-JsonValue McpServer::onResourcesRead(const JsonValue& params) {
+cJsonValue cMcpServer::onResourcesRead(const cJsonValue& params) {
   if (!params.isObject()) {
-    throw RpcError(kRpcInvalidParams, "resources/read: params must be an object");
+    throw cRpcError(kRpcInvalidParams, "resources/read: params must be an object");
   }
   ArgReader args(params);
   const std::string uri = args.reqNonEmptyString("uri");
@@ -773,8 +773,8 @@ JsonValue McpServer::onResourcesRead(const JsonValue& params) {
     }
   }
   if (!res) {
-    throw RpcError(kRpcInvalidParams, "unknown resource uri: '" + uri + "'",
-                   JsonValue::string(uri));
+    throw cRpcError(kRpcInvalidParams, "unknown resource uri: '" + uri + "'",
+                   cJsonValue::string(uri));
   }
   uint32_t missing;
   McpAgent agentCopy;
@@ -784,19 +784,19 @@ JsonValue McpServer::onResourcesRead(const JsonValue& params) {
     agentCopy = agent_;
   }
   if (missing != 0) {
-    throw RpcError(kMcpPermissionDenied,
+    throw cRpcError(kMcpPermissionDenied,
                    "permission denied: agent '" + agentCopy.name + "' is missing " +
                        permMaskNames(missing) + " for resource '" + uri + "'");
   }
-  std::string text = res->read(agentCopy);  // throws RpcError on failure
-  JsonValue::Object content;
-  content.emplace_back("uri", JsonValue::string(uri));
-  content.emplace_back("mimeType", JsonValue::string(res->mimeType));
-  content.emplace_back("text", JsonValue::string(text));
-  JsonValue::Object result;
+  std::string text = res->read(agentCopy);  // throws cRpcError on failure
+  cJsonValue::Object content;
+  content.emplace_back("uri", cJsonValue::string(uri));
+  content.emplace_back("mimeType", cJsonValue::string(res->mimeType));
+  content.emplace_back("text", cJsonValue::string(text));
+  cJsonValue::Object result;
   result.emplace_back("contents",
-                      JsonValue::array({JsonValue::object(std::move(content))}));
-  return JsonValue::object(std::move(result));
+                      cJsonValue::array({cJsonValue::object(std::move(content))}));
+  return cJsonValue::object(std::move(result));
 }
 
 // ---------------------------------------------------------------------------
@@ -818,7 +818,7 @@ const char* kNotWired = "not available: the game has not wired this backend";
 
 }  // namespace
 
-void McpServer::registerPhase1Tools() {
+void cMcpServer::registerPhase1Tools() {
   McpBackends& b = backends_;
 
   // -- sim_status ------------------------------------------------------------
@@ -827,14 +827,14 @@ void McpServer::registerPhase1Tools() {
       "Simulation clock: world tick, measured TPS, target TPS, paused flag.",
       {},
       kPermWorldRead,
-      [&b](const JsonValue&, const McpAgent&) {
+      [&b](const cJsonValue&, const McpAgent&) {
         if (!b.sim) return ToolResult::error(kNotWired);
-        JsonValue::Object o;
-        o.emplace_back("tick", JsonValue::integer(static_cast<int64_t>(b.sim->worldTick())));
-        o.emplace_back("tps", JsonValue::number(b.sim->currentTps()));
-        o.emplace_back("targetTps", JsonValue::integer(b.sim->targetTps()));
-        o.emplace_back("paused", JsonValue::boolean(b.sim->paused()));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        cJsonValue::Object o;
+        o.emplace_back("tick", cJsonValue::integer(static_cast<int64_t>(b.sim->worldTick())));
+        o.emplace_back("tps", cJsonValue::number(b.sim->currentTps()));
+        o.emplace_back("targetTps", cJsonValue::integer(b.sim->targetTps()));
+        o.emplace_back("paused", cJsonValue::boolean(b.sim->paused()));
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 
@@ -844,20 +844,20 @@ void McpServer::registerPhase1Tools() {
       "Installed mods: name, version, granted permission mask and names.",
       {},
       0,
-      [&b](const JsonValue&, const McpAgent&) {
+      [&b](const cJsonValue&, const McpAgent&) {
         if (!b.mods) return ToolResult::error(kNotWired);
-        JsonValue::Array arr;
+        cJsonValue::Array arr;
         for (const auto& m : b.mods->mods()) {
-          JsonValue::Object o;
-          o.emplace_back("name", JsonValue::string(m.name));
-          o.emplace_back("version", JsonValue::string(m.version));
+          cJsonValue::Object o;
+          o.emplace_back("name", cJsonValue::string(m.name));
+          o.emplace_back("version", cJsonValue::string(m.version));
           o.emplace_back("permissions",
-                         JsonValue::integer(static_cast<int64_t>(m.permissions)));
+                         cJsonValue::integer(static_cast<int64_t>(m.permissions)));
           o.emplace_back("permissionNames", strVec(permBitNameList(m.permissions)));
           o.emplace_back("extensions", strVec(m.extensions));
-          arr.emplace_back(JsonValue::object(std::move(o)));
+          arr.emplace_back(cJsonValue::object(std::move(o)));
         }
-        return ToolResult::ok(JsonValue::array(std::move(arr)).serialize());
+        return ToolResult::ok(cJsonValue::array(std::move(arr)).serialize());
       },
   });
 
@@ -867,33 +867,33 @@ void McpServer::registerPhase1Tools() {
       "Local player: position, velocity, look direction, dimension, health, stats, hotbar, selected slot.",
       {},
       kPermWorldRead,
-      [&b](const JsonValue&, const McpAgent&) {
+      [&b](const cJsonValue&, const McpAgent&) {
         if (!b.player) return ToolResult::error(kNotWired);
         IPlayerView::Snapshot s = b.player->localPlayer();
-        JsonValue::Object o;
-        o.emplace_back("x", JsonValue::number(s.x));
-        o.emplace_back("y", JsonValue::number(s.y));
-        o.emplace_back("z", JsonValue::number(s.z));
-        o.emplace_back("vx", JsonValue::number(s.vx));
-        o.emplace_back("vy", JsonValue::number(s.vy));
-        o.emplace_back("vz", JsonValue::number(s.vz));
-        o.emplace_back("yaw", JsonValue::number(s.yaw));
-        o.emplace_back("pitch", JsonValue::number(s.pitch));
-        o.emplace_back("dimension", JsonValue::integer(s.dimension));
-        o.emplace_back("health", JsonValue::integer(s.health));
-        JsonValue::Array stats;
+        cJsonValue::Object o;
+        o.emplace_back("x", cJsonValue::number(s.x));
+        o.emplace_back("y", cJsonValue::number(s.y));
+        o.emplace_back("z", cJsonValue::number(s.z));
+        o.emplace_back("vx", cJsonValue::number(s.vx));
+        o.emplace_back("vy", cJsonValue::number(s.vy));
+        o.emplace_back("vz", cJsonValue::number(s.vz));
+        o.emplace_back("yaw", cJsonValue::number(s.yaw));
+        o.emplace_back("pitch", cJsonValue::number(s.pitch));
+        o.emplace_back("dimension", cJsonValue::integer(s.dimension));
+        o.emplace_back("health", cJsonValue::integer(s.health));
+        cJsonValue::Array stats;
         for (const auto& [name, value] : s.stats) {
-          JsonValue::Object e;
-          e.emplace_back("name", JsonValue::string(name));
-          e.emplace_back("value", JsonValue::number(value));
-          stats.emplace_back(JsonValue::object(std::move(e)));
+          cJsonValue::Object e;
+          e.emplace_back("name", cJsonValue::string(name));
+          e.emplace_back("value", cJsonValue::number(value));
+          stats.emplace_back(cJsonValue::object(std::move(e)));
         }
-        o.emplace_back("stats", JsonValue::array(std::move(stats)));
-        JsonValue::Array hotbar;
-        for (uint16_t id : s.hotbar) hotbar.emplace_back(JsonValue::integer(id));
-        o.emplace_back("hotbar", JsonValue::array(std::move(hotbar)));
-        o.emplace_back("selectedSlot", JsonValue::integer(s.selectedSlot));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        o.emplace_back("stats", cJsonValue::array(std::move(stats)));
+        cJsonValue::Array hotbar;
+        for (uint16_t id : s.hotbar) hotbar.emplace_back(cJsonValue::integer(id));
+        o.emplace_back("hotbar", cJsonValue::array(std::move(hotbar)));
+        o.emplace_back("selectedSlot", cJsonValue::integer(s.selectedSlot));
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 
@@ -917,27 +917,27 @@ void McpServer::registerPhase1Tools() {
         "Entities within radius of a point, ascending id. Radius mandatory and capped.",
         std::move(params),
         kPermWorldRead,
-        [&b](const JsonValue& a, const McpAgent&) {
+        [&b](const cJsonValue& a, const McpAgent&) {
           if (!b.entities) return ToolResult::error(kNotWired);
           ArgReader r(a);
           const double cx = r.reqNumber("cx"), cy = r.reqNumber("cy"),
                        cz = r.reqNumber("cz");
           const double radius = r.reqNumber("radius");
           if (!(radius >= 1.0 && radius <= kMaxEntityRadius)) {
-            throw RpcError(kRpcInvalidParams,
+            throw cRpcError(kRpcInvalidParams,
                            "entity_list: 'radius' must be in [1, 512]");
           }
-          JsonValue::Array arr;
+          cJsonValue::Array arr;
           for (const auto& e : b.entities->within(cx, cy, cz, radius)) {
-            JsonValue::Object o;
-            o.emplace_back("id", JsonValue::integer(static_cast<int64_t>(e.id)));
-            o.emplace_back("type", JsonValue::integer(e.type));
-            o.emplace_back("x", JsonValue::number(e.x));
-            o.emplace_back("y", JsonValue::number(e.y));
-            o.emplace_back("z", JsonValue::number(e.z));
-            arr.emplace_back(JsonValue::object(std::move(o)));
+            cJsonValue::Object o;
+            o.emplace_back("id", cJsonValue::integer(static_cast<int64_t>(e.id)));
+            o.emplace_back("type", cJsonValue::integer(e.type));
+            o.emplace_back("x", cJsonValue::number(e.x));
+            o.emplace_back("y", cJsonValue::number(e.y));
+            o.emplace_back("z", cJsonValue::number(e.z));
+            arr.emplace_back(cJsonValue::object(std::move(o)));
           }
-          return ToolResult::ok(JsonValue::array(std::move(arr)).serialize());
+          return ToolResult::ok(cJsonValue::array(std::move(arr)).serialize());
         },
     });
   }
@@ -948,22 +948,22 @@ void McpServer::registerPhase1Tools() {
       "One entity by id. Unknown id is an isError result, not a protocol error.",
       {p("id", "integer", "Entity id.", true)},
       kPermWorldRead,
-      [&b](const JsonValue& a, const McpAgent&) {
+      [&b](const cJsonValue& a, const McpAgent&) {
         if (!b.entities) return ToolResult::error(kNotWired);
         ArgReader r(a);
         const int64_t id = r.reqInt("id");
-        if (id < 0) throw RpcError(kRpcInvalidParams, "entity_get: 'id' must be >= 0");
+        if (id < 0) throw cRpcError(kRpcInvalidParams, "entity_get: 'id' must be >= 0");
         IEntityView::Ent e;
         if (!b.entities->get(static_cast<uint64_t>(id), e)) {
           return ToolResult::error("no entity with id " + std::to_string(id));
         }
-        JsonValue::Object o;
-        o.emplace_back("id", JsonValue::integer(static_cast<int64_t>(e.id)));
-        o.emplace_back("type", JsonValue::integer(e.type));
-        o.emplace_back("x", JsonValue::number(e.x));
-        o.emplace_back("y", JsonValue::number(e.y));
-        o.emplace_back("z", JsonValue::number(e.z));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        cJsonValue::Object o;
+        o.emplace_back("id", cJsonValue::integer(static_cast<int64_t>(e.id)));
+        o.emplace_back("type", cJsonValue::integer(e.type));
+        o.emplace_back("x", cJsonValue::number(e.x));
+        o.emplace_back("y", cJsonValue::number(e.y));
+        o.emplace_back("z", cJsonValue::number(e.z));
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 
@@ -974,7 +974,7 @@ void McpServer::registerPhase1Tools() {
       {p("x", "integer", "Cell x.", true), p("y", "integer", "Cell y.", true),
        p("z", "integer", "Cell z.", true)},
       kPermWorldRead,
-      [&b](const JsonValue& a, const McpAgent&) {
+      [&b](const cJsonValue& a, const McpAgent&) {
         if (!b.world) return ToolResult::error(kNotWired);
         ArgReader r(a);
         const int64_t x = r.reqInt("x"), y = r.reqInt("y"), z = r.reqInt("z");
@@ -982,17 +982,17 @@ void McpServer::registerPhase1Tools() {
         // in every dimension; out-of-int32 is rejected rather than truncated.
         for (int64_t v : {x, y, z}) {
           if (v < INT32_MIN || v > INT32_MAX) {
-            throw RpcError(kRpcInvalidParams, "world_get_block: coordinate out of range");
+            throw cRpcError(kRpcInvalidParams, "world_get_block: coordinate out of range");
           }
         }
         const uint16_t id =
             b.world->getBlock(static_cast<int>(x), static_cast<int>(y), static_cast<int>(z));
-        JsonValue::Object o;
-        o.emplace_back("x", JsonValue::integer(x));
-        o.emplace_back("y", JsonValue::integer(y));
-        o.emplace_back("z", JsonValue::integer(z));
-        o.emplace_back("blockId", JsonValue::integer(id));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        cJsonValue::Object o;
+        o.emplace_back("x", cJsonValue::integer(x));
+        o.emplace_back("y", cJsonValue::integer(y));
+        o.emplace_back("z", cJsonValue::integer(z));
+        o.emplace_back("blockId", cJsonValue::integer(id));
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 
@@ -1006,25 +1006,25 @@ void McpServer::registerPhase1Tools() {
        p("z1", "integer", "Box corner z.", true), p("x2", "integer", "Box corner x.", true),
        p("y2", "integer", "Box corner y.", true), p("z2", "integer", "Box corner z.", true)},
       kPermWorldRead,
-      [&b](const JsonValue& a, const McpAgent&) {
+      [&b](const cJsonValue& a, const McpAgent&) {
         if (!b.worldQuery) return ToolResult::error(kNotWired);
         ArgReader r(a);
         const int64_t blockId = r.reqInt("blockId");
         const int64_t x1 = r.reqInt("x1"), y1 = r.reqInt("y1"), z1 = r.reqInt("z1");
         const int64_t x2 = r.reqInt("x2"), y2 = r.reqInt("y2"), z2 = r.reqInt("z2");
         if (blockId < 0 || blockId > UINT32_MAX) {
-          throw RpcError(kRpcInvalidParams, "world_query_blocks: 'blockId' out of range");
+          throw cRpcError(kRpcInvalidParams, "world_query_blocks: 'blockId' out of range");
         }
         for (int64_t v : {x1, y1, z1, x2, y2, z2}) {
           if (v < INT32_MIN || v > INT32_MAX) {
-            throw RpcError(kRpcInvalidParams, "world_query_blocks: coordinate out of range");
+            throw cRpcError(kRpcInvalidParams, "world_query_blocks: coordinate out of range");
           }
         }
         // Fail-closed on unbounded scans: mirror console::kMaxQueryCells here
         // so the cap holds even if a backend forgot it.
         const uint64_t cells = console::queryCellsSaturated(x1, y1, z1, x2, y2, z2);  // MCP-H1: no uint64 wrap
         if (cells > console::kMaxQueryCells) {
-          throw RpcError(kRpcInvalidParams,
+          throw cRpcError(kRpcInvalidParams,
                          "world_query_blocks: region too large (" +
                              std::to_string(cells) + " cells > " +
                              std::to_string(console::kMaxQueryCells) + ")");
@@ -1035,21 +1035,21 @@ void McpServer::registerPhase1Tools() {
             static_cast<int>(z1), static_cast<int>(x2), static_cast<int>(y2),
             static_cast<int>(z2), &err);
         if (!err.empty()) return ToolResult::error("world_query_blocks: " + err);
-        JsonValue::Array hits;
+        cJsonValue::Array hits;
         for (const auto& h : res.blocks) {
-          JsonValue::Object o;
-          o.emplace_back("x", JsonValue::integer(h.x));
-          o.emplace_back("y", JsonValue::integer(h.y));
-          o.emplace_back("z", JsonValue::integer(h.z));
-          o.emplace_back("blockId", JsonValue::integer(h.blockId));
-          hits.emplace_back(JsonValue::object(std::move(o)));
+          cJsonValue::Object o;
+          o.emplace_back("x", cJsonValue::integer(h.x));
+          o.emplace_back("y", cJsonValue::integer(h.y));
+          o.emplace_back("z", cJsonValue::integer(h.z));
+          o.emplace_back("blockId", cJsonValue::integer(h.blockId));
+          hits.emplace_back(cJsonValue::object(std::move(o)));
         }
-        JsonValue::Object o;
-        o.emplace_back("cellsScanned", JsonValue::integer(static_cast<int64_t>(res.cellsScanned)));
-        o.emplace_back("totalMatches", JsonValue::integer(static_cast<int64_t>(res.totalMatches)));
-        o.emplace_back("truncated", JsonValue::boolean(res.truncated));
-        o.emplace_back("blocks", JsonValue::array(std::move(hits)));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        cJsonValue::Object o;
+        o.emplace_back("cellsScanned", cJsonValue::integer(static_cast<int64_t>(res.cellsScanned)));
+        o.emplace_back("totalMatches", cJsonValue::integer(static_cast<int64_t>(res.totalMatches)));
+        o.emplace_back("truncated", cJsonValue::boolean(res.truncated));
+        o.emplace_back("blocks", cJsonValue::array(std::move(hits)));
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 
@@ -1067,21 +1067,21 @@ void McpServer::registerPhase1Tools() {
         "scores, and page text.",
         {p("query", "string", "Search text.", true), std::move(maxResults)},
         kPermWorldRead,
-        [&b](const JsonValue& a, const McpAgent&) {
+        [&b](const cJsonValue& a, const McpAgent&) {
           if (!b.corpus) return ToolResult::error(kNotWired);
           ArgReader r(a);
           const std::string q = r.reqNonEmptyString("query");
           const int64_t maxResults = r.optInt("maxResults", 10, 1, 64);
-          JsonValue::Array arr;
+          cJsonValue::Array arr;
           for (const auto& h :
                b.corpus->search(q, static_cast<size_t>(maxResults))) {
-            JsonValue::Object o;
-            o.emplace_back("doc", JsonValue::integer(static_cast<int64_t>(h.doc)));
-            o.emplace_back("score", JsonValue::number(h.score));
-            o.emplace_back("text", JsonValue::string(h.text));
-            arr.emplace_back(JsonValue::object(std::move(o)));
+            cJsonValue::Object o;
+            o.emplace_back("doc", cJsonValue::integer(static_cast<int64_t>(h.doc)));
+            o.emplace_back("score", cJsonValue::number(h.score));
+            o.emplace_back("text", cJsonValue::string(h.text));
+            arr.emplace_back(cJsonValue::object(std::move(o)));
           }
-          return ToolResult::ok(JsonValue::array(std::move(arr)).serialize());
+          return ToolResult::ok(cJsonValue::array(std::move(arr)).serialize());
         },
     });
   }
@@ -1092,15 +1092,15 @@ void McpServer::registerPhase1Tools() {
       "Forever-world defrag service: running, phase, progress, stores. Status only.",
       {},
       0,
-      [&b](const JsonValue&, const McpAgent&) {
+      [&b](const cJsonValue&, const McpAgent&) {
         if (!b.defrag) return ToolResult::error(kNotWired);
-        JsonValue::Object o;
-        o.emplace_back("running", JsonValue::boolean(b.defrag->running()));
-        o.emplace_back("phase", JsonValue::string(b.defrag->phaseName()));
-        o.emplace_back("progress", JsonValue::number(b.defrag->progress()));
-        o.emplace_back("statusLine", JsonValue::string(b.defrag->statusLine()));
+        cJsonValue::Object o;
+        o.emplace_back("running", cJsonValue::boolean(b.defrag->running()));
+        o.emplace_back("phase", cJsonValue::string(b.defrag->phaseName()));
+        o.emplace_back("progress", cJsonValue::number(b.defrag->progress()));
+        o.emplace_back("statusLine", cJsonValue::string(b.defrag->statusLine()));
         o.emplace_back("stores", strVec(b.defrag->storeNames()));
-        return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+        return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
       },
   });
 }
@@ -1130,7 +1130,7 @@ void McpServer::registerPhase1Tools() {
 /// malformed (-32602): a line this long is a batch, not a line — split it.
 inline constexpr std::size_t kMcpMaxExecLineBytes = 64u * 1024u;
 
-void McpServer::registerPhase4WriteTools() {
+void cMcpServer::registerPhase4WriteTools() {
   McpBackends& b = backends_;
 
   // -- world_set_block -------------------------------------------------------
@@ -1150,7 +1150,7 @@ void McpServer::registerPhase4WriteTools() {
   setBlock.annotations.readOnlyHint = false;
   setBlock.annotations.destructiveHint = true;
   setBlock.annotations.idempotentHint = true;  // setting the same block twice is a no-op
-  setBlock.handler = [&b, this](const JsonValue& args, const McpAgent& agent) {
+  setBlock.handler = [&b, this](const cJsonValue& args, const McpAgent& agent) {
     ArgReader r(args);
     const int64_t xi = r.reqInt("x");
     const int64_t yi = r.reqInt("y");
@@ -1158,10 +1158,10 @@ void McpServer::registerPhase4WriteTools() {
     const int64_t bi = r.reqInt("block");
     if (xi < INT32_MIN || xi > INT32_MAX || yi < INT32_MIN || yi > INT32_MAX ||
         zi < INT32_MIN || zi > INT32_MAX) {
-      throw RpcError(kRpcInvalidParams, "world_set_block: coordinates out of int32 range");
+      throw cRpcError(kRpcInvalidParams, "world_set_block: coordinates out of int32 range");
     }
     if (bi < 0 || bi > 65535) {
-      throw RpcError(kRpcInvalidParams, "world_set_block: 'block' must be 0..65535");
+      throw cRpcError(kRpcInvalidParams, "world_set_block: 'block' must be 0..65535");
     }
     const int timeoutMs =
         static_cast<int>(r.optInt("timeout_ms", kMcpSimWriteTimeoutMs, 1, kMcpSimWriteTimeoutMs));
@@ -1185,13 +1185,13 @@ void McpServer::registerPhase4WriteTools() {
         std::to_string(y) + "," + std::to_string(z) + ")=" + std::to_string(bi) + " -> " +
         (ok ? "ok" : "not applied: " + why));
     if (!ok) return ToolResult::error("world_set_block not applied: " + why);
-    JsonValue::Object o;
-    o.emplace_back("x", JsonValue::integer(x));
-    o.emplace_back("y", JsonValue::integer(y));
-    o.emplace_back("z", JsonValue::integer(z));
-    o.emplace_back("block", JsonValue::integer(bi));
-    o.emplace_back("applied", JsonValue::boolean(true));
-    return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+    cJsonValue::Object o;
+    o.emplace_back("x", cJsonValue::integer(x));
+    o.emplace_back("y", cJsonValue::integer(y));
+    o.emplace_back("z", cJsonValue::integer(z));
+    o.emplace_back("block", cJsonValue::integer(bi));
+    o.emplace_back("applied", cJsonValue::boolean(true));
+    return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
   };
   tools_.push_back(std::move(setBlock));
 
@@ -1207,11 +1207,11 @@ void McpServer::registerPhase4WriteTools() {
   exec.requiredPerms = kPermConsole;
   exec.annotations.readOnlyHint = false;
   exec.annotations.destructiveHint = true;  // an arbitrary line can mutate the world
-  exec.handler = [&b, this](const JsonValue& args, const McpAgent& agent) {
+  exec.handler = [&b, this](const cJsonValue& args, const McpAgent& agent) {
     ArgReader r(args);
     const std::string line = r.reqNonEmptyString("line");
     if (line.size() > kMcpMaxExecLineBytes) {
-      throw RpcError(kRpcInvalidParams, "lithoscript_exec: line exceeds 64 KiB");
+      throw cRpcError(kRpcInvalidParams, "lithoscript_exec: line exceeds 64 KiB");
     }
     if (!b.consoleExec) {
       log("mcp: exec lithoscript_exec agent=" + agent.name + " -> not wired");
@@ -1245,34 +1245,34 @@ void McpServer::registerPhase4WriteTools() {
 // anti-cheat note: a model-driven player is still a player.
 // ---------------------------------------------------------------------------
 
-McpTokenBucket& McpServer::controlBucket(const std::string& pilot) {
+cMcpTokenBucket& cMcpServer::controlBucket(const std::string& pilot) {
   auto it = controlBuckets_.find(pilot);
   if (it == controlBuckets_.end())
     it = controlBuckets_
-             .emplace(pilot, McpTokenBucket(kMcpControlLimitPerSec, kMcpControlBurst))
+             .emplace(pilot, cMcpTokenBucket(kMcpControlLimitPerSec, kMcpControlBurst))
              .first;
   return it->second;
 }
 
-McpTokenBucket& McpServer::visionBucket(const std::string& pilot) {
+cMcpTokenBucket& cMcpServer::visionBucket(const std::string& pilot) {
   auto it = visionBuckets_.find(pilot);
   if (it == visionBuckets_.end())
     it = visionBuckets_
-             .emplace(pilot, McpTokenBucket(kMcpVisionLimitPerSec, kMcpVisionBurst))
+             .emplace(pilot, cMcpTokenBucket(kMcpVisionLimitPerSec, kMcpVisionBurst))
              .first;
   return it->second;
 }
 
-McpTokenBucket& McpServer::audioBucket(const std::string& pilot) {
+cMcpTokenBucket& cMcpServer::audioBucket(const std::string& pilot) {
   auto it = audioBuckets_.find(pilot);
   if (it == audioBuckets_.end())
     it = audioBuckets_
-             .emplace(pilot, McpTokenBucket(kMcpAudioLimitPerSec, kMcpAudioBurst))
+             .emplace(pilot, cMcpTokenBucket(kMcpAudioLimitPerSec, kMcpAudioBurst))
              .first;
   return it->second;
 }
 
-void McpServer::registerPlayerControlTools() {
+void cMcpServer::registerPlayerControlTools() {
   McpBackends& b = backends_;
 
   // Per-pilot helpers (multi-pilot, locked 2026-10-11).
@@ -1307,7 +1307,7 @@ void McpServer::registerPlayerControlTools() {
   auto reqPilot = [](ArgReader& r) {
     const std::string pilot = r.reqNonEmptyString("pilot");
     if (pilot.size() > 64)
-      throw RpcError(kRpcInvalidParams, "pilot id exceeds 64 chars");
+      throw cRpcError(kRpcInvalidParams, "pilot id exceeds 64 chars");
     return pilot;
   };
   auto rateErr = []() {
@@ -1338,7 +1338,7 @@ void McpServer::registerPlayerControlTools() {
     t.requiredPerms = kPermPlayerControl;
     t.annotations.readOnlyHint = false;
     t.handler = [&b, this, takePilotBudget, needPilot, reqPilot, rateErr, kNoPilot](
-                    const JsonValue& args, const McpAgent& agent) {
+                    const cJsonValue& args, const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
       const double fwd = r.optNumber("forward", 0.0, -1.0, 1.0);
@@ -1377,7 +1377,7 @@ void McpServer::registerPlayerControlTools() {
     t.requiredPerms = kPermPlayerControl;
     t.annotations.readOnlyHint = false;
     t.handler = [&b, this, takePilotBudget, needPilot, reqPilot, rateErr, kNoPilot](
-                    const JsonValue& args, const McpAgent& agent) {
+                    const cJsonValue& args, const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
       const double dx = r.optNumber("dx", 0.0, -2048.0, 2048.0);
@@ -1415,7 +1415,7 @@ void McpServer::registerPlayerControlTools() {
     t.annotations.readOnlyHint = false;
     t.annotations.destructiveHint = true;  // attack/place mutate the world
     t.handler = [&b, this, takePilotBudget, needPilot, reqPilot, rateErr, kNoPilot](
-                    const JsonValue& args, const McpAgent& agent) {
+                    const cJsonValue& args, const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
       const std::string a = r.reqString("action");
@@ -1425,7 +1425,7 @@ void McpServer::registerPlayerControlTools() {
       else if (a == "place") f.placePressed = true;
       else if (a == "drop") f.dropPressed = true;
       else
-        throw RpcError(kRpcInvalidParams,
+        throw cRpcError(kRpcInvalidParams,
                        "player_action: 'action' must be one of: use, attack, place, drop");
       if (!takePilotBudget(pilot, agent, "player_action")) return rateErr();
       IPlayerController* c = needPilot(pilot, agent, "player_action");
@@ -1454,12 +1454,12 @@ void McpServer::registerPlayerControlTools() {
     t.requiredPerms = kPermPlayerControl;
     t.annotations.readOnlyHint = false;
     t.handler = [&b, this, takePilotBudget, needPilot, reqPilot, rateErr, kNoPilot](
-                    const JsonValue& args, const McpAgent& agent) {
+                    const cJsonValue& args, const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
       const int64_t slot = r.optInt("slot", -1, 0, 7);
       if (slot < 0)
-        throw RpcError(kRpcInvalidParams, "player_hotbar: 'slot' must be 0..7");
+        throw cRpcError(kRpcInvalidParams, "player_hotbar: 'slot' must be 0..7");
       if (!takePilotBudget(pilot, agent, "player_hotbar")) return rateErr();
       IPlayerController* c = needPilot(pilot, agent, "player_hotbar");
       if (!c) return ToolResult::error(kNotWired);
@@ -1488,7 +1488,7 @@ void McpServer::registerPlayerControlTools() {
     t.requiredPerms = kPermPlayerControl;
     t.annotations.readOnlyHint = false;
     t.handler = [&b, this, takePilotBudget, needPilot, reqPilot, rateErr](
-                    const JsonValue& args, const McpAgent& agent) {
+                    const cJsonValue& args, const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
       if (!takePilotBudget(pilot, agent, "player_release")) return rateErr();
@@ -1514,13 +1514,13 @@ void McpServer::registerPlayerControlTools() {
 // and ramps via the game's mcp.audio_tier cvar. See mcp_senses.h.
 // ---------------------------------------------------------------------------
 
-void McpServer::registerPilotSensesTools() {
+void cMcpServer::registerPilotSensesTools() {
   McpBackends& b = backends_;
 
   auto reqPilot = [](ArgReader& r) {
     const std::string pilot = r.reqNonEmptyString("pilot");
     if (pilot.size() > 64)
-      throw RpcError(kRpcInvalidParams, "pilot id exceeds 64 chars");
+      throw cRpcError(kRpcInvalidParams, "pilot id exceeds 64 chars");
     return pilot;
   };
   // Validates the pilot against a senses backend's own pilot list (each
@@ -1560,7 +1560,7 @@ void McpServer::registerPilotSensesTools() {
     t.params[2].minimum = 16; t.params[2].maximum = 512;
     t.requiredPerms = kPermPilotSenses;
     t.annotations.readOnlyHint = true;  // observation only: never mutates
-    t.handler = [&b, this, reqPilot, needSensePilot](const JsonValue& args,
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
                                                     const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
@@ -1580,23 +1580,23 @@ void McpServer::registerPilotSensesTools() {
       VisionFrame f;
       if (!b.vision->captureVisionFrame(pilot, w, h, f) || f.png.empty())
         return ToolResult::error("vision capture failed for pilot '" + pilot + "'");
-      JsonValue::Object o;
-      o.emplace_back("width", JsonValue::integer(f.width));
-      o.emplace_back("height", JsonValue::integer(f.height));
-      o.emplace_back("format", JsonValue::string("png"));
+      cJsonValue::Object o;
+      o.emplace_back("width", cJsonValue::integer(f.width));
+      o.emplace_back("height", cJsonValue::integer(f.height));
+      o.emplace_back("format", cJsonValue::string("png"));
       o.emplace_back("data",
-                     JsonValue::string(base64Encode(f.png.data(), f.png.size())));
-      o.emplace_back("tick", JsonValue::integer(int64_t(f.tick)));
-      JsonValue::Object cam;
-      cam.emplace_back("x", JsonValue::number(f.camX));
-      cam.emplace_back("y", JsonValue::number(f.camY));
-      cam.emplace_back("z", JsonValue::number(f.camZ));
-      cam.emplace_back("yaw", JsonValue::number(f.yaw));
-      cam.emplace_back("pitch", JsonValue::number(f.pitch));
-      o.emplace_back("camera", JsonValue::object(std::move(cam)));
+                     cJsonValue::string(base64Encode(f.png.data(), f.png.size())));
+      o.emplace_back("tick", cJsonValue::integer(int64_t(f.tick)));
+      cJsonValue::Object cam;
+      cam.emplace_back("x", cJsonValue::number(f.camX));
+      cam.emplace_back("y", cJsonValue::number(f.camY));
+      cam.emplace_back("z", cJsonValue::number(f.camZ));
+      cam.emplace_back("yaw", cJsonValue::number(f.yaw));
+      cam.emplace_back("pitch", cJsonValue::number(f.pitch));
+      o.emplace_back("camera", cJsonValue::object(std::move(cam)));
       log("mcp: senses vision.capture_frame agent=" + agent.name + " pilot=" + pilot +
           " -> ok " + std::to_string(f.width) + "x" + std::to_string(f.height));
-      return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+      return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
     };
     tools_.push_back(std::move(t));
   }
@@ -1618,7 +1618,7 @@ void McpServer::registerPilotSensesTools() {
     t.params[1].minimum = 0; t.params[1].maximum = 3;
     t.requiredPerms = kPermPilotSenses;
     t.annotations.readOnlyHint = true;  // observation only: never mutates
-    t.handler = [&b, this, reqPilot, needSensePilot](const JsonValue& args,
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
                                                     const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
@@ -1637,18 +1637,18 @@ void McpServer::registerPilotSensesTools() {
       AudioChunk c;
       if (!b.audio->captureAudioChunk(pilot, tier, c) || c.samples.empty())
         return ToolResult::error("audio capture failed for pilot '" + pilot + "'");
-      JsonValue::Object o;
-      o.emplace_back("sampleRate", JsonValue::integer(c.sampleRate));
-      o.emplace_back("channels", JsonValue::integer(1));
-      o.emplace_back("format", JsonValue::string("pcm_s16le"));
-      o.emplace_back("frames", JsonValue::integer(int64_t(c.samples.size())));
-      o.emplace_back("data", JsonValue::string(base64Encode(
+      cJsonValue::Object o;
+      o.emplace_back("sampleRate", cJsonValue::integer(c.sampleRate));
+      o.emplace_back("channels", cJsonValue::integer(1));
+      o.emplace_back("format", cJsonValue::string("pcm_s16le"));
+      o.emplace_back("frames", cJsonValue::integer(int64_t(c.samples.size())));
+      o.emplace_back("data", cJsonValue::string(base64Encode(
                                    reinterpret_cast<const uint8_t*>(c.samples.data()),
                                    c.samples.size() * sizeof(int16_t))));
-      o.emplace_back("tick", JsonValue::integer(int64_t(c.tick)));
+      o.emplace_back("tick", cJsonValue::integer(int64_t(c.tick)));
       log("mcp: senses audio.capture_chunk agent=" + agent.name + " pilot=" + pilot +
           " -> ok tier " + std::to_string(tier));
-      return ToolResult::ok(JsonValue::object(std::move(o)).serialize());
+      return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
     };
     tools_.push_back(std::move(t));
   }
@@ -1675,7 +1675,7 @@ void McpServer::registerPilotSensesTools() {
     t.params[6].minimum = 10.0; t.params[6].maximum = 120.0;
     t.requiredPerms = kPermPilotSenses;
     t.annotations.readOnlyHint = false;  // moves the camera (observer state)
-    t.handler = [&b, this, reqPilot, needSensePilot](const JsonValue& args,
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
                                                     const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
@@ -1715,7 +1715,7 @@ void McpServer::registerPilotSensesTools() {
     t.params = {p("pilot", "string", "pilot id (v1: \"player\")", true)};
     t.requiredPerms = kPermPilotSenses;
     t.annotations.readOnlyHint = false;
-    t.handler = [&b, this, reqPilot, needSensePilot](const JsonValue& args,
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
                                                     const McpAgent& agent) {
       ArgReader r(args);
       const std::string pilot = reqPilot(r);
@@ -1741,7 +1741,7 @@ void McpServer::registerPilotSensesTools() {
 // Phase 1 resources.
 // ---------------------------------------------------------------------------
 
-void McpServer::registerPhase1Resources() {
+void cMcpServer::registerPhase1Resources() {
   McpBackends& b = backends_;
 
   resources_.push_back(ResourceDescriptor{
@@ -1751,7 +1751,7 @@ void McpServer::registerPhase1Resources() {
       "text/plain",
       kPermConsole,
       [&b](const McpAgent&) {
-        if (!b.console) throw RpcError(kRpcInternalError, "console surface not wired");
+        if (!b.console) throw cRpcError(kRpcInternalError, "console surface not wired");
         auto cmds = b.console->commands();
         std::sort(cmds.begin(), cmds.end(),
                   [](const auto& x, const auto& y) { return x.name < y.name; });
@@ -1772,7 +1772,7 @@ void McpServer::registerPhase1Resources() {
       "text/plain",
       kPermConsole,
       [&b](const McpAgent&) {
-        if (!b.console) throw RpcError(kRpcInternalError, "console surface not wired");
+        if (!b.console) throw cRpcError(kRpcInternalError, "console surface not wired");
         auto cvars = b.console->cvars();
         std::sort(cvars.begin(), cvars.end(),
                   [](const auto& x, const auto& y) { return x.name < y.name; });
@@ -1793,17 +1793,17 @@ void McpServer::registerPhase1Resources() {
       "application/json",
       kPermWorldRead,
       [&b](const McpAgent&) {
-        if (!b.dimensions) throw RpcError(kRpcInternalError, "dimension view not wired");
-        JsonValue::Array arr;
+        if (!b.dimensions) throw cRpcError(kRpcInternalError, "dimension view not wired");
+        cJsonValue::Array arr;
         for (const auto& d : b.dimensions->dimensions()) {
-          JsonValue::Object o;
-          o.emplace_back("id", JsonValue::string(d.id));
-          o.emplace_back("name", JsonValue::string(d.name));
-          o.emplace_back("bound", JsonValue::integer(d.bound));
-          o.emplace_back("current", JsonValue::boolean(d.current));
-          arr.emplace_back(JsonValue::object(std::move(o)));
+          cJsonValue::Object o;
+          o.emplace_back("id", cJsonValue::string(d.id));
+          o.emplace_back("name", cJsonValue::string(d.name));
+          o.emplace_back("bound", cJsonValue::integer(d.bound));
+          o.emplace_back("current", cJsonValue::boolean(d.current));
+          arr.emplace_back(cJsonValue::object(std::move(o)));
         }
-        return JsonValue::array(std::move(arr)).serialize();
+        return cJsonValue::array(std::move(arr)).serialize();
       },
   });
 
@@ -1814,19 +1814,19 @@ void McpServer::registerPhase1Resources() {
       "application/json",
       0,
       [&b](const McpAgent&) {
-        if (!b.mods) throw RpcError(kRpcInternalError, "mod list not wired");
-        JsonValue::Array arr;
+        if (!b.mods) throw cRpcError(kRpcInternalError, "mod list not wired");
+        cJsonValue::Array arr;
         for (const auto& m : b.mods->mods()) {
-          JsonValue::Object o;
-          o.emplace_back("name", JsonValue::string(m.name));
-          o.emplace_back("version", JsonValue::string(m.version));
+          cJsonValue::Object o;
+          o.emplace_back("name", cJsonValue::string(m.name));
+          o.emplace_back("version", cJsonValue::string(m.version));
           o.emplace_back("permissions",
-                         JsonValue::integer(static_cast<int64_t>(m.permissions)));
+                         cJsonValue::integer(static_cast<int64_t>(m.permissions)));
           o.emplace_back("permissionNames", strVec(permBitNameList(m.permissions)));
           o.emplace_back("extensions", strVec(m.extensions));
-          arr.emplace_back(JsonValue::object(std::move(o)));
+          arr.emplace_back(cJsonValue::object(std::move(o)));
         }
-        return JsonValue::array(std::move(arr)).serialize();
+        return cJsonValue::array(std::move(arr)).serialize();
       },
   });
 
@@ -1838,10 +1838,10 @@ void McpServer::registerPhase1Resources() {
       "text/markdown",
       0,
       [&b](const McpAgent&) {
-        if (!b.lore) throw RpcError(kRpcInternalError, "lore glossary not wired");
+        if (!b.lore) throw cRpcError(kRpcInternalError, "lore glossary not wired");
         std::string text = b.lore->text();
         if (text.empty()) {
-          throw RpcError(kRpcInternalError,
+          throw cRpcError(kRpcInternalError,
                          "lore glossary not configured by the game");
         }
         return text;
@@ -1855,14 +1855,14 @@ void McpServer::registerPhase1Resources() {
       "application/json",
       0,
       [](const McpAgent&) {
-        JsonValue::Object o;
-        o.emplace_back("engine", JsonValue::string(mcpEngineVersionString()));
-        o.emplace_back("sdk", JsonValue::integer(LITHOLATTICE_SDK_VERSION));
+        cJsonValue::Object o;
+        o.emplace_back("engine", cJsonValue::string(mcpEngineVersionString()));
+        o.emplace_back("sdk", cJsonValue::integer(LITHOLATTICE_SDK_VERSION));
         // F-L3: advertise the CURRENT protocol version (kProtocolVersion,
         // v3) — this resource previously reported LITHOLATTICE_PROTOCOL_V1.
-        o.emplace_back("protocol", JsonValue::integer(net::kProtocolVersion));
-        o.emplace_back("mcp", JsonValue::string(kMcpProtocolVersion));
-        return JsonValue::object(std::move(o)).serialize();
+        o.emplace_back("protocol", cJsonValue::integer(net::kProtocolVersion));
+        o.emplace_back("mcp", cJsonValue::string(kMcpProtocolVersion));
+        return cJsonValue::object(std::move(o)).serialize();
       },
   });
 }
@@ -1952,7 +1952,7 @@ void cFdStdioTransport::writeLine(std::string_view line) {
 
 // ---------------------------------------------------------------------------
 // Fix run 2 (2026-10-23, Cortana; review R-RACE-1): cancel + join the stdin
-// reader thread so McpServer can be freed without a use-after-free.
+// reader thread so cMcpServer can be freed without a use-after-free.
 // ---------------------------------------------------------------------------
 namespace {
 std::atomic<bool> gStdioStop{false};

@@ -2,8 +2,8 @@
 // HTTP transport (Phase 2). Clean-room; no code taken from any socket
 // implementation.
 //
-// Threading model (locked): the McpHttpServer runs ONE accept/dispatch
-// thread. TcpListener::accept is poll-based with a timeout so the thread
+// Threading model (locked): the cMcpHttpServer runs ONE accept/dispatch
+// thread. cTcpListener::accept is poll-based with a timeout so the thread
 // notices stop(); each accepted cTcpConn is served synchronously on that same
 // thread (sequential requests, keep-alive, bounded per connection). No
 // connection threads and no thread pool in v1. Blocking reads use an I/O
@@ -60,22 +60,22 @@ class cTcpConn {
   void setTimeout(int seconds);
 
  private:
-  friend class TcpListener;
+  friend class cTcpListener;
   explicit cTcpConn(NativeSocket sock);
 
   NativeSocket sock_ = kInvalidSocketValue;
 };
 
 /// Listening TCP socket. Move-only.
-class TcpListener {
+class cTcpListener {
  public:
-  TcpListener();
-  ~TcpListener();
+  cTcpListener();
+  ~cTcpListener();
 
-  TcpListener(const TcpListener&) = delete;
-  TcpListener& operator=(const TcpListener&) = delete;
-  TcpListener(TcpListener&& other) noexcept;
-  TcpListener& operator=(TcpListener&& other) noexcept;
+  cTcpListener(const cTcpListener&) = delete;
+  cTcpListener& operator=(const cTcpListener&) = delete;
+  cTcpListener(cTcpListener&& other) noexcept;
+  cTcpListener& operator=(cTcpListener&& other) noexcept;
 
   /// Bind (IPv4 dotted quad) + listen. Fail-fast: false with `error` set on
   /// any failure (address in use, permission, bad address). The caller logs

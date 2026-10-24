@@ -346,7 +346,7 @@ class SoftwareRenderer : public IRenderer {
   SoftwareShadingTier shadingTier_ = SoftwareShadingTier::Basic;  ///< fragment tier (per-pixel path)
   const PbrFragmentContext* pbrContext_ = nullptr;  ///< PBR context (registry/lights/camera); may be null
 
-  CpuTextureArray textures_;
+  cCpuTextureArray textures_;
   std::array<int, 32> tintMask_{}; std::array<int, 2> stripPal_{};  ///< 2026-10-16 kShadeTraceTint
   std::array<int, 4> leafGlow_{};  ///< 2026-10-16 crystal twinkle glow layers
   int twinkleMode_ = 2; uint32_t twinklePhase_ = 0;

@@ -178,10 +178,10 @@ bool isLoopbackBindAddress(std::string_view addr) {
 }
 
 // ---------------------------------------------------------------------------
-// McpHttpServer
+// cMcpHttpServer
 // ---------------------------------------------------------------------------
 
-McpHttpServer::McpHttpServer(McpBackends backends, std::string agentName)
+cMcpHttpServer::cMcpHttpServer(McpBackends backends, std::string agentName)
     : backends_(std::move(backends)), agentName_(std::move(agentName)) {
   std::uint8_t raw[32];
   if (!cryptoRandomBytes(raw, sizeof(raw))) {
@@ -194,16 +194,16 @@ McpHttpServer::McpHttpServer(McpBackends backends, std::string agentName)
   // Phase 3: the shared stateless-era server. One agent identity for every
   // stateless client (no session to key per-client masks on); deny-by-
   // default like every other connection. Its log sink forwards through
-  // McpHttpServer::log so it always tracks the current game sink without
+  // cMcpHttpServer::log so it always tracks the current game sink without
   // a data race on reassignment.
   statelessServer_ =
-      std::make_unique<McpServer>(backends_, McpAgent{agentName_ + "/stateless", 0});
+      std::make_unique<cMcpServer>(backends_, McpAgent{agentName_ + "/stateless", 0});
   statelessServer_->setLogSink([this](std::string_view line) { log(line); });
 }
 
-McpHttpServer::~McpHttpServer() { stop(); }
+cMcpHttpServer::~cMcpHttpServer() { stop(); }
 
-bool McpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
+bool cMcpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
   if (running_.load()) {
     log("mcp: http start: already running");
     return false;
@@ -219,7 +219,7 @@ bool McpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
         "'; the bearer token is the ONLY auth and there is no TLS in v1. "
         "Prefer 127.0.0.1 or a tunnel.");
   }
-  TcpListener listener;
+  cTcpListener listener;
   std::string err;
   if (!listener.bind(bindAddr, port, err)) {
     // Fail-fast: a taken port is an error, never a silent re-pick.
@@ -233,11 +233,11 @@ bool McpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
     boundPort_ = listener_.boundPort();
   }
   running_.store(true);
-  thread_ = std::thread(&McpHttpServer::acceptLoop, this);
+  thread_ = std::thread(&cMcpHttpServer::acceptLoop, this);
   return true;
 }
 
-void McpHttpServer::stop() {
+void cMcpHttpServer::stop() {
   bool was = running_.exchange(false);
   // Closing the listener wakes the poll (best effort); the 50 ms poll tick
   // in accept() guarantees the thread notices stop() promptly regardless.
@@ -247,12 +247,12 @@ void McpHttpServer::stop() {
   sessions_.clear();
 }
 
-std::string McpHttpServer::token() const {
+std::string cMcpHttpServer::token() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return bearerToken_;
 }
 
-std::string McpHttpServer::rotateToken() {
+std::string cMcpHttpServer::rotateToken() {
   std::uint8_t raw[32];
   std::string next;
   if (cryptoRandomBytes(raw, sizeof(raw))) next = hexEncode(raw, sizeof(raw));
@@ -267,30 +267,30 @@ std::string McpHttpServer::rotateToken() {
   return bearerToken_;
 }
 
-bool McpHttpServer::grantPermissions(const std::string& sessionId,
+bool cMcpHttpServer::grantPermissions(const std::string& sessionId,
                                      std::uint32_t bits) {
-  if (McpServer* s = findSession(sessionId)) {
+  if (cMcpServer* s = findSession(sessionId)) {
     s->grantPermissions(bits);
     return true;
   }
   return false;
 }
 
-bool McpHttpServer::revokePermissions(const std::string& sessionId,
+bool cMcpHttpServer::revokePermissions(const std::string& sessionId,
                                       std::uint32_t bits) {
-  if (McpServer* s = findSession(sessionId)) {
+  if (cMcpServer* s = findSession(sessionId)) {
     s->revokePermissions(bits);
     return true;
   }
   return false;
 }
 
-bool McpHttpServer::grantStatelessPermissions(std::uint32_t bits) {
+bool cMcpHttpServer::grantStatelessPermissions(std::uint32_t bits) {
   // Copy the pointer under the lock, then grant without holding it:
-  // McpServer::grantPermissions is internally synchronized, and holding
+  // cMcpServer::grantPermissions is internally synchronized, and holding
   // the HTTP mutex here would deadlock against the server's log sink
-  // (which forwards through McpHttpServer::log, i.e. this same mutex).
-  McpServer* s = nullptr;
+  // (which forwards through cMcpHttpServer::log, i.e. this same mutex).
+  cMcpServer* s = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     s = statelessServer_.get();
@@ -300,8 +300,8 @@ bool McpHttpServer::grantStatelessPermissions(std::uint32_t bits) {
   return true;
 }
 
-bool McpHttpServer::revokeStatelessPermissions(std::uint32_t bits) {
-  McpServer* s = nullptr;
+bool cMcpHttpServer::revokeStatelessPermissions(std::uint32_t bits) {
+  cMcpServer* s = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     s = statelessServer_.get();
@@ -311,12 +311,12 @@ bool McpHttpServer::revokeStatelessPermissions(std::uint32_t bits) {
   return true;
 }
 
-std::uint32_t McpHttpServer::statelessPermissionMask() const {
+std::uint32_t cMcpHttpServer::statelessPermissionMask() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return statelessServer_ ? statelessServer_->permissionMask() : 0;
 }
 
-std::vector<std::string> McpHttpServer::sessionIds() const {
+std::vector<std::string> cMcpHttpServer::sessionIds() const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string> ids;
   ids.reserve(sessions_.size());
@@ -324,17 +324,17 @@ std::vector<std::string> McpHttpServer::sessionIds() const {
   return ids;
 }
 
-std::string McpHttpServer::boundAddress() const {
+std::string cMcpHttpServer::boundAddress() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return boundAddress_;
 }
 
-std::uint16_t McpHttpServer::boundPort() const {
+std::uint16_t cMcpHttpServer::boundPort() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return boundPort_;
 }
 
-void McpHttpServer::log(std::string_view line) {
+void cMcpHttpServer::log(std::string_view line) {
   LogSink sink;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -345,7 +345,7 @@ void McpHttpServer::log(std::string_view line) {
 
 // --- sessions --------------------------------------------------------------
 
-std::string McpHttpServer::createSession() {
+std::string cMcpHttpServer::createSession() {
   std::uint8_t raw[16];
   std::string id;
   if (cryptoRandomBytes(raw, sizeof(raw))) {
@@ -357,7 +357,7 @@ std::string McpHttpServer::createSession() {
     return {};
   }
   auto server =
-      std::make_unique<McpServer>(backends_, McpAgent{agentName_, 0});
+      std::make_unique<cMcpServer>(backends_, McpAgent{agentName_, 0});
   std::vector<std::string> expiredIds;
   std::string evictedId;
   {
@@ -392,9 +392,9 @@ std::string McpHttpServer::createSession() {
   return id;
 }
 
-McpServer* McpHttpServer::findSession(const std::string& id) {
+cMcpServer* cMcpHttpServer::findSession(const std::string& id) {
   std::string expiredId;
-  McpServer* out = nullptr;
+  cMcpServer* out = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = sessions_.find(id);
@@ -413,12 +413,12 @@ McpServer* McpHttpServer::findSession(const std::string& id) {
   return out;
 }
 
-void McpHttpServer::eraseSession(const std::string& id) {
+void cMcpHttpServer::eraseSession(const std::string& id) {
   std::lock_guard<std::mutex> lock(mutex_);
   sessions_.erase(id);
 }
 
-bool McpHttpServer::checkAuth(const HttpRequest& req) const {
+bool cMcpHttpServer::checkAuth(const HttpRequest& req) const {
   std::string_view auth = req.headerValue("authorization");
   if (!startsWithI(auth, "Bearer ")) return false;
   std::string_view presented = auth.substr(7);
@@ -426,19 +426,19 @@ bool McpHttpServer::checkAuth(const HttpRequest& req) const {
   return constantTimeEqual(presented, bearerToken_) && !bearerToken_.empty();
 }
 
-std::string McpHttpServer::rpcMethodOf(std::string_view body) {
+std::string cMcpHttpServer::rpcMethodOf(std::string_view body) {
   ParseResult pr = parseJson(body);
   if (!pr.ok || !pr.value.isObject()) return {};
-  const JsonValue* m = pr.value.find("method");
+  const cJsonValue* m = pr.value.find("method");
   if (!m || !m->isString()) return {};
   return m->asString();
 }
 
 // --- request handling -------------------------------------------------------
 
-HttpResponse McpHttpServer::statelessRpcError(const JsonValue& id, int code,
+HttpResponse cMcpHttpServer::statelessRpcError(const cJsonValue& id, int code,
                                              const std::string& message,
-                                             const JsonValue& data) {
+                                             const cJsonValue& data) {
   HttpResponse r;
   // -32601 -> 404: a dual-era client tells "no such method" (modern server,
   // unknown method) apart from "bad request". Every other protocol-level
@@ -450,8 +450,8 @@ HttpResponse McpHttpServer::statelessRpcError(const JsonValue& id, int code,
   return r;
 }
 
-HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
-                                                   const JsonValue& body,
+HttpResponse cMcpHttpServer::handleStatelessRequest(const HttpRequest& req,
+                                                   const cJsonValue& body,
                                                    const std::string& method) {
   std::string agentLog = "unauthenticated";
   {
@@ -463,9 +463,9 @@ HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
         " session=stateless agent=" + agentLog + " method=" + method +
         " -> " + std::to_string(status));
   };
-  const JsonValue* idv = body.find("id");
-  const JsonValue id = idv ? *idv : JsonValue::null();
-  const JsonValue* params = body.find("params");
+  const cJsonValue* idv = body.find("id");
+  const cJsonValue id = idv ? *idv : cJsonValue::null();
+  const cJsonValue* params = body.find("params");
 
   // SEP-2243: Streamable HTTP requests mirror the era in headers so
   // infrastructure can route without parsing the body. Missing or
@@ -488,7 +488,7 @@ HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
   if (method == "tools/call" || method == "prompts/get" ||
       method == "resources/read") {
     const char* field = (method == "resources/read") ? "uri" : "name";
-    const JsonValue* nv =
+    const cJsonValue* nv =
         (params && params->isObject()) ? params->find(field) : nullptr;
     if (!nv || !nv->isString() ||
         std::string(req.headerValue("mcp-name")) != nv->asString()) {
@@ -500,12 +500,12 @@ HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
     }
   }
 
-  // Dispatch on the shared stateless server. McpServer::handleMessage owns
+  // Dispatch on the shared stateless server. cMcpServer::handleMessage owns
   // the stateless envelope (resultType + _meta identity), so stdio and HTTP
   // stay one code path — the transport only adds headers and status codes.
   std::optional<std::string> rpcResp;
   try {
-    McpServer* s = nullptr;
+    cMcpServer* s = nullptr;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       s = statelessServer_.get();
@@ -540,8 +540,8 @@ HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
     int rpcCode = 0;
     ParseResult pr = parseJson(*rpcResp);
     if (pr.ok && pr.value.isObject()) {
-      const JsonValue* err = pr.value.find("error");
-      const JsonValue* code = err ? err->find("code") : nullptr;
+      const cJsonValue* err = pr.value.find("error");
+      const cJsonValue* code = err ? err->find("code") : nullptr;
       if (code && code->isInt()) rpcCode = static_cast<int>(code->asInt());
     }
     r.status = (rpcCode == kRpcMethodNotFound)
@@ -555,7 +555,7 @@ HttpResponse McpHttpServer::handleStatelessRequest(const HttpRequest& req,
   return r;
 }
 
-HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
+HttpResponse cMcpHttpServer::handleRequest(const HttpRequest& req) {
   std::string sessionLog = "-";
   std::string agentLog = "unauthenticated";
   std::string methodLog;
@@ -692,25 +692,25 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
   {
     ParseResult pr = parseJson(req.body);
     if (pr.ok && pr.value.isObject()) {
-      const JsonValue& body = pr.value;
-      const JsonValue* params = body.find("params");
+      const cJsonValue& body = pr.value;
+      const cJsonValue* params = body.find("params");
       McpEra era = McpEra::kLegacy;
       bool eraOk = true;
       int eraCode = 0;
       std::string eraMsg;
-      JsonValue eraData = JsonValue::null();
+      cJsonValue eraData = cJsonValue::null();
       try {
-        era = classifyRequestEra(params ? *params : JsonValue::null());
-      } catch (const RpcError& e) {
+        era = classifyRequestEra(params ? *params : cJsonValue::null());
+      } catch (const cRpcError& e) {
         eraOk = false;
         eraCode = e.code();
         eraMsg = e.message();
         eraData = e.data();
       }
       if (!eraOk) {
-        const JsonValue* idv = body.find("id");
+        const cJsonValue* idv = body.find("id");
         HttpResponse r = statelessRpcError(
-            idv ? *idv : JsonValue::null(), eraCode, eraMsg, eraData);
+            idv ? *idv : cJsonValue::null(), eraCode, eraMsg, eraData);
         audit(r.status);
         return r;
       }
@@ -722,7 +722,7 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
 
   // 6. Session lifecycle (handshake era).
   std::string sid(req.headerValue("mcp-session-id"));
-  McpServer* session = nullptr;
+  cMcpServer* session = nullptr;
   if (sid.empty()) {
     // Only initialize may open a session.
     if (methodLog != "initialize") {
@@ -751,7 +751,7 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
   sessionLog = sid;
   agentLog = session->agent().name;
 
-  // 7. Dispatch to the session's McpServer (Phase 1 logic unchanged).
+  // 7. Dispatch to the session's cMcpServer (Phase 1 logic unchanged).
   std::optional<std::string> rpcResp;
   try {
     rpcResp = session->handleMessage(req.body);
@@ -759,8 +759,8 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
     // handleMessage is not supposed to throw std::exception (the router
     // converts), so this is a backend bug: log it, 500, keep the session.
     log(std::string("mcp: http handler exception: ") + e.what());
-    JsonValue errVal =
-        buildErrorResponse(JsonValue::null(), kRpcInternalError,
+    cJsonValue errVal =
+        buildErrorResponse(cJsonValue::null(), kRpcInternalError,
                            "internal error");
     HttpResponse r;
     r.status = 500;
@@ -794,7 +794,7 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
 
 // --- connection serving ----------------------------------------------------
 
-McpHttpServer::ReadOutcome McpHttpServer::readRequest(cTcpConn& conn,
+cMcpHttpServer::ReadOutcome cMcpHttpServer::readRequest(cTcpConn& conn,
                                                      std::string& buf) {
   ReadOutcome out;
   // Phase A: headers.
@@ -856,7 +856,7 @@ McpHttpServer::ReadOutcome McpHttpServer::readRequest(cTcpConn& conn,
   return out;
 }
 
-void McpHttpServer::serveConnection(cTcpConn& conn) {
+void cMcpHttpServer::serveConnection(cTcpConn& conn) {
   std::string buf;  // carry-over for pipelined requests
   for (int i = 0; i < kMaxHttpRequestsPerConn; ++i) {
     ReadOutcome ro = readRequest(conn, buf);
@@ -872,7 +872,7 @@ void McpHttpServer::serveConnection(cTcpConn& conn) {
   }
 }
 
-void McpHttpServer::acceptLoop() {
+void cMcpHttpServer::acceptLoop() {
   log("mcp: http listening on " + boundAddress() + ":" +
       std::to_string(boundPort()));
   while (running_.load()) {

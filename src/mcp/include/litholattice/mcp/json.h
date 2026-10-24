@@ -32,51 +32,51 @@ constexpr std::size_t kMaxJsonDepth = 64;
 
 /// JSON value. Variant over null, bool, int64, double, string, array, ordered
 /// object. Copyable/movable; default-constructed value is null.
-class JsonValue {
+class cJsonValue {
  public:
   enum class Type { kNull, kBool, kInt, kDouble, kString, kArray, kObject };
 
-  using Array = std::vector<JsonValue>;
-  using ObjectEntry = std::pair<std::string, JsonValue>;
+  using Array = std::vector<cJsonValue>;
+  using ObjectEntry = std::pair<std::string, cJsonValue>;
   /// Ordered object: entries in insertion order. Duplicate keys are allowed by
   /// the value model (parser keeps them in order); find() returns the first.
   using Object = std::vector<ObjectEntry>;
 
-  JsonValue() = default;
-  JsonValue(const JsonValue&) = default;
-  JsonValue(JsonValue&&) noexcept = default;
-  JsonValue& operator=(const JsonValue&) = default;
-  JsonValue& operator=(JsonValue&&) noexcept = default;
-  ~JsonValue() = default;
+  cJsonValue() = default;
+  cJsonValue(const cJsonValue&) = default;
+  cJsonValue(cJsonValue&&) noexcept = default;
+  cJsonValue& operator=(const cJsonValue&) = default;
+  cJsonValue& operator=(cJsonValue&&) noexcept = default;
+  ~cJsonValue() = default;
 
-  static JsonValue null() { return JsonValue(); }
-  static JsonValue boolean(bool b) {
-    JsonValue v;
+  static cJsonValue null() { return cJsonValue(); }
+  static cJsonValue boolean(bool b) {
+    cJsonValue v;
     v.data_ = b;
     return v;
   }
-  static JsonValue integer(std::int64_t i) {
-    JsonValue v;
+  static cJsonValue integer(std::int64_t i) {
+    cJsonValue v;
     v.data_ = i;
     return v;
   }
-  static JsonValue number(double d) {
-    JsonValue v;
+  static cJsonValue number(double d) {
+    cJsonValue v;
     v.data_ = d;
     return v;
   }
-  static JsonValue string(std::string_view s) {
-    JsonValue v;
+  static cJsonValue string(std::string_view s) {
+    cJsonValue v;
     v.data_ = std::string(s);
     return v;
   }
-  static JsonValue array(Array a) {
-    JsonValue v;
+  static cJsonValue array(Array a) {
+    cJsonValue v;
     v.data_ = std::move(a);
     return v;
   }
-  static JsonValue object(Object o) {
-    JsonValue v;
+  static cJsonValue object(Object o) {
+    cJsonValue v;
     v.data_ = std::move(o);
     return v;
   }
@@ -103,9 +103,9 @@ class JsonValue {
   Object& asObject() { return std::get<Object>(data_); }
 
   /// Object lookup by key; returns nullptr when absent or not an object.
-  const JsonValue* find(std::string_view key) const;
+  const cJsonValue* find(std::string_view key) const;
   /// Mutable object lookup; inserts a null entry when absent.
-  JsonValue& getOrInsert(std::string_view key);
+  cJsonValue& getOrInsert(std::string_view key);
 
   /// Canonical serialization: minimal (no whitespace), exact round-trip for
   /// the value model (parse(serialize(v)) compares equal to v; and for
@@ -115,8 +115,8 @@ class JsonValue {
   /// invalid UTF-8.
   std::string serialize() const;
 
-  bool operator==(const JsonValue& other) const { return data_ == other.data_; }
-  bool operator!=(const JsonValue& other) const { return !(*this == other); }
+  bool operator==(const cJsonValue& other) const { return data_ == other.data_; }
+  bool operator!=(const cJsonValue& other) const { return !(*this == other); }
 
  private:
   // variant index matches Type order: null, bool, int, double, string, array, object
@@ -127,7 +127,7 @@ class JsonValue {
 /// fail-fast; value is null and error/offset describe where and why.
 struct ParseResult {
   bool ok = false;
-  JsonValue value;
+  cJsonValue value;
   std::string error;
   std::size_t offset = 0;  // byte offset of the failure (or of trailing garbage)
 };

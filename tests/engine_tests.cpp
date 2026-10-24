@@ -3524,12 +3524,12 @@ void testVelocityMargin() {
   std::printf("render: velocity-adaptive margin prototype (JD 2026-10-11)\n");
   {
     // Tracker: 1 rad/s yaw converges; still camera reads ~0.
-    VelocityTracker vt;
+    cVelocityTracker vt;
     vt.update(0.f, 0.f, 0.0);  // arms
     for (int i = 1; i <= 10; ++i) vt.update(0.1f * float(i), 0.f, 0.1 * double(i));
     check(vt.yawVel() > 0.9f && vt.yawVel() < 1.1f && std::fabs(vt.pitchVel()) < 0.05f,
           "velocity tracker: 1 rad/s yaw converges, pitch stays ~0");
-    VelocityTracker still;
+    cVelocityTracker still;
     still.update(0.3f, -0.2f, 0.0);
     still.update(0.3f, -0.2f, 1.0);
     check(std::fabs(still.yawVel()) < 1e-4f && std::fabs(still.pitchVel()) < 1e-4f,

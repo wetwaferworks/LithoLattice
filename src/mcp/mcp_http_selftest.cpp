@@ -3,7 +3,7 @@
 // live-loopback integration test of the accept/dispatch thread.
 //
 // The parser/session/auth unit tests never touch a real socket: they drive
-// parseHttpHeaders() and McpHttpServer::handleRequest() directly. The live
+// parseHttpHeaders() and cMcpHttpServer::handleRequest() directly. The live
 // tests at the end use real loopback sockets (POSIX only).
 #include "litholattice/mcp/mcp_selftest.h"
 
@@ -77,10 +77,10 @@ bool bodyHas(const HttpResponse& r, const std::string& needle) {
 bool bodyIsJsonRpcResult(const HttpResponse& r, std::string* protocolOut = nullptr) {
   ParseResult pr = parseJson(r.body);
   if (!pr.ok || !pr.value.isObject()) return false;
-  const JsonValue* res = pr.value.find("result");
+  const cJsonValue* res = pr.value.find("result");
   if (!res || !res->isObject()) return false;
   if (protocolOut) {
-    const JsonValue* pv = res->find("protocolVersion");
+    const cJsonValue* pv = res->find("protocolVersion");
     *protocolOut = (pv && pv->isString()) ? pv->asString() : "";
   }
   return true;
@@ -212,7 +212,7 @@ int runMcpHttpSelfTest() {
 
   // ---- 5. auth + session lifecycle (no sockets) ----
   {
-    McpHttpServer server(McpBackends{}, "test-agent");
+    cMcpHttpServer server(McpBackends{}, "test-agent");
     std::string logs;
     server.setLogSink([&](std::string_view l) { logs += std::string(l) + "\n"; });
     std::string token = server.token();
@@ -342,7 +342,7 @@ int runMcpHttpSelfTest() {
 
   // ---- 5b. session expiry: LRU cap + DELETE close (eraseSession wired) ----
   {
-    McpHttpServer server(McpBackends{}, "test-agent");
+    cMcpHttpServer server(McpBackends{}, "test-agent");
     server.setLogSink(nullptr);
     std::string token = server.token();
 
@@ -402,7 +402,7 @@ int runMcpHttpSelfTest() {
 #ifndef _WIN32
   // ---- 7. live loopback: socket layer + accept thread ----
   {
-    McpHttpServer server(McpBackends{}, "live-agent");
+    cMcpHttpServer server(McpBackends{}, "live-agent");
     std::string logs;
     server.setLogSink([&](std::string_view l) { logs += std::string(l) + "\n"; });
     check(server.start(0), "http: live server starts on ephemeral port");
@@ -457,7 +457,7 @@ int runMcpHttpSelfTest() {
     check(raw.find("HTTP/1.1 401") == 0, "http: live bad token -> 401");
 
     // port-in-use: fail fast, never silently re-pick
-    McpHttpServer squatter(McpBackends{});
+    cMcpHttpServer squatter(McpBackends{});
     check(!squatter.start(port), "http: port-in-use fails fast");
 
     server.stop();
@@ -466,7 +466,7 @@ int runMcpHttpSelfTest() {
 
   // ---- 8. non-loopback bind warns loudly ----
   {
-    McpHttpServer server(McpBackends{});
+    cMcpHttpServer server(McpBackends{});
     std::string logs;
     server.setLogSink([&](std::string_view l) { logs += std::string(l) + "\n"; });
     bool ok = server.start(0, "0.0.0.0");
@@ -510,12 +510,12 @@ int runMcpHttpSelfTest() {
     };
     auto rpcErrCode = [](const HttpResponse& r) {
       ParseResult pr = parseJson(r.body);
-      const JsonValue* e = pr.ok ? pr.value.find("error") : nullptr;
-      const JsonValue* c = e ? e->find("code") : nullptr;
+      const cJsonValue* e = pr.ok ? pr.value.find("error") : nullptr;
+      const cJsonValue* c = e ? e->find("code") : nullptr;
       return (c && c->isInt()) ? static_cast<int>(c->asInt()) : 0;
     };
 
-    McpHttpServer server(p3backends, "http-phase3");
+    cMcpHttpServer server(p3backends, "http-phase3");
     std::string logs;
     server.setLogSink([&](std::string_view l) { logs += std::string(l) + "\n"; });
     std::string token = server.token();

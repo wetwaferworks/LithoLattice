@@ -113,7 +113,7 @@ std::string renderDiagnose(const std::map<std::string, std::string>& args) {
   if (it != args.end() && !parseTicks(it->second, ticks)) {
     // Unreachable: onPromptsGet rejects non-string args, and the
     // descriptor marks ticks required=false; but fail fast anyway.
-    throw RpcError(kRpcInvalidParams,
+    throw cRpcError(kRpcInvalidParams,
                    "diagnose: 'ticks' must be a decimal integer 1..1000000");
   }
   const std::string t = std::to_string(ticks);
@@ -145,7 +145,7 @@ std::string renderDiagnose(const std::map<std::string, std::string>& args) {
 
 }  // namespace
 
-void McpServer::registerPhase3Prompts() {
+void cMcpServer::registerPhase3Prompts() {
   prompts_.push_back(PromptDescriptor{
       "agent_onboarding",
       "Briefing for an agent inside LithoKraft: how you see (query tools), "

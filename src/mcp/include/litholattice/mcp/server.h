@@ -122,27 +122,27 @@ enum class McpEra { kLegacy, kStateless };
 ///   session; the dispatch layer applies the stateless result envelope).
 /// - _meta.protocolVersion == "2025-11-25": kLegacy (the handshake era
 ///   never used per-request _meta; the lifecycle gate still applies).
-/// - anything else in protocolVersion: throws RpcError
+/// - anything else in protocolVersion: throws cRpcError
 ///   (kRpcUnsupportedProtocolVersion, -32022) with data.supported naming
 ///   both served versions.
 /// - _meta present but not an object, or protocolVersion missing/non-string:
-///   throws RpcError(kRpcInvalidParams, -32602) — the client attempted the
+///   throws cRpcError(kRpcInvalidParams, -32602) — the client attempted the
 ///   stateless shape but malformed it.
 /// Never throws for absent _meta. `params` is the request's params value
 /// (null when the member was absent).
-McpEra classifyRequestEra(const JsonValue& params);
+McpEra classifyRequestEra(const cJsonValue& params);
 
 // Stateless agent identity (Phase 3): a stateless request carries no
 // session, so there is no per-client handshake to hang an identity on. It
-// is served with the McpServer's own McpAgent identity — deny-by-default
+// is served with the cMcpServer's own McpAgent identity — deny-by-default
 // (mask 0), exactly like a fresh handshake-era connection, and the Phase 1
 // permission gating (isError denials on tools, -32001 on gated resources)
 // applies unchanged. Permissions arrive through the same approval flow:
 // - stdio: the game calls server.grantPermissions(bits) (console
 //   `mcp grant <perm...>`), which flips the one server's agent.
-// - HTTP: all stateless clients share the McpHttpServer's dedicated
-//   stateless McpServer; the game calls
-//   McpHttpServer::grantStatelessPermissions(bits) (console
+// - HTTP: all stateless clients share the cMcpHttpServer's dedicated
+//   stateless cMcpServer; the game calls
+//   cMcpHttpServer::grantStatelessPermissions(bits) (console
 //   `mcp grant stateless <perm...>`). Sharing one identity is the
 //   stateless tradeoff: there is no session to key per-client masks on.
 
@@ -456,10 +456,10 @@ struct ToolResult {
   static ToolResult error(std::string t) { return ToolResult{true, std::move(t)}; }
 };
 
-/// Tool handler: validated arguments object -> result. May throw RpcError
+/// Tool handler: validated arguments object -> result. May throw cRpcError
 /// (-32602) for malformed arguments; any other exception becomes an isError
 /// result (never a protocol error).
-using ToolHandler = std::function<ToolResult(const JsonValue& args, const McpAgent& agent)>;
+using ToolHandler = std::function<ToolResult(const cJsonValue& args, const McpAgent& agent)>;
 
 /// One input-schema property (see the schema-subset note at the top).
 struct ToolParam {
@@ -497,7 +497,7 @@ struct ResourceDescriptor {
   std::string description;
   std::string mimeType;
   uint32_t requiredPerms = 0;  ///< denied -> kMcpPermissionDenied protocol error
-  /// Returns the resource text. Throws RpcError on failure.
+  /// Returns the resource text. Throws cRpcError on failure.
   std::function<std::string(const McpAgent& agent)> read;
 };
 
@@ -554,7 +554,7 @@ class cFdStdioTransport : public IStdioTransport {
 };
 
 /// Fix run 2 (2026-10-23, Cortana; review R-RACE-1): stop a thread that is
-/// running McpServer::runStdio() on the REAL stdin and join it, so the server
+/// running cMcpServer::runStdio() on the REAL stdin and join it, so the server
 /// can be freed safely. `done` must be set by the thread as its last action.
 /// Sets the process-wide stdin stop flag (cFdStdioTransport returns EOF without
 /// dispatching once it is set), then on Windows repeatedly CancelSynchronousIo()s
@@ -575,11 +575,11 @@ using LogSink = std::function<void(std::string_view line)>;
 // The server.
 // ---------------------------------------------------------------------------
 
-class McpServer {
+class cMcpServer {
  public:
-  explicit McpServer(McpBackends backends = {}, McpAgent agent = {});
-  McpServer(const McpServer&) = delete;
-  McpServer& operator=(const McpServer&) = delete;
+  explicit cMcpServer(McpBackends backends = {}, McpAgent agent = {});
+  cMcpServer(const cMcpServer&) = delete;
+  cMcpServer& operator=(const cMcpServer&) = delete;
 
   // -- agent identity -------------------------------------------------------
   /// Console-side approval flow (provisional UX, JD 2026-10-11): the game
@@ -620,7 +620,7 @@ class McpServer {
   /// Replaces the monotonic clock behind both rate limiters (tool-call cap
   /// and block-write cap). Production default is the steady clock; tests
   /// inject a fake. Documented for tests; the game has no reason to call it.
-  void setRateLimitClock(McpTokenBucket::ClockFn fn);
+  void setRateLimitClock(cMcpTokenBucket::ClockFn fn);
 
   // -- registries (for tests / introspection) --------------------------------
   const std::vector<ToolDescriptor>& tools() const { return tools_; }
@@ -628,14 +628,14 @@ class McpServer {
   const std::vector<PromptDescriptor>& prompts() const { return prompts_; }
 
  private:
-  JsonValue onInitialize(const JsonValue& params);
-  JsonValue onDiscover(const JsonValue& params);
-  JsonValue onToolsList(const JsonValue& params);
-  JsonValue onToolsCall(const JsonValue& params);
-  JsonValue onResourcesList(const JsonValue& params);
-  JsonValue onResourcesRead(const JsonValue& params);
-  JsonValue onPromptsList(const JsonValue& params);
-  JsonValue onPromptsGet(const JsonValue& params);
+  cJsonValue onInitialize(const cJsonValue& params);
+  cJsonValue onDiscover(const cJsonValue& params);
+  cJsonValue onToolsList(const cJsonValue& params);
+  cJsonValue onToolsCall(const cJsonValue& params);
+  cJsonValue onResourcesList(const cJsonValue& params);
+  cJsonValue onResourcesRead(const cJsonValue& params);
+  cJsonValue onPromptsList(const cJsonValue& params);
+  cJsonValue onPromptsGet(const cJsonValue& params);
 
   /// Stateless-era dispatch: no lifecycle gate; the success result gets the
   /// stateless envelope (see applyStatelessEnvelope), merged into the
@@ -645,7 +645,7 @@ class McpServer {
   /// "complete" (SEP-2322; this server never needs client input), _meta with
   /// the protocol version + server identity, and SEP-2549 ttlMs/cacheScope
   /// on list/discover/read results. Existing keys are never overwritten.
-  void applyStatelessEnvelope(JsonValue& result, const std::string& method);
+  void applyStatelessEnvelope(cJsonValue& result, const std::string& method);
 
   void registerPhase1Tools();
   void registerPhase1Resources();
@@ -678,29 +678,29 @@ class McpServer {
   std::vector<PromptDescriptor> prompts_;
   bool initialized_ = false;
   LogSink logSink_;
-  /// Per-connection rate limiters (Phase 4): one bucket per McpServer, and
-  /// there is one McpServer per connection (stdio), per HTTP session, and
+  /// Per-connection rate limiters (Phase 4): one bucket per cMcpServer, and
+  /// there is one cMcpServer per connection (stdio), per HTTP session, and
   /// one shared for all stateless traffic — so the caps are per
   /// session/stateless identity, exactly as the research plan requires.
-  McpTokenBucket toolCalls_{kMcpToolCallLimitPerSec, kMcpToolCallBurst};
-  McpTokenBucket blockWrites_{kMcpBlockWriteLimitPerSec, kMcpBlockWriteBurst};
+  cMcpTokenBucket toolCalls_{kMcpToolCallLimitPerSec, kMcpToolCallBurst};
+  cMcpTokenBucket blockWrites_{kMcpBlockWriteLimitPerSec, kMcpBlockWriteBurst};
   /// Player-control frames, keyed by pilot id (multi-pilot, locked
   /// 2026-10-11): each pilot gets its own 120/sec sustained, burst 240.
   /// The frame pump is the natural limiter (one staged batch per frame per
   /// pilot), but this bucket stops a model vibrating a player with
   /// press/release spam at wire speed. Lazily created; adding a pilot is
   /// configuration, not surgery.
-  std::map<std::string, McpTokenBucket> controlBuckets_;
+  std::map<std::string, cMcpTokenBucket> controlBuckets_;
   /// Bucket for `pilot`, creating it (full) on first use.
-  McpTokenBucket& controlBucket(const std::string& pilot);
+  cMcpTokenBucket& controlBucket(const std::string& pilot);
   /// Pilot-sense buckets, keyed by pilot id (multi-pilot, locked
   /// 2026-10-11): vision 4/sec burst 8, audio 8/sec burst 16 per pilot.
   /// Frames are the most expensive thing an agent can request; the vision
   /// cap keeps a curious model from melting the machine.
-  std::map<std::string, McpTokenBucket> visionBuckets_;
-  std::map<std::string, McpTokenBucket> audioBuckets_;
-  McpTokenBucket& visionBucket(const std::string& pilot);
-  McpTokenBucket& audioBucket(const std::string& pilot);
+  std::map<std::string, cMcpTokenBucket> visionBuckets_;
+  std::map<std::string, cMcpTokenBucket> audioBuckets_;
+  cMcpTokenBucket& visionBucket(const std::string& pilot);
+  cMcpTokenBucket& audioBucket(const std::string& pilot);
 };
 
 /// Canonical manifest name for one kPerm* bit (mirrors

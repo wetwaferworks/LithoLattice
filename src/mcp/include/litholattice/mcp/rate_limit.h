@@ -18,7 +18,7 @@
 // CPU/memory quota state machines. So the MCP module ships its own minimal
 // bucket following that pattern rather than pretending to reuse one.
 //
-// Threading: one bucket per McpServer, and McpServer dispatch is
+// Threading: one bucket per cMcpServer, and cMcpServer dispatch is
 // single-threaded (see server.h layering), so the bucket is NOT internally
 // synchronized — the server serializes every call.
 //
@@ -79,13 +79,13 @@ inline constexpr int kMcpSimWriteTimeoutMs = 2000;
 /// Classic token bucket. `take(n)` consumes n tokens when available and
 /// returns true; otherwise it consumes nothing and returns false. Tokens
 /// refill continuously at ratePerSec up to `burst` (the bucket starts full).
-class McpTokenBucket {
+class cMcpTokenBucket {
  public:
   /// Monotonic milliseconds (std::chrono::steady_clock in production, a fake
   /// in tests).
   using ClockFn = std::function<int64_t()>;
 
-  McpTokenBucket(uint64_t ratePerSec, uint64_t burst, ClockFn clock = steadyClockMs);
+  cMcpTokenBucket(uint64_t ratePerSec, uint64_t burst, ClockFn clock = steadyClockMs);
 
   /// Consumes n tokens when the bucket holds them (true); otherwise false
   /// with the bucket unchanged. n == 0 always succeeds.

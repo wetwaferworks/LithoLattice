@@ -106,7 +106,7 @@ class CometTail {
 // still camera degrades exactly to the base margin. The margin breathes
 // with the input.
 // ---------------------------------------------------------------------------
-class VelocityTracker {
+class cVelocityTracker {
  public:
   void reset() {
     yawVel_ = 0.f;
@@ -288,7 +288,7 @@ class CullProtoState {
  private:
   CullProtoConfig cfg_;
   CometTail comet_;
-  VelocityTracker vel_;
+  cVelocityTracker vel_;
   float lastYaw_ = 0.f, lastPitch_ = 0.f;
   CullProtoStats stats_;
 };

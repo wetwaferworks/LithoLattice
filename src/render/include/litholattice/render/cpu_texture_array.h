@@ -9,7 +9,7 @@
 
 namespace litholattice {
 
-class CpuTextureArray final : public ITextureArray {
+class cCpuTextureArray final : public ITextureArray {
  public:
   /// The software fragment shaders sample a fixed 16x16 tile per layer,
   /// whatever resolution the source registry carries.

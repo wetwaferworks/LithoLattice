@@ -1,4 +1,4 @@
-// McpTokenBucket implementation: continuous fractional refill from a
+// cMcpTokenBucket implementation: continuous fractional refill from a
 // monotonic millisecond clock. Clean-room.
 #include "litholattice/mcp/rate_limit.h"
 
@@ -6,15 +6,15 @@
 
 namespace litholattice::mcp {
 
-int64_t McpTokenBucket::steadyClockMs() {
+int64_t cMcpTokenBucket::steadyClockMs() {
   using namespace std::chrono;
   return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-McpTokenBucket::McpTokenBucket(uint64_t ratePerSec, uint64_t burst, ClockFn clock)
+cMcpTokenBucket::cMcpTokenBucket(uint64_t ratePerSec, uint64_t burst, ClockFn clock)
     : ratePerSec_(ratePerSec), burst_(burst), clock_(std::move(clock)), tokens_(static_cast<double>(burst)) {}
 
-void McpTokenBucket::refill(int64_t nowMs) {
+void cMcpTokenBucket::refill(int64_t nowMs) {
   if (!started_) {
     started_ = true;
     lastMs_ = nowMs;
@@ -27,19 +27,19 @@ void McpTokenBucket::refill(int64_t nowMs) {
   lastMs_ = nowMs;
 }
 
-bool McpTokenBucket::take(uint64_t n) {
+bool cMcpTokenBucket::take(uint64_t n) {
   refill(clock_());
   if (static_cast<double>(n) > tokens_) return false;
   tokens_ -= static_cast<double>(n);
   return true;
 }
 
-uint64_t McpTokenBucket::balance() {
+uint64_t cMcpTokenBucket::balance() {
   refill(clock_());
   return static_cast<uint64_t>(tokens_);
 }
 
-void McpTokenBucket::setClock(ClockFn clock) {
+void cMcpTokenBucket::setClock(ClockFn clock) {
   clock_ = std::move(clock);
   started_ = false;  // re-stamp on the next take()/balance()
 }

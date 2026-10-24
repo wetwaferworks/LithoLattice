@@ -87,7 +87,7 @@ class Parser {
     if (pos_ >= text_.size()) {
       return fail("empty input");
     }
-    JsonValue v = parseValue(0, &r);
+    cJsonValue v = parseValue(0, &r);
     if (!r.ok) return r;
     skipWhitespace();
     if (pos_ != text_.size()) {
@@ -120,7 +120,7 @@ class Parser {
 
   char peek() const { return pos_ < text_.size() ? text_[pos_] : '\0'; }
 
-  JsonValue parseValue(std::size_t depth, ParseResult* r) {
+  cJsonValue parseValue(std::size_t depth, ParseResult* r) {
     char c = peek();
     switch (c) {
       case '{':
@@ -130,11 +130,11 @@ class Parser {
       case '"':
         return parseString(r);
       case 't':
-        return parseLiteral("true", JsonValue::boolean(true), r);
+        return parseLiteral("true", cJsonValue::boolean(true), r);
       case 'f':
-        return parseLiteral("false", JsonValue::boolean(false), r);
+        return parseLiteral("false", cJsonValue::boolean(false), r);
       case 'n':
-        return parseLiteral("null", JsonValue::null(), r);
+        return parseLiteral("null", cJsonValue::null(), r);
       case '-':
       case '0':
       case '1':
@@ -149,50 +149,50 @@ class Parser {
         return parseNumber(r);
       default:
         *r = fail(std::string("unexpected character '") + (c ? c : '?') + "'");
-        return JsonValue();
+        return cJsonValue();
     }
   }
 
-  JsonValue parseLiteral(std::string_view word, JsonValue value, ParseResult* r) {
+  cJsonValue parseLiteral(std::string_view word, cJsonValue value, ParseResult* r) {
     if (text_.substr(pos_, word.size()) == word) {
       pos_ += word.size();
       r->ok = true;
       return value;
     }
     *r = fail("invalid literal");
-    return JsonValue();
+    return cJsonValue();
   }
 
-  JsonValue parseObject(std::size_t depth, ParseResult* r) {
+  cJsonValue parseObject(std::size_t depth, ParseResult* r) {
     if (depth >= kMaxJsonDepth) {
       *r = fail("nesting depth exceeds limit");
-      return JsonValue();
+      return cJsonValue();
     }
     ++pos_;  // '{'
-    JsonValue::Object obj;
+    cJsonValue::Object obj;
     skipWhitespace();
     if (peek() == '}') {
       ++pos_;
       r->ok = true;
-      return JsonValue::object(std::move(obj));
+      return cJsonValue::object(std::move(obj));
     }
     for (;;) {
       skipWhitespace();
       if (peek() != '"') {
         *r = fail("object key must be a string");
-        return JsonValue();
+        return cJsonValue();
       }
-      JsonValue key = parseString(r);
-      if (!r->ok) return JsonValue();
+      cJsonValue key = parseString(r);
+      if (!r->ok) return cJsonValue();
       skipWhitespace();
       if (peek() != ':') {
         *r = fail("expected ':' after object key");
-        return JsonValue();
+        return cJsonValue();
       }
       ++pos_;
       skipWhitespace();
-      JsonValue val = parseValue(depth + 1, r);
-      if (!r->ok) return JsonValue();
+      cJsonValue val = parseValue(depth + 1, r);
+      if (!r->ok) return cJsonValue();
       obj.emplace_back(key.asString(), std::move(val));
       skipWhitespace();
       char c = peek();
@@ -203,30 +203,30 @@ class Parser {
       if (c == '}') {
         ++pos_;
         r->ok = true;
-        return JsonValue::object(std::move(obj));
+        return cJsonValue::object(std::move(obj));
       }
       *r = fail("expected ',' or '}' in object");
-      return JsonValue();
+      return cJsonValue();
     }
   }
 
-  JsonValue parseArray(std::size_t depth, ParseResult* r) {
+  cJsonValue parseArray(std::size_t depth, ParseResult* r) {
     if (depth >= kMaxJsonDepth) {
       *r = fail("nesting depth exceeds limit");
-      return JsonValue();
+      return cJsonValue();
     }
     ++pos_;  // '['
-    JsonValue::Array arr;
+    cJsonValue::Array arr;
     skipWhitespace();
     if (peek() == ']') {
       ++pos_;
       r->ok = true;
-      return JsonValue::array(std::move(arr));
+      return cJsonValue::array(std::move(arr));
     }
     for (;;) {
       skipWhitespace();
-      JsonValue val = parseValue(depth + 1, r);
-      if (!r->ok) return JsonValue();
+      cJsonValue val = parseValue(depth + 1, r);
+      if (!r->ok) return cJsonValue();
       arr.push_back(std::move(val));
       skipWhitespace();
       char c = peek();
@@ -237,10 +237,10 @@ class Parser {
       if (c == ']') {
         ++pos_;
         r->ok = true;
-        return JsonValue::array(std::move(arr));
+        return cJsonValue::array(std::move(arr));
       }
       *r = fail("expected ',' or ']' in array");
-      return JsonValue();
+      return cJsonValue();
     }
   }
 
@@ -270,7 +270,7 @@ class Parser {
     return true;
   }
 
-  JsonValue parseString(ParseResult* r) {
+  cJsonValue parseString(ParseResult* r) {
     ++pos_;  // opening quote
     std::string out;
     while (pos_ < text_.size()) {
@@ -279,16 +279,16 @@ class Parser {
         ++pos_;
         if (!isValidUtf8(out.data(), out.data() + out.size())) {
           *r = fail("invalid UTF-8 in string");
-          return JsonValue();
+          return cJsonValue();
         }
         r->ok = true;
-        return JsonValue::string(std::move(out));
+        return cJsonValue::string(std::move(out));
       }
       if (c == '\\') {
         ++pos_;
         if (pos_ >= text_.size()) {
           *r = fail("truncated escape sequence");
-          return JsonValue();
+          return cJsonValue();
         }
         char e = text_[pos_++];
         switch (e) {
@@ -302,37 +302,37 @@ class Parser {
           case 't': out.push_back('\t'); break;
           case 'u': {
             std::uint32_t cp;
-            if (!parseHex4(&cp, r)) return JsonValue();
+            if (!parseHex4(&cp, r)) return cJsonValue();
             if (cp >= 0xD800 && cp <= 0xDBFF) {
               // high surrogate: must be followed by \uDC00-\uDFFF
               if (pos_ + 6 > text_.size() || text_[pos_] != '\\' || text_[pos_ + 1] != 'u') {
                 *r = fail("lone high surrogate in \\u escape");
-                return JsonValue();
+                return cJsonValue();
               }
               pos_ += 2;
               std::uint32_t lo;
-              if (!parseHex4(&lo, r)) return JsonValue();
+              if (!parseHex4(&lo, r)) return cJsonValue();
               if (lo < 0xDC00 || lo > 0xDFFF) {
                 *r = fail("lone high surrogate in \\u escape");
-                return JsonValue();
+                return cJsonValue();
               }
               cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
             } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
               *r = fail("lone low surrogate in \\u escape");
-              return JsonValue();
+              return cJsonValue();
             }
             encodeUtf8(cp, out);
             break;
           }
           default:
             *r = fail(std::string("invalid escape '\\") + e + "'");
-            return JsonValue();
+            return cJsonValue();
         }
         continue;
       }
       if (c < 0x20) {
         *r = fail("unescaped control character in string");
-        return JsonValue();
+        return cJsonValue();
       }
       // Raw byte (part of a UTF-8 sequence or ASCII): copy through; the
       // whole-string UTF-8 validation at the closing quote rejects bad bytes.
@@ -340,16 +340,16 @@ class Parser {
       ++pos_;
     }
     *r = fail("unterminated string");
-    return JsonValue();
+    return cJsonValue();
   }
 
-  JsonValue parseNumber(ParseResult* r) {
+  cJsonValue parseNumber(ParseResult* r) {
     std::size_t start = pos_;
     if (peek() == '-') ++pos_;
     // integer part
     if (pos_ >= text_.size()) {
       *r = fail("truncated number");
-      return JsonValue();
+      return cJsonValue();
     }
     char c = text_[pos_];
     if (c == '0') {
@@ -358,7 +358,7 @@ class Parser {
       while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') ++pos_;
     } else {
       *r = fail("invalid number");
-      return JsonValue();
+      return cJsonValue();
     }
     bool isDouble = false;
     // fraction
@@ -367,7 +367,7 @@ class Parser {
       ++pos_;
       if (pos_ >= text_.size() || text_[pos_] < '0' || text_[pos_] > '9') {
         *r = fail("missing digits after decimal point");
-        return JsonValue();
+        return cJsonValue();
       }
       while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') ++pos_;
     }
@@ -378,7 +378,7 @@ class Parser {
       if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) ++pos_;
       if (pos_ >= text_.size() || text_[pos_] < '0' || text_[pos_] > '9') {
         *r = fail("missing digits in exponent");
-        return JsonValue();
+        return cJsonValue();
       }
       while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') ++pos_;
     }
@@ -389,7 +389,7 @@ class Parser {
       long long v = std::strtoll(tok.c_str(), &endp, 10);
       if (errno == 0 && endp && *endp == '\0') {
         r->ok = true;
-        return JsonValue::integer(static_cast<std::int64_t>(v));
+        return cJsonValue::integer(static_cast<std::int64_t>(v));
       }
       // Integer-form number outside int64 range: demote to double
       // (documented; never silently wraps to a wrong integer).
@@ -399,10 +399,10 @@ class Parser {
     double d = std::strtod(tok.c_str(), &endp);
     if (!endp || *endp != '\0' || errno == ERANGE) {
       *r = fail("number out of range");
-      return JsonValue();
+      return cJsonValue();
     }
     r->ok = true;
-    return JsonValue::number(d);
+    return cJsonValue::number(d);
   }
 
   std::string_view text_;
@@ -411,7 +411,7 @@ class Parser {
 
 // ---------- canonical serializer ----------
 
-void serializeInto(const JsonValue& v, std::string& out);
+void serializeInto(const cJsonValue& v, std::string& out);
 
 void serializeString(std::string_view s, std::string& out) {
   out.push_back('"');
@@ -454,27 +454,27 @@ void serializeDouble(double d, std::string& out) {
   }
 }
 
-void serializeInto(const JsonValue& v, std::string& out) {
+void serializeInto(const cJsonValue& v, std::string& out) {
   switch (v.type()) {
-    case JsonValue::Type::kNull:
+    case cJsonValue::Type::kNull:
       out += "null";
       break;
-    case JsonValue::Type::kBool:
+    case cJsonValue::Type::kBool:
       out += v.asBool() ? "true" : "false";
       break;
-    case JsonValue::Type::kInt:
+    case cJsonValue::Type::kInt:
       out += std::to_string(v.asInt());
       break;
-    case JsonValue::Type::kDouble:
+    case cJsonValue::Type::kDouble:
       serializeDouble(v.asDouble(), out);
       break;
-    case JsonValue::Type::kString:
+    case cJsonValue::Type::kString:
       if (!isValidUtf8(v.asString().data(), v.asString().data() + v.asString().size())) {
         throw std::invalid_argument("json: string holds invalid UTF-8");
       }
       serializeString(v.asString(), out);
       break;
-    case JsonValue::Type::kArray: {
+    case cJsonValue::Type::kArray: {
       out.push_back('[');
       bool first = true;
       for (const auto& e : v.asArray()) {
@@ -485,7 +485,7 @@ void serializeInto(const JsonValue& v, std::string& out) {
       out.push_back(']');
       break;
     }
-    case JsonValue::Type::kObject: {
+    case cJsonValue::Type::kObject: {
       out.push_back('{');
       bool first = true;
       for (const auto& [k, val] : v.asObject()) {
@@ -503,7 +503,7 @@ void serializeInto(const JsonValue& v, std::string& out) {
 
 }  // namespace
 
-const JsonValue* JsonValue::find(std::string_view key) const {
+const cJsonValue* cJsonValue::find(std::string_view key) const {
   if (!isObject()) return nullptr;
   for (const auto& [k, v] : asObject()) {
     if (k == key) return &v;
@@ -511,18 +511,18 @@ const JsonValue* JsonValue::find(std::string_view key) const {
   return nullptr;
 }
 
-JsonValue& JsonValue::getOrInsert(std::string_view key) {
+cJsonValue& cJsonValue::getOrInsert(std::string_view key) {
   if (!isObject()) {
     data_ = Object{};
   }
   for (auto& [k, v] : asObject()) {
     if (k == key) return v;
   }
-  asObject().emplace_back(std::string(key), JsonValue::null());
+  asObject().emplace_back(std::string(key), cJsonValue::null());
   return asObject().back().second;
 }
 
-std::string JsonValue::serialize() const {
+std::string cJsonValue::serialize() const {
   std::string out;
   serializeInto(*this, out);
   return out;

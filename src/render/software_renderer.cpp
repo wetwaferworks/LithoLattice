@@ -48,10 +48,10 @@ namespace litholattice {
 static constexpr uint8_t kTwinkleLut[256] = {0,0,0,0,0,0,1,1,2,2,3,4,5,6,8,10,11,14,16,19,21,24,28,31,35,39,43,48,52,57,62,67,72,77,83,89,94,100,106,111,117,123,129,134,140,145,151,156,161,166,170,175,179,183,186,189,192,195,197,199,201,202,203,204,204,204,203,202,201,199,197,195,192,189,186,183,179,175,170,166,161,156,151,145,140,134,129,123,117,111,106,100,94,89,83,77,72,67,62,57,52,48,43,39,35,31,28,24,21,19,16,14,11,10,8,6,5,4,3,2,2,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
 // ---------------------------------------------------------------------------
-// CpuTextureArray
+// cCpuTextureArray
 // ---------------------------------------------------------------------------
 
-bool CpuTextureArray::upload(const TextureRegistry& textures) {
+bool cCpuTextureArray::upload(const TextureRegistry& textures) {
   const std::span<const Texture> src = textures.textures();
   layers_ = int(src.size());
   // Cortana 2026-10-16 (BUG-0003): keep the pack's own resolution (was a fixed 16x16 box
@@ -122,7 +122,7 @@ bool CpuTextureArray::upload(const TextureRegistry& textures) {
 // Ginny (Argon) 2026-10-16 Pass 2 step 4: swizzle every 16x16 layer to Morton order at load.
 // Cortana 2026-10-16 (BUG-0005): 2x2 box mips for 32/64 tiles so distant faces sample a
 // texel density close to 1 per pixel instead of aliasing (sparkle / incoherent noise).
-void CpuTextureArray::buildMips() {
+void cCpuTextureArray::buildMips() {
   levels_ = 1;
   for (auto& m : mips_) m.clear();
   if (tile_ <= 16 || layers_ <= 0) return;
@@ -152,7 +152,7 @@ void CpuTextureArray::buildMips() {
   }
 }
 
-void CpuTextureArray::buildMorton() {
+void cCpuTextureArray::buildMorton() {
   if (tile_ != 16) { texelsMorton_.clear(); return; }  // Cortana 2026-10-16: Morton tables are 16x16
   texelsMorton_.assign(texels_.size(), 0u);
   for (size_t l = 0; l < texels_.size() / 256; ++l)
@@ -161,7 +161,7 @@ void CpuTextureArray::buildMorton() {
         texelsMorton_[l * 256 + (kSwMortonU[tx] | kSwMortonV[ty])] = texels_[l * 256 + ty * 16 + tx];
 }
 
-void CpuTextureArray::setRaw(const uint32_t* data, uint32_t layers) {
+void cCpuTextureArray::setRaw(const uint32_t* data, uint32_t layers) {
   if (!data || layers == 0) {
     texels_.clear();
     texelsMorton_.clear();

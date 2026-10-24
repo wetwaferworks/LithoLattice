@@ -98,7 +98,7 @@ class ChunkMap {
   /// Column eviction (A2 / B-M1): removes the column at (cx, cz) and frees
   /// its sub-chunks. Returns false when the column was not resident. The
   /// caller owns the eviction discipline (save-first for dirty columns,
-  /// SignalSim::unscanColumn, mesh retire, streamer cleanup) -- this is
+  /// cSignalSim::unscanColumn, mesh retire, streamer cleanup) -- this is
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
     const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;

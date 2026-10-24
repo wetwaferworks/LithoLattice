@@ -10,7 +10,7 @@
 //   protocol version; NO Mcp-Session-Id is minted, expected, or required.
 //   The mirrored headers MCP-Protocol-Version / Mcp-Method / Mcp-Name are
 //   validated against the body (SEP-2243); a missing/mismatched header is
-//   JSON-RPC -32020. All stateless requests share ONE McpServer (one agent
+//   JSON-RPC -32020. All stateless requests share ONE cMcpServer (one agent
 //   identity) — there is no session to key per-client permission masks on,
 //   so grants target the shared stateless agent via
 //   grantStatelessPermissions().
@@ -33,7 +33,7 @@
 //   - Sessions: `initialize` with no Mcp-Session-Id creates a session;
 //     every later request must carry it. Unknown session id -> 404,
 //     missing session id on a non-initialize request -> 400. Each session
-//     owns one McpServer (Phase 1 model: one server per connection) tied to
+//     owns one cMcpServer (Phase 1 model: one server per connection) tied to
 //     one McpAgent identity; permission grants flow through the same
 //     grantPermissions/revokePermissions the stdio console flow uses.
 //   - Transport fails closed: malformed HTTP -> 400, oversized body -> 413
@@ -41,9 +41,9 @@
 //     415, port taken -> start() fails loudly, never picks another port.
 //
 // Threading (locked): ONE accept/dispatch thread (see sockets.h). All
-// handleMessage() calls serialize on it, so the per-session McpServer
+// handleMessage() calls serialize on it, so the per-session cMcpServer
 // instances never see concurrent dispatch. grantPermissions/revokePermissions
-// are safe to call from the console thread (McpServer synchronizes the
+// are safe to call from the console thread (cMcpServer synchronizes the
 // agent mask internally); the session map itself is mutex-guarded.
 //
 // SSE seam: Phase 1 has no server-initiated notifications, so there is no
@@ -98,16 +98,16 @@ bool constantTimeEqual(std::string_view a, std::string_view b);
 /// Anything else triggers the loud non-loopback warning in start().
 bool isLoopbackBindAddress(std::string_view addr);
 
-class McpHttpServer {
+class cMcpHttpServer {
  public:
-  /// `backends` are cloned (shared_ptr members) into one McpServer per
+  /// `backends` are cloned (shared_ptr members) into one cMcpServer per
   /// session; `agentName` seeds each session's McpAgent identity.
-  explicit McpHttpServer(McpBackends backends,
+  explicit cMcpHttpServer(McpBackends backends,
                          std::string agentName = "http-agent");
-  ~McpHttpServer();
+  ~cMcpHttpServer();
 
-  McpHttpServer(const McpHttpServer&) = delete;
-  McpHttpServer& operator=(const McpHttpServer&) = delete;
+  cMcpHttpServer(const cMcpHttpServer&) = delete;
+  cMcpHttpServer& operator=(const cMcpHttpServer&) = delete;
 
   /// Start listening and spawn the accept/dispatch thread. Fail-fast:
   /// returns false (and logs) if the port is taken — the server NEVER
@@ -128,7 +128,7 @@ class McpHttpServer {
 
   // -- console approval flow (one McpAgent identity per session) ------------
   /// Grant/revoke kPerm* bits on a session's agent (cf.
-  /// McpServer::grantPermissions). Thread-safe; false when the session id
+  /// cMcpServer::grantPermissions). Thread-safe; false when the session id
   /// is unknown.
   bool grantPermissions(const std::string& sessionId, std::uint32_t bits);
   bool revokePermissions(const std::string& sessionId, std::uint32_t bits);
@@ -136,7 +136,7 @@ class McpHttpServer {
 
   // -- stateless-era agent (Phase 3) -----------------------------------------
   /// Grant/revoke kPerm* bits on the SHARED stateless agent (all stateless
-  /// requests are served by one McpServer — there is no session to key
+  /// requests are served by one cMcpServer — there is no session to key
   /// per-client masks on). Thread-safe. The console command is
   /// `mcp grant stateless <perm...>` (see engine/docs/MCP-GAME-SEAM.md).
   bool grantStatelessPermissions(std::uint32_t bits);
@@ -182,7 +182,7 @@ class McpHttpServer {
   /// timeout; createSession sweeps expired sessions and evicts LRU past the
   /// session cap.
   std::string createSession();
-  McpServer* findSession(const std::string& id);
+  cMcpServer* findSession(const std::string& id);
   void eraseSession(const std::string& id);
 
   bool checkAuth(const HttpRequest& req) const;
@@ -190,22 +190,22 @@ class McpHttpServer {
   /// is not a JSON-RPC request object (fail-fast at the transport layer).
   static std::string rpcMethodOf(std::string_view body);
   /// Stateless-era dispatch (2026-07-28): header validation (SEP-2243),
-  /// then McpServer::handleMessage on the shared stateless server. No
+  /// then cMcpServer::handleMessage on the shared stateless server. No
   /// session is created, expected, or minted.
   HttpResponse handleStatelessRequest(const HttpRequest& req,
-                                      const JsonValue& body,
+                                      const cJsonValue& body,
                                       const std::string& method);
   /// JSON-RPC error body for the stateless path: -32601 -> HTTP 404 (so a
   /// dual-era client can tell "no such method" from "bad request"), other
   /// protocol errors -> HTTP 400.
-  static HttpResponse statelessRpcError(const JsonValue& id, int code,
+  static HttpResponse statelessRpcError(const cJsonValue& id, int code,
                                         const std::string& message,
-                                        const JsonValue& data = JsonValue::null());
+                                        const cJsonValue& data = cJsonValue::null());
   void log(std::string_view line);
 
   McpBackends backends_;
   std::string agentName_;
-  TcpListener listener_;
+  cTcpListener listener_;
   std::thread thread_;
   std::atomic<bool> running_{false};
 
@@ -214,7 +214,7 @@ class McpHttpServer {
   /// idle past the timeout expires fail-closed (the client re-handshakes),
   /// and the table is LRU-capped (see createSession).
   struct Session {
-    std::unique_ptr<McpServer> server;
+    std::unique_ptr<cMcpServer> server;
     std::chrono::steady_clock::time_point lastActivity{};
   };
 
@@ -222,8 +222,8 @@ class McpHttpServer {
   std::map<std::string, Session> sessions_;
   /// Phase 3: the shared stateless-era server (one agent identity for every
   /// stateless client). Used only on the accept/dispatch thread; grants are
-  /// internally synchronized like every McpServer.
-  std::unique_ptr<McpServer> statelessServer_;
+  /// internally synchronized like every cMcpServer.
+  std::unique_ptr<cMcpServer> statelessServer_;
   std::string bearerToken_;
   LogSink logSink_;
   std::string boundAddress_;
