@@ -1,4 +1,4 @@
-// SubdivStore: chunk-scoped block -> SparseOctree map (workstream 1).
+// cSubdivStore: chunk-scoped block -> SparseOctree map (workstream 1).
 // See subdiv_store.h for the serialized format.
 
 #include "litholattice/subdiv/subdiv_store.h"
@@ -36,7 +36,7 @@ constexpr uint16_t kStoreVersion = 1;
 
 }  // namespace
 
-size_t SubdivStore::findIndex(int x, int y, int z) const {
+size_t cSubdivStore::findIndex(int x, int y, int z) const {
   size_t lo = 0, hi = entries_.size();
   while (lo < hi) {
     const size_t mid = lo + (hi - lo) / 2;
@@ -49,7 +49,7 @@ size_t SubdivStore::findIndex(int x, int y, int z) const {
   return lo;
 }
 
-void SubdivStore::setBlockOctree(int x, int y, int z, SparseOctree octree) {
+void cSubdivStore::setBlockOctree(int x, int y, int z, cSparseOctree octree) {
   if (!validCoord(x) || !validCoord(y) || !validCoord(z)) return;
   const size_t i = findIndex(x, y, z);
   const bool hit = i < entries_.size() && entries_[i].x == x &&
@@ -69,7 +69,7 @@ void SubdivStore::setBlockOctree(int x, int y, int z, SparseOctree octree) {
   }
 }
 
-const SparseOctree* SubdivStore::getBlockOctree(int x, int y, int z) const {
+const cSparseOctree* cSubdivStore::getBlockOctree(int x, int y, int z) const {
   if (!validCoord(x) || !validCoord(y) || !validCoord(z)) return nullptr;
   const size_t i = findIndex(x, y, z);
   if (i < entries_.size() && entries_[i].x == x && entries_[i].y == y &&
@@ -78,7 +78,7 @@ const SparseOctree* SubdivStore::getBlockOctree(int x, int y, int z) const {
   return nullptr;
 }
 
-bool SubdivStore::removeBlockOctree(int x, int y, int z) {
+bool cSubdivStore::removeBlockOctree(int x, int y, int z) {
   if (!validCoord(x) || !validCoord(y) || !validCoord(z)) return false;
   const size_t i = findIndex(x, y, z);
   if (i < entries_.size() && entries_[i].x == x && entries_[i].y == y &&
@@ -89,13 +89,13 @@ bool SubdivStore::removeBlockOctree(int x, int y, int z) {
   return false;
 }
 
-size_t SubdivStore::memoryBytes() const {
-  size_t bytes = sizeof(SubdivStore) + entries_.capacity() * sizeof(Entry);
+size_t cSubdivStore::memoryBytes() const {
+  size_t bytes = sizeof(cSubdivStore) + entries_.capacity() * sizeof(Entry);
   for (const Entry& e : entries_) bytes += e.tree.memoryBytes();
   return bytes;
 }
 
-std::vector<uint8_t> SubdivStore::serialize() const {
+std::vector<uint8_t> cSubdivStore::serialize() const {
   std::vector<uint8_t> out;
   out.reserve(10);
   out.push_back('L');
@@ -121,7 +121,7 @@ std::vector<uint8_t> SubdivStore::serialize() const {
   return out;
 }
 
-bool SubdivStore::deserialize(const uint8_t* data, size_t size) {
+bool cSubdivStore::deserialize(const uint8_t* data, size_t size) {
   if (!data || size < 10) return false;
   if (data[0] != 'L' || data[1] != 'T' || data[2] != 'H' || data[3] != 'S')
     return false;
@@ -129,7 +129,7 @@ bool SubdivStore::deserialize(const uint8_t* data, size_t size) {
   const uint32_t count = getU32(data + 6);
   // Every entry needs at least its 7-byte header (x, y, z + leaf count).
   if (count > (size - 10) / 7) return false;
-  SubdivStore tmp;
+  cSubdivStore tmp;
   size_t off = 10;
   for (uint32_t i = 0; i < count; ++i) {
     if (off + 7 > size) return false;
@@ -138,7 +138,7 @@ bool SubdivStore::deserialize(const uint8_t* data, size_t size) {
     const uint32_t n = getU32(data + off + 3);
     off += 7;
     if (n > (size - off) / 5) return false;  // 5 bytes per leaf record
-    SparseOctree t;
+    cSparseOctree t;
     for (uint32_t k = 0; k < n; ++k) {
       const int level = data[off], cx = data[off + 1], cy = data[off + 2];
       const int cz = data[off + 3], mat = data[off + 4];

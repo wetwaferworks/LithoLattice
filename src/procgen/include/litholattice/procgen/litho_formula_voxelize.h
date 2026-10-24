@@ -34,7 +34,7 @@ struct VoxelResult {
 
 /// Sample the (pTheta, pPhi) shape and fill its interior on a
 /// resolution^3 grid. `resolution` must be a power of two in {8, 16, 32, 64}
-/// (matching the SparseOctree level range 3..6). Any other value is rejected:
+/// (matching the cSparseOctree level range 3..6). Any other value is rejected:
 /// the rejection is reported to stderr and an empty VoxelResult with
 /// `resolution == 0` is returned.
 ///
@@ -63,14 +63,14 @@ struct VoxelResult {
 VoxelResult voxelizeLithoShape(const LithoParams& pTheta, const LithoParams& pPhi,
                                int resolution, uint8_t material = 1);
 
-/// Emit a VoxelResult into a SparseOctree at level log2(resolution)
+/// Emit a VoxelResult into a cSparseOctree at level log2(resolution)
 /// (resolution 64 -> level 6) with material 1. VoxelResults with a
 /// resolution outside {8, 16, 32, 64} (e.g. rejected results) emit nothing.
-void emitToOctree(const VoxelResult& result, litholattice::subdiv::SparseOctree& tree);
+void emitToOctree(const VoxelResult& result, litholattice::subdiv::cSparseOctree& tree);
 
-/// Emit a VoxelResult into a SparseOctree at level log2(resolution) with an
+/// Emit a VoxelResult into a cSparseOctree at level log2(resolution) with an
 /// explicit material id.
-void emitToOctree(const VoxelResult& result, litholattice::subdiv::SparseOctree& tree,
+void emitToOctree(const VoxelResult& result, litholattice::subdiv::cSparseOctree& tree,
                   uint8_t material);
 
 }  // namespace litholattice::procgen::litho_formula

@@ -35,9 +35,9 @@ bool validShrubParams(const ShrubParams& p) {
   return true;
 }
 
-litholattice::subdiv::SparseOctree generateShrubOctree(const ShrubParams& p) {
-  using litholattice::subdiv::SparseOctree;
-  SparseOctree tree;
+litholattice::subdiv::cSparseOctree generateShrubOctree(const ShrubParams& p) {
+  using litholattice::subdiv::cSparseOctree;
+  cSparseOctree tree;
   if (!validShrubParams(p)) return tree;  // fail closed: empty octree
 
   // --- resolution: span `sizeCells` micro-cells using a coarser octree level

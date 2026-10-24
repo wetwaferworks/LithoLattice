@@ -129,7 +129,7 @@ void resolutionCheck(Checker& check) {
     // emitToOctree lands at level log2(resolution): 16->4, 32->5, 64->6.
     int level = 0;
     for (int p = res; p > 1; p >>= 1) ++level;
-    litholattice::subdiv::SparseOctree tree;
+    litholattice::subdiv::cSparseOctree tree;
     emitToOctree(vr, tree, 7);
     if (tree.leafCount() != vr.filled.size()) ok = false;
     for (size_t i = 0; i < vr.filled.size() && ok; i += vr.filled.size() / 7 + 1) {
@@ -144,7 +144,7 @@ void resolutionCheck(Checker& check) {
   for (const int bad : {24, 0, 7, 100, -8}) {
     const VoxelResult vr = voxelizeLithoShape(c, c, bad);
     if (vr.resolution != 0 || !vr.filled.empty()) rejected = false;
-    litholattice::subdiv::SparseOctree tree;
+    litholattice::subdiv::cSparseOctree tree;
     emitToOctree(vr, tree);
     if (!tree.empty()) rejected = false;
   }

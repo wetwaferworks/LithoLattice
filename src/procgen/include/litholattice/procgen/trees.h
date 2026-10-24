@@ -1,13 +1,13 @@
 // Procedural tree generator (workstream 1 of 3, ProcGen vegetation; JD-authorized 2026-10-11).
 //
 // WHAT: engine-side procedural vegetation. generateTree() builds a tree as a
-//   litholattice::subdiv::SparseOctree (level-6 micro-cells inside one block volume),
-//   which drops straight into SubdivStore::setBlockOctree(x, y, z, std::move(tree)).
+//   litholattice::subdiv::cSparseOctree (level-6 micro-cells inside one block volume),
+//   which drops straight into cSubdivStore::setBlockOctree(x, y, z, std::move(tree)).
 //   Game-side wrapping into .lthm Models is workstream 3; this file is the exact seam
 //   it consumes (do not reshape TreeParams / generateTree without coordinator sign-off).
 //
 // WHY engine-side: JD wants procedural vegetation exposed by the engine, not just game
-//   code -- the engine owns SparseOctree, so the generator outputs octrees directly.
+//   code -- the engine owns cSparseOctree, so the generator outputs octrees directly.
 //
 // HOW: deterministic recursive growth. All randomness flows through
 //   litholattice::procgen::Rng (xoshiro256**, seeded via the splitmix64-family mix64
@@ -72,7 +72,7 @@ struct TreeParams {
 /// heightCells tall. Organic mode: tip pixels alternate tipMaterial/leafMaterial by
 /// extremity index when BOTH are nonzero (two-colour tips, e.g. red/blue); with only
 /// tipMaterial set every extremity is tipMaterial.
-litholattice::subdiv::SparseOctree generateTree(const TreeParams& p);
+litholattice::subdiv::cSparseOctree generateTree(const TreeParams& p);
 
 // ---- biome family presets (documented values; seed picks the individual) ----
 

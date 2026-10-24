@@ -1308,7 +1308,7 @@ void testBinaryMesherTransparent() {
 
 // Micro-face mesher for subdivided blocks (workstream 2, 2026-10-11): LOD policy,
 // greedy micro-face merging, determinism, and the chunk-build integration point.
-// The SparseOctree side is workstream 1's contract; these tests run against the
+// The cSparseOctree side is workstream 1's contract; these tests run against the
 // stopgap octree.cpp until their implementation lands (same public API).
 namespace {
 // All four corners of a MicroQuad must lie inside [o, o+1]^3 (block AABB) for
@@ -1338,14 +1338,14 @@ void testMicroMesher() {
   std::printf("render: micro-face mesher (subdivided blocks, LOD)\n");
   using micro::MicroMeshParams;
   using micro::MicroQuad;
-  using subdiv::SparseOctree;
+  using subdiv::cSparseOctree;
 
   check(sizeof(MicroQuad) == 24 && sizeof(BinaryQuad) == 8,
         "micro mesher: MicroQuad is 24 bytes; BinaryQuad layout untouched at 8 bytes");
 
   // Octree stopgap contract sanity (workstream 1's own tests supersede these).
   {
-    SparseOctree t;
+    cSparseOctree t;
     check(t.empty(), "micro mesher: fresh tree is empty");
     t.set(6, 0, 0, 0, 1);
     t.set(6, 1, 0, 0, 2);
@@ -1371,7 +1371,7 @@ void testMicroMesher() {
 
   // LOD0 of a subdivided block == plain cube mesh: 6 unit quads at the origin.
   {
-    SparseOctree t;
+    cSparseOctree t;
     for (int z = 0; z < 2; ++z)
       for (int y = 0; y < 2; ++y)
         for (int x = 0; x < 2; ++x) t.set(1, x, y, z, 3);
@@ -1403,7 +1403,7 @@ void testMicroMesher() {
 
   // LOD6 of a known tree: one level-6 cell -> 6 quads of 1/64 extent.
   {
-    SparseOctree t;
+    cSparseOctree t;
     t.set(6, 0, 0, 0, 1);
     MicroMeshParams p;
     std::vector<MicroQuad> q;
@@ -1420,7 +1420,7 @@ void testMicroMesher() {
 
   // Greedy merging: two adjacent micro-cells -> one 2x1x1 box (shared face culled).
   {
-    SparseOctree t;
+    cSparseOctree t;
     t.set(6, 0, 0, 0, 1);
     t.set(6, 1, 0, 0, 1);
     MicroMeshParams p;
@@ -1437,7 +1437,7 @@ void testMicroMesher() {
 
   // Determinism: same tree twice -> bit-identical quad stream.
   {
-    SparseOctree t;
+    cSparseOctree t;
     for (int i = 0; i < 200; ++i) {
       uint64_t seed = uint64_t(i) * 0x9E3779B97F4A7C15ULL + 0x12345;
       const uint64_t s = testSplitmix64(seed);
@@ -1455,7 +1455,7 @@ void testMicroMesher() {
 
   // Empty tree -> no output, `out` untouched.
   {
-    SparseOctree t;
+    cSparseOctree t;
     MicroMeshParams p;
     std::vector<MicroQuad> q(1);  // sentinel proves the vector is not modified
     check(micro::meshOctreeLOD(t, 6, p, q) == 0 && q.size() == 1,
@@ -1464,7 +1464,7 @@ void testMicroMesher() {
 
   // LOD monotonicity: a detailed tree never loses quads going to finer LODs.
   {
-    SparseOctree t;
+    cSparseOctree t;
     for (int z = 0; z < 2; ++z)
       for (int y = 0; y < 2; ++y)
         for (int x = 0; x < 2; ++x) t.set(1, x, y, z, 2);  // solid block
@@ -1486,7 +1486,7 @@ void testMicroMesher() {
   // Boundary culling via neighborSolid: a micro-cell on the +X block face loses
   // its +X quad when the neighbour is opaque.
   {
-    SparseOctree t;
+    cSparseOctree t;
     t.set(6, 63, 0, 0, 1);
     MicroMeshParams p;
     std::vector<MicroQuad> open, shut;
@@ -1503,7 +1503,7 @@ void testMicroMesher() {
   // existing chunk-level frustum test (render.frustum_margin_deg) covers it and
   // subdivision never widens chunk bounds.
   {
-    SparseOctree t;
+    cSparseOctree t;
     for (int i = 0; i < 120; ++i) {
       uint64_t seed = uint64_t(i) * 0xD1B54A32D192ED03ULL + 0x777;
       const uint64_t s = testSplitmix64(seed);
@@ -1519,16 +1519,16 @@ void testMicroMesher() {
           "micro mesher: all micro-quads lie inside the block AABB (chunk frustum culling covers them)");
   }
 
-  // Chunk-build integration (real SubdivStore, workstream 1): empty store ->
+  // Chunk-build integration (real cSubdivStore, workstream 1): empty store ->
   // zero behavior change; subdivided blocks get micro-geometry at the
   // camera-selected LOD; other blocks untouched.
   {
-    subdiv::SubdivStore store;
+    subdiv::cSubdivStore store;
     std::vector<MicroQuad> q;
     check(micro::appendChunkMicroGeometry(store, 0, 0, 0, 0.0f, 0.0f, 0.0f, q) == 0 && q.empty(),
           "micro mesher: empty SubdivStore -> no output (plain chunks untouched)");
 
-    SparseOctree solid;
+    cSparseOctree solid;
     for (int z = 0; z < 2; ++z)
       for (int y = 0; y < 2; ++y)
         for (int x = 0; x < 2; ++x) solid.set(1, x, y, z, 4);
@@ -1553,7 +1553,7 @@ void testMicroMesher() {
     check(coarse, "micro mesher: far camera -> LOD0 single cube");
 
     // Neighbour-opacity callback threads through to boundary culling.
-    SparseOctree edge;
+    cSparseOctree edge;
     edge.set(6, 63, 0, 0, 1);
     store.setBlockOctree(0, 0, 0, edge);
     std::vector<MicroQuad> culled;

@@ -69,9 +69,9 @@ class cCondition final : public IBtNode {
  private:
   std::function<bool(const AiContext&)> p_;
 };
-class Action final : public IBtNode {
+class cAction final : public IBtNode {
  public:
-  explicit Action(std::function<BtStatus(AiContext&)> a) : a_(std::move(a)) {}
+  explicit cAction(std::function<BtStatus(AiContext&)> a) : a_(std::move(a)) {}
   BtStatus tick(AiContext& ctx) override { return a_(ctx); }
  private:
   std::function<BtStatus(AiContext&)> a_;
@@ -96,7 +96,7 @@ BtPtr btSequence(std::vector<BtPtr> c) { return std::make_unique<Sequence>(std::
 BtPtr btSelector(std::vector<BtPtr> c) { return std::make_unique<Selector>(std::move(c)); }
 BtPtr btInverter(BtPtr c) { return std::make_unique<cInverter>(std::move(c)); }
 BtPtr btCondition(std::function<bool(const AiContext&)> p) { return std::make_unique<cCondition>(std::move(p)); }
-BtPtr btAction(std::function<BtStatus(AiContext&)> a) { return std::make_unique<Action>(std::move(a)); }
+BtPtr btAction(std::function<BtStatus(AiContext&)> a) { return std::make_unique<cAction>(std::move(a)); }
 BtPtr btUtility(std::vector<UtilityAction> a, const ILearnedScorer* l) { return std::make_unique<cUtility>(std::move(a), l); }
 
 }  // namespace litholattice::ai

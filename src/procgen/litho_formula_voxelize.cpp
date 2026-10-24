@@ -158,11 +158,11 @@ VoxelResult voxelizeLithoShape(const LithoParams& pTheta, const LithoParams& pPh
   return out;
 }
 
-void emitToOctree(const VoxelResult& result, litholattice::subdiv::SparseOctree& tree) {
+void emitToOctree(const VoxelResult& result, litholattice::subdiv::cSparseOctree& tree) {
   emitToOctree(result, tree, 1);
 }
 
-void emitToOctree(const VoxelResult& result, litholattice::subdiv::SparseOctree& tree,
+void emitToOctree(const VoxelResult& result, litholattice::subdiv::cSparseOctree& tree,
                   uint8_t material) {
   const int n = result.resolution;
   // Only results from accepted resolutions emit; rejected (resolution 0)

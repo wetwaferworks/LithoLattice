@@ -2,7 +2,7 @@
 //
 // Covers the contract: set/get/collapse semantics, sparse memory bounds,
 // determinism (insertion-order-independent hashLeaves), leaves() ordering,
-// fillDense, deep-copy value semantics, and SubdivStore round-trips.
+// fillDense, deep-copy value semantics, and cSubdivStore round-trips.
 
 #include "litholattice/subdiv/subdiv_selftest.h"
 
@@ -47,7 +47,7 @@ bool leavesSorted(const std::vector<MicroCell>& ls) {
 }
 
 void testEmptyAndBounds(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   c(t.empty(), "fresh tree is empty");
   c(t.leafCount() == 0, "fresh tree has no leaves");
   c(t.leaves().empty(), "fresh tree leaf stream is empty");
@@ -57,7 +57,7 @@ void testEmptyAndBounds(Checker& c) {
   t.set(3, 1, 2, 3, 0);
   c(t.empty(), "clearing an empty tree is a no-op");
 
-  SparseOctree one;
+  cSparseOctree one;
   one.set(6, 10, 20, 30, 7);
   c(!one.empty(), "tree with one cell is not empty");
   c(one.leafCount() == 1, "single level-6 cell => one leaf");
@@ -83,7 +83,7 @@ void testEmptyAndBounds(Checker& c) {
 }
 
 void testAncestorResolution(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   t.set(2, 1, 1, 1, 3);
   c(t.get(2, 1, 1, 1) == 3, "coarse cell reads back");
   // Level-2 cell (1,1,1) covers level-6 cells [16,32) on each axis.
@@ -97,7 +97,7 @@ void testAncestorResolution(Checker& c) {
 }
 
 void testSetClearsFiner(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   t.set(6, 16, 16, 16, 5);
   t.set(6, 17, 16, 16, 6);
   t.set(5, 20, 20, 20, 7);  // level-5 cell 20 covers level-6 x in [40,42)
@@ -114,7 +114,7 @@ void testSetClearsFiner(Checker& c) {
 }
 
 void testRefinePushDown(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   t.set(1, 0, 0, 0, 5);
   t.set(3, 1, 1, 1, 9);
   // Level-1 cell (0,0,0) covers level-6 [0,32)^3;
@@ -145,7 +145,7 @@ void testRefinePushDown(Checker& c) {
 }
 
 void testLeavesOrder(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   t.set(6, 5, 4, 3, 1);
   t.set(2, 3, 3, 3, 2);
   t.set(4, 0, 0, 1, 3);
@@ -171,7 +171,7 @@ void testLeavesOrder(Checker& c) {
 
 void testDeterminism(Checker& c) {
   auto build = [](bool reverse) {
-    SparseOctree t;
+    cSparseOctree t;
     struct Op {
       int l, x, y, z;
       uint8_t m;
@@ -186,33 +186,33 @@ void testDeterminism(Checker& c) {
     }
     return t;
   };
-  const SparseOctree fwd = build(false);
-  const SparseOctree rev = build(true);
+  const cSparseOctree fwd = build(false);
+  const cSparseOctree rev = build(true);
   c(hashLeaves(fwd) == hashLeaves(rev),
     "insertion order does not change hashLeaves");
   c(fwd.leaves().size() == rev.leaves().size() &&
         hashLeaves(fwd) == hashLeaves(build(false)),
     "same op sequence => identical leaf stream");
   // hashLeaves is stable across identical rebuilds (structural determinism).
-  SparseOctree a = build(false), b = build(false);
+  cSparseOctree a = build(false), b = build(false);
   c(hashLeaves(a) == hashLeaves(b), "repeated builds hash identically");
 }
 
 void testCopySemantics(Checker& c) {
-  SparseOctree a;
+  cSparseOctree a;
   a.set(6, 1, 2, 3, 9);
   a.set(2, 0, 0, 1, 4);
-  SparseOctree b = a;  // copy-construct
+  cSparseOctree b = a;  // copy-construct
   a.set(6, 1, 2, 3, 1);
   c(b.get(6, 1, 2, 3) == 9 && b.get(2, 0, 0, 1) == 4 && b.leafCount() == 2,
     "copy is deep: mutating the original leaves the copy alone");
-  SparseOctree d;
+  cSparseOctree d;
   d = a;  // copy-assign
   c(d.get(6, 1, 2, 3) == 1 && d.get(2, 0, 0, 1) == 4,
     "copy-assign deep-copies");
   d.set(6, 1, 2, 3, 2);
   c(a.get(6, 1, 2, 3) == 1, "copy-assign target is independent afterwards");
-  SparseOctree e;
+  cSparseOctree e;
   e.set(0, 0, 0, 0, 8);
   e = e;  // self-assign must not corrupt
   c(e.get(0, 0, 0, 0) == 8 && e.get(6, 1, 2, 3) == 8, "self-assign is safe");
@@ -224,7 +224,7 @@ void testCopySemantics(Checker& c) {
 void testRandomizedModel(Checker& c) {
   constexpr int S = 64;
   std::vector<uint8_t> ref((size_t)S * S * S, 0);
-  SparseOctree t;
+  cSparseOctree t;
   uint64_t rng = 0x243F6A8885A308D3ULL;  // fixed seed: deterministic
   auto next = [&]() {
     rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -273,7 +273,7 @@ void testRandomizedModel(Checker& c) {
 }
 
 void testStress(Checker& c) {
-  SparseOctree t;
+  cSparseOctree t;
   for (int z = 0; z < 32; ++z)
     for (int y = 0; y < 32; ++y)
       for (int x = 0; x < 32; ++x)
@@ -293,16 +293,16 @@ void testStress(Checker& c) {
 }
 
 void testStoreBasics(Checker& c) {
-  SubdivStore s;
+  cSubdivStore s;
   c(s.blockCount() == 0, "fresh store has no blocks");
   c(s.getBlockOctree(0, 0, 0) == nullptr, "missing block => nullptr");
   c(s.getBlockOctree(16, 0, 0) == nullptr, "out-of-range get => nullptr");
 
-  SparseOctree o;
+  cSparseOctree o;
   o.set(6, 1, 1, 1, 5);
   s.setBlockOctree(3, 7, 15, o);
   c(s.blockCount() == 1, "one stored block");
-  const SparseOctree* g = s.getBlockOctree(3, 7, 15);
+  const cSparseOctree* g = s.getBlockOctree(3, 7, 15);
   c(g && g->get(6, 1, 1, 1) == 5, "stored octree reads back");
   // The store keeps its own copy.
   o.set(6, 1, 1, 1, 6);
@@ -314,7 +314,7 @@ void testStoreBasics(Checker& c) {
   s.setBlockOctree(0, 16, 0, o);
   c(s.blockCount() == 1, "out-of-range setBlockOctree is ignored");
   // Storing an empty octree removes the entry.
-  s.setBlockOctree(3, 7, 15, SparseOctree{});
+  s.setBlockOctree(3, 7, 15, cSparseOctree{});
   c(s.blockCount() == 0 && s.getBlockOctree(3, 7, 15) == nullptr,
     "storing an empty octree removes the entry");
   // Replacement and removal.
@@ -324,15 +324,15 @@ void testStoreBasics(Checker& c) {
   c(s.removeBlockOctree(1, 2, 3), "remove reports true");
   c(!s.removeBlockOctree(1, 2, 3), "double remove reports false");
   c(!s.removeBlockOctree(16, 0, 0), "out-of-range remove reports false");
-  c(s.memoryBytes() >= sizeof(SubdivStore), "store memoryBytes is sane");
+  c(s.memoryBytes() >= sizeof(cSubdivStore), "store memoryBytes is sane");
 }
 
 void testStoreSerialize(Checker& c) {
-  SubdivStore s;
-  SparseOctree a;
+  cSubdivStore s;
+  cSparseOctree a;
   a.set(6, 1, 2, 3, 9);
   a.set(2, 0, 0, 1, 4);
-  SparseOctree b;
+  cSparseOctree b;
   b.set(0, 0, 0, 0, 2);
   s.setBlockOctree(0, 0, 0, a);
   s.setBlockOctree(15, 15, 15, b);
@@ -343,17 +343,17 @@ void testStoreSerialize(Checker& c) {
     "stream starts with magic LTHS");
   c(bytes[4] == 1 && bytes[5] == 0, "stream carries version 1 (LE)");
 
-  SubdivStore s2;
+  cSubdivStore s2;
   c(s2.deserialize(bytes.data(), bytes.size()), "well-formed stream parses");
   c(s2.blockCount() == 3, "round-trip preserves block count");
   c(s2.serialize() == bytes, "serialize round-trips byte-identical");
-  const SparseOctree* g = s2.getBlockOctree(15, 15, 15);
+  const cSparseOctree* g = s2.getBlockOctree(15, 15, 15);
   c(g && g->get(0, 0, 0, 0) == 2, "round-trip preserves a level-0 cell");
   c(s2.getBlockOctree(0, 0, 0)->get(6, 1, 2, 3) == 9,
     "round-trip preserves fine detail");
 
   // Malformed streams are rejected and leave the store unchanged.
-  SubdivStore s3;
+  cSubdivStore s3;
   s3.setBlockOctree(1, 1, 1, a);
   const std::vector<uint8_t> before = s3.serialize();
   c(!s3.deserialize(bytes.data(), 5), "truncated stream rejected");
@@ -373,7 +373,7 @@ void testStoreSerialize(Checker& c) {
   c(s3.serialize() == before, "failed deserialize leaves the store unchanged");
 
   // Empty store round-trips.
-  SubdivStore e, e2;
+  cSubdivStore e, e2;
   const std::vector<uint8_t> eb = e.serialize();
   c(e2.deserialize(eb.data(), eb.size()) && e2.blockCount() == 0,
     "empty store round-trips");

@@ -27,7 +27,7 @@
 
 namespace litholattice::subdiv {
 
-struct SparseOctree::Node {
+struct cSparseOctree::Node {
   struct Cell {
     uint8_t material = 0;
     int32_t child[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
@@ -74,12 +74,12 @@ struct SparseOctree::Node {
   }
 };
 
-SparseOctree::~SparseOctree() { delete root_; }
+cSparseOctree::~cSparseOctree() { delete root_; }
 
-SparseOctree::SparseOctree(const SparseOctree& other)
+cSparseOctree::cSparseOctree(const cSparseOctree& other)
     : root_(other.root_ ? new Node(*other.root_) : nullptr) {}
 
-SparseOctree& SparseOctree::operator=(const SparseOctree& other) {
+cSparseOctree& cSparseOctree::operator=(const cSparseOctree& other) {
   if (this != &other) {
     delete root_;
     root_ = other.root_ ? new Node(*other.root_) : nullptr;
@@ -104,7 +104,7 @@ inline bool inRange(int level, int x, int y, int z) {
 
 }  // namespace
 
-void SparseOctree::set(int level, int x, int y, int z, uint8_t material) {
+void cSparseOctree::set(int level, int x, int y, int z, uint8_t material) {
   if (!inRange(level, x, y, z)) return;
   if (!root_) root_ = new Node();
   if (root_->cells.empty()) {
@@ -182,7 +182,7 @@ void SparseOctree::set(int level, int x, int y, int z, uint8_t material) {
   }
 }
 
-uint8_t SparseOctree::get(int level, int x, int y, int z) const {
+uint8_t cSparseOctree::get(int level, int x, int y, int z) const {
   if (!inRange(level, x, y, z)) return 0;
   if (!root_ || root_->cells.empty()) return 0;
   const Node* n = root_;
@@ -197,7 +197,7 @@ uint8_t SparseOctree::get(int level, int x, int y, int z) const {
   return n->cells[(size_t)idx].material;
 }
 
-std::vector<MicroCell> SparseOctree::leaves() const {
+std::vector<MicroCell> cSparseOctree::leaves() const {
   std::vector<MicroCell> out;
   if (!root_ || root_->cells.empty()) return out;
   const Node* n = root_;
@@ -226,10 +226,10 @@ std::vector<MicroCell> SparseOctree::leaves() const {
   return out;
 }
 
-size_t SparseOctree::leafCount() const { return leaves().size(); }
+size_t cSparseOctree::leafCount() const { return leaves().size(); }
 
-size_t SparseOctree::memoryBytes() const {
-  size_t bytes = sizeof(SparseOctree);
+size_t cSparseOctree::memoryBytes() const {
+  size_t bytes = sizeof(cSparseOctree);
   if (root_) {
     bytes += sizeof(Node);
     bytes += root_->cells.capacity() * sizeof(Node::Cell);
@@ -238,9 +238,9 @@ size_t SparseOctree::memoryBytes() const {
   return bytes;
 }
 
-bool SparseOctree::empty() const { return leafCount() == 0; }
+bool cSparseOctree::empty() const { return leafCount() == 0; }
 
-void SparseOctree::fillDense(int level, uint8_t* out) const {
+void cSparseOctree::fillDense(int level, uint8_t* out) const {
   if (!out) return;
   if (level < 0 || level > kMaxLevel) return;  // out-of-range level: no-op
   const int s = 1 << level;
@@ -250,7 +250,7 @@ void SparseOctree::fillDense(int level, uint8_t* out) const {
         out[(size_t)((z * s + y) * s + x)] = get(level, x, y, z);
 }
 
-uint64_t hashLeaves(const SparseOctree& tree) {
+uint64_t hashLeaves(const cSparseOctree& tree) {
   // FNV-1a over the deterministic leaf stream. The offset basis matches the
   // house constant used across the engine (det_sched.h, image.cpp, ...).
   uint64_t h = 1469598103934665603ULL;

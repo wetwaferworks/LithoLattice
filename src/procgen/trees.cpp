@@ -58,7 +58,7 @@ class Painter {
  public:
   /// maxY: hard height ceiling (level-6 cells); cells at y >= maxY are skipped.
   /// Fail-closed backstop so the tree is ALWAYS at most maxY cells tall.
-  explicit Painter(litholattice::subdiv::SparseOctree& t, int maxY) : tree_(t), maxY_(maxY) {}
+  explicit Painter(litholattice::subdiv::cSparseOctree& t, int maxY) : tree_(t), maxY_(maxY) {}
   void cell(int x, int y, int z, uint8_t mat) {
     if (mat == 0) return;
     if (x < 0 || y < 0 || z < 0 || x >= kCells || y >= kCells || z >= kCells) return;
@@ -125,7 +125,7 @@ class Painter {
   }
 
  private:
-  litholattice::subdiv::SparseOctree& tree_;
+  litholattice::subdiv::cSparseOctree& tree_;
   int maxY_ = kCells;
 };
 
@@ -187,7 +187,7 @@ void growBranch(OrganicCtx& ctx, const Vec3& pos, const Vec3& dir, float length,
   }
 }
 
-void growOrganic(litholattice::subdiv::SparseOctree& tree, const TreeParams& p, Rng& rng) {
+void growOrganic(litholattice::subdiv::cSparseOctree& tree, const TreeParams& p, Rng& rng) {
   Painter paint(tree, p.heightCells);
   OrganicCtx ctx{&paint, &rng, p, 0, 0};
 
@@ -221,7 +221,7 @@ void growOrganic(litholattice::subdiv::SparseOctree& tree, const TreeParams& p, 
 
 // ---- crystalline growth ----
 
-void growCrystal(litholattice::subdiv::SparseOctree& tree, const TreeParams& p, Rng& rng) {
+void growCrystal(litholattice::subdiv::cSparseOctree& tree, const TreeParams& p, Rng& rng) {
   Painter paint(tree, p.heightCells);
   const int shardH = std::max(2, p.heightCells / 6);
   const float r0 = float(p.trunkRadiusCells);
@@ -271,10 +271,10 @@ void growCrystal(litholattice::subdiv::SparseOctree& tree, const TreeParams& p, 
 
 }  // namespace
 
-litholattice::subdiv::SparseOctree generateTree(const TreeParams& p) {
+litholattice::subdiv::cSparseOctree generateTree(const TreeParams& p) {
   const TreeParams q = sanitize(p);
   Rng rng(deriveSeed(q.seed, nameHash("tree")));
-  litholattice::subdiv::SparseOctree tree;
+  litholattice::subdiv::cSparseOctree tree;
   if (q.crystalline)
     growCrystal(tree, q, rng);
   else

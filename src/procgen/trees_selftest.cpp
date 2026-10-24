@@ -26,10 +26,10 @@ class Checker {
 };
 
 using subdiv::MicroCell;
-using subdiv::SparseOctree;
+using subdiv::cSparseOctree;
 
 /// modelEquals-style leaf-stream equality: identical leaves in identical order.
-bool leafStreamsEqual(const SparseOctree& a, const SparseOctree& b) {
+bool leafStreamsEqual(const cSparseOctree& a, const cSparseOctree& b) {
   const std::vector<MicroCell> la = a.leaves(), lb = b.leaves();
   if (la.size() != lb.size()) return false;
   for (size_t i = 0; i < la.size(); ++i)
@@ -40,14 +40,14 @@ bool leafStreamsEqual(const SparseOctree& a, const SparseOctree& b) {
 }
 
 /// Max cell-top y over all leaves (tree height in micro-cells); 0 when empty.
-int treeHeightCells(const SparseOctree& t) {
+int treeHeightCells(const cSparseOctree& t) {
   int top = 0;
   for (const MicroCell& c : t.leaves()) top = std::max(top, int(c.y) + 1);
   return top;
 }
 
 /// Every leaf inside the block volume and at level 6, using only expected materials.
-bool leavesValid(const SparseOctree& t, std::initializer_list<uint8_t> mats) {
+bool leavesValid(const cSparseOctree& t, std::initializer_list<uint8_t> mats) {
   for (const MicroCell& c : t.leaves()) {
     if (c.level != 6 || c.x >= 64 || c.y >= 64 || c.z >= 64) return false;
     bool ok = false;
@@ -61,7 +61,7 @@ bool leavesValid(const SparseOctree& t, std::initializer_list<uint8_t> mats) {
 void determinismChecks(Checker& check) {
   TreeParams p;
   p.seed = 123456789ull;
-  const SparseOctree a = generateTree(p), b = generateTree(p);
+  const cSparseOctree a = generateTree(p), b = generateTree(p);
   check(subdiv::hashLeaves(a) == subdiv::hashLeaves(b),
         "trees: same (params, seed) twice -> identical hashLeaves");
   check(leafStreamsEqual(a, b), "trees: same (params, seed) twice -> identical leaf stream");
@@ -120,7 +120,7 @@ void degenerateChecks(Checker& check) {
 
   bool ok = true;
   for (const TreeParams& bp : bad) {
-    const SparseOctree t = generateTree(bp);  // must not crash or hang
+    const cSparseOctree t = generateTree(bp);  // must not crash or hang
     const int budget = std::clamp(bp.heightCells, 1, 64);
     if (treeHeightCells(t) > budget) ok = false;  // hard ceiling: never over budget
     if (!leavesValid(t, {bp.trunkMaterial, bp.leafMaterial, bp.tipMaterial}) && !t.empty())
@@ -133,7 +133,7 @@ void degenerateChecks(Checker& check) {
 void presetChecks(Checker& check, const std::string& name, TreeParams (*preset)(uint64_t),
                   std::initializer_list<uint8_t> mats) {
   const TreeParams p = preset(20261011ull);
-  const SparseOctree t = generateTree(p);
+  const cSparseOctree t = generateTree(p);
   check(!t.empty(), "trees: " + name + " preset generates a non-empty tree");
   check(leavesValid(t, mats), "trees: " + name + " uses only its palette slots, level 6, in-volume");
   const int h = treeHeightCells(t);
@@ -141,8 +141,8 @@ void presetChecks(Checker& check, const std::string& name, TreeParams (*preset)(
         "trees: " + name + " bounded (height " + std::to_string(h) + " <= " +
             std::to_string(p.heightCells) + " cells)");
   // Deterministic per seed, distinct per seed.
-  const SparseOctree t2 = generateTree(preset(20261011ull));
-  const SparseOctree t3 = generateTree(preset(999ull));
+  const cSparseOctree t2 = generateTree(preset(20261011ull));
+  const cSparseOctree t3 = generateTree(preset(999ull));
   check(leafStreamsEqual(t, t2), "trees: " + name + " deterministic for its seed");
   check(subdiv::hashLeaves(t) != subdiv::hashLeaves(t3),
         "trees: " + name + " varies with seed");
@@ -169,17 +169,17 @@ void familyChecks(Checker& check) {
   TreeParams org, cry;
   org.seed = cry.seed = 424242ull;
   cry.crystalline = true;
-  const SparseOctree to = generateTree(org), tc = generateTree(cry);
+  const cSparseOctree to = generateTree(org), tc = generateTree(cry);
   check(to.leafCount() != tc.leafCount(),
         "trees: crystalline vs organic differ structurally (leaf counts " +
             std::to_string(to.leafCount()) + " vs " + std::to_string(tc.leafCount()) + ")");
   check(subdiv::hashLeaves(to) != subdiv::hashLeaves(tc),
         "trees: crystalline vs organic differ (hashLeaves)");
 
-  // Directly placeable into a SubdivStore (the workstream-3 seam).
-  subdiv::SubdivStore store;
+  // Directly placeable into a cSubdivStore (the workstream-3 seam).
+  subdiv::cSubdivStore store;
   store.setBlockOctree(3, 9, 5, generateTree(traceForestTree(11ull)));
-  const SparseOctree* got = store.getBlockOctree(3, 9, 5);
+  const cSparseOctree* got = store.getBlockOctree(3, 9, 5);
   check(got != nullptr && !got->empty() &&
             leafStreamsEqual(*got, generateTree(traceForestTree(11ull))),
         "trees: generateTree output round-trips through SubdivStore::setBlockOctree");

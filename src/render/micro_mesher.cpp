@@ -13,7 +13,7 @@
 namespace litholattice::micro {
 namespace {
 
-/// Micro-cells per axis at full detail (SparseOctree kMaxLevel == 6).
+/// Micro-cells per axis at full detail (cSparseOctree kMaxLevel == 6).
 constexpr int kFull = 64;
 
 /// Rasterize the leaf stream into a dense 64^3 material grid (0 = empty).
@@ -178,13 +178,13 @@ size_t meshMicroLeaves(const std::vector<subdiv::MicroCell>& leaves, int lodLeve
   return greedyMeshGrid(coarse.data(), S, lodLevel, params, out);
 }
 
-size_t meshOctreeLOD(const subdiv::SparseOctree& tree, int lodLevel,
+size_t meshOctreeLOD(const subdiv::cSparseOctree& tree, int lodLevel,
                      const MicroMeshParams& params, std::vector<MicroQuad>& out) {
   if (tree.empty()) return 0;
   return meshMicroLeaves(tree.leaves(), lodLevel, params, out);
 }
 
-size_t appendChunkMicroGeometry(const subdiv::SubdivStore& store, int regionMinX, int regionMinY,
+size_t appendChunkMicroGeometry(const subdiv::cSubdivStore& store, int regionMinX, int regionMinY,
                                 int regionMinZ, float camX, float camY, float camZ,
                                 std::vector<MicroQuad>& out,
                                 std::function<void(int bx, int by, int bz, uint8_t solid[6])>

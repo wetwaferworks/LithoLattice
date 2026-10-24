@@ -4,7 +4,7 @@
 // DUAL OUTPUT (JD's explicit call — "we like options"): every plant carries a
 // `style` flag selecting one of two render paths:
 //
-//   (a) Modeled3D    — a small noisy shrub mound baked into a subdiv::SparseOctree
+//   (a) Modeled3D    — a small noisy shrub mound baked into a subdiv::cSparseOctree
 //                      (subdivision geometry; the mesher renders micro-cells).
 //   (b) CrossedQuads — a Minecraft-style cross sprite: width/height/tint plus an
 //                      index into the procedural plant texture set below. The
@@ -84,7 +84,7 @@ struct CrossQuadPlant {
   uint8_t tintR = 255, tintG = 255, tintB = 255;
 };
 
-/// 3D path: noisy shrub mound in a SparseOctree over one block's volume,
+/// 3D path: noisy shrub mound in a cSparseOctree over one block's volume,
 /// centered horizontally, base at micro-cell y=0, spanning `sizeCells`
 /// level-6 micro-cells. A stem column (stemMaterial) rises through a lumpy
 /// leaf mound (leafMaterial) whose horizontal cross-section is the Litho
@@ -93,7 +93,7 @@ struct CrossQuadPlant {
 /// Coarser octree levels are used for large
 /// plants so the leaf count stays bounded (kMaxShrubLeaves, few hundred
 /// typical). Invalid params -> empty octree.
-litholattice::subdiv::SparseOctree generateShrubOctree(const ShrubParams& p);
+litholattice::subdiv::cSparseOctree generateShrubOctree(const ShrubParams& p);
 
 /// 2D path: width/height/tint derived deterministically from (seed, sizeCells);
 /// textureIndex uniform over the plant texture set — unless the params carry

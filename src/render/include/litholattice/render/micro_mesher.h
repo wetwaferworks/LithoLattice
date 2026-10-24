@@ -1,7 +1,7 @@
 // Micro-face meshing for subdivided blocks (workstream 2, 2026-10-11).
 //
 // WHAT: the renderer learns micro-faces. A 1m block subdivided via
-//   litholattice::subdiv::SparseOctree (up to 64^3 micro-cells, render/detail
+//   litholattice::subdiv::cSparseOctree (up to 64^3 micro-cells, render/detail
 //   level only - the sim still ticks whole blocks) meshes here into merged
 //   quads with fractional positions, at a distance-selected LOD.
 // WHY: subdivision is the modeling system (armory, silicon trees, mobs, the
@@ -83,22 +83,22 @@ struct MicroMeshParams {
 int selectLOD(float cameraDistance);  // linear distance, exact band compares (see micro_mesher.cpp)
 
 /// Mesh one subdivided block from its leaf stream (the documented
-/// SparseOctree::leaves() output: non-overlapping, deterministic order).
+/// cSparseOctree::leaves() output: non-overlapping, deterministic order).
 /// lodLevel is clamped to [0, 6]. Appends to `out`; returns quads appended.
 /// Empty leaf stream -> 0 quads, `out` untouched. Bit-identical output for
 /// identical inputs (fixed iteration order; positions are exact int/S ratios).
 size_t meshMicroLeaves(const std::vector<subdiv::MicroCell>& leaves, int lodLevel,
                        const MicroMeshParams& params, std::vector<MicroQuad>& out);
 
-/// Convenience wrapper: mesh a whole SparseOctree at the given LOD.
+/// Convenience wrapper: mesh a whole cSparseOctree at the given LOD.
 /// Empty tree -> 0 quads, `out` untouched.
-size_t meshOctreeLOD(const subdiv::SparseOctree& tree, int lodLevel,
+size_t meshOctreeLOD(const subdiv::cSparseOctree& tree, int lodLevel,
                      const MicroMeshParams& params, std::vector<MicroQuad>& out);
 
 // ---------------------------------------------------------------------------
 // Chunk-build integration point.
 //
-// SubdivStore is workstream 1's chunk-scoped block -> octree map
+// cSubdivStore is workstream 1's chunk-scoped block -> octree map
 // (subdiv/subdiv_store.h): chunk-local block coords 0..15, entries sorted
 // deterministically. The concrete overload below is the signature sibling
 // workstreams (Chipor viewport, first models) should call; the template
@@ -125,7 +125,7 @@ size_t meshOctreeLOD(const subdiv::SparseOctree& tree, int lodLevel,
 // micro-geometry unchanged: LOD selection and chunk culling are orthogonal -
 // micro-detail NEVER disables chunk-level culling.
 // ---------------------------------------------------------------------------
-size_t appendChunkMicroGeometry(const subdiv::SubdivStore& store, int regionMinX, int regionMinY,
+size_t appendChunkMicroGeometry(const subdiv::cSubdivStore& store, int regionMinX, int regionMinY,
                                 int regionMinZ, float camX, float camY, float camZ,
                                 std::vector<MicroQuad>& out,
                                 std::function<void(int bx, int by, int bz, uint8_t solid[6])>
@@ -133,10 +133,10 @@ size_t appendChunkMicroGeometry(const subdiv::SubdivStore& store, int regionMinX
 
 /// Generic form of the integration point: any store-like providing
 ///   size_t blockCount() const;
-///   const subdiv::SparseOctree* getBlockOctree(int x, int y, int z) const;
+///   const subdiv::cSparseOctree* getBlockOctree(int x, int y, int z) const;
 /// (chunk-local 0..15, nullptr = no subdivision) gets the same treatment.
-template <typename SubdivStore>
-size_t appendChunkMicroGeometryT(const SubdivStore& store, int regionMinX, int regionMinY,
+template <typename cSubdivStore>
+size_t appendChunkMicroGeometryT(const cSubdivStore& store, int regionMinX, int regionMinY,
                                  int regionMinZ, float camX, float camY, float camZ,
                                  std::vector<MicroQuad>& out,
                                  std::function<void(int bx, int by, int bz, uint8_t solid[6])>
@@ -146,7 +146,7 @@ size_t appendChunkMicroGeometryT(const SubdivStore& store, int regionMinX, int r
   for (int bz = 0; bz < 16; ++bz)
     for (int by = 0; by < 16; ++by)
       for (int bx = 0; bx < 16; ++bx) {
-        const subdiv::SparseOctree* tree = store.getBlockOctree(bx, by, bz);
+        const subdiv::cSparseOctree* tree = store.getBlockOctree(bx, by, bz);
         if (!tree || tree->empty()) continue;  // no subdivision -> untouched
         const float cx = float(regionMinX + bx) + 0.5f;
         const float cy = float(regionMinY + by) + 0.5f;

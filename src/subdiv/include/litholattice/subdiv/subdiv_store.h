@@ -1,8 +1,8 @@
 #pragma once
-// SubdivStore: chunk-scoped map from block-local coords to SparseOctree
+// cSubdivStore: chunk-scoped map from block-local coords to cSparseOctree
 // (workstream 1, 2026-10-11).
 //
-// WHAT: attaches micro-detail (one SparseOctree per 1m block) to the 16^3
+// WHAT: attaches micro-detail (one cSparseOctree per 1m block) to the 16^3
 //   blocks of a chunk. This is what the model pipeline stamps detail into
 //   and what the mesher reads.
 // WHY: blocks are addressed chunk-locally (x, y, z in 0..15); the store keeps
@@ -23,17 +23,17 @@
 
 namespace litholattice::subdiv {
 
-class SubdivStore {
+class cSubdivStore {
  public:
-  SubdivStore() = default;
+  cSubdivStore() = default;
 
   /// Attach (or replace) the octree for block (x, y, z). Out-of-range coords
   /// are ignored; storing an empty octree removes the entry.
-  void setBlockOctree(int x, int y, int z, SparseOctree octree);
+  void setBlockOctree(int x, int y, int z, cSparseOctree octree);
 
   /// The octree for block (x, y, z), or nullptr when there is none or the
   /// coords are out of range.
-  const SparseOctree* getBlockOctree(int x, int y, int z) const;
+  const cSparseOctree* getBlockOctree(int x, int y, int z) const;
 
   /// Drop the entry for block (x, y, z). Returns false when there was no
   /// entry or the coords are out of range.
@@ -56,7 +56,7 @@ class SubdivStore {
  private:
   struct Entry {
     uint8_t x = 0, y = 0, z = 0;
-    SparseOctree tree;
+    cSparseOctree tree;
   };
   std::vector<Entry> entries_;  // sorted by (z, y, x)
 

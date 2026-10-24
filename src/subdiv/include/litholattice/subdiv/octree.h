@@ -34,18 +34,18 @@ struct MicroCell {
 
 /// Sparse octree over one block's volume. Deterministic: iteration order is
 /// fixed (level, then z, y, x), no hashing, no thread-locals.
-class SparseOctree {
+class cSparseOctree {
  public:
-  SparseOctree() = default;
+  cSparseOctree() = default;
   // NOTE (workstream 1, 2026-10-11): the contract draft defaulted the three
   // members below. Defaulting them over the owning `root_` pointer would
   // shallow-copy the node graph (copies aliasing each other) and never free
   // nodes. They are declared here and defined in octree.cpp as a deep copy
   // and a freeing destroy instead. The callable public API is unchanged;
   // coordinator: reinstate `= default` only alongside a non-owning Node.
-  ~SparseOctree();
-  SparseOctree(const SparseOctree&);
-  SparseOctree& operator=(const SparseOctree&);
+  ~cSparseOctree();
+  cSparseOctree(const cSparseOctree&);
+  cSparseOctree& operator=(const cSparseOctree&);
 
   /// Set the cell at (level,x,y,z) to material (0 clears). Setting a cell
   /// clears any finer cells beneath it; clearing collapses empty parents.
@@ -76,6 +76,6 @@ class SparseOctree {
 };
 
 /// Deterministic FNV-1a over the leaf stream (for determinism self-tests).
-uint64_t hashLeaves(const SparseOctree& tree);
+uint64_t hashLeaves(const cSparseOctree& tree);
 
 }  // namespace litholattice::subdiv

@@ -23,16 +23,16 @@ uint64_t cellKey(Cell c) { return (uint64_t(uint32_t(c.x) & 0x3fffff) << 42) | (
 ///    across and one up is priced 2048 against a true cost of 1536. At 512
 ///    the heuristic is tight on step-up and on drops, and stays under
 ///    climb (2048), fly vertical (1024 pure, but fly cannot bundle, so no
-///    edge beats the bound), swim (1229), wire slope (2048), Leap jump-up-2
-///    (2560/3072 for a bundled +2) and Leap long drops (base + 512/level,
+///    edge beats the bound), swim (1229), wire slope (2048), cLeap jump-up-2
+///    (2560/3072 for a bundled +2) and cLeap long drops (base + 512/level,
 ///    tight for the fluid-waived diagonal case). I.e. for every edge of
 ///    every mode except the one below, cost(edge) >= the heuristic drop
 ///    across that edge (consistency), so first-goal-pop is optimal.
-///  - Known residual: Leap DIAGONAL gap jumps price a (d,d) displacement
+///  - Known residual: cLeap DIAGONAL gap jumps price a (d,d) displacement
 ///    with the orthogonal gap formula (1024*d + 512*(d-1)), undercutting an
 ///    octile-tight heuristic by up to ~248 (plus 512 if the landing is a
 ///    level down) -- the diagonal-premium inconsistency already filed as
-///    B-L1 in the edge costs themselves. A* over Leap can therefore still
+///    B-L1 in the edge costs themselves. A* over cLeap can therefore still
 ///    be marginally suboptimal across a diagonal gap; Walk-family, HPA and
 ///    the optimality fixture are exact. Closing it belongs with the B-L1
 ///    cost-model fix, not with a weaker heuristic for every other mode.
@@ -54,7 +54,7 @@ bool standable(const NavView& n, int x, int y, int z) { return n.bits(x, y, z) &
 bool passable(const NavView& n, int x, int y, int z) { return n.bits(x, y, z) & kNavPassable; }
 bool headroom(const NavView& n, int x, int y, int z) { return passable(n, x, y + 1, z); }
 
-/// Ground locomotion shared by Walk / Climb / Leap: flat moves, step-up 1 and
+/// Ground locomotion shared by Walk / Climb / cLeap: flat moves, step-up 1 and
 /// ledge drops up to maxDrop, in all 8 horizontal directions. Diagonals carry
 /// a corner-cut guard: both orthogonal neighbour cells at the relevant level
 /// must be passable, so a mover never clips through a diagonal wall corner.
@@ -90,7 +90,7 @@ void groundMoves(const NavView& n, Cell c, int maxDrop, std::vector<NavStep>& ou
   for (auto& d : kD) tryDir(d[0], d[1], true);
 }
 
-/// Vertical moves on climbable cells (ladders / vines), shared by Climb/Leap.
+/// Vertical moves on climbable cells (ladders / vines), shared by Climb/cLeap.
 void climbMoves(const NavView& n, Cell c, std::vector<NavStep>& out) {
   for (int dy : {1, -1})
     if ((n.bits(c.x, c.y + dy, c.z) & kNavClimb) || ((n.bits(c.x, c.y, c.z) & kNavClimb) && passable(n, c.x, c.y + dy, c.z)))
@@ -116,12 +116,12 @@ class Climb : public Walk {
     climbMoves(n, c, out);
   }
 };
-/// Leap (P1): Walk + Climb, plus jump-up 2, gap jumps of 2-4 cells and long
+/// cLeap (P1): Walk + Climb, plus jump-up 2, gap jumps of 2-4 cells and long
 /// drops of 4-8. Jump feasibility is closed-form from the cell model (per the
 /// research report's S3 lesson: no runtime physics rollouts — headroom, arc
 /// clearance and landing checks are pure nav-bit queries, hence exact and
 /// deterministic). Numeric costs are JD-review-pending.
-class Leap final : public Climb {
+class cLeap final : public Climb {
  public:
   std::string_view name() const override { return "leap"; }
   void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
@@ -382,7 +382,7 @@ size_t WalkCache::cachedColumns() const { std::lock_guard l(m_); return cols_.si
 
 std::unique_ptr<IMovementMode> makeWalk(int maxDrop) { return std::make_unique<Walk>(maxDrop); }
 std::unique_ptr<IMovementMode> makeClimb() { return std::make_unique<Climb>(); }
-std::unique_ptr<IMovementMode> makeLeap() { return std::make_unique<Leap>(); }
+std::unique_ptr<IMovementMode> makeLeap() { return std::make_unique<cLeap>(); }
 std::unique_ptr<IMovementMode> makeFly() { return std::make_unique<Fly>(); }
 std::unique_ptr<IMovementMode> makeSwim() { return std::make_unique<Swim>(); }
 std::unique_ptr<IMovementMode> makeWireFollow() { return std::make_unique<cWireFollow>(); }
