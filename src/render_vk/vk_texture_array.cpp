@@ -68,31 +68,47 @@ UniqueSampler createNearestSampler(const cVulkanDevice& dev) {
 
 cVkTextureArray::cVkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced)
     : dev_(dev), pool_(pool), onReplaced_(std::move(onReplaced)), paletteSampler_(createNearestSampler(dev)) {
-  // Same filtering as the OpenGL backend: crisp texels up close, trilinear in the distance.
+  if (const char* e = std::getenv("LL_VK_ANISO")) aniso_ = float(std::atof(e));
+  buildArraySampler();
+}
+
+// PROVISIONAL (JD 2026-10-24): texture-filtering stand-in (Graphics > Texture filter / Anisotropic).
+// Sharp = the former fixed sampler (0.0.1.52 [C52-5]): mag NEAREST, min LINEAR + LINEAR mips.
+// Bilinear = mag/min LINEAR + NEAREST mips. Trilinear = mag/min LINEAR + LINEAR mips.
+// Anisotropy: requested 1..16, clamped to VkPhysicalDeviceLimits::maxSamplerAnisotropy (the device
+// is created with samplerAnisotropy when offered). Small negative LOD bias (-0.25) for minification
+// kept from C52-5; LL_VK_ANISO / LL_VK_LODBIAS still override for A/B shots. UNORM kept on purpose.
+void cVkTextureArray::buildArraySampler() {
   auto si = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
-  si.magFilter = VK_FILTER_NEAREST;
+  si.magFilter = filter_ == 0 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
   si.minFilter = VK_FILTER_LINEAR;
-  si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  si.mipmapMode = filter_ == 1 ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   si.maxLod = VK_LOD_CLAMP_NONE;
-  // 0.0.1.52 [C52-5] (Proposed by JD, Built by Cortana): texture smear fix. Oblique and mid-distance
-  // faces were trilinear-only (isotropic), so the mip chosen for the long axis smeared the short one.
-  // Now: anisotropic filtering (8x or the device cap) and a small negative LOD bias (-0.25) for
-  // minification only (magnification stays NEAREST: crisp voxel texels). UNORM is kept on purpose:
-  // the art and the GL backend are display-referred, so sRGB views would shift the look.
-  // LL_VK_ANISO=<n> (1 = off) and LL_VK_LODBIAS=<f> override for A/B shots.
-  float aniso = std::min(8.f, dev.maxAnisotropy());
-  if (const char* e = std::getenv("LL_VK_ANISO")) aniso = std::clamp(float(std::atof(e)), 1.f, dev.maxAnisotropy());
+  const float aniso = std::clamp(aniso_, 1.f, std::max(1.f, dev_.maxAnisotropy()));
   float bias = -0.25f;
   if (const char* e = std::getenv("LL_VK_LODBIAS")) bias = float(std::atof(e));
-  bias = std::clamp(bias, -dev.properties().limits.maxSamplerLodBias, dev.properties().limits.maxSamplerLodBias);
+  bias = std::clamp(bias, -dev_.properties().limits.maxSamplerLodBias, dev_.properties().limits.maxSamplerLodBias);
   si.anisotropyEnable = aniso > 1.f ? VK_TRUE : VK_FALSE;
   si.maxAnisotropy = aniso;
   si.mipLodBias = bias;
-  logInfo("vulkan: block texture sampler: mag nearest, min linear + linear mips, anisotropy %.0fx, LOD bias %.2f, UNORM", aniso, bias);
+  static const char* kNames[] = {"sharp (mag nearest, min linear + linear mips)", "bilinear (linear, nearest mips)",
+                                 "trilinear (linear, linear mips)"};
+  logInfo("vulkan: block texture sampler: %s, anisotropy %.0fx (device max %.0fx), LOD bias %.2f, UNORM [provisional]",
+          kNames[filter_], aniso, dev_.maxAnisotropy(), bias);
   VkSampler s = VK_NULL_HANDLE;
-  check(vkCreateSampler(dev.device(), &si, nullptr, &s), "vkCreateSampler (texture array)");
-  arraySampler_ = UniqueSampler(dev.device(), s);
+  check(vkCreateSampler(dev_.device(), &si, nullptr, &s), "vkCreateSampler (texture array)");
+  arraySampler_ = UniqueSampler(dev_.device(), s);
+}
+
+void cVkTextureArray::setFiltering(int filter, int aniso) {
+  filter = std::clamp(filter, 0, 2);
+  if (filter == filter_ && float(aniso) == aniso_) return;
+  filter_ = filter;
+  aniso_ = float(aniso);
+  vkDeviceWaitIdle(dev_.device());  // the old sampler may still be in use by frames in flight
+  buildArraySampler();
+  if (onReplaced_ && array_) onReplaced_();  // rebind descriptors to the new sampler
 }
 
 std::optional<Image> cVkTextureArray::uploadArray(const cTextureReg& textures, uint32_t mipLevels) const {

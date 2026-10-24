@@ -280,6 +280,9 @@ class cGL33Renderer final : public IRenderer {
 
   void setPbrTier(PbrTransparencyTier t) override { pbrTier_ = t; }
   void setAmbientMode(AmbientMode m) override { ambientMode_ = m; }
+  // PROVISIONAL (JD 2026-10-24): texture-filtering stand-in.
+  void setTextureFiltering(int filter, int aniso) override { textures_.setFiltering(filter, aniso); }
+  int maxAnisotropy() const override { return const_cast<cGlTextureArray&>(textures_).maxAnisotropy(); }
   void setFrustumMarginDeg(float degrees) override {
     frustumMarginDeg_ = std::clamp(degrees, 0.f, 15.f);  // JD-locked 2026-10-11
   }

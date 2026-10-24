@@ -27,9 +27,14 @@ class cVkTextureArray final : public ITextureArray {
   int tileSize() const override { return tile_; }
 
   VkDescriptorImageInfo arrayDescriptor() const;
+  /// PROVISIONAL (JD 2026-10-24): rebuilds the block sampler (device idle) and rebinds.
+  void setFiltering(int filter, int aniso);
   VkDescriptorImageInfo paletteDescriptor() const;
 
  private:
+  void buildArraySampler();
+  int filter_ = 0;      // PROVISIONAL: 0 Sharp, 1 Bilinear, 2 Trilinear
+  float aniso_ = 8.f;   // requested; clamped to the device cap
   std::optional<Image> uploadArray(const cTextureReg& textures, uint32_t mipLevels) const;
 
   const cVulkanDevice& dev_;

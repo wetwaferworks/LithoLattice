@@ -1,5 +1,6 @@
 #include "gl_texture_array.h"
 #include <algorithm>
+#include <string>
 #include <vector>
 #include "litholattice/core/log.h"
 #include "litholattice/render/texture_dilate.h"  // Cortana 2026-10-15 1530 (CA-01)
@@ -50,8 +51,7 @@ bool cGlTextureArray::upload(const cTextureReg& textures) {
       const int sz = std::max(1, tile_ >> int(l + 1));
       glTexSubImage3D(GL_TEXTURE_2D_ARRAY, GLint(l + 1), 0, 0, layer, sz, sz, 1, GL_RGBA, GL_UNSIGNED_BYTE, levels[l].data());
     }
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);  // crisp pixel art up close
+  applyFiltering();  // PROVISIONAL 2026-10-24: min/mag + anisotropy from the Graphics settings
   glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -71,6 +71,48 @@ bool cGlTextureArray::upload(const cTextureReg& textures) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   glBindTexture(GL_TEXTURE_2D, 0);
   return glGetError() == 0;
+}
+
+// PROVISIONAL (JD 2026-10-24): texture-filtering stand-in. Sharp = the former fixed setup
+// (MIN LINEAR_MIPMAP_LINEAR, MAG NEAREST: crisp pixel art up close). Anisotropy via
+// GL_EXT_texture_filter_anisotropic / GL_ARB_texture_filter_anisotropic when the driver offers it.
+namespace {
+constexpr GLenum kTexMaxAniso = 0x84FE, kMaxTexMaxAniso = 0x84FF, kNumExtensions = 0x821D, kExtensions = 0x1F03;
+constexpr GLenum kLinearMipNearest = 0x2701, kLinear = 0x2601, kNearest = 0x2600, kLinearMipLinear = 0x2703;
+}  // namespace
+
+int cGlTextureArray::maxAnisotropy() {
+  if (maxAniso_ < 0.f) {
+    maxAniso_ = 1.f;
+    bool has = false;
+    GLint n = 0;
+    if (glGetIntegerv && glGetStringi) glGetIntegerv(kNumExtensions, &n);
+    for (GLint i = 0; i < n && !has; ++i) {
+      const char* e = reinterpret_cast<const char*>(glGetStringi(kExtensions, GLuint(i)));
+      has = e && (std::string(e) == "GL_EXT_texture_filter_anisotropic" || std::string(e) == "GL_ARB_texture_filter_anisotropic");
+    }
+    if (has && glGetFloatv) { GLfloat m = 1.f; glGetFloatv(kMaxTexMaxAniso, &m); maxAniso_ = std::max(1.f, m); }
+    logInfo("gl33: anisotropic filtering %s (max %.0fx)", has ? "available" : "not offered by the driver", maxAniso_);
+  }
+  return int(maxAniso_);
+}
+
+void cGlTextureArray::applyFiltering() {
+  if (!array_) return;
+  glBindTexture(GL_TEXTURE_2D_ARRAY, array_);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GLint(filter_ == 1 ? kLinearMipNearest : kLinearMipLinear));
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GLint(filter_ == 0 ? kNearest : kLinear));
+  const int cap = maxAnisotropy();
+  const float a = float(std::clamp(aniso_, 1, std::max(1, cap)));
+  if (cap > 1 && glTexParameterf) glTexParameterf(GL_TEXTURE_2D_ARRAY, kTexMaxAniso, a);
+  logInfo("gl33: block textures: filter %s, anisotropy %.0fx [provisional]",
+          filter_ == 0 ? "sharp" : filter_ == 1 ? "bilinear" : "trilinear", cap > 1 ? a : 1.f);
+}
+
+void cGlTextureArray::setFiltering(int filter, int aniso) {
+  filter_ = std::clamp(filter, 0, 2);
+  aniso_ = aniso;
+  applyFiltering();
 }
 
 void cGlTextureArray::bind() const {

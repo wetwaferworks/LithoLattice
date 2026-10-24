@@ -134,7 +134,11 @@ using GLintptr = std::ptrdiff_t;
   X(void, TexBuffer, (GLenum, GLenum, GLuint)) \
   X(void, Uniform3fv, (GLint, GLsizei, const GLfloat*)) \
   X(void, Uniform4fv, (GLint, GLsizei, const GLfloat*)) \
-  X(void, ReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*))
+  X(void, ReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*)) \
+  X(void, GetIntegerv, (GLenum, GLint*)) /* PROVISIONAL 2026-10-24: anisotropic extension query */ \
+  X(const unsigned char*, GetStringi, (GLenum, GLuint)) \
+  X(void, GetFloatv, (GLenum, GLfloat*)) \
+  X(void, TexParameterf, (GLenum, GLenum, GLfloat))
 
 #define LITHOLATTICE_DECLARE(ret, name, args) \
   using PFN_litholattice_gl##name = ret(LITHOLATTICE_APIENTRY*) args; extern PFN_litholattice_gl##name litholattice_gl##name;
@@ -169,6 +173,10 @@ LITHOLATTICE_GL_FUNCS(LITHOLATTICE_DECLARE)
 #define glDepthMask litholattice_glDepthMask
 #define glViewport litholattice_glViewport
 #define glGetString litholattice_glGetString
+#define glGetIntegerv litholattice_glGetIntegerv
+#define glGetStringi litholattice_glGetStringi
+#define glGetFloatv litholattice_glGetFloatv
+#define glTexParameterf litholattice_glTexParameterf
 #define glDrawElements litholattice_glDrawElements
 #define glCreateShader litholattice_glCreateShader
 #define glShaderSource litholattice_glShaderSource

@@ -131,6 +131,9 @@ class cVulkanRenderer final : public IRenderer {
   std::string presentMode() const override { return presentModeName(surface_.presentMode); }
   std::string deviceInfo() const override { return dev_->description(); }
   ITextureArray& textureArray() override { return *textures_; }
+  // PROVISIONAL (JD 2026-10-24): texture-filtering stand-in.
+  void setTextureFiltering(int filter, int aniso) override { if (textures_) textures_->setFiltering(filter, aniso); }
+  int maxAnisotropy() const override { return dev_ ? int(dev_->maxAnisotropy()) : 1; }
 
   void setMaterials(const BlockMaterials& m) override {
     const MaterialBindings& b = m.bindings();

@@ -370,6 +370,13 @@ class IRenderer {
   /// Cortana 2026-10-16: software-backend render.shimmer / render.ao / render.tex_res; GPU no-op.
   virtual void setShimmer(bool on) { (void)on; }
   virtual void setMipmaps(bool on) { (void)on; }
+  /// PROVISIONAL (JD 2026-10-24): texture-filtering stand-in for the block texture array.
+  /// filter: 0 = Sharp (nearest mag, trilinear-mipmapped min; the old default), 1 = Bilinear,
+  /// 2 = Trilinear. aniso: 1 = off, else 2..16, clamped to maxAnisotropy(). GPU backends only;
+  /// the software rasterizer has no anisotropic sampling, so it keeps this no-op.
+  virtual void setTextureFiltering(int filter, int aniso) { (void)filter; (void)aniso; }
+  /// Highest anisotropy the backend can use (1 = unsupported).
+  virtual int maxAnisotropy() const { return 1; }
   virtual void setEmissiveLight(bool on) { (void)on; }
   virtual void setAo(bool on) { (void)on; }
   virtual void setTexRes(int tile) { (void)tile; }
