@@ -796,10 +796,8 @@ static uint32_t faceColor(uint8_t face, uint8_t value, uint8_t mode) {
   else if (face == 3) shade = 0.4f; // bottom
   uint8_t v = uint8_t(b * shade);
   // Trace colors: mode determines red/blue tint
-  if (mode == 3 || mode == 4) {  // kShadeStripTint0/1
-    // Red/blue based on value parity (simplified)
-    return 0xFF000000 | (v << 16) | (v >> 1);  // reddish
-  }
+  if (mode == 3) return 0xFF000000 | (v << 16) | (v >> 1);  // kShadeStripTint0: reddish
+  if (mode == 4) return 0xFF000000 | (v >> 2 << 16) | (v >> 1 << 8) | v;  // 2026-10-24: kShadeStripTint1 bluish (was reddish)
   return 0xFF000000 | (v << 16) | (v << 8) | v;  // grayscale
 }
 
@@ -809,7 +807,11 @@ static uint32_t faceColor(uint8_t face, uint8_t value, uint8_t mode) {
 // so the tinted face keeps the basic shader's N.L shading.
 static uint32_t traceTint(uint32_t texel, uint32_t shaded, bool blue, uint8_t value) {
   const int s = value > 64 ? 64 : value;
-  const uint32_t rc = (blue ? kBlueTraceRamp : kRedTraceRamp)[s];
+  // 2026-10-24 (JD): unpowered = dark channel hue (ramp[1] x 0.45), not the ramp's neutral grey;
+  // mirrors chunk_shading.glsl MODE_WIRE.
+  const uint32_t r1 = (blue ? kBlueTraceRamp : kRedTraceRamp)[1];
+  const uint32_t rc = s ? (blue ? kBlueTraceRamp : kRedTraceRamp)[s]
+                        : (((((r1 >> 16) & 0xFFu) * 45u / 100u) << 16) | ((((r1 >> 8) & 0xFFu) * 45u / 100u) << 8) | ((r1 & 0xFFu) * 45u / 100u));
   const float mr = float((texel >> 16) & 0xFF);
   const float light = mr > 0.f ? std::min(1.f, float((shaded >> 16) & 0xFF) / mr) : 1.f;
   const float lum = mr / 255.f / 0.70f;

@@ -201,8 +201,11 @@ void main() {
     int ch = vMode - MODE_WIRE0, s = clamp(vVal, 0, 64);
     float fs = float(s);
     float lum = max(t.r, max(t.g, t.b));
-    vec3 ramp = texelFetch(uPal, ivec2(s, uWirePal[ch]), 0).rgb;
-    vec3 col = mix(t.rgb, clamp(ramp * (lum / 0.85), 0.0, 1.0), smoothstep(0.45, 0.80, lum));
+    // 2026-10-24 (JD): Trace reads as its colour at every strength - unpowered = a dark version of
+    // the channel hue (ramp[1] x 0.45, was the ramp's neutral grey), 64 = full; the tint reaches
+    // mid-grey texels too (was lum >= 0.45 only). Mirrored in software_renderer.cpp traceTint.
+    vec3 ramp = s == 0 ? texelFetch(uPal, ivec2(1, uWirePal[ch]), 0).rgb * 0.45 : texelFetch(uPal, ivec2(s, uWirePal[ch]), 0).rgb;
+    vec3 col = mix(t.rgb, clamp(ramp * (lum / 0.85), 0.0, 1.0), smoothstep(0.20, 0.60, lum));
     col = mix(col, CORE[ch], 0.9 * smoothstep(0.90, 0.99, lum) * smoothstep(40.0, 64.0, fs));
     vec4 m = mask(uRing[ch], rotUV(uvW, (4 - gRot) & 3));   // ring mask uses the unrotated tile UV
     float idx = floor(m.r * 255.0 / 16.0 + 0.5);
