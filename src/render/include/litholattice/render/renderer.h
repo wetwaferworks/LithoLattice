@@ -156,7 +156,7 @@ struct HudLayer {
   float scale = 1.f;
   std::vector<HudRect> rects;
   std::vector<HudText> texts;
-  std::vector<HudDraw> draws;  ///< UI (ui::IUiRenderer through HudUiRenderer)
+  std::vector<HudDraw> draws;  ///< UI (ui::IUiRenderer through cHudUiRenderer)
 };
 
 /// One world-space textured quad for the dynamic sprite pass (sprite system

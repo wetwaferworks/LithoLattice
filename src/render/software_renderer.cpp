@@ -523,9 +523,9 @@ void SoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drain
 bool SoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
   if (!uploadRingEnabled_) { uploadChunkMesh(mesh); return true; }
   const bool tombstone = mesh.verts.empty();  // removals are must-push: never refused for bytes
-  SwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PackedVertex)), tombstone);
+  cSwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PackedVertex)), tombstone);
   if (!s) return false;  // ring full: caller keeps the mesh (spill/retry) — never dropped
-  s->kind = SwUploadRing::Kind::Chunk;
+  s->kind = cSwUploadRing::Kind::Chunk;
   s->mesh = std::move(mesh);
   uploadRing_.publish();
   return true;
@@ -534,9 +534,9 @@ bool SoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
 bool SoftwareRenderer::enqueuePbrChunkMesh(PbrChunkMesh&& mesh) {
   if (!uploadRingEnabled_) { uploadPbrChunkMesh(mesh); return true; }
   const bool tombstone = mesh.verts.empty();
-  SwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PbrQuadVertex)), tombstone);
+  cSwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PbrQuadVertex)), tombstone);
   if (!s) return false;
-  s->kind = SwUploadRing::Kind::PbrChunk;
+  s->kind = cSwUploadRing::Kind::PbrChunk;
   s->pbrMesh = std::move(mesh);
   uploadRing_.publish();
   return true;
@@ -544,9 +544,9 @@ bool SoftwareRenderer::enqueuePbrChunkMesh(PbrChunkMesh&& mesh) {
 
 bool SoftwareRenderer::enqueueClearChunkMeshes() {
   if (!uploadRingEnabled_) { clearChunkMeshes(); return true; }
-  SwUploadRing::Slot* s = uploadRing_.claim(0, /*mustPush=*/true);  // a clear is never dropped
+  cSwUploadRing::Slot* s = uploadRing_.claim(0, /*mustPush=*/true);  // a clear is never dropped
   if (!s) return false;
-  s->kind = SwUploadRing::Kind::ClearAll;
+  s->kind = cSwUploadRing::Kind::ClearAll;
   uploadRing_.publish();
   return true;
 }
@@ -602,31 +602,31 @@ void SoftwareRenderer::drainUploadRing(uint64_t target) {
   // never drops it at all (must-push + the game's spill queue).
   size_t begin = 0;
   for (size_t i = 0; i < n; ++i)
-    if (drainBatch_[i].kind == SwUploadRing::Kind::ClearAll) begin = i;  // the last clear starts the kept range
+    if (drainBatch_[i].kind == cSwUploadRing::Kind::ClearAll) begin = i;  // the last clear starts the kept range
   std::unordered_map<std::pair<int64_t, int>, size_t, PairHash> lastOf;
   for (size_t i = begin; i < n; ++i) {
-    const SwUploadRing::Slot& s = drainBatch_[i];
-    if (s.kind == SwUploadRing::Kind::ClearAll) continue;  // the clear itself always applies
-    const int64_t key = s.kind == SwUploadRing::Kind::Chunk
+    const cSwUploadRing::Slot& s = drainBatch_[i];
+    if (s.kind == cSwUploadRing::Kind::ClearAll) continue;  // the clear itself always applies
+    const int64_t key = s.kind == cSwUploadRing::Kind::Chunk
                             ? swMeshKey(s.mesh.cx, s.mesh.sy, s.mesh.cz)
                             : swMeshKey(s.pbrMesh.cx, s.pbrMesh.sy, s.pbrMesh.cz);
     lastOf[{key, int(s.kind)}] = i;
   }
   size_t appliedNow = 0;
   for (size_t i = begin; i < n; ++i) {
-    const SwUploadRing::Slot& s = drainBatch_[i];
+    const cSwUploadRing::Slot& s = drainBatch_[i];
     switch (s.kind) {
-      case SwUploadRing::Kind::ClearAll:
+      case cSwUploadRing::Kind::ClearAll:
         clearChunkMeshes();
         ++ringClears_;
         ++appliedNow;
         break;
-      case SwUploadRing::Kind::Chunk:
+      case cSwUploadRing::Kind::Chunk:
         if (lastOf[{swMeshKey(s.mesh.cx, s.mesh.sy, s.mesh.cz), int(s.kind)}] != i) break;  // superseded
         uploadChunkMesh(s.mesh);
         ++appliedNow;
         break;
-      case SwUploadRing::Kind::PbrChunk:
+      case cSwUploadRing::Kind::PbrChunk:
         if (lastOf[{swMeshKey(s.pbrMesh.cx, s.pbrMesh.sy, s.pbrMesh.cz), int(s.kind)}] != i) break;  // superseded
         uploadPbrChunkMesh(s.pbrMesh);
         ++appliedNow;

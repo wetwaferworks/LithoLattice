@@ -430,11 +430,11 @@ class SoftwareRenderer : public IRenderer {
   // detached executor). drainBatch_ and the ring* counters are touched only
   // by the consumer side (the detached body, or the caller when the pool's
   // detached mode is off); ringMaterialsEnqueued_ only by the producer.
-  SwUploadRing uploadRing_;
+  cSwUploadRing uploadRing_;
   bool uploadRingEnabled_ = false;
   const MaterialRegistry* ringMaterialsEnqueued_ = nullptr;  ///< last table announced via enqueuePbrMaterials (producer)
   std::atomic<const MaterialRegistry*> pendingPbrMaterials_{nullptr};  ///< announced table, applied at the next seal
-  std::vector<SwUploadRing::Slot> drainBatch_;  ///< drained entries between the seal and the post-render retire
+  std::vector<cSwUploadRing::Slot> drainBatch_;  ///< drained entries between the seal and the post-render retire
   uint64_t ringDrained_ = 0, ringApplied_ = 0, ringCoalesced_ = 0, ringClears_ = 0;  ///< consumer-side stats
   /// The frame seal (executor): apply the announced PBR material table,
   /// then drain the ring up to `target` and apply the survivors of

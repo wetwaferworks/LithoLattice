@@ -19,10 +19,10 @@ class IInputBackend {
 
 /// Plays back a recorded (or scripted) event stream: poll() returns the events with
 /// time <= the current replay time. Used by the self-test and for reproducing bugs.
-class ReplayInputBackend final : public IInputBackend {
+class cReplayInputBackend final : public IInputBackend {
  public:
-  ReplayInputBackend() = default;
-  explicit ReplayInputBackend(std::vector<InputEvent> events) : events_(std::move(events)) {}
+  cReplayInputBackend() = default;
+  explicit cReplayInputBackend(std::vector<InputEvent> events) : events_(std::move(events)) {}
 
   std::string_view name() const override { return "replay"; }
   void poll(std::vector<InputEvent>& out) override;

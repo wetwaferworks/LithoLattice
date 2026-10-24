@@ -10,7 +10,7 @@ namespace litholattice {
 // Edges are rounded independently (not x and w), so adjacent rects never gap or overlap.
 static float snapPx(float v) { return std::floor(v + 0.5f); }
 
-void HudUiRenderer::fillRect(const ui::Rect& r, ui::Color c) {
+void cHudUiRenderer::fillRect(const ui::Rect& r, ui::Color c) {
   HudDraw d;
   d.x = snapPx(r.x);
   d.y = snapPx(r.y);
@@ -25,7 +25,7 @@ void HudUiRenderer::fillRect(const ui::Rect& r, ui::Color c) {
   layer_.draws.push_back(std::move(d));
 }
 
-void HudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, float scale) {
+void cHudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, float scale) {
   HudDraw d;
   d.x = snapPx(pos.x);
   d.y = snapPx(pos.y);
@@ -39,7 +39,7 @@ void HudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, f
   layer_.draws.push_back(std::move(d));
 }
 
-void HudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Color tint) {
+void cHudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Color tint) {
   if (const Image* icon = icons_ ? icons_(image) : nullptr; icon && !icon->empty()) {
     const float cw = r.w / float(icon->width()), ch = r.h / float(icon->height());
     for (int y = 0; y < icon->height(); ++y)
@@ -57,13 +57,13 @@ void HudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Col
   fillRect(r, {base.r * tint.r, base.g * tint.g, base.b * tint.b, base.a * tint.a});
 }
 
-void HudUiRenderer::pushClip(const ui::Rect& r) {
+void cHudUiRenderer::pushClip(const ui::Rect& r) {
   const HudClip cur = clip();
   clips_.push_back({std::max(cur.x0, snapPx(r.x)), std::max(cur.y0, snapPx(r.y)), std::min(cur.x1, snapPx(r.right())),
                     std::min(cur.y1, snapPx(r.bottom()))});  // whole-pixel clips: glyphs cut on texel edges
 }
 
-void HudUiRenderer::popClip() {
+void cHudUiRenderer::popClip() {
   if (!clips_.empty()) clips_.pop_back();
 }
 

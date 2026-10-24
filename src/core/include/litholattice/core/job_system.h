@@ -13,7 +13,7 @@
 // have different fairness semantics (FIFO vs. work-stealing) and different costs.
 //
 // ---- lock order (strict; read before adding any lock) --------------------------
-// L0  lock-free: Chase-Lev deques, SpscQueue, atomics (stop_, workGen_,
+// L0  lock-free: Chase-Lev deques, cSpscQueue, atomics (stop_, workGen_,
 //     inFlight_, ioInFlight_, submitCursor_). No lock, no order.
 // L1  overflowM_ / ioM_ / fence m_: leaf mutexes. Held only to push/drain a short
 //     queue or to flip a completion counter; NEVER held while running a job and

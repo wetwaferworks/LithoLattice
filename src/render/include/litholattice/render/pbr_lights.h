@@ -20,8 +20,8 @@
 //   (scan-vs-retained decision documented there). The adapter above now has a real
 //   candidate source to filter; the "caller supplies positions" fallback remains valid
 //   for tools/tests that enumerate sources themselves.
-// OPEN QUESTION (no engine changes invented here): neither ILighting nor LightEngine
-//   can enumerate emissive sources. LightEngine::addSource feeds the BFS and retains
+// OPEN QUESTION (no engine changes invented here): neither ILighting nor cLightEngine
+//   can enumerate emissive sources. cLightEngine::addSource feeds the BFS and retains
 //   no source list (there is no enumeration API), and ILighting::lightAt returns the
 //   post-flood-fill level, not source identity. So today the caller must supply
 //   candidate positions (e.g. the software renderer scanning emissive chunks, or the

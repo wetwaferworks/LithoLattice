@@ -10,7 +10,7 @@
 // - Player: distance attenuation (1/d), stereo panning, wall occlusion
 // - AI: query "what sounds can mob at X hear?" (with occlusion + hearing range)
 // - Reverb: estimated from nearby solid blocks (small room = more reverb)
-// - OcclusionField: flood-fill visibility baked once per tick from the
+// - cOcclusionField: flood-fill visibility baked once per tick from the
 //      listener, then O(1) occlusion queries per voice (amortized path)
 #pragma once
 #include <cstdint>
@@ -78,7 +78,7 @@ struct Listener {
 /// They coincide for open space and full-spanning walls, and differ only
 /// at corners/edges (the flood leaks around corners a ray would clip).
 /// perceive()/audibleSounds() keep the per-pair IsOccluded callable
-/// contract (raycast-style); the OcclusionField overloads answer from the
+/// contract (raycast-style); the cOcclusionField overloads answer from the
 /// baked field instead.
 ///
 /// Voxel convention: world position -> voxel via floor(), matching
@@ -87,7 +87,7 @@ struct Listener {
 ///
 /// Threading: bake() mutates; all other methods are const and safe for
 /// concurrent reads once bake() has returned.
-class OcclusionField {
+class cOcclusionField {
  public:
   /// Maximum bake radius (blocks). Larger radii clamp to this.
   static constexpr int kMaxRadius = 32;
@@ -189,7 +189,7 @@ class OcclusionField {
 };
 
 template <typename IsSolid>
-void OcclusionField::bake(int lx, int ly, int lz, IsSolid isSolid, int radius) {
+void cOcclusionField::bake(int lx, int ly, int lz, IsSolid isSolid, int radius) {
   radius_ = radius < 1 ? 1 : (radius > kMaxRadius ? kMaxRadius : radius);
   lx_ = lx;
   ly_ = ly;
@@ -260,13 +260,13 @@ class SpatialAudio {
                                    event.y, event.z));
   }
 
-  /// perceive() reading occlusion from a baked OcclusionField (amortized
+  /// perceive() reading occlusion from a baked cOcclusionField (amortized
   /// path): bake once per tick, then one O(1) lookup per voice instead of
   /// one raycast per voice. The field must have been baked for this
   /// listener's voxel; a stale field yields stale occlusion (same caveat
   /// as the occlusion thread's cached gains).
   PerceivedSound perceive(const SoundEvent& event, const Listener& listener,
-                          const OcclusionField& field) const {
+                          const cOcclusionField& field) const {
     return perceiveImpl(event, listener,
                         field.occluded(event.x, event.y, event.z));
   }
@@ -299,11 +299,11 @@ class SpatialAudio {
     return result;
   }
 
-  /// audibleSounds() reading occlusion from a baked OcclusionField
+  /// audibleSounds() reading occlusion from a baked cOcclusionField
   /// (amortized path). Same contract as above; occlusion answers come
   /// from the field instead of per-pair queries.
   std::vector<SoundEvent> audibleSounds(const Listener& mob,
-                                        const OcclusionField& field) const {
+                                        const cOcclusionField& field) const {
     // H-AUD-5: perceived-volume sort, same as the callable overload above.
     std::vector<std::pair<float, SoundEvent>> scored;
     for (const auto& e : events_) {

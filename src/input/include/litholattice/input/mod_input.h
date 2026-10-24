@@ -26,7 +26,7 @@
 // ANTI-CHEAT: mods must not be able to synthesize fake player input. The
 // engine's input pipeline has exactly two event-injection points, both
 // engine-internal and both unreachable from mod code:
-//   a. ReplayInputBackend::push() — the replay/testing seam. The backend
+//   a. cReplayInputBackend::push() — the replay/testing seam. The backend
 //      object is owned by InputPump (private unique_ptr); the mod API
 //      surface exposes no path to it.
 //   b. InputSystem::processFrame() — replay/tests. Mods never receive an

@@ -15,24 +15,24 @@
 
 namespace litholattice {
 
-OcclusionThread::OcclusionThread() = default;
+cOcclusionThread::cOcclusionThread() = default;
 
-OcclusionThread::~OcclusionThread() { stop(); }
+cOcclusionThread::~cOcclusionThread() { stop(); }
 
-void OcclusionThread::start(OcclusionRate rate) {
+void cOcclusionThread::start(OcclusionRate rate) {
   if (running_.load()) return;
   rate_.store(rate);
   if (rate == OcclusionRate::Inline) return;  // no thread needed in inline mode
   running_.store(true);
-  thread_ = std::thread(&OcclusionThread::threadMain, this);
+  thread_ = std::thread(&cOcclusionThread::threadMain, this);
 }
 
-void OcclusionThread::stop() {
+void cOcclusionThread::stop() {
   running_.store(false);
   if (thread_.joinable()) thread_.join();
 }
 
-size_t OcclusionThread::addQuery(float lx, float ly, float lz,
+size_t cOcclusionThread::addQuery(float lx, float ly, float lz,
                                   float sx, float sy, float sz) {
   // Structural mutation is mutex-guarded: the occlusion thread may be
   // iterating a snapshot of these same objects right now.
@@ -71,7 +71,7 @@ size_t OcclusionThread::addQuery(float lx, float ly, float lz,
   return queries_.size() - 1;
 }
 
-void OcclusionThread::publishSnapshotLocked() {
+void cOcclusionThread::publishSnapshotLocked() {
   auto snap = std::make_unique<QuerySnapshot>();
   snap->queries.reserve(queries_.size());
   for (const auto& q : queries_) snap->queries.push_back(q.get());
@@ -80,12 +80,12 @@ void OcclusionThread::publishSnapshotLocked() {
   publishedSnapshot_.store(raw, std::memory_order_release);
 }
 
-void OcclusionThread::removeQuery(size_t idx) {
+void cOcclusionThread::removeQuery(size_t idx) {
   std::lock_guard<std::mutex> lock(queriesMu_);
   if (idx < queries_.size()) queries_[idx]->active.store(false, std::memory_order_release);
 }
 
-float OcclusionThread::gain(size_t idx) const {
+float cOcclusionThread::gain(size_t idx) const {
   // H-AUD-1: genuinely lock-free (the header always claimed it; the old body
   // took queriesMu_). One acquire load of the published snapshot, then the
   // query's own atomic gain. A snapshot loaded just before a publish is
@@ -97,7 +97,7 @@ float OcclusionThread::gain(size_t idx) const {
   return q->gain.load(std::memory_order_relaxed);
 }
 
-void OcclusionThread::setOcclusionTest(
+void cOcclusionThread::setOcclusionTest(
     std::function<bool(float,float,float,float,float,float)> fn) {
   // Assigning the std::function while threadMain reads it is a data race;
   // the test must be installed before the thread starts.
@@ -105,7 +105,7 @@ void OcclusionThread::setOcclusionTest(
   isOccluded_ = std::move(fn);
 }
 
-void OcclusionThread::setInline(bool inlineMode) {
+void cOcclusionThread::setInline(bool inlineMode) {
   if (inlineMode) {
     stop();
     rate_.store(OcclusionRate::Inline);
@@ -118,7 +118,7 @@ void OcclusionThread::setInline(bool inlineMode) {
   }
 }
 
-void OcclusionThread::threadMain() {
+void cOcclusionThread::threadMain() {
   using clock = std::chrono::steady_clock;
 
   while (running_.load(std::memory_order_relaxed)) {

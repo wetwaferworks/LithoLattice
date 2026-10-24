@@ -135,7 +135,7 @@ int runAudioSelfTest() {
           "presets: SID3 = 3 full voices; DMG = 2 pulse + wave + noise (unsupported waveforms coerced)");
   }
   {
-    SpscQueue<int, 64> q;
+    cSpscQueue<int, 64> q;
     constexpr int kN = 200000;
     std::thread producer([&] { for (int i = 0; i < kN;) if (q.tryPush(i)) ++i; });
     bool ordered = true;
@@ -253,7 +253,7 @@ int runAudioSelfTest() {
     // target as blocked too.)
     constexpr int kLX = 2, kLY = 2, kLZ = 2, kR = 12, kWallX = 8;
     auto wallSolid = [](int x, int, int) { return x == kWallX; };
-    OcclusionField field;
+    cOcclusionField field;
     field.bake(kLX, kLY, kLZ, wallSolid, kR);
     bool ok = true;
     std::function<bool(int, int, int)> solidFn = wallSolid;
@@ -304,7 +304,7 @@ int runAudioSelfTest() {
     const std::unordered_set<std::tuple<int, int, int>, TupleHash> scrambled(cells.begin(), cells.end());
     auto solidA = [&](int x, int y, int z) { return ordered.count({x, y, z}) != 0; };
     auto solidB = [&](int x, int y, int z) { return scrambled.count({x, y, z}) != 0; };
-    OcclusionField fa, fb;
+    cOcclusionField fa, fb;
     fa.bake(0, 0, 0, solidA, 10);
     fb.bake(0, 0, 0, solidB, 10);
     const bool bytesEqual =
@@ -318,17 +318,17 @@ int runAudioSelfTest() {
   }
   {
     // Bounded memory: radius clamps to kMaxRadius; out-of-field reads occluded.
-    OcclusionField f;
+    cOcclusionField f;
     auto air = [](int, int, int) { return false; };
     f.bake(0, 0, 0, air, 1000);
-    bool ok = f.radius() == OcclusionField::kMaxRadius;
+    bool ok = f.radius() == cOcclusionField::kMaxRadius;
     ok = ok && !f.occluded(0.5f, 0.5f, 0.5f);
     ok = ok && !f.occluded(32.5f, 0.5f, 0.5f);   // edge voxel 32: inside
     ok = ok && f.occluded(33.5f, 0.5f, 0.5f);    // voxel 33: outside -> occluded
     ok = ok && f.occluded(-33.5f, 0.5f, 0.5f);
     ok = ok && near(f.enclosure(), 0.0, 1e-9);
     check(ok, "occlusion field: radius clamps to 32, out-of-field reads occluded");
-    OcclusionField g;
+    cOcclusionField g;
     g.bake(0, 0, 0, air, 0);
     check(g.radius() == 1 && !g.occluded(0.5f, 0.5f, 0.5f) &&
               !g.occluded(1.5f, 0.5f, 0.5f) && g.occluded(2.5f, 0.5f, 0.5f) &&
@@ -353,7 +353,7 @@ int runAudioSelfTest() {
           if (!(x == 0 && y == 0 && z == 0) && rng() % 100 < 18)
             solids.emplace(x, y, z);
     auto isSolid = [&](int x, int y, int z) { return solids.count({x, y, z}) != 0; };
-    OcclusionField field;
+    cOcclusionField field;
     field.bake(0, 0, 0, isSolid, kR);
     auto perPairFlood = [&](float, float, float, float x1, float y1, float z1) {
       const int tx = int(std::floor(x1)), ty = int(std::floor(y1)), tz = int(std::floor(z1));
@@ -968,9 +968,9 @@ int runAudioSelfTest() {
     check(n == 4096, "audio: tap ring overflows by dropping oldest (bounded)");
   }
 
-  // OcclusionThread: dedicated 32/16/8 Hz occlusion sim, clean-room.
+  // cOcclusionThread: dedicated 32/16/8 Hz occlusion sim, clean-room.
   {
-    OcclusionThread oc;
+    cOcclusionThread oc;
     // start(Inline) must not spawn a thread or poison later start() calls.
     oc.setOcclusionTest([](float, float, float, float, float, float) { return false; });
     oc.start(OcclusionRate::Inline);
@@ -992,7 +992,7 @@ int runAudioSelfTest() {
   {
     // H-AUD-1: gain() reads the lock-free published snapshot — queries added
     // (structural appends) are visible to gain() with no thread running.
-    OcclusionThread oc;
+    cOcclusionThread oc;
     const size_t q0 = oc.addQuery(0, 0, 0, 10, 0, 0);
     const size_t q1 = oc.addQuery(0, 0, 0, 20, 0, 0);
     check(oc.gain(q0) == 1.0f && oc.gain(q1) == 1.0f && oc.gain(9999) == 1.0f,

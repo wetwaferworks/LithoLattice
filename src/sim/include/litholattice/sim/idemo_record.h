@@ -107,7 +107,7 @@ class IDemoRecord {
   virtual const DemoSessionInfo& session() const = 0;
   virtual DemoError lastError() const = 0;
 };
-class DemoRecorder final : public IDemoRecord {
+class cDemoRecorder final : public IDemoRecord {
  public:
   // Attaches to the stream's recording tap (setRecording(true)) and starts
   // the file image with the demo preamble. False + State error if begun twice.
@@ -136,7 +136,7 @@ class DemoRecorder final : public IDemoRecord {
   bool begun_ = false;
   mutable DemoError lastError_ = DemoError::None;
 };
-class DemoPlayer final : public IDemoRecord {
+class cDemoPlayer final : public IDemoRecord {
  public:
   bool load(const uint8_t* data, size_t n);   // parseDemo; true iff complete || truncated
   bool loadFile(const std::string& path);     // Io error on unreadable file

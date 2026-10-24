@@ -10,7 +10,7 @@
 // poll() calls glfwPollEvents(), which is main-thread-only on macOS).
 //
 // How events are queued and drained: the pump is the single producer into a
-// lock-free SpscQueue<InputEvent, 1024> (same idiom as the audio command queue:
+// lock-free cSpscQueue<InputEvent, 1024> (same idiom as the audio command queue:
 // wait-free push, no allocation after construction). The TICK thread is the
 // single consumer: once per frame it calls drainInto(), which moves every queued
 // event (oldest first) into a vector. Fan-out to engine, window, and UI happens
@@ -32,8 +32,8 @@
 // sits at the drain: the engine drains the pump exactly once per tick/frame,
 // BEFORE the sim tick, and the sim sees a fixed event list for that tick.
 // Deterministic GIVEN the list. Two runs with live input are NOT expected to
-// hash identically; two runs fed the same ReplayInputBackend stream ARE —
-// ReplayInputBackend bypasses the pump entirely (driven on the tick thread, no
+// hash identically; two runs fed the same cReplayInputBackend stream ARE —
+// cReplayInputBackend bypasses the pump entirely (driven on the tick thread, no
 // input thread involved) and stays the deterministic path for tests, replays,
 // and golden traces.
 //
@@ -89,7 +89,7 @@ class InputPump {
 
   bool threaded() const { return mode_ == Mode::Threaded; }
 
-  static constexpr size_t kQueueCapacity = 1024;  // power of two (SpscQueue requirement)
+  static constexpr size_t kQueueCapacity = 1024;  // power of two (cSpscQueue requirement)
 
  private:
   void threadLoop();
@@ -102,7 +102,7 @@ class InputPump {
   std::unique_ptr<IInputBackend> backend_;
   const Mode mode_;
   const std::chrono::milliseconds pollInterval_;
-  SpscQueue<InputEvent, kQueueCapacity> queue_;  // input thread -> tick thread, lock-free
+  cSpscQueue<InputEvent, kQueueCapacity> queue_;  // input thread -> tick thread, lock-free
   std::vector<InputEvent> staging_;             // backend's per-poll output (input thread only)
   std::atomic<bool> running_{false};
   std::thread inputThread_;

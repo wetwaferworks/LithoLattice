@@ -302,7 +302,7 @@ DemoParseResult parseDemo(const uint8_t* data, size_t n) {
 
 // ---------------------------------------------------------------- recorder
 
-bool DemoRecorder::begin(ControlStream& stream, const DemoSessionInfo& info) {
+bool cDemoRecorder::begin(ControlStream& stream, const DemoSessionInfo& info) {
   if (begun_) {
     lastError_ = DemoError::State;
     return false;
@@ -323,7 +323,7 @@ bool DemoRecorder::begin(ControlStream& stream, const DemoSessionInfo& info) {
   return true;
 }
 
-size_t DemoRecorder::pump() {
+size_t cDemoRecorder::pump() {
   if (!active_ || stream_ == nullptr) {
     lastError_ = DemoError::State;
     return 0;
@@ -353,7 +353,7 @@ size_t DemoRecorder::pump() {
   return drained.size();
 }
 
-bool DemoRecorder::finish(uint64_t finalWorldHash, uint64_t totalTicks) {
+bool cDemoRecorder::finish(uint64_t finalWorldHash, uint64_t totalTicks) {
   if (!active_) {
     lastError_ = DemoError::State;
     return false;
@@ -374,17 +374,17 @@ bool DemoRecorder::finish(uint64_t finalWorldHash, uint64_t totalTicks) {
   return true;
 }
 
-void DemoRecorder::abort() {
+void cDemoRecorder::abort() {
   if (stream_ != nullptr) stream_->setRecording(false);
   stream_ = nullptr;
   active_ = false;
 }
 
-bool DemoRecorder::recording() const { return active_; }
-uint64_t DemoRecorder::eventsRecorded() const { return eventsRecorded_; }
-const std::vector<uint8_t>& DemoRecorder::bytes() const { return bytes_; }
+bool cDemoRecorder::recording() const { return active_; }
+uint64_t cDemoRecorder::eventsRecorded() const { return eventsRecorded_; }
+const std::vector<uint8_t>& cDemoRecorder::bytes() const { return bytes_; }
 
-bool DemoRecorder::saveToFile(const std::string& path) const {
+bool cDemoRecorder::saveToFile(const std::string& path) const {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
     lastError_ = DemoError::Io;
@@ -400,19 +400,19 @@ bool DemoRecorder::saveToFile(const std::string& path) const {
   return true;
 }
 
-const DemoSessionInfo& DemoRecorder::session() const { return session_; }
-DemoError DemoRecorder::lastError() const { return lastError_; }
+const DemoSessionInfo& cDemoRecorder::session() const { return session_; }
+DemoError cDemoRecorder::lastError() const { return lastError_; }
 
 // ------------------------------------------------------------------ player
 
-bool DemoPlayer::load(const uint8_t* data, size_t n) {
+bool cDemoPlayer::load(const uint8_t* data, size_t n) {
   parsed_ = parseDemo(data, n);
   loaded_ = parsed_.complete || parsed_.truncated;
   lastError_ = parsed_.error;
   return loaded_;
 }
 
-bool DemoPlayer::loadFile(const std::string& path) {
+bool cDemoPlayer::loadFile(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
     parsed_ = DemoParseResult{};
@@ -430,9 +430,9 @@ bool DemoPlayer::loadFile(const std::string& path) {
   return load(data.empty() ? nullptr : data.data(), data.size());
 }
 
-const DemoParseResult& DemoPlayer::parsed() const { return parsed_; }
+const DemoParseResult& cDemoPlayer::parsed() const { return parsed_; }
 
-bool DemoPlayer::submitInto(ControlStream& stream) const {
+bool cDemoPlayer::submitInto(ControlStream& stream) const {
   if (!loaded_) {
     lastError_ = DemoError::State;
     return false;
@@ -442,8 +442,8 @@ bool DemoPlayer::submitInto(ControlStream& stream) const {
   return true;
 }
 
-const DemoSessionInfo& DemoPlayer::session() const { return parsed_.session; }
-DemoError DemoPlayer::lastError() const { return lastError_; }
+const DemoSessionInfo& cDemoPlayer::session() const { return parsed_.session; }
+DemoError cDemoPlayer::lastError() const { return lastError_; }
 
 // ----------------------------------------------------------------- summary
 

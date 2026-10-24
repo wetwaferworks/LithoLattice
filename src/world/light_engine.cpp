@@ -12,13 +12,13 @@
 
 namespace litholattice {
 
-LightEngine::LightEngine(int sx, int sy, int sz)
+cLightEngine::cLightEngine(int sx, int sy, int sz)
     : sx_(sx), sy_(sy), sz_(sz) {
   light_.assign(size_t(sx) * sy * sz, 0);
   opacity_.assign(size_t(sx) * sy * sz, 0);
 }
 
-void LightEngine::addSource(int x, int y, int z, uint8_t level) {
+void cLightEngine::addSource(int x, int y, int z, uint8_t level) {
   if (!inBounds(x, y, z)) return;
   if (level > kMaxLight) level = kMaxLight;  // B-L5: clamp to the 1..64 light scale
   sources_[packPos(x, y, z)] = level;
@@ -26,7 +26,7 @@ void LightEngine::addSource(int x, int y, int z, uint8_t level) {
   bfsQueue_.push({x, y, z, level});
 }
 
-void LightEngine::removeSource(int x, int y, int z) {
+void cLightEngine::removeSource(int x, int y, int z) {
   if (!inBounds(x, y, z)) return;
   const int si = idx(x, y, z);
   const uint8_t oldLevel = light_[size_t(si)];
@@ -79,12 +79,12 @@ void LightEngine::removeSource(int x, int y, int z) {
   propagate();
 }
 
-void LightEngine::setOpacity(int x, int y, int z, uint8_t opacity) {
+void cLightEngine::setOpacity(int x, int y, int z, uint8_t opacity) {
   if (!inBounds(x, y, z)) return;
   opacity_[size_t(idx(x, y, z))] = opacity;
 }
 
-size_t LightEngine::propagate() {
+size_t cLightEngine::propagate() {
   size_t updated = 0;
   const int d[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
 
@@ -118,12 +118,12 @@ size_t LightEngine::propagate() {
   return updated;
 }
 
-uint8_t LightEngine::getLight(int x, int y, int z) const {
+uint8_t cLightEngine::getLight(int x, int y, int z) const {
   if (!inBounds(x, y, z)) return 0;
   return light_[size_t(idx(x, y, z))];
 }
 
-void LightEngine::clear() {
+void cLightEngine::clear() {
   std::fill(light_.begin(), light_.end(), 0);
   sources_.clear();
   // Clear the queue

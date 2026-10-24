@@ -217,7 +217,7 @@ int runInputSelfTest() {
   }
   {
     InputSystem in(testDefaults(), testContexts());
-    ReplayInputBackend backend;
+    cReplayInputBackend backend;
     double t = 0;
     auto frame = [&](std::initializer_list<InputEvent> evs) {
       t += 1.0 / 60.0;

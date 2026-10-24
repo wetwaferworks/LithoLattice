@@ -1,4 +1,4 @@
-// Cadence control for OcclusionField bakes.
+// Cadence control for cOcclusionField bakes.
 //
 // WHAT: the field used to re-bake on demand (or once per tick wherever the
 // caller remembered to). This scheduler owns the "should I re-bake?" decision:
@@ -30,14 +30,14 @@ struct OcclusionCadence {
   uint64_t bakeEveryTicks = 0;  ///< re-bake when tick - lastBake >= this; 0 = never on tick cadence
   float moveThreshold = 0.f;    ///< re-bake early if the listener moved more than this (blocks); 0 = disabled
   bool bakeOnChunkChange = true;  ///< re-bake when the listener enters a new chunk (default policy)
-  int radius = 16;              ///< bake radius (clamped by OcclusionField to [1, kMaxRadius])
+  int radius = 16;              ///< bake radius (clamped by cOcclusionField to [1, kMaxRadius])
 };
 
 /// Chunk edge length the chunk-change detector uses. Mirrors
 /// world::kChunkSize; kept local so audio does not depend on world.
 inline constexpr int kCadenceChunkSize = 16;
 
-/// Owns one OcclusionField and decides when it needs a re-bake.
+/// Owns one cOcclusionField and decides when it needs a re-bake.
 /// Game thread only (bake() mutates; the audio thread reads the field).
 class cOcclusionBakeScheduler {
  public:
@@ -86,13 +86,13 @@ class cOcclusionBakeScheduler {
   }
 
   /// The (possibly stale) baked field. Valid after the first maybeBake().
-  const OcclusionField& field() const { return field_; }
+  const cOcclusionField& field() const { return field_; }
   /// How many bakes have happened (lets callers/tests prove the cadence).
   uint64_t bakes() const { return bakes_; }
 
  private:
   OcclusionCadence cadence_;
-  OcclusionField field_;
+  cOcclusionField field_;
   uint64_t lastTick_ = 0;
   uint64_t bakes_ = 0;
   float lastX_ = 0.f, lastY_ = 0.f, lastZ_ = 0.f;

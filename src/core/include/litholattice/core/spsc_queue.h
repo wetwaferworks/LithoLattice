@@ -17,7 +17,7 @@ namespace litholattice {
 /// Fixed-capacity SPSC ring buffer. Capacity must be a power of two; one producer thread calls
 /// tryPush, one consumer thread calls tryPop.
 template <typename T, size_t Capacity>
-class SpscQueue {
+class cSpscQueue {
   static_assert((Capacity & (Capacity - 1)) == 0, "capacity must be a power of two");
   static_assert(std::is_trivially_copyable_v<T>, "items are copied in the consumer's real-time context");
 

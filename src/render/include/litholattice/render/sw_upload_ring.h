@@ -60,7 +60,7 @@
 
 namespace litholattice {
 
-class SwUploadRing {
+class cSwUploadRing {
  public:
   static constexpr size_t kSlots = 512;                        // hard slot cap (power of two)
   static constexpr size_t kByteBudget = size_t(8) << 20;       // payload budget (design §5)

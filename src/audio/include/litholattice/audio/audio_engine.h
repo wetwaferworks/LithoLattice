@@ -1,6 +1,6 @@
 // Audio engine: two synth buses fed by a lock-free command queue.
 //
-//   game thread  --post(AudioCommand)-->  SpscQueue  --render()-->  audio callback
+//   game thread  --post(AudioCommand)-->  cSpscQueue  --render()-->  audio callback
 //
 // render() drains the queue, applies the commands and mixes; it never locks or allocates.
 // The music bus is a SID3 synth (Tone Blocks), the effects bus a DMG synth (procedural SFX).
@@ -125,9 +125,9 @@ class AudioEngine {
   static constexpr size_t kBlock = 512;
   float sampleRate_;
   Synth music_, effects_;
-  static constexpr size_t kCommandQueueDepth = 1024;  // power of two (SpscQueue)
+  static constexpr size_t kCommandQueueDepth = 1024;  // power of two (cSpscQueue)
   static constexpr size_t kCriticalReserve = 64;      // slots reserved for NoteOff/SetMasterGain
-  SpscQueue<AudioCommand, kCommandQueueDepth> queue_;
+  cSpscQueue<AudioCommand, kCommandQueueDepth> queue_;
   // Heuristic queue depth (every successful push is popped exactly once, so
   // this self-corrects; tryPush() stays the hard gate). Lets post() refuse
   // non-critical commands before they eat the critical reserve.

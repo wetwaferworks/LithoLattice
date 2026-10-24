@@ -13,7 +13,7 @@
 
 namespace litholattice {
 
-class HudUiRenderer final : public ui::IUiRenderer {
+class cHudUiRenderer final : public ui::IUiRenderer {
  public:
   using ImageResolver = std::function<std::optional<ui::Color>(std::string_view image)>;
 
@@ -21,7 +21,7 @@ class HudUiRenderer final : public ui::IUiRenderer {
   /// Pixel-art icons: a small RGBA image drawn as one rect per opaque pixel (alpha >= 50%),
   /// so the HUD needs no textures. Keep icons small (16 x 16, see downsampleIcon).
   using IconResolver = std::function<const Image*(std::string_view image)>;
-  explicit HudUiRenderer(HudLayer& layer, ImageResolver images = {}, IconResolver icons = {})
+  explicit cHudUiRenderer(HudLayer& layer, ImageResolver images = {}, IconResolver icons = {})
       : layer_(layer), images_(std::move(images)), icons_(std::move(icons)) {}
 
   void fillRect(const ui::Rect& r, ui::Color c) override;

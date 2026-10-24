@@ -169,7 +169,7 @@ class BlockRegistry;
 /// Typed view over a ContentRegistry, filtered to items. Mirrors the BlockRegistry
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
-class ItemRegistry;
+class cItemReg;
 
 /// The unified content registry (Infinite Registry, phase 2 — JD-locked option B).
 ///
@@ -261,7 +261,7 @@ class ContentRegistry {
 
   // ---- typed views ----
   BlockRegistry blocks();
-  ItemRegistry items();
+  cItemReg items();
 
   // ---- seal & hot-swap (debug prototyping) ----
   /// Seal the registry: addBlock/addItem/stageBlockUpdate refuse afterwards.
@@ -812,12 +812,12 @@ class BlockRegistry {
 /// Typed view over a ContentRegistry, filtered to items. Mirrors the BlockRegistry
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
-class ItemRegistry {
+class cItemReg {
  public:
-  ItemRegistry() : owned_(std::make_unique<ContentRegistry>()), reg_(owned_.get()) {}
-  explicit ItemRegistry(ContentRegistry& content) : reg_(&content) {}
-  ItemRegistry(ItemRegistry&&) noexcept = default;
-  ItemRegistry& operator=(ItemRegistry&&) noexcept = default;
+  cItemReg() : owned_(std::make_unique<ContentRegistry>()), reg_(owned_.get()) {}
+  explicit cItemReg(ContentRegistry& content) : reg_(&content) {}
+  cItemReg(cItemReg&&) noexcept = default;
+  cItemReg& operator=(cItemReg&&) noexcept = default;
 
   ItemId add(const ItemDef& d) { return reg_->addItem(d); }
   std::optional<ItemId> addWithStableId(const ItemDef& d, StableId stable) {
@@ -845,6 +845,6 @@ class ItemRegistry {
 };
 
 inline BlockRegistry ContentRegistry::blocks() { return BlockRegistry(*this); }
-inline ItemRegistry ContentRegistry::items() { return ItemRegistry(*this); }
+inline cItemReg ContentRegistry::items() { return cItemReg(*this); }
 
 }  // namespace litholattice

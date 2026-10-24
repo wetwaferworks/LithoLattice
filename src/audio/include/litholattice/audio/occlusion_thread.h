@@ -50,10 +50,10 @@ struct OcclusionQuery {
 };
 
 /// Dedicated occlusion simulation thread.
-class OcclusionThread {
+class cOcclusionThread {
  public:
-  OcclusionThread();
-  ~OcclusionThread();
+  cOcclusionThread();
+  ~cOcclusionThread();
 
   /// Start at the given rate. Falls back to Reduced if Full can't keep up.
   void start(OcclusionRate rate = OcclusionRate::Full);

@@ -1,5 +1,5 @@
 // Raw input as timestamped events. Backends produce them; InputSystem consumes them once per
-// frame. A recorded event stream replays deterministically (ReplayInputBackend).
+// frame. A recorded event stream replays deterministically (cReplayInputBackend).
 #pragma once
 #include <cstdint>
 #include "litholattice/input/input_types.h"

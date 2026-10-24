@@ -1,5 +1,5 @@
 // BFS light propagation engine.
-// STAGED / UNWIRED (P3-2 B-L5): LightEngine has NO production callers —
+// STAGED / UNWIRED (P3-2 B-L5): cLightEngine has NO production callers —
 // nothing in the engine or the game constructs one today. The live
 // lighting path is the flood-fill ambient in the renderer (see
 // lighting.h). This class is kept, tested in isolation, as the staged
@@ -31,9 +31,9 @@ struct LightPos {
 };
 
 /// BFS light propagator for a chunk column.
-class LightEngine {
+class cLightEngine {
  public:
-  LightEngine(int sizeX, int sizeY, int sizeZ);
+  cLightEngine(int sizeX, int sizeY, int sizeZ);
 
   /// Set a light source (e.g. torch, lamp, sky). `level` is clamped to
   /// kMaxLight (64): the 1..64 scale is the world's light currency, and an

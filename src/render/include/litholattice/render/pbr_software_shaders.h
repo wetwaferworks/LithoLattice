@@ -16,7 +16,7 @@
 //   basic path stays intact and the PBR tier degrades gracefully.
 //
 // EMISSIVE-PROVIDER SEAM (documented stub): LightCollector needs a forEachEmissive
-//   callable, but neither ILighting nor LightEngine can enumerate emissive sources
+//   callable, but neither ILighting nor cLightEngine can enumerate emissive sources
 //   (see pbr_lights.h's open question). Until the world side grows a forEachEmissive
 //   (chunk emissive scan or a retained light-engine source list), the software path
 //   takes an IEmissiveProvider via PbrFragmentContext::emissive; a null provider yields

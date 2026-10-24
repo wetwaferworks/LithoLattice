@@ -849,7 +849,7 @@ void testInfiniteRegistryPhase2() {
   ContentRegistry cr;
   // Typed views share the registry underneath.
   BlockRegistry blocks(cr);
-  ItemRegistry items(cr);
+  cItemReg items(cr);
   check(&blocks.content() == &cr && &items.content() == &cr,
         "registry: typed views share one ContentRegistry");
 
@@ -914,20 +914,20 @@ void testInfiniteRegistryPhase2() {
 
   // Item CRC32 (WS7): deterministic, content-sensitive, id-blind.
   {
-    ItemRegistry r1, r2;
+    cItemReg r1, r2;
     const ItemId a1 = r1.add({"Copper Ingot", 64, 0, {}, "m:copper_ingot"});
     const ItemId a2 = r2.add({"Copper Ingot", 64, 0, {}, "m:copper_ingot"});
     check(r1.crcOf(a1) == r2.crcOf(a2) && r1.crcOf(a1) != 0,
           "registry: item CRC deterministic across sessions");
     const ItemId b1 = r1.add({"Copper Nugget", 64, 0, {}, "m:copper_nugget"});
     check(r1.crcOf(b1) != r1.crcOf(a1), "registry: different item content -> different CRC");
-    ItemRegistry r3;
+    cItemReg r3;
     const ItemId c1 = r3.add({"Copper Ingot", 64, 0, {}, "m:copper_ingot"});
     const ItemId c2 = r3.add({"Copper Ingot", 64, 0, {}, "m:copper_renamed"});
     check(r3.crcOf(c1) == r3.crcOf(c2) && r3.stableIdOf(c1) != r3.stableIdOf(c2),
           "registry: item CRC covers content only (string id excluded)");
     // placesBlock participates in the CRC.
-    ItemRegistry r4;
+    cItemReg r4;
     const StableId fakeBlock = 0x1111ULL;
     const ItemId d1 = r4.add({"Placer", 64, fakeBlock, {}, "m:placer"});
     const ItemId d2 = r4.add({"Placer", 64, 0, {}, "m:placer2"});
@@ -938,7 +938,7 @@ void testInfiniteRegistryPhase2() {
   // later registrations (which may reallocate the def vector) cannot tear
   // or invalidate what the caller already took.
   {
-    ItemRegistry r;
+    cItemReg r;
     const ItemId a = r.add({"Copy", 64, 0, {}, "m:copy"});
     const ItemDef snap = r.def(a);
     for (int i = 0; i < 64; ++i)
@@ -966,7 +966,7 @@ void testInfiniteRegistryPhase2() {
 
   // Item id 0 is the empty sentinel.
   {
-    ItemRegistry r;
+    cItemReg r;
     check(r.def(0).name.empty() && r.stableIdOf(0) == 0 && r.crcOf(0) == 0 &&
               r.idOf(0).empty() && !r.findById("nope"),
           "registry: item id 0 is the empty sentinel");
@@ -1052,7 +1052,7 @@ void testInfiniteRegistryPhase2() {
   {
     ContentRegistry kr;
     BlockRegistry kb(kr);
-    ItemRegistry ki(kr);
+    cItemReg ki(kr);
     const BlockId b = kb.add({"B", kSolid, Shape::Cube, "b", {}, 0, 0, 0, 0.8f, false, 0, "t:b"});
     const ItemId it = ki.add({"I", 64, 0, {}, "t:i"});
     const StableId itemSid = ki.stableIdOf(it);

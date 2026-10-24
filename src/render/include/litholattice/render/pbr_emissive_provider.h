@@ -5,7 +5,7 @@
 //   bytes across a chunk region around a focus column, resolves each voxel through
 //   the column's materialPalette into the MaterialRegistry, and caches every voxel
 //   whose material def has emissiveIntensity > 0 as (position, linear rgb, intensity).
-// WHY: LightCollector (pbr_lights.h) needs emissive candidates, but the LightEngine
+// WHY: LightCollector (pbr_lights.h) needs emissive candidates, but the cLightEngine
 //   retains no source list and the flood fill carries levels, not source identity.
 //   This provider is the world-side forEachEmissive the phase-1 seam was waiting for.
 // HOW: header-only, mirrors the pbr_lights.h pattern. The scan is CACHED: refresh()

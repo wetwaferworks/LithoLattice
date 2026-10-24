@@ -7,7 +7,7 @@ namespace litholattice {
 const TextInput InputSystem::kNoText{};
 const InputSystem::ActionState InputSystem::kNoAction{};
 
-void ReplayInputBackend::poll(std::vector<InputEvent>& out) {
+void cReplayInputBackend::poll(std::vector<InputEvent>& out) {
   while (next_ < events_.size() && events_[next_].time <= now_) out.push_back(events_[next_++]);
 }
 
