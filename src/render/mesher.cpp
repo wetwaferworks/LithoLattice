@@ -465,7 +465,11 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
             // 2026-10-16 (CloudAtlas power-state art): a block with its OWN channel (Red / Blue Via)
             // tints with that channel and lights while it carries signal (value > 0); others keep the
             // feeding-Trace rule. Render-only.
-            const int ch = def.channel ? def.channel : nb.channel;
+            int ch = def.channel ? def.channel : nb.channel;
+            if (ch == 0) {  // 2026-10-24 (JD 6:13 PM red flash): back source gone / colourless -> colour of the Trace it drives
+              const BlockDef& fn = jobDef(in.id[pidx(x + 1 + kDirX[facing], y + 1, z + 1 + kDirZ[facing])]);
+              ch = fn.channel;
+            }
             const bool lit = active || (def.channel != 0 && (st & 0x7f) != 0);
             lk.mode = kShadeTraceTint;
             lk.value = uint8_t((ts - 1) | (ch == 2 ? 0x40 : 0) | (lit ? 0x80 : 0));
