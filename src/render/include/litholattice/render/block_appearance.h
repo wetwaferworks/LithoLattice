@@ -80,6 +80,11 @@ class IBlockAppearance {
   virtual std::optional<FaceMaterial> faceMaterial(const CustomBlock& /*cell*/, FaceSlot /*slot*/, bool /*active*/) const { return std::nullopt; }
   /// Extra quads after a Cube / Slab cell (overlays, readouts). Default: none.
   virtual void meshExtra(const CustomBlock& /*cell*/, MeshWriter& /*out*/) const {}
+  /// 2026-10-24 render-only shape model for a Cube cell (slab components): true = drawn here, the
+  /// cube path (and meshExtra) is skipped. Collision, flags and sim are unchanged. Default: none.
+  virtual bool meshShaped(const CustomBlock& /*cell*/, MeshWriter& /*out*/) const { return false; }
+  /// Whether meshShaped may draw this block: such cells do not hide neighbour faces in the mesher.
+  virtual bool shapedRender(const BlockDef& /*def*/) const { return false; }
   /// Meshes a Shape::Custom cell. Default: nothing is drawn.
   virtual void meshCustom(const CustomBlock& /*cell*/, MeshWriter& /*out*/) const {}
   /// Box model of an attachable block (kAttachable with an attach face), or nullptr to keep its

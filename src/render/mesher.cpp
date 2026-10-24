@@ -309,7 +309,10 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
   };
   const bool solidShell = shellSolid();  // 2026-10-16 1551 (JD): Trace Bulb shell Ghostly / Solid
   const uint32_t opaqueMask = (fancyLeaves ? uint32_t(kOpaque) : uint32_t(kOpaque | kLeaves)) | (solidShell ? uint32_t(kShell) : 0u);
-  for (int i = 0; i < kMeshPadVolume; ++i) opaque[i] = uint8_t((jobDef(in.id[i]).flags & opaqueMask) != 0);
+  for (int i = 0; i < kMeshPadVolume; ++i) {
+    const BlockDef& od = jobDef(in.id[i]);
+    opaque[i] = uint8_t((od.flags & opaqueMask) != 0 && !look.shapedRender(od));  // 2026-10-24: slab components
+  }
   static const int full[4] = {3, 3, 3, 3};
 
   out.verts.reserve(4096);
@@ -373,6 +376,9 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
             continue;
           }
         }
+        if (def.shape == Shape::Cube && look.shapedRender(def) &&
+            look.meshShaped(CustomBlock{in, reg, mats, b, st, x, y, z}, writer))
+          continue;  // 2026-10-24: render-only slab model (collision stays a full cell)
         if (def.shape == Shape::Custom) {  // the game builds it (e.g. connected strips)
           look.meshCustom(CustomBlock{in, reg, mats, b, st, x, y, z}, writer);
           continue;
