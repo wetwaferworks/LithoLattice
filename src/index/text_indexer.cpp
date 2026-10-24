@@ -92,7 +92,7 @@ void tokenize(std::string_view text, std::vector<std::string>* terms) {
 
 }  // namespace
 
-void TextIndexer::addDocument(DocId id, std::string_view text) {
+void cTextIndexer::addDocument(DocId id, std::string_view text) {
   removeDocument(id);  // replace: drop the old postings first
   std::vector<std::string> terms;
   tokenize(text, &terms);
@@ -104,7 +104,7 @@ void TextIndexer::addDocument(DocId id, std::string_view text) {
   ++docCount_;
 }
 
-void TextIndexer::removeDocument(DocId id) {
+void cTextIndexer::removeDocument(DocId id) {
   auto docIt = docs_.find(id);
   if (docIt == docs_.end()) return;  // missing id = no-op
   for (const auto& kv : docIt->second) {
@@ -118,7 +118,7 @@ void TextIndexer::removeDocument(DocId id) {
   --docCount_;
 }
 
-std::vector<TextIndexer::Hit> TextIndexer::query(std::string_view q, size_t maxResults) const {
+std::vector<cTextIndexer::Hit> cTextIndexer::query(std::string_view q, size_t maxResults) const {
   std::vector<std::string> terms;
   tokenize(q, &terms);
   if (terms.empty()) return {};  // empty query -> empty result
@@ -143,11 +143,11 @@ std::vector<TextIndexer::Hit> TextIndexer::query(std::string_view q, size_t maxR
   return hits;
 }
 
-size_t TextIndexer::documentCount() const { return docCount_; }
+size_t cTextIndexer::documentCount() const { return docCount_; }
 
-size_t TextIndexer::termCount() const { return index_.size(); }
+size_t cTextIndexer::termCount() const { return index_.size(); }
 
-void TextIndexer::clear() {
+void cTextIndexer::clear() {
   docs_.clear();
   index_.clear();
   docCount_ = 0;

@@ -1,4 +1,4 @@
-// SpriteRegistry implementation. See sprite.h for the registration rules
+// cSpriteReg implementation. See sprite.h for the registration rules
 // (first-wins by name) and the atlas contract.
 #include "litholattice/sprite/sprite_registry.h"
 
@@ -44,20 +44,20 @@ void blitPadded(std::vector<uint8_t>& buf, int pageW, const Image& src, int imgX
 
 }  // namespace
 
-SpriteRegistry::SpriteRegistry(int atlasPageSize)
+cSpriteReg::cSpriteReg(int atlasPageSize)
     : pageSize_(atlasPageSize <= 0 ? 1024 : roundUpPow2(atlasPageSize)) {}
 
-uint32_t SpriteRegistry::findSprite(std::string_view name) const {
+uint32_t cSpriteReg::findSprite(std::string_view name) const {
   const auto it = byName_.find(std::string(name));
   return it == byName_.end() ? 0 : it->second;
 }
 
-const SpriteDef* SpriteRegistry::spriteDef(uint32_t spriteId) const {
+const SpriteDef* cSpriteReg::spriteDef(uint32_t spriteId) const {
   const auto it = defs_.find(spriteId);
   return it == defs_.end() ? nullptr : &it->second.def;
 }
 
-uint32_t SpriteRegistry::adoptImage(const SpriteDef& def, Image image, bool singleFrame,
+uint32_t cSpriteReg::adoptImage(const SpriteDef& def, Image image, bool singleFrame,
                                     std::string* err) {
   // Def validation (fail closed, like the player registries).
   if (!def.name || def.name[0] == '\0') {
@@ -125,7 +125,7 @@ uint32_t SpriteRegistry::adoptImage(const SpriteDef& def, Image image, bool sing
   return id;
 }
 
-uint32_t SpriteRegistry::registerPng(const SpriteDef& def, std::span<const uint8_t> pngBytes,
+uint32_t cSpriteReg::registerPng(const SpriteDef& def, std::span<const uint8_t> pngBytes,
                                      std::string* err) {
   if (def.name && def.name[0] != '\0')
     if (const uint32_t existing = findSprite(def.name)) return existing;  // no decode on duplicate
@@ -138,7 +138,7 @@ uint32_t SpriteRegistry::registerPng(const SpriteDef& def, std::span<const uint8
   return adoptImage(def, std::move(*img), /*singleFrame=*/false, err);
 }
 
-uint32_t SpriteRegistry::registerPngFile(const SpriteDef& def, const std::filesystem::path& file,
+uint32_t cSpriteReg::registerPngFile(const SpriteDef& def, const std::filesystem::path& file,
                                          std::string* err) {
   if (def.name && def.name[0] != '\0')
     if (const uint32_t existing = findSprite(def.name)) return existing;
@@ -152,7 +152,7 @@ uint32_t SpriteRegistry::registerPngFile(const SpriteDef& def, const std::filesy
   return registerPng(def, bytes, err);
 }
 
-uint32_t SpriteRegistry::registerSvg(const SpriteDef& def, std::string_view svgText,
+uint32_t cSpriteReg::registerSvg(const SpriteDef& def, std::string_view svgText,
                                      std::string* err) {
   if (def.name && def.name[0] != '\0')
     if (const uint32_t existing = findSprite(def.name)) return existing;
@@ -173,15 +173,15 @@ uint32_t SpriteRegistry::registerSvg(const SpriteDef& def, std::string_view svgT
   return adoptImage(def, std::move(*img), /*singleFrame=*/true, err);
 }
 
-uint32_t SpriteRegistry::registerImage(const SpriteDef& def, Image image, std::string* err) {
+uint32_t cSpriteReg::registerImage(const SpriteDef& def, Image image, std::string* err) {
   return adoptImage(def, std::move(image), /*singleFrame=*/false, err);
 }
 
-void SpriteRegistry::ensureAtlas() {
+void cSpriteReg::ensureAtlas() {
   if (atlasDirty_) rebuildAtlas();
 }
 
-void SpriteRegistry::rebuildAtlas() {
+void cSpriteReg::rebuildAtlas() {
   pages_.clear();
   rects_.clear();
 
@@ -268,7 +268,7 @@ void SpriteRegistry::rebuildAtlas() {
   ++atlasVersion_;
 }
 
-const SpriteUvRect* SpriteRegistry::frameRect(uint32_t spriteId, uint32_t frame) const {
+const SpriteUvRect* cSpriteReg::frameRect(uint32_t spriteId, uint32_t frame) const {
   const auto it = rects_.find(spriteId);
   if (it == rects_.end() || frame >= it->second.size()) return nullptr;
   return &it->second[frame];

@@ -28,7 +28,7 @@
 //   - Extension save sections are keyed by dotted identity path
 //     ("mod.parent.child"), so identity survives unload/reload.
 //   - Unload NEVER deletes save data: the section stays on disk. Reloading the
-//     same identity restores it (subject to ModSaveRegistry version-compat
+//     same identity restores it (subject to cModSaveReg version-compat
 //     rules: quarantine + disable on corruption or incompatible versions).
 //   - If the extension never comes back, its section becomes Orphaned: kept
 //     on disk, never deleted — the same policy as orphaned mod sections.

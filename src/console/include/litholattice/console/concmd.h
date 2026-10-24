@@ -167,7 +167,7 @@
 #include "litholattice/console/iworldquery.h"
 
 namespace litholattice::defrag {
-class DefragService;  // engine defrag service (owned by the game, must outlive the registry)
+class cDefragService;  // engine defrag service (owned by the game, must outlive the registry)
 }  // namespace litholattice::defrag
 
 namespace litholattice::console {
@@ -327,8 +327,8 @@ class ConsoleRegistry {
   /// Installs the engine defrag service (game-owned, must outlive the
   /// registry). Powers `debug.defrag` and is pumped once per tick() so a
   /// long defrag never stalls the sim. Null = the command reports unregistered.
-  void setDefragService(defrag::DefragService* d) { defragService_ = d; }
-  defrag::DefragService* defragService() const { return defragService_; }
+  void setDefragService(defrag::cDefragService* d) { defragService_ = d; }
+  defrag::cDefragService* defragService() const { return defragService_; }
   /// Installs/replaces the onChange hook for a cvar. False when unknown.
   bool setCVarChangeFn(const std::string& name, CVarChangeFn fn);
   std::vector<std::string> commandNames() const;
@@ -564,7 +564,7 @@ class ConsoleRegistry {
     return callerPermissions_ == kCallerFullAuthority;
   }
   IWorldQuery* worldQuery_ = nullptr;  ///< game backend for `query` (may be null)
-  defrag::DefragService* defragService_ = nullptr;  ///< engine defrag service (may be null)
+  defrag::cDefragService* defragService_ = nullptr;  ///< engine defrag service (may be null)
   int execDepth_ = 0;  ///< current executeFile nesting depth (0 = not inside one)
   ExecCtx* currentCtx_ = nullptr;      ///< innermost live invocation (used by exec)
   int currentAliasDepth_ = 0;          ///< alias depth of the executing frame (used by wait)

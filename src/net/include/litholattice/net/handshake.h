@@ -101,7 +101,7 @@
 // SPOOFING (audit MEDIUM 2026-10-11): a client in HelloSent accepts any
 // well-formed Reject/ServerHello, so a spoofed 3-byte Reject kills the
 // handshake (targeted connection-prevention DoS). Partial mitigation:
-// ConnectHandshake::bindPeer() ties the state machine to the expected
+// cConnectHandshake::bindPeer() ties the state machine to the expected
 // endpoint token and the onPayload() overload ignores payloads from any
 // other endpoint — the game must derive the token from the socket's remote
 // endpoint and actually pass it, or the hook does nothing. The token is an
@@ -248,7 +248,7 @@ constexpr CodecKind codecForProtocol(uint8_t protocolVersion) {
 }
 
 // ---------------------------------------------------------------------------
-// ConnectHandshake: the state machine.
+// cConnectHandshake: the state machine.
 // ---------------------------------------------------------------------------
 
 enum class HandshakeRole : uint8_t { Client, Server };
@@ -283,11 +283,11 @@ struct HandshakeConfig {
 ///   Server: onPayload(ClientHello) -> pending() yields ServerHello/Reject.
 ///
 /// Retransmission is the reliable channel's job (RTO); this class only
-/// needs the deadline. A fresh ConnectHandshake is created per connection
+/// needs the deadline. A fresh cConnectHandshake is created per connection
 /// attempt (like ReliableChannel, it is a fresh pairing).
-class ConnectHandshake {
+class cConnectHandshake {
  public:
-  explicit ConnectHandshake(HandshakeConfig cfg);
+  explicit cConnectHandshake(HandshakeConfig cfg);
 
   HandshakeRole role() const { return cfg_.role; }
   HandshakeState state() const { return state_; }

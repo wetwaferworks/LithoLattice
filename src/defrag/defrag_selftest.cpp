@@ -47,7 +47,7 @@ RecordStore makeFragmented(size_t n, size_t recSize) {
 }
 
 // Drives a session to a terminal phase; false when the pump budget is hit.
-bool runToCompletion(DefragService& svc, int maxPumps = 100000) {
+bool runToCompletion(cDefragService& svc, int maxPumps = 100000) {
   for (int i = 0; i < maxPumps && svc.running(); ++i) svc.pump();
   return !svc.running();
 }
@@ -98,14 +98,14 @@ int runDefragSelfTest() {
     }
     check(deadBefore > 0, "defrag: fixture is fragmented");
 
-    DefragService svc;
+    cDefragService svc;
     const auto path = scratchPath("happy");
     check(svc.registerStore("frag", store, path), "defrag: register ok");
     check(!svc.registerStore("frag", store, path), "defrag: duplicate name refused");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
     check(!svc.beginDefrag("frag"), "defrag: double begin refused fail-closed");
     check(runToCompletion(svc), "defrag: session completes");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: phase Done");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: phase Done");
     check(svc.progress() == 1.0, "defrag: progress 1.0 at Done");
 
     bool intact = store.recordCount() == expected.size();
@@ -141,7 +141,7 @@ int runDefragSelfTest() {
   // 4. Reindex through the text indexer: index consistent after defrag.
   {
     RecordStore store;
-    index::TextIndexer indexer;
+    index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 50; ++i) {
       std::string text = "page about dragons number " + std::to_string(i);
       store.put(i, bytesOf(text));
@@ -151,13 +151,13 @@ int runDefragSelfTest() {
       store.erase(i);
       indexer.removeDocument(i);
     }
-    TextIndexerReindexer rx(&indexer);
-    DefragService svc;
+    cTextIndexerReindexer rx(&indexer);
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("reindex"), &rx),
           "defrag: register with reindexer ok");
     check(svc.beginDefrag("frag"), "defrag: begin with reindexer ok");
     check(runToCompletion(svc), "defrag: reindex session completes");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: reindex phase Done");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: reindex phase Done");
     auto hits = indexer.query("dragons", 64);
     check(hits.size() == 25, "defrag: index consistent after reindex (25 docs)");
     check(indexer.documentCount() == 25, "defrag: document count matches live records");
@@ -172,18 +172,18 @@ int runDefragSelfTest() {
     auto before = RecordStore::load(path, &err);
     check(before.has_value(), "defrag: pre-defrag file loads");
 
-    DefragService svc;
+    cDefragService svc;
     check(svc.registerStore("frag", store, path), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
     // Pump only through Scan (never reaching Commit).
-    for (int i = 0; i < 1000 && svc.phase() == DefragService::Phase::Scan; ++i)
+    for (int i = 0; i < 1000 && svc.phase() == cDefragService::Phase::Scan; ++i)
       svc.pump();
     auto during = RecordStore::load(path, &err);
     bool untouched = during && during->recordCount() == before->recordCount() &&
                      during->deadBytes() == before->deadBytes();
     check(untouched, "defrag: live file untouched before commit");
     check(runToCompletion(svc), "defrag: completes after the check");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: Done");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: Done");
     std::error_code ec;
     std::filesystem::remove(path, ec);
   }
@@ -191,13 +191,13 @@ int runDefragSelfTest() {
   // 6. Mutation mid-defrag: bounded restart, data stays intact.
   {
     RecordStore store = makeFragmented(300, 64);
-    DefragService svc;
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("restart")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
     svc.pump();  // get the scan underway
     store.put(10001, bytesOf("mid-defrag write"));  // mutate: bumps generation
     check(runToCompletion(svc), "defrag: completes despite mid-defrag mutation");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: Done after restart");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: Done after restart");
     auto g = store.get(10001);
     check(g && *g == bytesOf("mid-defrag write"),
           "defrag: mid-defrag write survives (restart rescanned it)");
@@ -206,7 +206,7 @@ int runDefragSelfTest() {
   // 7. Pathological churn: mutate on every pump -> bounded failure, no livelock.
   {
     RecordStore store = makeFragmented(200, 64);
-    DefragService svc;
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("busy")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
     for (int i = 0; i < 100000 && svc.running(); ++i) {
@@ -214,7 +214,7 @@ int runDefragSelfTest() {
       store.put(20000 + (i % 7), bytesOf("churn"));  // every pump mutates
     }
     check(!svc.running(), "defrag: churn session terminates (no livelock)");
-    check(svc.phase() == DefragService::Phase::Failed, "defrag: churn fails closed");
+    check(svc.phase() == cDefragService::Phase::Failed, "defrag: churn fails closed");
     check(!svc.lastError().empty(), "defrag: churn reports why");
     // The live store is still fully usable after the failed session.
     // (id 2: even, live in the fixture, replaced by "replaced-1-...")
@@ -226,7 +226,7 @@ int runDefragSelfTest() {
   // 8. Per-tick boundedness: one pump never finishes a large defrag.
   {
     RecordStore store = makeFragmented(5000, 128);
-    DefragService svc;
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("bounded")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
     double p0 = svc.progress();
@@ -236,14 +236,14 @@ int runDefragSelfTest() {
     check(p1 >= p0, "defrag: progress monotonic");
     check(p1 < 1.0, "defrag: single pump is bounded work");
     svc.cancel();
-    check(!svc.running() && svc.phase() == DefragService::Phase::Idle,
+    check(!svc.running() && svc.phase() == cDefragService::Phase::Idle,
           "defrag: cancel idles the session");
   }
 
   // 9. Unknown store / unregister rules.
   {
     RecordStore store;
-    DefragService svc;
+    cDefragService svc;
     check(!svc.beginDefrag("nope"), "defrag: unknown store refused");
     check(svc.registerStore("a", store, scratchPath("a")), "defrag: register ok");
     check(svc.unregisterStore("a"), "defrag: unregister idle store ok");
@@ -258,11 +258,11 @@ int runDefragSelfTest() {
   // 10. Empty store defrags cleanly.
   {
     RecordStore store;
-    DefragService svc;
+    cDefragService svc;
     check(svc.registerStore("empty", store, scratchPath("empty")), "defrag: register ok");
     check(svc.beginDefrag("empty"), "defrag: begin on empty ok");
     check(runToCompletion(svc), "defrag: empty session completes");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: empty -> Done");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: empty -> Done");
     std::error_code ec;
     std::filesystem::remove(scratchPath("empty"), ec);
   }
@@ -271,19 +271,19 @@ int runDefragSelfTest() {
   // cleared-but-partial), and no dirty flag is set for a fresh snapshot.
   {
     RecordStore store;
-    index::TextIndexer indexer;
+    index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 600; ++i)
       store.put(i, bytesOf("cancelreindex doc number " + std::to_string(i)));
-    TextIndexerReindexer rx(&indexer);
-    DefragService svc;
+    cTextIndexerReindexer rx(&indexer);
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("cancelreindex"), &rx),
           "defrag: register with reindexer ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
-    while (svc.running() && svc.phase() != DefragService::Phase::Reindex) svc.pump();
-    check(svc.phase() == DefragService::Phase::Reindex, "defrag: reached reindex");
+    while (svc.running() && svc.phase() != cDefragService::Phase::Reindex) svc.pump();
+    check(svc.phase() == cDefragService::Phase::Reindex, "defrag: reached reindex");
     svc.pump();  // partial reindex: reindexBegin() cleared the index, feed incomplete
     svc.cancel();
-    check(!svc.running() && svc.phase() == DefragService::Phase::Idle,
+    check(!svc.running() && svc.phase() == cDefragService::Phase::Idle,
           "defrag: cancel mid-reindex idles the session");
     auto hits = indexer.query("cancelreindex", 700);
     check(hits.size() == 600, "defrag: cancel mid-reindex completes the feed (600 docs)");
@@ -297,16 +297,16 @@ int runDefragSelfTest() {
   // (never fed stale bytes), and the next session's reindex heals it.
   {
     RecordStore store;
-    index::TextIndexer indexer;
+    index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 600; ++i)
       store.put(i, bytesOf("stalereindex doc number " + std::to_string(i)));
-    TextIndexerReindexer rx(&indexer);
-    DefragService svc;
+    cTextIndexerReindexer rx(&indexer);
+    cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("stalereindex"), &rx),
           "defrag: register with reindexer ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
-    while (svc.running() && svc.phase() != DefragService::Phase::Reindex) svc.pump();
-    check(svc.phase() == DefragService::Phase::Reindex, "defrag: reached reindex");
+    while (svc.running() && svc.phase() != cDefragService::Phase::Reindex) svc.pump();
+    check(svc.phase() == cDefragService::Phase::Reindex, "defrag: reached reindex");
     svc.pump();                       // partial feed; index cleared
     store.put(601, bytesOf("stalereindex late arrival"));  // mutate mid-reindex
     svc.cancel();
@@ -314,7 +314,7 @@ int runDefragSelfTest() {
           "defrag: stale cancel marks the index dirty (no stale feed)");
     check(svc.beginDefrag("frag"), "defrag: re-begin ok");
     check(runToCompletion(svc), "defrag: healing session completes");
-    check(svc.phase() == DefragService::Phase::Done, "defrag: healing session Done");
+    check(svc.phase() == cDefragService::Phase::Done, "defrag: healing session Done");
     auto hits = indexer.query("stalereindex", 700);
     check(hits.size() == 601, "defrag: next reindex heals the dirty index (601 docs)");
     check(!svc.indexDirty(), "defrag: dirty flag cleared after a full reindex");

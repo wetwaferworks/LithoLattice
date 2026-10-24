@@ -1,4 +1,4 @@
-// SpriteRegistry: the concrete ISpriteReg. One registry serves the
+// cSpriteReg: the concrete ISpriteReg. One registry serves the
 // whole process; defs are keyed by id in ordered maps, so iteration (and
 // therefore atlas packing) is deterministic by registration order.
 #pragma once
@@ -12,12 +12,12 @@
 
 namespace litholattice::sprite {
 
-class SpriteRegistry final : public ISpriteReg {
+class cSpriteReg final : public ISpriteReg {
  public:
   /// `atlasPageSize` is the edge of the (square) atlas pages: rounded up
   /// to a power of two, minimum 64; <= 0 selects the default 1024. A frame
   /// larger than the page gets a dedicated page of its own exact size.
-  explicit SpriteRegistry(int atlasPageSize = 1024);
+  explicit cSpriteReg(int atlasPageSize = 1024);
 
   uint32_t registerPng(const SpriteDef& def, std::span<const uint8_t> pngBytes,
                        std::string* err = nullptr) override;

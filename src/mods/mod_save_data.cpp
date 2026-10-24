@@ -81,15 +81,15 @@ bool parseModSaveVersion(const std::string& s, uint32_t& major, uint32_t& minor,
   return true;
 }
 
-ModSaveRegistry::ModSaveRegistry(std::filesystem::path worldDir)
+cModSaveReg::cModSaveReg(std::filesystem::path worldDir)
     : worldDir_(std::move(worldDir)), saveDir_(worldDir_ / kModSaveDirName) {}
 
-std::filesystem::path ModSaveRegistry::sectionPath(const std::string& modId) const {
+std::filesystem::path cModSaveReg::sectionPath(const std::string& modId) const {
   if (!ExtensionRegistry::isValidId(modId)) return {};
   return saveDir_ / (modId + kModSaveFileSuffix);
 }
 
-bool ModSaveRegistry::save(const std::string& modId, const std::string& modVersion,
+bool cModSaveReg::save(const std::string& modId, const std::string& modVersion,
                            uint16_t dataVersion, const std::vector<uint8_t>& payload,
                            std::string* err, const storage::FileWriteOptions& opts) {
   const std::filesystem::path path = sectionPath(modId);
@@ -120,7 +120,7 @@ bool ModSaveRegistry::save(const std::string& modId, const std::string& modVersi
   return true;
 }
 
-std::vector<ModSaveResult> ModSaveRegistry::loadAll(const std::vector<RunningMod>& mods) {
+std::vector<ModSaveResult> cModSaveReg::loadAll(const std::vector<RunningMod>& mods) {
   std::vector<ModSaveResult> results;
   results.reserve(mods.size());
 

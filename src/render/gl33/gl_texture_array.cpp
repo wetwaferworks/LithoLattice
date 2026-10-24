@@ -7,12 +7,12 @@
 
 namespace litholattice::gl33 {
 
-GlTextureArray::~GlTextureArray() {
+cGlTextureArray::~cGlTextureArray() {
   if (array_) glDeleteTextures(1, &array_);
   if (palette_) glDeleteTextures(1, &palette_);
 }
 
-bool GlTextureArray::upload(const TextureRegistry& textures) {
+bool cGlTextureArray::upload(const TextureRegistry& textures) {
   if (!array_) glGenTextures(1, &array_);
   tile_ = textures.tileSize();
   layers_ = int(textures.textures().size());
@@ -73,7 +73,7 @@ bool GlTextureArray::upload(const TextureRegistry& textures) {
   return glGetError() == 0;
 }
 
-void GlTextureArray::bind() const {
+void cGlTextureArray::bind() const {
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D_ARRAY, array_);
   glActiveTexture(GL_TEXTURE1);

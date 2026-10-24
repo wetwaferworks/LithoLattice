@@ -43,7 +43,7 @@ SpriteDef baseDef(const char* name) {
 }
 
 /// Pixel at the centre of a frame rect on its atlas page.
-const uint8_t* rectCenterPx(SpriteRegistry& reg, const SpriteUvRect& r) {
+const uint8_t* rectCenterPx(cSpriteReg& reg, const SpriteUvRect& r) {
   const litholattice::Image& page = reg.atlasPages()[r.page];
   const int x = static_cast<int>((r.u0 + r.u1) * 0.5f * page.width());
   const int y = static_cast<int>((r.v0 + r.v1) * 0.5f * page.height());
@@ -58,9 +58,9 @@ int main() {
 
   // -- Registration: PNG source, first-wins, lookups ------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     check(reg.atlasPageSize() == 1024, "registry: default page size 1024");
-    check(SpriteRegistry(100).atlasPageSize() == 128, "registry: page size rounds up to pow2");
+    check(cSpriteReg(100).atlasPageSize() == 128, "registry: page size rounds up to pow2");
 
     // PNG fixture produced through the assets encoder (decode(encode(x))
     // exercises the real PNG path without embedding fragile byte arrays).
@@ -97,7 +97,7 @@ int main() {
 
   // -- Registration: PNG file source ----------------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     const auto path = std::filesystem::temp_directory_path() / "litho_sprite_selftest.png";
     std::string err;
     check(solid(3, 3, 10, 20, 30, 255).savePng(path, &err), "png file: fixture writes");
@@ -109,7 +109,7 @@ int main() {
 
   // -- SVG source: rasterizes into the atlas ---------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     SpriteDef d = baseDef("test:red");
     d.pixelWidth = 8;
     d.pixelHeight = 8;
@@ -140,7 +140,7 @@ int main() {
 
   // -- Raw Image source + atlas packing --------------------------------------
   {
-    SpriteRegistry reg(64);
+    cSpriteReg reg(64);
     const uint32_t a = reg.registerImage(baseDef("test:a"), solid(8, 8, 255, 0, 0, 255));
     const uint32_t b = reg.registerImage(baseDef("test:b"), solid(8, 8, 0, 0, 255, 255));
     SpriteDef strip = baseDef("test:strip");
@@ -181,7 +181,7 @@ int main() {
 
   // -- Instance lifecycle -----------------------------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     const uint32_t dot = reg.registerImage(baseDef("test:dot"), solid(2, 2, 255, 255, 255, 255));
     SpriteSystem sys(reg);
     sys.setGravity({0.f, 0.f, 0.f});
@@ -221,7 +221,7 @@ int main() {
 
   // -- Gravity and drag --------------------------------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     const uint32_t dot = reg.registerImage(baseDef("test:dot"), solid(2, 2, 255, 255, 255, 255));
 
     SpriteSystem grav(reg);
@@ -273,7 +273,7 @@ int main() {
 
   // -- Emitters: determinism and rate ------------------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     const uint32_t dot = reg.registerImage(baseDef("test:dot"), solid(2, 2, 255, 255, 255, 255));
     ParticleEmitterDef ed;
     ed.spriteDef = dot;
@@ -333,7 +333,7 @@ int main() {
 
   // -- Quad emission -------------------------------------------------------------
   {
-    SpriteRegistry reg;
+    cSpriteReg reg;
     SpriteDef flat = baseDef("test:flat");
     flat.billboard = BillboardMode::FlatFacing;
     flat.widthBlocks = 2.f;

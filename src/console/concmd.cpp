@@ -1367,7 +1367,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                   "debug.defrag [<store>|status|cancel]: defrag a registered store "
                   "(no args: status)",
                   [](ConsoleRegistry& r, const ConsoleArgs& argv) {
-                    defrag::DefragService* d = r.defragService();
+                    defrag::cDefragService* d = r.defragService();
                     if (!d) {
                       r.print("debug.defrag: no defrag service registered");
                       return;

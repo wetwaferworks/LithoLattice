@@ -123,7 +123,7 @@ class SnapshotClient {
 
   /// Version byte stamped on outbound snapshot headers: the negotiated
   /// protocol version once the connect handshake agrees (kProtocolVersion
-  /// before that). The game calls this after ConnectHandshake reaches
+  /// before that). The game calls this after cConnectHandshake reaches
   /// Agreed.
   void setVersion(uint8_t v) { version_ = v; }
   uint8_t version() const { return version_; }

@@ -23,13 +23,13 @@ class Checker {
   int fails_ = 0;
 };
 
-bool containsDoc(const std::vector<TextIndexer::Hit>& hits, TextIndexer::DocId doc) {
+bool containsDoc(const std::vector<cTextIndexer::Hit>& hits, cTextIndexer::DocId doc) {
   for (const auto& h : hits)
     if (h.doc == doc) return true;
   return false;
 }
 
-bool sameResults(const std::vector<TextIndexer::Hit>& a, const std::vector<TextIndexer::Hit>& b) {
+bool sameResults(const std::vector<cTextIndexer::Hit>& a, const std::vector<cTextIndexer::Hit>& b) {
   if (a.size() != b.size()) return false;
   for (size_t i = 0; i < a.size(); ++i)
     if (a[i].doc != b[i].doc || a[i].score != b[i].score) return false;
@@ -43,7 +43,7 @@ int runIndexSelfTest() {
 
   // ---- basics: index, query, tf scoring, ordering ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "redstone torch powers the redstone circuit");
     ix.addDocument(2, "redstone dust");
     ix.addDocument(3, "a quiet page about the void");
@@ -67,7 +67,7 @@ int runIndexSelfTest() {
 
   // ---- tie-break: equal scores -> DocId ascending ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(7, "lattice");
     ix.addDocument(3, "lattice");
     ix.addDocument(5, "lattice");
@@ -81,7 +81,7 @@ int runIndexSelfTest() {
 
   // ---- replace: addDocument on an existing id reindexes only that doc ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "old words about copper");
     ix.addDocument(2, "copper wire and tin");
     check(containsDoc(ix.query("copper"), 1), "doc 1 found under 'copper' before replace");
@@ -94,7 +94,7 @@ int runIndexSelfTest() {
 
   // ---- remove ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "alpha beta");
     ix.addDocument(2, "alpha gamma");
     ix.removeDocument(1);
@@ -109,7 +109,7 @@ int runIndexSelfTest() {
 
   // ---- unicode safety: multibyte terms index and match, never split ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "caf\u00e9 na\u00efve r\u00e9sum\u00e9");
     ix.addDocument(2, "plain ascii page");
     check(containsDoc(ix.query("caf\u00e9"), 1), "multibyte term 'caf\u00e9' matches");
@@ -135,7 +135,7 @@ int runIndexSelfTest() {
 
   // ---- empty / punctuation-only queries ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "some words here");
     check(ix.query("").empty(), "empty query string -> no hits");
     check(ix.query("   \t\n  ").empty(), "whitespace-only query -> no hits");
@@ -145,7 +145,7 @@ int runIndexSelfTest() {
 
   // ---- determinism: same query twice -> identical results ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     for (uint64_t i = 0; i < 200; ++i) {
       ix.addDocument(i, "doc number " + std::to_string(i) + " redstone lattice repeater");
     }
@@ -164,7 +164,7 @@ int runIndexSelfTest() {
 
   // ---- maxResults cap ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     for (uint64_t i = 0; i < 100; ++i) ix.addDocument(i, "shared term here");
     auto capped = ix.query("shared", 5);
     check(capped.size() == 5, "maxResults caps at 5");
@@ -180,7 +180,7 @@ int runIndexSelfTest() {
 
   // ---- clear ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     ix.addDocument(1, "something");
     ix.clear();
     check(ix.documentCount() == 0 && ix.termCount() == 0, "clear empties the index");
@@ -189,7 +189,7 @@ int runIndexSelfTest() {
 
   // ---- latency sanity: 10k small docs + 100 queries under a generous bound ----
   {
-    TextIndexer ix;
+    cTextIndexer ix;
     const auto t0 = std::chrono::steady_clock::now();
     for (uint64_t i = 0; i < 10000; ++i) {
       ix.addDocument(i, "journal entry " + std::to_string(i) +

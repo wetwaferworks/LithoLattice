@@ -125,7 +125,7 @@ class AiWorld {
   HpaGraph hpa_;  // P4: lazy/repaired from nav_ versions; only consulted when cfg_.useHpa
   // P4 flow-field state (single current field, keyed by goal + nav
   // generation; rebuilt in the plan collect phase, never in a job).
-  std::optional<FlowField> flow_;
+  std::optional<cFlowField> flow_;
   Cell flowGoal_{};
   uint64_t flowGen_ = ~uint64_t(0);
   bool flowOk_ = false;

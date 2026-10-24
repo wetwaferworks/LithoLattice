@@ -27,7 +27,7 @@
 //   permission is STRIPPED (the mod loads with a reduced mask, logged).
 // - "firstParty": true is a claim, not a grant. The engine treats a mod as
 //   first-party only when its id is on the gate's trusted first-party list
-//   (game-configured via ModPermissionGate::setFirstPartyIds). A claim with
+//   (game-configured via cModPermissionGate::setFirstPartyIds). A claim with
 //   no engine confirmation is logged and the mod is treated as third-party.
 //   No silent privilege inheritance: a first-party parent never makes its
 //   extensions first-party (that rule lives with the IExtensible worker).
@@ -35,7 +35,7 @@
 //   mods at runtime; the manifest path covers install-time resolution for
 //   content/script mods and the UI prompt.
 //
-// APPROVAL FLOW (UI-agnostic): ModPermissionGate::resolve() collects the
+// APPROVAL FLOW (UI-agnostic): cModPermissionGate::resolve() collects the
 // requested permissions + rationales into a PermissionRequest and calls the
 // game's PermissionPromptFn, which returns the approved bit subset. The game
 // presents PermissionRequest however it likes (install dialog, settings
@@ -50,7 +50,7 @@
 // the effective mask and the (builder-side) API binder must gate each
 // binding on it.
 //
-// PERSISTENCE: PermissionStore records per-mod grants (granted/denied masks
+// PERSISTENCE: cPermissionStore records per-mod grants (granted/denied masks
 // plus the requested snapshot, mod version, and permission-set version) and
 // persists them as JSON (atomic write). Re-prompts happen only when the
 // manifest ASKS FOR MORE: new bits vs. the stored request snapshot (an update
@@ -167,9 +167,9 @@ struct StoredGrant {
 /// its StoredGrant (names, not raw bits, for readability and forward
 /// compatibility). Writes are atomic (temp + fsync + rename). "" path =
 /// in-memory only (no persistence).
-class PermissionStore {
+class cPermissionStore {
  public:
-  explicit PermissionStore(std::string path = {});
+  explicit cPermissionStore(std::string path = {});
   /// Loads the store from disk. A missing file is fine (fresh store);
   /// a corrupt file is logged and treated as empty (never fatal).
   bool load();
@@ -188,7 +188,7 @@ class PermissionStore {
 
 /// Install/enable-time permission gate. resolve() is the only entry point
 /// the loader needs; the game configures the trusted first-party list.
-class ModPermissionGate {
+class cModPermissionGate {
  public:
   /// Mod ids the engine trusts as first-party (e.g. {"lithokraft"}).
   /// A manifest "firstParty": true claim only takes effect for ids on
@@ -203,7 +203,7 @@ class ModPermissionGate {
   ///   3. critical check: a denied load-critical bit -> kRefuse;
   ///      otherwise denied bits are stripped -> kLoadStripped (logged).
   /// A null prompt behaves like denyAllPermissions (headless-safe).
-  PermissionResolution resolve(const ModInfo& mod, PermissionStore& store,
+  PermissionResolution resolve(const ModInfo& mod, cPermissionStore& store,
                                PermissionPromptFn prompt);
 
  private:

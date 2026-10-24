@@ -5,7 +5,7 @@
 // from the WalkCache's per-column version counters; nothing is persisted.
 //
 // Three pieces:
-//  - FlowField: a Dijkstra integration field over Walk-semantics steps.
+//  - cFlowField: a Dijkstra integration field over Walk-semantics steps.
 //    Built once per goal, followed by any number of mobs -- the
 //    pack/crowd-movement primitive (Deceitor pack aggro is the consumer
 //    class this serves).
@@ -33,7 +33,7 @@ namespace litholattice::ai {
 /// Dijkstra integration field toward one goal, over the exact neighbour
 /// edges of the Walk movement mode (so field descent is always a legal
 /// walk). Costs are the steps' own fixed-point costs.
-class FlowField {
+class cFlowField {
  public:
   static constexpr NavCost kUnreached = ~NavCost(0);
 

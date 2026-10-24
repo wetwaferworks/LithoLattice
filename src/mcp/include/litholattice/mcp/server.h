@@ -11,7 +11,7 @@
 //   - The server NEVER touches engine subsystems directly. Every data source
 //     is an injectable seam interface declared below (ISimStatus, IWorldReader,
 //     ...). The game adapts its real classes (SimThread, ModLoader, ChunkMap,
-//     EntityManager, ConsoleRegistry, TextIndexer, DefragService, ...) to
+//     EntityManager, ConsoleRegistry, cTextIndexer, cDefragService, ...) to
 //     these seams; the self-tests use stub seams. Consequence: the mcp library
 //     has no link dependencies on any other engine module — it only reads
 //     three header-only public headers (kPerm* bits, engine version macros,
@@ -368,7 +368,7 @@ class IConsoleSurface {
   virtual std::vector<CVar> cvars() = 0;
 };
 
-/// index/text_indexer.h: the Fragment corpus. The game wires its TextIndexer
+/// index/text_indexer.h: the Fragment corpus. The game wires its cTextIndexer
 /// plus the DocId -> page-text mapping; the server never interprets DocIds.
 class IFragmentCorpus {
  public:
@@ -378,7 +378,7 @@ class IFragmentCorpus {
     std::string text;  ///< page text (may be truncated by the game)
   };
   virtual ~IFragmentCorpus() = default;
-  /// Deterministic search (score desc, doc asc on ties, like TextIndexer).
+  /// Deterministic search (score desc, doc asc on ties, like cTextIndexer).
   virtual std::vector<Hit> search(std::string_view query, size_t maxResults) = 0;
 };
 

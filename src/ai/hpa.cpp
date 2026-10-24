@@ -88,9 +88,9 @@ void scanBorder(const NavView& nav, bool axisX, int lx, int lz, std::vector<HpaP
 
 }  // namespace
 
-// ---------------------------------------------------------------- FlowField
+// ---------------------------------------------------------------- cFlowField
 
-bool FlowField::build(const WalkCache& cache, Cell goal, int maxRange, size_t maxCells) {
+bool cFlowField::build(const WalkCache& cache, Cell goal, int maxRange, size_t maxCells) {
   cache_ = &cache;
   goal_ = goal;
   dist_.clear();
@@ -145,12 +145,12 @@ bool FlowField::build(const WalkCache& cache, Cell goal, int maxRange, size_t ma
   return true;
 }
 
-NavCost FlowField::dist(Cell c) const {
+NavCost cFlowField::dist(Cell c) const {
   const auto it = dist_.find(c);
   return it == dist_.end() ? kUnreached : it->second;
 }
 
-std::optional<Cell> FlowField::next(Cell from) const {
+std::optional<Cell> cFlowField::next(Cell from) const {
   if (!cache_ || !walk_) return std::nullopt;
   const NavCost d0 = dist(from);
   if (d0 == kUnreached || d0 == 0) return std::nullopt;

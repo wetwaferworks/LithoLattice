@@ -1299,7 +1299,7 @@ int runConsoleSelfTest() {
     check(cap.contains("no defrag service registered"),
           "defrag: command reports missing service fail-closed");
 
-    defrag::DefragService svc;
+    defrag::cDefragService svc;
     r.setDefragService(&svc);
     cap.clear();
     r.executeLine("debug.defrag");
@@ -1319,7 +1319,7 @@ int runConsoleSelfTest() {
     r.executeLine("debug.defrag fragment");
     check(cap.contains("started on 'fragment'"), "defrag: command starts session");
     for (int i = 0; i < 10000 && svc.running(); ++i) r.tick();  // pumped via tick()
-    check(!svc.running() && svc.phase() == defrag::DefragService::Phase::Done,
+    check(!svc.running() && svc.phase() == defrag::cDefragService::Phase::Done,
           "defrag: session completes through registry tick()");
     check(store.deadBytes() == 0, "defrag: dead space reclaimed via tick pump");
     bool intact = true;

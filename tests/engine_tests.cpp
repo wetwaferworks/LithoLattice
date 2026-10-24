@@ -6000,11 +6000,11 @@ void testAi() {
 
   // ---- P4: flow fields, HPA*-lite, portal-pair cache, AiWorld flags ----
   {
-    FlowField ff;
+    cFlowField ff;
     check(ff.build(nav, {30, 10, 40}), "ai: P4 flow: field builds toward a standable goal");
     check(ff.dist({30, 10, 40}) == 0 && ff.dist({26, 10, 40}) == 4 * 1024,
           "ai: P4 flow: distances are exact fixed-point (goal 0, 4 straight steps = 4096)");
-    check(ff.dist({500, 10, 500}) == FlowField::kUnreached, "ai: P4 flow: outside the field reads kUnreached");
+    check(ff.dist({500, 10, 500}) == cFlowField::kUnreached, "ai: P4 flow: outside the field reads kUnreached");
     check(!ff.build(nav, {20, 10, 10}), "ai: P4 flow: a non-standable goal (inside the wall) is refused");
     ff.build(nav, {30, 10, 40});
     auto descends = [&](Cell from, int budget) {
@@ -7788,8 +7788,8 @@ void testNetHandshake() {
     cdemux.setAcceptedVersions(knownProtocolVersions());
     sdemux.setAcceptedVersions(knownProtocolVersions());
 
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2, 3}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
-    ConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2, 3}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2, 3}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2, 3}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
 
     std::deque<std::vector<uint8_t>> c2s, s2c;  // the fake wire
     uint64_t now = 1000;
@@ -7857,8 +7857,8 @@ void testNetHandshake() {
   {
     bool ok = true;
     // client only speaks v1, server only speaks v2
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
-    ConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
     shs.onPayload(hello, 0);
@@ -7881,8 +7881,8 @@ void testNetHandshake() {
   // --- incompatible engine major: clean reject ---------------------------------
   {
     bool ok = true;
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2}, {9, 0, 0}, LITHOLATTICE_SDK_VERSION, 5000});
-    ConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2}, {9, 0, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
     shs.onPayload(hello, 0);
@@ -7900,7 +7900,7 @@ void testNetHandshake() {
   // --- server answers with a version the client never offered -------------------
   {
     bool ok = true;
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
     const auto bogus = encodeServerHello(1, EngineVersion{0, 1, 0}, LITHOLATTICE_SDK_VERSION);  // v1 was not offered
@@ -7930,8 +7930,8 @@ void testNetHandshake() {
   {
     bool ok = true;
     // server side: client on SDK line 1, server on line 2
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2}, {0, 1, 0}, 1, 5000});
-    ConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0}, 2, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1, 2}, {0, 1, 0}, 1, 5000});
+    cConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0}, 2, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
     shs.onPayload(hello, 0);
@@ -7947,7 +7947,7 @@ void testNetHandshake() {
     ok = ok && chs.state() == HandshakeState::Rejected &&
          chs.rejectReason() == RejectReason::IncompatibleSdkMajor;
     // client side: server answers with a different SDK line than the client's
-    ConnectHandshake chs2(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, 1, 5000});
+    cConnectHandshake chs2(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, 1, 5000});
     std::vector<uint8_t> hello2;
     ok = ok && chs2.start(0, hello2);
     const auto foreign = encodeServerHello(2, EngineVersion{0, 1, 0}, 2);  // SDK line 2
@@ -7961,13 +7961,13 @@ void testNetHandshake() {
   {
     bool ok = true;
     HandshakeConfig noSdk{HandshakeRole::Client, {2}, {0, 1, 0}, kSdkVersionUnset, 5000};
-    ConnectHandshake chs(noSdk);
+    cConnectHandshake chs(noSdk);
     std::vector<uint8_t> hello;
     ok = ok && !chs.start(0, hello);  // client refuses to start without its SDK line
     ok = ok && chs.state() == HandshakeState::Idle;
     // server with an unset SDK line rejects instead of comparing
     HandshakeConfig srvNoSdk{HandshakeRole::Server, {2}, {0, 1, 0}, kSdkVersionUnset, 5000};
-    ConnectHandshake shs(srvNoSdk);
+    cConnectHandshake shs(srvNoSdk);
     const uint8_t v2only[] = {2};
     const auto good = encodeClientHello(EngineVersion{0, 1, 0}, LITHOLATTICE_SDK_VERSION, v2only);
     ok = ok && !good.empty();
@@ -7983,9 +7983,9 @@ void testNetHandshake() {
   {
     bool ok = true;
     // client only knows v1, server knows both: agree on 1 (legitimate downgrade)
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1}, {0, 1, 0},
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {1}, {0, 1, 0},
                                          LITHOLATTICE_SDK_VERSION, 5000});
-    ConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0},
+    cConnectHandshake shs(HandshakeConfig{HandshakeRole::Server, {1, 2}, {0, 1, 0},
                                          LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
@@ -7998,9 +7998,9 @@ void testNetHandshake() {
     // ... and the codec dispatch tells the game what agreeing on 1 means
     ok = ok && codecForProtocol(chs.agreedProtocol()) == CodecKind::V1Baseline;
     // mirrored: server only knows v2, client offers both: agree on 2
-    ConnectHandshake chs2(HandshakeConfig{HandshakeRole::Client, {1, 2}, {0, 1, 0},
+    cConnectHandshake chs2(HandshakeConfig{HandshakeRole::Client, {1, 2}, {0, 1, 0},
                                           LITHOLATTICE_SDK_VERSION, 5000});
-    ConnectHandshake shs2(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0},
+    cConnectHandshake shs2(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0},
                                           LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello2;
     ok = ok && chs2.start(0, hello2);
@@ -8012,14 +8012,14 @@ void testNetHandshake() {
   // --- timeouts: clean failure, never a hang ------------------------------------
   {
     bool ok = true;
-    ConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake chs(HandshakeConfig{HandshakeRole::Client, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
     std::vector<uint8_t> hello;
     ok = ok && chs.start(0, hello);
     ok = ok && chs.pollTimeout(4999) == HandshakeState::HelloSent;  // not yet
     ok = ok && chs.pollTimeout(5000) == HandshakeState::TimedOut;   // deadline
     ok = ok && chs.pollTimeout(10'000'000) == HandshakeState::TimedOut;  // terminal: never moves
     ok = ok && chs.rejectReason() == RejectReason::None;  // no peer fault: just silence
-    ConnectHandshake idle(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
+    cConnectHandshake idle(HandshakeConfig{HandshakeRole::Server, {2}, {0, 1, 0}, LITHOLATTICE_SDK_VERSION, 5000});
     ok = ok && idle.pollTimeout(10'000'000) == HandshakeState::Idle;  // Idle never times out
     check(ok, "net: handshake timeout fails clean (TimedOut), never hangs; Idle is exempt");
   }

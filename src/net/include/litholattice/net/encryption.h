@@ -46,7 +46,7 @@
 //      BoringSSL is overkill (TLS stack weight for a datagram protocol).
 //      Whichever is chosen, it lives behind ICipher: only NullCipher is
 //      replaced, nothing else in net/ changes.
-//   2. PLUG-IN POINT: after ConnectHandshake reaches Agreed and BEFORE the
+//   2. PLUG-IN POINT: after cConnectHandshake reaches Agreed and BEFORE the
 //      game narrows the accepted version set / starts game traffic. The
 //      initiator sends KeyExchange (kHsKeyExchange) on the reliable channel
 //      as a PayloadType::Handshake datagram; the responder answers with its
@@ -232,7 +232,7 @@ enum class KexAlgorithm : uint8_t {
 ///
 /// The message SHAPE is implemented (encode/parse); the key math is not —
 /// CryptoSession::deriveKeys() returns NotImplemented until the backend
-/// lands. Runs on the reliable channel after ConnectHandshake::Agreed.
+/// lands. Runs on the reliable channel after cConnectHandshake::Agreed.
 struct KeyExchangeMsg {
   bool initiator = false;
   KexAlgorithm algorithm = KexAlgorithm::Unknown;

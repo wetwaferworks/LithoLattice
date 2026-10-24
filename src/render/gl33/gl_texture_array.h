@@ -7,12 +7,12 @@
 
 namespace litholattice::gl33 {
 
-class GlTextureArray final : public ITextureArray {
+class cGlTextureArray final : public ITextureArray {
  public:
-  GlTextureArray() = default;
-  ~GlTextureArray() override;
-  GlTextureArray(const GlTextureArray&) = delete;
-  GlTextureArray& operator=(const GlTextureArray&) = delete;
+  cGlTextureArray() = default;
+  ~cGlTextureArray() override;
+  cGlTextureArray(const cGlTextureArray&) = delete;
+  cGlTextureArray& operator=(const cGlTextureArray&) = delete;
 
   bool upload(const TextureRegistry& textures) override;
   int layerCount() const override { return layers_; }

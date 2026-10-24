@@ -237,7 +237,7 @@ class ReliableChannel {
 
   /// Version byte stamped on outbound headers: the negotiated protocol
   /// version once the connect handshake agrees (kProtocolVersion before
-  /// that). The game calls this after ConnectHandshake reaches Agreed.
+  /// that). The game calls this after cConnectHandshake reaches Agreed.
   void setVersion(uint8_t v) { version_ = v; }
   uint8_t version() const { return version_; }
 

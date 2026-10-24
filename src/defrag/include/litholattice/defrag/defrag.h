@@ -10,7 +10,7 @@
 // to be a RecordStore below — slotted 4 KiB pages, tombstoned deletes,
 // generation counter. If the real Fragment persistence evolves, it must either
 // adopt this layout or provide its own defrag target behind the same
-// DefragService session protocol (begin/pump/cancel + reindex hook).
+// cDefragService session protocol (begin/pump/cancel + reindex hook).
 //
 // Crash safety: the compacted image is written with storage::writeFileAtomic
 // (temp -> fsync -> atomic rename). The live file is never touched until the
@@ -19,7 +19,7 @@
 // ten-year Fragment never stalls the sim.
 //
 // Threading: NOT thread-safe. The owner (the tick pump) must serialize access,
-// same rule as index::TextIndexer.
+// same rule as index::cTextIndexer.
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -32,7 +32,7 @@
 #include <vector>
 
 namespace litholattice::index {
-class TextIndexer;  // engine text indexer (the reindex target)
+class cTextIndexer;  // engine text indexer (the reindex target)
 }  // namespace litholattice::index
 
 namespace litholattice::defrag {
@@ -99,7 +99,7 @@ class RecordStore {
   void replaceWith(RecordStore&& compacted);
 
   // The defrag service serializes the compacted image for the atomic commit.
-  friend class DefragService;
+  friend class cDefragService;
 
  private:
   struct Slot {
@@ -136,24 +136,24 @@ class IReindexer {
   virtual void reindexEnd() = 0;
 };
 
-// Adapts the engine TextIndexer: record bytes are interpreted as UTF-8 text
+// Adapts the engine cTextIndexer: record bytes are interpreted as UTF-8 text
 // and re-fed as documents keyed by record id. Keeps index/ untouched.
-class TextIndexerReindexer : public IReindexer {
+class cTextIndexerReindexer : public IReindexer {
  public:
-  explicit TextIndexerReindexer(::litholattice::index::TextIndexer* indexer)
+  explicit cTextIndexerReindexer(::litholattice::index::cTextIndexer* indexer)
       : indexer_(indexer) {}
   void reindexBegin(size_t liveRecords) override;
   void reindexRecord(uint64_t id, std::span<const uint8_t> bytes) override;
   void reindexEnd() override;
 
  private:
-  ::litholattice::index::TextIndexer* indexer_ = nullptr;
+  ::litholattice::index::cTextIndexer* indexer_ = nullptr;
 };
 
 // ---------------------------------------------------------------------------
-// DefragService: chunked, crash-safe defrag sessions over registered stores.
+// cDefragService: chunked, crash-safe defrag sessions over registered stores.
 // ---------------------------------------------------------------------------
-class DefragService {
+class cDefragService {
  public:
   enum class Phase { Idle, Scan, Copy, Commit, Reindex, Done, Failed };
 
@@ -166,7 +166,7 @@ class DefragService {
   // the session fails closed ("store too busy") rather than livelocking.
   static constexpr int kMaxRestarts = 3;
 
-  DefragService() = default;
+  cDefragService() = default;
 
   // Registers a defraggable store. The game registers the Fragment store at
   // boot with its save path (the seam the real Fragment persistence fills).

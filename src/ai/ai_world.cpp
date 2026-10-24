@@ -99,7 +99,7 @@ void AiWorld::tick() {
           flowGoal_ = g;
           flowGen_ = nav_.generation();
         }
-        if (flowOk_ && flow_->dist(m.pos) != FlowField::kUnreached) {
+        if (flowOk_ && flow_->dist(m.pos) != cFlowField::kUnreached) {
           Path p;
           p.cells.push_back(m.pos);
           p.steps.push_back(StepTag::kStepStart);

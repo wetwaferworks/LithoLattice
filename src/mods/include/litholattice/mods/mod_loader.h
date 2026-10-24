@@ -35,7 +35,7 @@
 // with a logged reason); a minor-version mismatch only warns and continues.
 // checkCompatibility() implements the check; load() enforces it.
 //
-// Permission approval (item 7): load() runs ModPermissionGate::resolve()
+// Permission approval (item 7): load() runs cModPermissionGate::resolve()
 // for every mod BEFORE the mod's onLoad, so an unapproved mod never gets its
 // lifecycle callbacks with ungranted permissions. The plain load(dir)
 // overload uses the headless-safe default (deny-all prompt, grants stored
@@ -102,12 +102,12 @@ class ModLoader {
   /// ungranted permissions.
   std::vector<ModInfo> load(const std::string& dir);
 
-  /// load() with an explicit approval flow: the game's PermissionStore
-  /// (e.g. in the profile dir), ModPermissionGate (first-party list), and
+  /// load() with an explicit approval flow: the game's cPermissionStore
+  /// (e.g. in the profile dir), cModPermissionGate (first-party list), and
   /// PermissionPromptFn (the install/enable UI dialog; null = deny-all).
   /// Same semantics as load(dir) otherwise.
-  std::vector<ModInfo> load(const std::string& dir, mods::PermissionStore& store,
-                            mods::ModPermissionGate& gate, mods::PermissionPromptFn prompt);
+  std::vector<ModInfo> load(const std::string& dir, mods::cPermissionStore& store,
+                            mods::cModPermissionGate& gate, mods::PermissionPromptFn prompt);
 
   /// Validates a mod.json's permissions against its type.
   /// Content mods need no prompt; script/native do.

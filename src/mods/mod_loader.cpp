@@ -333,13 +333,13 @@ bool ModLoader::checkCompatibility(const ModInfo& mod, std::string& reason) cons
 std::vector<ModInfo> ModLoader::load(const std::string& dir) {
   // Headless-safe default: deny-all prompt, grants stored next to the mods
   // dir. The game passes its own store/prompt/gate via the overload below.
-  mods::PermissionStore store(dir + "/permission_grants.json");
-  mods::ModPermissionGate gate;
+  mods::cPermissionStore store(dir + "/permission_grants.json");
+  mods::cModPermissionGate gate;
   return load(dir, store, gate, mods::denyAllPermissions);
 }
 
-std::vector<ModInfo> ModLoader::load(const std::string& dir, mods::PermissionStore& store,
-                                     mods::ModPermissionGate& gate,
+std::vector<ModInfo> ModLoader::load(const std::string& dir, mods::cPermissionStore& store,
+                                     mods::cModPermissionGate& gate,
                                      mods::PermissionPromptFn prompt) {
   std::vector<ModInfo> loaded;
   std::vector<std::string> seenIds;

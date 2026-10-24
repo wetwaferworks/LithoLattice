@@ -349,7 +349,7 @@ void testModSaveData(Checker& c) {
   // Round-trip: save then load verifies id + version + payload.
   {
     const fs::path dir = freshTempDir("ll_modsave_rt");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     const std::vector<uint8_t> payload = {9, 8, 7, 6, 5};
     c(reg.save("testmod", "1.2.0", 3, payload, &err),
@@ -366,7 +366,7 @@ void testModSaveData(Checker& c) {
   // Fresh install: mod present, no section -> Fresh with empty payload.
   {
     const fs::path dir = freshTempDir("ll_modsave_fresh");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     const std::vector<ModSaveResult> rs = reg.loadAll({{"newmod", "0.1.0"}});
     const ModSaveResult* r = findResult(rs, "newmod");
     c(r && r->status == ModSaveStatus::Fresh && r->payload.empty() && !r->disabled(),
@@ -379,7 +379,7 @@ void testModSaveData(Checker& c) {
   // still loads (the healthy mod's section verifies fine), file kept on disk.
   {
     const fs::path dir = freshTempDir("ll_modsave_corrupt");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("goodmod", "1.0.0", 1, {1, 2, 3}, &err) &&
           reg.save("badmod", "1.0.0", 1, {4, 5, 6}, &err),
@@ -405,7 +405,7 @@ void testModSaveData(Checker& c) {
   // ADVERSARIAL: inner id mismatch (file renamed / hand-placed) -> Corrupt.
   {
     const fs::path dir = freshTempDir("ll_modsave_idmismatch");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("modx", "1.0.0", 1, {1}, &err), "modsave: section written for modx");
     std::error_code ec;
@@ -420,7 +420,7 @@ void testModSaveData(Checker& c) {
   // Major version change -> VersionIncompatible, quarantined, mod disabled.
   {
     const fs::path dir = freshTempDir("ll_modsave_major");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("vmod", "1.0.0", 1, {1, 2}, &err), "modsave: section written at 1.0.0");
     const std::vector<ModSaveResult> rs = reg.loadAll({{"vmod", "2.0.0"}});
@@ -435,7 +435,7 @@ void testModSaveData(Checker& c) {
   // Minor change with no migration registered -> VersionIncompatible.
   {
     const fs::path dir = freshTempDir("ll_modsave_nomh");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("mmod", "1.2.0", 7, {1, 2, 3}, &err), "modsave: section written at 1.2.0");
     const std::vector<ModSaveResult> rs = reg.loadAll({{"mmod", "1.3.0"}});
@@ -449,7 +449,7 @@ void testModSaveData(Checker& c) {
   // Minor change WITH a migration hook -> migrated payload, mod runs.
   {
     const fs::path dir = freshTempDir("ll_modsave_migrate");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("mmod", "1.2.0", 7, {1, 2, 3}, &err), "modsave: section written at 1.2.0");
     bool hookRan = false;
@@ -474,7 +474,7 @@ void testModSaveData(Checker& c) {
   // Migration hook declining -> VersionIncompatible.
   {
     const fs::path dir = freshTempDir("ll_modsave_declined");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("mmod", "1.2.0", 7, {1}, &err), "modsave: section written at 1.2.0");
     reg.setMigrateFn([](const std::string&, const std::string&, const std::string&, uint16_t,
@@ -492,7 +492,7 @@ void testModSaveData(Checker& c) {
   // Orphaned section: mod removed -> kept on disk, never deleted, logged.
   {
     const fs::path dir = freshTempDir("ll_modsave_orphan");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(reg.save("gone", "1.0.0", 1, {9}, &err), "modsave: section written for gone");
     const std::vector<ModSaveResult> rs = reg.loadAll({});
@@ -506,7 +506,7 @@ void testModSaveData(Checker& c) {
   // Invalid mod id -> save refused (path safety).
   {
     const fs::path dir = freshTempDir("ll_modsave_badid");
-    ModSaveRegistry reg(dir);
+    cModSaveReg reg(dir);
     std::string err;
     c(!reg.save("Bad-Id", "1.0.0", 1, {1}, &err) && !err.empty() &&
           !reg.save("../escape", "1.0.0", 1, {1}, &err),
@@ -1249,8 +1249,8 @@ void testPermissionApprovalFlow(Checker& c) {
   // 1. Headless deny default: denyAll strips every unapproved permission; the
   // mod still loads (reduced), never silently elevated.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     const PermissionResolution r = gate.resolve(
         mkPermMod("a", "script", kPermBlocks | kPermNet | kPermTick), store,
         denyAllPermissions);
@@ -1263,8 +1263,8 @@ void testPermissionApprovalFlow(Checker& c) {
   // 2. An approving prompt grants exactly the approved subset; rationales
   // reach the request items.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     bool sawRationale = false;
     PermissionPromptFn ui = [&](const PermissionRequest& req) {
       c(req.modId == "b" && req.items.size() == 3,
@@ -1283,8 +1283,8 @@ void testPermissionApprovalFlow(Checker& c) {
   }
   // 3. A denied load-critical permission refuses the load.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     ModInfo m = mkPermMod("c", "script", kPermWorldWrite);
     m.criticalPermissions = kPermWorldWrite;
     const PermissionResolution r = gate.resolve(m, store, denyAllPermissions);
@@ -1294,8 +1294,8 @@ void testPermissionApprovalFlow(Checker& c) {
   // 4. Content mods auto-approve the content-safe subset (blocks, assets)
   // with no prompt; net still needs approval.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     bool promptRan = false;
     PermissionPromptFn ui = [&](const PermissionRequest& req) {
       promptRan = true;
@@ -1313,8 +1313,8 @@ void testPermissionApprovalFlow(Checker& c) {
   }
   // 5. Verified first-party claim: all granted, prompt never consulted.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     gate.setFirstPartyIds({"lithokraft"});
     bool promptRan = false;
     PermissionPromptFn ui = [&](const PermissionRequest&) {
@@ -1330,8 +1330,8 @@ void testPermissionApprovalFlow(Checker& c) {
   }
   // 6. Unverified firstParty claim: logged, treated as third-party.
   {
-    PermissionStore store;
-    ModPermissionGate gate;  // empty trusted list
+    cPermissionStore store;
+    cModPermissionGate gate;  // empty trusted list
     bool promptRan = false;
     PermissionPromptFn ui = [&](const PermissionRequest&) {
       promptRan = true;
@@ -1346,8 +1346,8 @@ void testPermissionApprovalFlow(Checker& c) {
   }
   // 7. The prompt cannot approve bits it was not asked about.
   {
-    PermissionStore store;
-    ModPermissionGate gate;
+    cPermissionStore store;
+    cModPermissionGate gate;
     PermissionPromptFn greedy = [](const PermissionRequest&) {
       return uint32_t(0xFFFFFFFF);
     };
@@ -1359,8 +1359,8 @@ void testPermissionApprovalFlow(Checker& c) {
 }
 
 void testPermissionUpdateRepompt(Checker& c) {
-  PermissionStore store;  // in-memory across "launches"
-  ModPermissionGate gate;
+  cPermissionStore store;  // in-memory across "launches"
+  cModPermissionGate gate;
   auto mk = [](const char* ver, uint32_t perms) {
     ModInfo m;
     m.id = "upmod";
@@ -1439,7 +1439,7 @@ void testPermissionStoreRoundTrip(Checker& c) {
   std::error_code ec;
   const std::string path = (dir / "grants.json").string();
   {
-    PermissionStore store(path);
+    cPermissionStore store(path);
     StoredGrant sg;
     sg.modVersion = "1.0.0";
     sg.permissionSetVersion = kPermissionSetVersion;
@@ -1450,7 +1450,7 @@ void testPermissionStoreRoundTrip(Checker& c) {
     c(store.save(), "perm: store saves");
   }
   {
-    PermissionStore store(path);  // ctor loads from disk
+    cPermissionStore store(path);  // ctor loads from disk
     const StoredGrant* g = store.lookup("rtmod");
     c(g && g->modVersion == "1.0.0" && g->requested == uint32_t(kPermBlocks | kPermNet) &&
           g->granted == kPermBlocks && g->denied == kPermNet,
@@ -1463,7 +1463,7 @@ void testPermissionStoreRoundTrip(Checker& c) {
     out << "{nope";
   }
   {
-    PermissionStore store(path);
+    cPermissionStore store(path);
     c(store.count() == 0,
       "perm: corrupt grants file is treated as empty (never fatal)");
   }
@@ -1488,8 +1488,8 @@ void testPermissionLoadWiring(Checker& c) {
   mkmod("clean",
         R"({"id":"clean","version":"1.0.0","sdk":"1","type":"content",)"
         R"("permissions":["blocks"]})");
-  PermissionStore store;  // in-memory: no file written
-  ModPermissionGate gate;
+  cPermissionStore store;  // in-memory: no file written
+  cModPermissionGate gate;
   ModLoader ml;
   const std::vector<ModInfo> loaded =
       ml.load(dir.string(), store, gate, denyAllPermissions);

@@ -106,9 +106,9 @@ using ModSaveMigrateFn = std::function<std::optional<std::vector<uint8_t>>(
 /// Owns the <world>/moddata directory: atomic writes and verified loads of
 /// per-mod sections. Not thread-safe; the game calls it from the world
 /// load/save path (or the storage I/O thread) only.
-class ModSaveRegistry {
+class cModSaveReg {
  public:
-  explicit ModSaveRegistry(std::filesystem::path worldDir);
+  explicit cModSaveReg(std::filesystem::path worldDir);
 
   /// Register the migration hook (builder seam). Unset = every version change
   /// on a differing semver quarantines the section.

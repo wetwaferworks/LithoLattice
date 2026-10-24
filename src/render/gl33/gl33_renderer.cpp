@@ -36,7 +36,7 @@ namespace litholattice {
 namespace {
 
 using gl33::GlProgram;
-using gl33::GlTextureArray;
+using gl33::cGlTextureArray;
 
 /// Programs the backend draws with; names match assets/shaders/<name>.vert/.frag.
 /// "chunk_pbr" is the PBR path (BinaryQuad meshes); the classic "chunk" program keeps
@@ -1121,7 +1121,7 @@ class cGL33Renderer final : public IRenderer {
   float entityOrigin_[3] = {0.f, 0.f, 0.f};  // GAME-H1 entity batch origin
   GlProgram prog_, lineProg_, hudProg_;
   GLuint ebo_ = 0, lineVao_ = 0, lineVbo_ = 0;
-  GlTextureArray textures_;
+  cGlTextureArray textures_;
   MaterialBindings bindings_;
   std::vector<ShaderAnimation> animations_;
   std::vector<int> animFrames_;

@@ -10,7 +10,7 @@ namespace litholattice::index {
 // recipes, chip designs — any DocId-keyed corpus). Incremental: addDocument
 // reindexes only that document. UTF-8 safe: multibyte sequences are never
 // split; ASCII case-folded, terms are runs of alphanumeric code points.
-class TextIndexer {
+class cTextIndexer {
  public:
   using DocId = uint64_t;
   struct Hit { DocId doc = 0; double score = 0.0; };  // score desc, doc asc on ties

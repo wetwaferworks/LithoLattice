@@ -64,13 +64,13 @@ uint32_t denyAllPermissions(const PermissionRequest&) {
   return 0;  // headless-safe default: DENY unless approved
 }
 
-// ---- PermissionStore ----
+// ---- cPermissionStore ----
 
-PermissionStore::PermissionStore(std::string path) : path_(std::move(path)) {
+cPermissionStore::cPermissionStore(std::string path) : path_(std::move(path)) {
   if (!path_.empty()) load();
 }
 
-bool PermissionStore::load() {
+bool cPermissionStore::load() {
   grants_.clear();
   dirty_ = false;
   if (path_.empty()) return true;
@@ -108,7 +108,7 @@ bool PermissionStore::load() {
   return true;
 }
 
-bool PermissionStore::save() {
+bool cPermissionStore::save() {
   if (path_.empty() || !dirty_) return true;
   Json root = Json::object();
   root.add("format", Json::number(kGrantsFileFormat));
@@ -141,24 +141,24 @@ bool PermissionStore::save() {
   return true;
 }
 
-const StoredGrant* PermissionStore::lookup(const std::string& modId) const {
+const StoredGrant* cPermissionStore::lookup(const std::string& modId) const {
   const auto it = grants_.find(modId);
   return it == grants_.end() ? nullptr : &it->second;
 }
 
-void PermissionStore::record(const std::string& modId, StoredGrant grant) {
+void cPermissionStore::record(const std::string& modId, StoredGrant grant) {
   grants_[modId] = std::move(grant);
   dirty_ = true;
 }
 
-// ---- ModPermissionGate ----
+// ---- cModPermissionGate ----
 
-bool ModPermissionGate::isTrustedFirstParty(const std::string& modId) const {
+bool cModPermissionGate::isTrustedFirstParty(const std::string& modId) const {
   return std::find(firstPartyIds_.begin(), firstPartyIds_.end(), modId) !=
          firstPartyIds_.end();
 }
 
-PermissionResolution ModPermissionGate::resolve(const ModInfo& mod, PermissionStore& store,
+PermissionResolution cModPermissionGate::resolve(const ModInfo& mod, cPermissionStore& store,
                                                 PermissionPromptFn prompt) {
   PermissionResolution out;
   const uint32_t requested = mod.permissions & kAllPermissionBits;

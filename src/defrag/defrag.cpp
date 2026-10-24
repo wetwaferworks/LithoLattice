@@ -1,4 +1,4 @@
-// Engine defrag/restructure service: RecordStore + DefragService.
+// Engine defrag/restructure service: RecordStore + cDefragService.
 #include "litholattice/defrag/defrag.h"
 
 #include <cstring>
@@ -284,22 +284,22 @@ std::optional<RecordStore> RecordStore::load(const std::filesystem::path& path,
 }
 
 // ---------------------------------------------------------------------------
-// TextIndexerReindexer
+// cTextIndexerReindexer
 // ---------------------------------------------------------------------------
-void TextIndexerReindexer::reindexBegin(size_t /*liveRecords*/) {
+void cTextIndexerReindexer::reindexBegin(size_t /*liveRecords*/) {
   if (indexer_) indexer_->clear();
 }
-void TextIndexerReindexer::reindexRecord(uint64_t id, std::span<const uint8_t> bytes) {
+void cTextIndexerReindexer::reindexRecord(uint64_t id, std::span<const uint8_t> bytes) {
   if (!indexer_) return;
   indexer_->addDocument(
       id, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 }
-void TextIndexerReindexer::reindexEnd() {}
+void cTextIndexerReindexer::reindexEnd() {}
 
 // ---------------------------------------------------------------------------
-// DefragService
+// cDefragService
 // ---------------------------------------------------------------------------
-bool DefragService::registerStore(const std::string& name, RecordStore& store,
+bool cDefragService::registerStore(const std::string& name, RecordStore& store,
                                   const std::filesystem::path& filePath,
                                   IReindexer* reindexerOrNull) {
   if (name.empty() || stores_.count(name)) return false;
@@ -307,18 +307,18 @@ bool DefragService::registerStore(const std::string& name, RecordStore& store,
   return true;
 }
 
-bool DefragService::unregisterStore(const std::string& name) {
+bool cDefragService::unregisterStore(const std::string& name) {
   if (sessionStore_ == name && running()) return false;  // fail-closed: busy
   return stores_.erase(name) > 0;
 }
 
-std::vector<std::string> DefragService::storeNames() const {
+std::vector<std::string> cDefragService::storeNames() const {
   std::vector<std::string> names;
   for (const auto& [n, e] : stores_) names.push_back(n);
   return names;
 }
 
-bool DefragService::beginDefrag(const std::string& storeName) {
+bool cDefragService::beginDefrag(const std::string& storeName) {
   if (running()) {
     lastError_ = "a defrag is already running";
     return false;
@@ -336,7 +336,7 @@ bool DefragService::beginDefrag(const std::string& storeName) {
   return true;
 }
 
-void DefragService::cancel() {
+void cDefragService::cancel() {
   if (!running()) return;
   // A cancel at-or-after reindexBegin() leaves the index cleared-but-partial.
   // If the store did not mutate since the scan, finish feeding the snapshot
@@ -378,7 +378,7 @@ void DefragService::cancel() {
   phase_ = Phase::Idle;
 }
 
-void DefragService::resetSession() {
+void cDefragService::resetSession() {
   phase_ = Phase::Idle;
   sessionStore_.clear();
   sessionEntry_ = Entry{};
@@ -392,7 +392,7 @@ void DefragService::resetSession() {
   compacted_ = RecordStore();
 }
 
-void DefragService::fail(const std::string& why) {
+void cDefragService::fail(const std::string& why) {
   lastError_ = why;
   // The live file was never touched (commit is atomic): the store object and
   // its file are exactly as before the session. Safe to idle out.
@@ -408,7 +408,7 @@ void DefragService::fail(const std::string& why) {
   lastError_ = why;
 }
 
-const char* DefragService::phaseName(Phase p) {
+const char* cDefragService::phaseName(Phase p) {
   switch (p) {
     case Phase::Idle: return "idle";
     case Phase::Scan: return "scan";
@@ -421,7 +421,7 @@ const char* DefragService::phaseName(Phase p) {
   return "?";
 }
 
-void DefragService::pump() {
+void cDefragService::pump() {
   switch (phase_) {
     case Phase::Idle:
     case Phase::Done:
@@ -434,7 +434,7 @@ void DefragService::pump() {
   }
 }
 
-void DefragService::pumpScan() {
+void cDefragService::pumpScan() {
   RecordStore* store = sessionEntry_.store;
   for (size_t i = 0; i < kScanPagesPerTick; ++i) {
     if (scanPage_ >= store->pageCount()) {
@@ -450,7 +450,7 @@ void DefragService::pumpScan() {
   }
 }
 
-void DefragService::pumpCopy() {
+void cDefragService::pumpCopy() {
   for (size_t i = 0; i < kCopyRecordsPerTick; ++i) {
     if (copyIdx_ >= live_.size()) {
       phase_ = Phase::Commit;
@@ -466,7 +466,7 @@ void DefragService::pumpCopy() {
   }
 }
 
-void DefragService::restartScan() {
+void cDefragService::restartScan() {
   ++restarts_;
   live_.clear();
   scanPage_ = 0;
@@ -478,7 +478,7 @@ void DefragService::restartScan() {
   phase_ = Phase::Scan;
 }
 
-void DefragService::pumpCommit() {
+void cDefragService::pumpCommit() {
   RecordStore* store = sessionEntry_.store;
   // The store mutated mid-defrag: restart the scan, bounded. Past the bound
   // the session fails closed ("store too busy") instead of livelocking.
@@ -507,7 +507,7 @@ void DefragService::pumpCommit() {
   phase_ = sessionEntry_.reindexer ? Phase::Reindex : Phase::Done;
 }
 
-void DefragService::pumpReindex() {
+void cDefragService::pumpReindex() {
   IReindexer* rx = sessionEntry_.reindexer;
   if (!rx) {
     phase_ = Phase::Done;
@@ -547,7 +547,7 @@ void DefragService::pumpReindex() {
   }
 }
 
-double DefragService::progress() const {
+double cDefragService::progress() const {
   switch (phase_) {
     case Phase::Idle:
     case Phase::Failed: return 0.0;
@@ -572,7 +572,7 @@ double DefragService::progress() const {
   return 0.0;
 }
 
-std::string DefragService::statusLine() const {
+std::string cDefragService::statusLine() const {
   char buf[256];
   const int pct = static_cast<int>(progress() * 100.0);
   switch (phase_) {

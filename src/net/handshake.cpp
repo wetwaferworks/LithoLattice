@@ -80,9 +80,9 @@ bool parseReject(const uint8_t* data, size_t len, RejectMsg& out) {
   return true;
 }
 
-// --- ConnectHandshake -------------------------------------------------------
+// --- cConnectHandshake -------------------------------------------------------
 
-ConnectHandshake::ConnectHandshake(HandshakeConfig cfg) : cfg_(std::move(cfg)) {
+cConnectHandshake::cConnectHandshake(HandshakeConfig cfg) : cfg_(std::move(cfg)) {
   if (cfg_.supportedProtocols.empty()) cfg_.supportedProtocols = {kProtocolVersion};
   std::sort(cfg_.supportedProtocols.begin(), cfg_.supportedProtocols.end());
   cfg_.supportedProtocols.erase(
@@ -90,7 +90,7 @@ ConnectHandshake::ConnectHandshake(HandshakeConfig cfg) : cfg_(std::move(cfg)) {
       cfg_.supportedProtocols.end());
 }
 
-bool ConnectHandshake::start(uint64_t nowMs, std::vector<uint8_t>& helloOut) {
+bool cConnectHandshake::start(uint64_t nowMs, std::vector<uint8_t>& helloOut) {
   if (cfg_.role != HandshakeRole::Client || state_ != HandshakeState::Idle) return false;
   if (cfg_.sdkVersion == kSdkVersionUnset) return false;  // fail-closed: SDK line required
   helloOut = encodeClientHello(cfg_.engine, cfg_.sdkVersion, cfg_.supportedProtocols);
@@ -100,7 +100,7 @@ bool ConnectHandshake::start(uint64_t nowMs, std::vector<uint8_t>& helloOut) {
   return true;
 }
 
-void ConnectHandshake::onPayload(const uint8_t* data, size_t len, uint64_t nowMs) {
+void cConnectHandshake::onPayload(const uint8_t* data, size_t len, uint64_t nowMs) {
   if (state_ == HandshakeState::Agreed || state_ == HandshakeState::Rejected ||
       state_ == HandshakeState::TimedOut)
     return;  // terminal: late traffic is ignored
@@ -193,14 +193,14 @@ void ConnectHandshake::onPayload(const uint8_t* data, size_t len, uint64_t nowMs
   state_ = HandshakeState::Agreed;
 }
 
-bool ConnectHandshake::pending(std::vector<uint8_t>& out) {
+bool cConnectHandshake::pending(std::vector<uint8_t>& out) {
   if (pending_.empty()) return false;
   out = std::move(pending_.front());
   pending_.pop_front();
   return true;
 }
 
-HandshakeState ConnectHandshake::pollTimeout(uint64_t nowMs) {
+HandshakeState cConnectHandshake::pollTimeout(uint64_t nowMs) {
   if ((state_ == HandshakeState::HelloSent || state_ == HandshakeState::HelloReceived) &&
       cfg_.timeoutMs > 0 && nowMs >= lastActivityMs_ &&
       nowMs - lastActivityMs_ >= cfg_.timeoutMs) {
@@ -210,17 +210,17 @@ HandshakeState ConnectHandshake::pollTimeout(uint64_t nowMs) {
   return state_;
 }
 
-bool ConnectHandshake::offered(uint8_t v) const {
+bool cConnectHandshake::offered(uint8_t v) const {
   return std::find(cfg_.supportedProtocols.begin(), cfg_.supportedProtocols.end(), v) !=
          cfg_.supportedProtocols.end();
 }
 
-void ConnectHandshake::fail(RejectReason r) {
+void cConnectHandshake::fail(RejectReason r) {
   reject_ = r;
   state_ = HandshakeState::Rejected;
 }
 
-void ConnectHandshake::queueReject(RejectReason r) {
+void cConnectHandshake::queueReject(RejectReason r) {
   const uint8_t maxProto =
       cfg_.supportedProtocols.empty() ? 0 : cfg_.supportedProtocols.back();
   pending_.push_back(encodeReject(r, maxProto));
