@@ -2788,11 +2788,11 @@ void testPbrChunkMaterials() {
   }
 
   // Encode with session A's payload, decode with session B's: string IDs stable, compact remapped.
-  storage::PayloadRegistry encA;
+  storage::cPayloadReg encA;
   encA.setRegistry(&fixtureBlocks());  // encode translates StableId -> save-time BlockId
   encA.add(makeMaterialPayload(regA));
   const storage::Bytes rec = encA.encode(col);
-  storage::PayloadRegistry decB;
+  storage::cPayloadReg decB;
   decB.add(makeMaterialPayload(regB));
   std::string derr;
   auto col2 = decB.decode(rec, &derr);
@@ -2868,7 +2868,7 @@ void testPbrChunkMaterials() {
     oldSub->blocks.set(7, fixtureBlocks().stableIdOf(2));
     oldSub->nonAir = 1;
     oldCol.subs[2] = std::move(oldSub);
-    storage::PayloadRegistry oldReg;  // BLKS only
+    storage::cPayloadReg oldReg;  // BLKS only
     oldReg.setRegistry(&fixtureBlocks());
     auto oldLoaded = decB.decode(oldReg.encode(oldCol), &derr);
     check(oldLoaded != nullptr, "pbr-chunk: save without MATS still loads");
@@ -5350,9 +5350,9 @@ void testAsyncIo() {
     io.submit([] {}, [] { throw std::runtime_error("boom"); }, &fence);
     check(fence.wait() == 1, "async io: a throwing callback counts as one failed op");
   }
-  {  // WorldStore on a cJobSystem: saves/loads/region writes go through submitIo()
+  {  // cWorldStore on a cJobSystem: saves/loads/region writes go through submitIo()
     const auto wdir = dir / "world";
-    st::PayloadRegistry reg;
+    st::cPayloadReg reg;
     auto mkcol = [](int cx, int cz) {
       auto c = std::make_unique<ChunkColumn>();
       c->cx = cx;
@@ -5364,13 +5364,13 @@ void testAsyncIo() {
       return c;
     };
     {
-      st::WorldStore store(wdir, reg, &jobs);
+      st::cWorldStore store(wdir, reg, &jobs);
       for (int i = 0; i < 10; ++i) store.saveAsync(*mkcol(i, -i));
       store.flush();
       check(store.quarantinedCount() == 0, "async io: JobSystem-backed store saves with no quarantines");
     }
     {
-      st::WorldStore store(wdir, reg, &jobs);
+      st::cWorldStore store(wdir, reg, &jobs);
       std::string err;
       bool all = true;
       for (int i = 0; i < 10; ++i) {
@@ -5378,12 +5378,12 @@ void testAsyncIo() {
         all = all && c && c->cx == i && c->cz == -i && c->subs[1] && c->subs[1]->nonAir == kSubChunkVolume;
       }
       check(all, "async io: JobSystem-backed store round-trips 10 columns through submitIo()");
-      std::ofstream f(st::WorldStore::regionPath(wdir, 9, 9), std::ios::binary | std::ios::trunc);
+      std::ofstream f(st::cWorldStore::regionPath(wdir, 9, 9), std::ios::binary | std::ios::trunc);
       f << "garbage";
       f.close();
     }
     {
-      st::WorldStore store(wdir, reg, &jobs);
+      st::cWorldStore store(wdir, reg, &jobs);
       std::string err;
       const auto c = store.load(9 * 32, 9 * 32, &err);  // region (9,9) is garbage now
       check(!c && store.quarantinedCount() == 1, "async io: corrupt region quarantined + counted, load skips it");
@@ -5593,7 +5593,7 @@ void testStorage() {
     t.migrate[1] = [](const st::Bytes& b) -> std::optional<st::Bytes> { st::Bytes o = b; o.push_back(9); return o; };
     return t;
   };
-  st::PayloadRegistry v1, v2;
+  st::cPayloadReg v1, v2;
   v1.setRegistry(&reg); v2.setRegistry(&reg);  // encode translates StableId -> save-time BlockId
   v1.add(signalType(1)); v2.add(signalType(2));
   {
@@ -5606,14 +5606,14 @@ void testStorage() {
     loadedSignal = -1;
     const auto m = v2.decode(v1.encode(*a), &err);
     check(m && loadedSignal == 709, "old payload version is migrated up the chain on load");
-    st::PayloadRegistry old; old.add(signalType(1));
+    st::cPayloadReg old; old.add(signalType(1));
     const auto newer = old.decode(rec, &err);
     check(!newer && !err.empty(), "a payload newer than the build is refused, not misread");
     st::Bytes bad = rec; bad[bad.size() / 2] ^= 0xFF; bad.resize(bad.size() - 3);
     check(!v2.decode(bad, &err), "a truncated / damaged record is rejected");
   }
   {
-    st::WorldStore store(dir, v2);
+    st::cWorldStore store(dir, v2);
     for (int i = 0; i < 40; ++i) store.saveAsync(*column(i * 37 - 700, -i * 53));
     store.saveAsync(*column(1000000, -1000000));
     store.saveAsync(*column(-2000000000 / 16, 2000000000 / 16));
@@ -5622,7 +5622,7 @@ void testStorage() {
   size_t regionFiles = 0;
   for (const auto& e : std::filesystem::directory_iterator(dir)) regionFiles += e.path().extension() == ".llr";
   {
-    st::WorldStore store(dir, v2);
+    st::cWorldStore store(dir, v2);
     std::string err;
     bool all = true;
     for (int i = 0; i < 40; ++i) {
@@ -5638,20 +5638,20 @@ void testStorage() {
   }
   {  // flip a byte inside a stored record: the CRC catches it, neighbours still load
     const int cx = -700, cz = 0;  // the only column in region (-22, 0)
-    const auto p = st::WorldStore::regionPath(dir, -22, 0);
+    const auto p = st::cWorldStore::regionPath(dir, -22, 0);
     std::fstream f(p, std::ios::in | std::ios::out | std::ios::binary);
     f.seekg(0, std::ios::end); const auto size = f.tellg();
     f.seekp(size - std::streamoff(20)); f.put(char(0x5A)); f.close();
-    st::WorldStore store(dir, v2);
+    st::cWorldStore store(dir, v2);
     std::string err;
     const auto c = store.load(cx, cz, &err);
     check(!c && err.find("CRC") != std::string::npos, "corruption detected by the record CRC");
-    std::ofstream(st::WorldStore::regionPath(dir, 77, 77), std::ios::binary) << "garbage";
+    std::ofstream(st::cWorldStore::regionPath(dir, 77, 77), std::ios::binary) << "garbage";
     store.saveAsync(*column(77 * 32, 77 * 32));
     store.flush();
-    std::ifstream g(st::WorldStore::regionPath(dir, 77, 77), std::ios::binary);
+    std::ifstream g(st::cWorldStore::regionPath(dir, 77, 77), std::ios::binary);
     std::string content((std::istreambuf_iterator<char>(g)), std::istreambuf_iterator<char>());
-    check(content == "garbage" && !std::filesystem::exists(st::WorldStore::regionPath(dir, 77, 77).string() + ".tmp"),
+    check(content == "garbage" && !std::filesystem::exists(st::cWorldStore::regionPath(dir, 77, 77).string() + ".tmp"),
           "an unreadable region file is never overwritten (kept for recovery)");
   }
   testAnvilRegion();

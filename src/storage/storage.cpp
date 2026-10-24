@@ -34,7 +34,7 @@ bool regionImageIntact(const std::filesystem::path& p, std::string* err) {
     return false;
   }
   // Header + full index: 8 magic/version bytes + 1024 x 16-byte entries.
-  constexpr size_t kHead = 8 + size_t(RegionFile::kSpan) * RegionFile::kSpan * 16;
+  constexpr size_t kHead = 8 + size_t(cRegionFile::kSpan) * cRegionFile::kSpan * 16;
   Bytes head(kHead);
   f.read(reinterpret_cast<char*>(head.data()), head.size());
   if (size_t(f.gcount()) < 8) {
@@ -43,7 +43,7 @@ bool regionImageIntact(const std::filesystem::path& p, std::string* err) {
   }
   head.resize(size_t(f.gcount()));
   ByteReader r(head.data(), head.size());
-  if (r.u32() != RegionFile::kMagic || r.u16() != RegionFile::kVersion || (r.u16(), !r.ok())) {
+  if (r.u32() != cRegionFile::kMagic || r.u16() != cRegionFile::kVersion || (r.u16(), !r.ok())) {
     if (err) *err = "bad region magic/version";
     return false;
   }
@@ -52,7 +52,7 @@ bool regionImageIntact(const std::filesystem::path& p, std::string* err) {
   f.clear();
   f.seekg(0, std::ios::end);
   const uint64_t fileSize = uint64_t(f.tellg());
-  for (int i = 0; i < RegionFile::kSpan * RegionFile::kSpan; ++i) {
+  for (int i = 0; i < cRegionFile::kSpan * cRegionFile::kSpan; ++i) {
     const uint64_t off = r.u64();
     const uint32_t size = r.u32();
     r.u32();  // crc
@@ -116,7 +116,7 @@ bool decodePalette(ByteReader& r, uint16_t* v) {
 }
 
 // ---- payload registry
-PayloadRegistry::PayloadRegistry() {
+cPayloadReg::cPayloadReg() {
   PayloadType blocks;
   blocks.tag = kBlocksTag;
   blocks.version = kBlocksVersion;
@@ -194,7 +194,7 @@ PayloadRegistry::PayloadRegistry() {
   add(std::move(blocks));
 }
 
-Bytes PayloadRegistry::encode(const ChunkColumn& c) const {
+Bytes cPayloadReg::encode(const ChunkColumn& c) const {
   ByteWriter w;
   w.u16(kRecordVersion);
   w.u32(uint32_t(c.cx)); w.u32(uint32_t(c.cz));
@@ -203,7 +203,7 @@ Bytes PayloadRegistry::encode(const ChunkColumn& c) const {
   return w.out;
 }
 
-std::unique_ptr<ChunkColumn> PayloadRegistry::decode(const Bytes& rec, std::string* err) const {
+std::unique_ptr<ChunkColumn> cPayloadReg::decode(const Bytes& rec, std::string* err) const {
   auto fail = [&](std::string m) { if (err) *err = std::move(m); return nullptr; };
   ByteReader r(rec.data(), rec.size());
   const uint16_t rv = r.u16();
@@ -233,7 +233,7 @@ std::unique_ptr<ChunkColumn> PayloadRegistry::decode(const Bytes& rec, std::stri
 }
 
 // ---- region file
-bool RegionFile::open(std::string* err) {
+bool cRegionFile::open(std::string* err) {
   // Crash-window recovery (WORLD PERMANENCE): a crash between backup rotation
   // and the commit rename leaves the target absent with the previous generation
   // safe in <path>.bak.1. Promote the newest intact generation BEFORE reading,
@@ -280,7 +280,7 @@ bool RegionFile::open(std::string* err) {
   return true;
 }
 
-std::optional<Bytes> RegionFile::read(int lx, int lz, std::string* err) const {
+std::optional<Bytes> cRegionFile::read(int lx, int lz, std::string* err) const {
   if (lx < 0 || lx >= kSpan || lz < 0 || lz >= kSpan) {
     if (err) *err = "chunk coordinates out of range";
     return std::nullopt;  // fail closed: never index the vectors out of bounds
@@ -293,15 +293,15 @@ std::optional<Bytes> RegionFile::read(int lx, int lz, std::string* err) const {
   return b;
 }
 
-size_t RegionFile::count() const {
+size_t cRegionFile::count() const {
   size_t n = 0;
   for (size_t i = 0; i < records_.size(); ++i) n += !records_[i].empty() || pending_.count(int(i));
   return n;
 }
 
-bool RegionFile::flush(std::string* err) { return flush(err, FileWriteOptions{}); }
+bool cRegionFile::flush(std::string* err) { return flush(err, FileWriteOptions{}); }
 
-bool RegionFile::flush(std::string* err, const FileWriteOptions& opts) {
+bool cRegionFile::flush(std::string* err, const FileWriteOptions& opts) {
   if (pending_.empty()) return true;
   if (broken_) { if (err) *err = "region was unreadable; not overwriting " + path_.string(); return false; }
   // SV-H1: build the merged image in LOCALS and only commit it into
@@ -338,13 +338,13 @@ namespace {
 int floorDiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 }  // namespace
 
-WorldStore::WorldStore(std::filesystem::path dir, const PayloadRegistry& payloads, cJobSystem* jobs)
+cWorldStore::cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads, cJobSystem* jobs)
     : dir_(std::move(dir)), payloads_(payloads), jobsys_(jobs) {
   std::filesystem::create_directories(dir_);
   if (!jobsys_) thread_ = std::thread([this] { run(); });
 }
 
-WorldStore::~WorldStore() {
+cWorldStore::~cWorldStore() {
   flush();
   if (jobsys_) return;  // the engine owns the cJobSystem: never stop or join it here
   { std::lock_guard l(m_); stop_ = true; }
@@ -352,14 +352,14 @@ WorldStore::~WorldStore() {
   thread_.join();
 }
 
-std::filesystem::path WorldStore::regionPath(const std::filesystem::path& dir, int rx, int rz) {
+std::filesystem::path cWorldStore::regionPath(const std::filesystem::path& dir, int rx, int rz) {
   return dir / ("r." + std::to_string(rx) + "." + std::to_string(rz) + ".llr");
 }
 
-RegionFile& WorldStore::region(int rx, int rz) {
+cRegionFile& cWorldStore::region(int rx, int rz) {
   auto& r = regions_[{rx, rz}];
   if (!r) {
-    r = std::make_unique<RegionFile>(regionPath(dir_, rx, rz));
+    r = std::make_unique<cRegionFile>(regionPath(dir_, rx, rz));
     std::string err;
     if (!r->open(&err)) {
       ++quarantined_;
@@ -370,7 +370,7 @@ RegionFile& WorldStore::region(int rx, int rz) {
   return *r;
 }
 
-void WorldStore::post(std::function<void()> job) {
+void cWorldStore::post(std::function<void()> job) {
   bool kick = false;
   {
     std::lock_guard l(m_);
@@ -387,7 +387,7 @@ void WorldStore::post(std::function<void()> job) {
 // cJobSystem mode: run one queued store job per submitIo(), tail-chained. Strict
 // FIFO is preserved (the queue is the order), no I/O thread ever blocks waiting
 // for more work, and other I/O can interleave between chained jobs.
-void WorldStore::pumpOne() {
+void cWorldStore::pumpOne() {
   jobsys_->submitIo([this] {
     std::function<void()> job;
     {
@@ -414,7 +414,7 @@ void WorldStore::pumpOne() {
   });
 }
 
-void WorldStore::run() {
+void cWorldStore::run() {
   for (;;) {
     std::function<void()> job;
     {
@@ -429,38 +429,38 @@ void WorldStore::run() {
   }
 }
 
-void WorldStore::saveAsync(const ChunkColumn& c) {
+void cWorldStore::saveAsync(const ChunkColumn& c) {
   post([this, cx = c.cx, cz = c.cz, rec = payloads_.encode(c)]() mutable {
-    const int rx = floorDiv(cx, RegionFile::kSpan), rz = floorDiv(cz, RegionFile::kSpan);
-    region(rx, rz).put(cx - rx * RegionFile::kSpan, cz - rz * RegionFile::kSpan, std::move(rec));
+    const int rx = floorDiv(cx, cRegionFile::kSpan), rz = floorDiv(cz, cRegionFile::kSpan);
+    region(rx, rz).put(cx - rx * cRegionFile::kSpan, cz - rz * cRegionFile::kSpan, std::move(rec));
   });
 }
 
-void WorldStore::saveAsync(std::unique_ptr<ChunkColumn> c) {
+void cWorldStore::saveAsync(std::unique_ptr<ChunkColumn> c) {
   post([this, c = std::shared_ptr<ChunkColumn>(std::move(c))] {
-    const int rx = floorDiv(c->cx, RegionFile::kSpan), rz = floorDiv(c->cz, RegionFile::kSpan);
-    region(rx, rz).put(c->cx - rx * RegionFile::kSpan, c->cz - rz * RegionFile::kSpan, payloads_.encode(*c));
+    const int rx = floorDiv(c->cx, cRegionFile::kSpan), rz = floorDiv(c->cz, cRegionFile::kSpan);
+    region(rx, rz).put(c->cx - rx * cRegionFile::kSpan, c->cz - rz * cRegionFile::kSpan, payloads_.encode(*c));
   });
 }
 
-void WorldStore::loadAsync(int cx, int cz, std::function<void(std::unique_ptr<ChunkColumn>, std::string)> done) {
+void cWorldStore::loadAsync(int cx, int cz, std::function<void(std::unique_ptr<ChunkColumn>, std::string)> done) {
   post([this, cx, cz, done = std::move(done)] {
-    const int rx = floorDiv(cx, RegionFile::kSpan), rz = floorDiv(cz, RegionFile::kSpan);
+    const int rx = floorDiv(cx, cRegionFile::kSpan), rz = floorDiv(cz, cRegionFile::kSpan);
     std::string err;
-    auto rec = region(rx, rz).read(cx - rx * RegionFile::kSpan, cz - rz * RegionFile::kSpan, &err);
+    auto rec = region(rx, rz).read(cx - rx * cRegionFile::kSpan, cz - rz * cRegionFile::kSpan, &err);
     std::unique_ptr<ChunkColumn> c = rec ? payloads_.decode(*rec, &err) : nullptr;
     done(std::move(c), std::move(err));
   });
 }
 
-bool WorldStore::flush() {
+bool cWorldStore::flush() {
   flushAsync();
   std::unique_lock l(m_);
   idle_.wait(l, [&] { return jobs_.empty() && !busy_; });
   return lastFlushOk();
 }
 
-void WorldStore::flushAsync() {
+void cWorldStore::flushAsync() {
   post([this] {
     // Batch durability: every region skips its own directory fsync and the
     // directory is fsync'd once after all renames land (one dir fsync per
@@ -484,7 +484,7 @@ void WorldStore::flushAsync() {
   });
 }
 
-std::unique_ptr<ChunkColumn> WorldStore::load(int cx, int cz, std::string* err) {
+std::unique_ptr<ChunkColumn> cWorldStore::load(int cx, int cz, std::string* err) {
   std::unique_ptr<ChunkColumn> out;
   std::string e;
   loadAsync(cx, cz, [&](std::unique_ptr<ChunkColumn> c, std::string er) { out = std::move(c); e = std::move(er); });

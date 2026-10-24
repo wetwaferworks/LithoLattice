@@ -7,7 +7,7 @@ namespace {
 constexpr uint32_t kMagic = 0x4E424C4C;  // "LLBN"
 
 // Fail-closed intactness check for recoverCrashedWrite, modelled on
-// RegionFile's regionImageIntact: a generation counts as intact only when
+// cRegionFile's regionImageIntact: a generation counts as intact only when
 // the WHOLE image parses (magic + version + entry count + every entry in
 // bounds + exact end-of-body + trailing CRC). Anything less is torn.
 bool blockNamesIntact(const std::filesystem::path& p, std::string* err) {

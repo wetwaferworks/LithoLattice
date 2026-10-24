@@ -40,19 +40,19 @@ void fuzzGenerator(const uint8_t* d, size_t n) {
   (void)g;
 }
 void fuzzRecord(const uint8_t* d, size_t n) {
-  static const storage::PayloadRegistry reg;
+  static const storage::cPayloadReg reg;
   std::string err;
   (void)reg.decode(storage::Bytes(d, d + n), &err);
 }
 void fuzzRegion(const uint8_t* d, size_t n) {
   static const auto path = std::filesystem::temp_directory_path() / "litholattice_fuzz_region.llr";
   { std::ofstream f(path, std::ios::binary | std::ios::trunc); f.write(reinterpret_cast<const char*>(d), std::streamsize(n)); }
-  storage::RegionFile r(path);
+  storage::cRegionFile r(path);
   std::string err;
   if (!r.open(&err)) return;
-  static const storage::PayloadRegistry reg;
-  for (int z = 0; z < storage::RegionFile::kSpan; ++z)
-    for (int x = 0; x < storage::RegionFile::kSpan; ++x)
+  static const storage::cPayloadReg reg;
+  for (int z = 0; z < storage::cRegionFile::kSpan; ++z)
+    for (int x = 0; x < storage::cRegionFile::kSpan; ++x)
       if (auto rec = r.read(x, z, &err)) (void)reg.decode(*rec, &err);
 }
 
@@ -83,13 +83,13 @@ int main(int argc, char** argv) {
     c.subs[1] = std::make_unique<SubChunk>();
     for (int i = 0; i < kSubChunkVolume; i += 3) { c.subs[1]->blocks[size_t(i)] = BlockId(1 + i % 4); c.subs[1]->state[size_t(i)] = CellState(i & 15); }
     c.subs[1]->nonAir = 1366;
-    static const storage::PayloadRegistry reg;
+    static const storage::cPayloadReg reg;
     storage::Bytes rec = reg.encode(c);
     if (t->fn == fuzzRecord) seeds.push_back(rec);
     else {
       const auto p = std::filesystem::temp_directory_path() / "litholattice_fuzz_seed.llr";
       std::filesystem::remove(p);
-      storage::RegionFile r(p); std::string err; r.open(&err); r.put(3, 30, rec); r.put(0, 0, rec); r.flush(&err);
+      storage::cRegionFile r(p); std::string err; r.open(&err); r.put(3, 30, rec); r.put(0, 0, rec); r.flush(&err);
       std::ifstream f(p, std::ios::binary);
       seeds.emplace_back((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     }

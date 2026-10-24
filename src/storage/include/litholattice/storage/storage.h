@@ -21,7 +21,7 @@
 #include "litholattice/storage/file_contract.h"
 #include "litholattice/world/chunk.h"
 
-namespace litholattice { class cJobSystem; }  // optional async back-end, see WorldStore
+namespace litholattice { class cJobSystem; }  // optional async back-end, see cWorldStore
 
 namespace litholattice::storage {
 
@@ -79,9 +79,9 @@ constexpr uint32_t kBlocksTag = fourcc("BLKS");
 constexpr uint16_t kBlocksVersion = 1;
 constexpr uint16_t kRecordVersion = 1;  ///< chunk record layout
 
-class PayloadRegistry {
+class cPayloadReg {
  public:
-  PayloadRegistry();  ///< registers the engine's BLKS payload
+  cPayloadReg();  ///< registers the engine's BLKS payload
   void add(PayloadType t) { types_[t.tag] = std::move(t); }
   /// Registry used by the BLKS payload to translate between the StableId voxel
   /// storage and the BlockId disk codec (the on-disk BLKS format is unchanged).
@@ -104,7 +104,7 @@ class PayloadRegistry {
 /// a crash leaves either the old or the new region, never a torn one — with the one documented
 /// backup-rotation window (see file_contract.h): a crash between rotation and the commit rename
 /// leaves the target absent, and open() heals it via recoverCrashedWrite().
-class RegionFile {
+class cRegionFile {
  public:
   static constexpr int kSpan = 32;
   static constexpr uint32_t kMagic = 0x52474C4C;  // "LLGR"
@@ -119,7 +119,7 @@ class RegionFile {
   /// Last-known-good copies kept per flush ("<file>.bak.1" .. ".bak.N"), rotated
   /// on each successful write via the file contract (file_contract.h), which
   /// defaults to kBackupDepthDefault (8) previous versions.
-  explicit RegionFile(std::filesystem::path p) : path_(std::move(p)) {}
+  explicit cRegionFile(std::filesystem::path p) : path_(std::move(p)) {}
   /// Reads the index (and keeps the file's records); false + err on a bad / corrupt header.
   bool open(std::string* err);
   std::optional<Bytes> read(int lx, int lz, std::string* err) const;  ///< nullopt: absent or corrupt (err set)
@@ -131,7 +131,7 @@ class RegionFile {
     pending_[slot(lx, lz)] = std::move(record);
   }
   bool flush(std::string* err);  ///< write all records (old + pending) via the file contract
-  /// Same, with explicit write options. WorldStore's batch flush passes
+  /// Same, with explicit write options. cWorldStore's batch flush passes
   /// deferDirFsync=true and fsyncs the directory once afterwards.
   bool flush(std::string* err, const FileWriteOptions& opts);
                                  ///< (temp + fsync + atomic rename, one backup kept); refused if open() failed
@@ -148,18 +148,18 @@ class RegionFile {
 /// A world directory of sparse region files "r.<rx>.<rz>.llr" (int32 region coordinates, so the
 /// addressable world is about 2^36 blocks a side; only touched regions exist). Load and save run
 /// on the store's own I/O thread; callbacks run on that thread.
-class WorldStore {
+class cWorldStore {
  public:
   /// `jobs`: when non-null, saves/loads/region writes run on the cJobSystem via
   /// submitIo() (tail-chained, strict FIFO, one op per submitIo so other I/O work
   /// can interleave); when null, the store keeps its own private I/O thread.
   /// Either way the sim/tick threads never block on disk. The cJobSystem (if any)
   /// must outlive the store.
-  explicit WorldStore(std::filesystem::path dir, const PayloadRegistry& payloads,
+  explicit cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads,
                       cJobSystem* jobs = nullptr);
-  ~WorldStore();  ///< finishes queued work
-  WorldStore(const WorldStore&) = delete;
-  WorldStore& operator=(const WorldStore&) = delete;
+  ~cWorldStore();  ///< finishes queued work
+  cWorldStore(const cWorldStore&) = delete;
+  cWorldStore& operator=(const cWorldStore&) = delete;
 
   void saveAsync(const ChunkColumn& column);  ///< encodes now (caller's thread), writes on the I/O thread
   void saveAsync(std::unique_ptr<ChunkColumn> column);  ///< takes a snapshot copy: encodes and writes on the I/O thread
@@ -188,10 +188,10 @@ class WorldStore {
   void post(std::function<void()> job);
   void run();   ///< private-I/O-thread mode only
   void pumpOne();  ///< cJobSystem mode: run one queued job per submitIo, tail-chained
-  RegionFile& region(int rx, int rz);
+  cRegionFile& region(int rx, int rz);
   std::filesystem::path dir_;
-  const PayloadRegistry& payloads_;
-  std::map<std::pair<int, int>, std::unique_ptr<RegionFile>> regions_;  // I/O thread only
+  const cPayloadReg& payloads_;
+  std::map<std::pair<int, int>, std::unique_ptr<cRegionFile>> regions_;  // I/O thread only
   std::mutex m_;
   std::condition_variable cv_, idle_;
   std::deque<std::function<void()>> jobs_;

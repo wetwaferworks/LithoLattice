@@ -7,7 +7,7 @@
 //   through the cMaterialReg, so a save written when iron was ID 13 loads correctly when
 //   iron is ID 1.
 // HOW: the game registers it — cWorldSave adds makeMaterialPayload(*materials) to its
-//   PayloadRegistry (the game owns the registry instance; see initMaterialRegistry). It is a
+//   cPayloadReg (the game owns the registry instance; see initMaterialRegistry). It is a
 //   separate payload tag rather than a BLKS version bump, so old saves (no MATS payload) keep
 //   loading: they simply get the default palette (every byte -> global ID 0, the built-in
 //   default). No migration chain needed.
@@ -107,7 +107,7 @@ inline bool decodeMatBytes(storage::ByteReader& r, uint8_t* v, std::string* err)
 
 /// Builds the engine's "MATS" payload for `reg`. The save/load lambdas capture `reg` by
 /// reference: the registry (owned by the game, e.g. LithoKraft's main()) must outlive the
-/// PayloadRegistry / WorldStore using this payload.
+/// cPayloadReg / cWorldStore using this payload.
 inline storage::PayloadType makeMaterialPayload(const cMaterialReg& reg) {
   storage::PayloadType mats;
   mats.tag = kMaterialsTag;

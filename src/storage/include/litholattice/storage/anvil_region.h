@@ -1,5 +1,5 @@
 // EXPERIMENTAL (P3-2 C-L3): cAnvilRegion has NO production callers. The
-// production region path is RegionFile / WorldStore (storage.h); this
+// production region path is cRegionFile / cWorldStore (storage.h); this
 // layer is a design experiment kept for evaluation and its own tests.
 // Do not wire it into a save path without a fresh review.
 //

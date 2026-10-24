@@ -7,7 +7,7 @@
 //      version, never a torn one — with one documented window: when backups are
 //      enabled, a crash between the rotation and the commit rename leaves the
 //      target ABSENT, the previous generation safe in "<path>.bak.1". That
-//      window self-heals: recoverCrashedWrite() (called by RegionFile::open and
+//      window self-heals: recoverCrashedWrite() (called by cRegionFile::open and
 //      cRecordStore::load) promotes the newest intact generation on the next
 //      open. The target is never touched until the replacement is fully on disk.
 //   2. Per-record CRC32: framed records (see frameRecord) are checksum-verified on
@@ -15,7 +15,7 @@
 //   3. Payload before header: inside multi-part files, data bytes are written and
 //      flushed before any index/header that points at them is committed, so a torn
 //      write is old-or-absent, never garbage. (cAnvilRegion implements this per
-//      record; RegionFile implements it per whole-file swap.)
+//      record; cRegionFile implements it per whole-file swap.)
 //
 // Future file-writing code gets safety by default by going through writeFileAtomic
 // (and frameRecord/unframeRecord for checksummed payloads). It is deliberately hard
@@ -84,7 +84,7 @@ struct FileWriteOptions {
   /// the default is kBackupDepthDefault (8).
   unsigned keepBackups = kBackupDepthDefault;
   /// Skip the parent-directory fsync after the commit rename. For batch flushers
-  /// (WorldStore): they pass deferDirFsync=true for every file in the batch and
+  /// (cWorldStore): they pass deferDirFsync=true for every file in the batch and
   /// then call syncDirContaining() once — one directory fsync for the whole
   /// batch instead of one per file, with the same batch durability. The file
   /// itself is still fsync'd before the rename. A crash between the renames and
@@ -99,7 +99,7 @@ struct FileWriteOptions {
 void syncDirContaining(const std::filesystem::path& path);
 
 /// Crash-recovery for writeFileAtomic's backup-rotation window. Called by
-/// RegionFile::open and cRecordStore::load before they read the target.
+/// cRegionFile::open and cRecordStore::load before they read the target.
 ///
 /// RECOVERY ORDER (do not reorder without updating the callers):
 ///   1. `path` exists and validate(path) passes: nothing to do, return true.
