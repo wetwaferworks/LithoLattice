@@ -98,7 +98,8 @@ vec3 groundTraceColor(float t, vec3 wpos) {
   return uTraceP1.rgb * a;
 }
 const vec3 RING_BACK = vec3(22.0, 25.0, 34.0) / 255.0, RING_UNLIT = vec3(44.0, 50.0, 66.0) / 255.0;
-const vec3 CORE[2] = vec3[2](vec3(1.0, 0.878, 0.722), vec3(0.867, 0.969, 1.0));
+// 2026-10-24 (JD): red core was warm amber (#FFE0B8); now a hot red-pink to match the red ramp. Blue unchanged.
+const vec3 CORE[2] = vec3[2](vec3(1.0, 0.549, 0.533), vec3(0.867, 0.969, 1.0));
 const vec3 RIM = vec3(185.0, 168.0, 240.0) / 255.0;
 const vec3 PIP_LIT = vec3(255.0, 211.0, 107.0) / 255.0, CELL_LIT = vec3(143.0, 214.0, 232.0) / 255.0;
 const vec3 CELL_OFF = vec3(30.0, 34.0, 48.0) / 255.0;
