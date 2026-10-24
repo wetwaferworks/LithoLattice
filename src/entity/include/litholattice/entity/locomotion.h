@@ -65,6 +65,7 @@ struct LocomotionConfig {
   double crawlSpeed = 1.31;      ///< blocks/s.
   double flySpeed = 10.9;        ///< blocks/s, horizontal (Fly).
   double flyVerticalSpeed = 10.9;///< blocks/s, vertical (Fly).
+  double flySprintMultiplier = 2.0; ///< horizontal fly speed while Sprint is held (2026-10-24).
   double gravity = 32.0;         ///< blocks/s^2, downward (Walk).
   double terminalVelocity = -60.0; ///< fall-speed clamp (Walk), <= 0.
   /// Jump apex height in blocks. Jump velocity is DERIVED from it and the

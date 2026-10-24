@@ -135,7 +135,7 @@ void cLocomotionController::step(Entity& e, const LocomotionInput& in,
   // tunnel. If NO pose fits at the destination (a wall, a step), nothing
   // changes — the sweep clamps as usual.
   if (pose_ != LocomotionPose::Crawl && (wishX != 0.0 || wishZ != 0.0)) {
-    double probeSpeed = cfg_.flySpeed;
+    double probeSpeed = in.sprint ? cfg_.flySpeed * cfg_.flySprintMultiplier : cfg_.flySpeed;
     if (mode_ == LocomotionMode::Walk) {
       probeSpeed = (desired == LocomotionPose::Sneak || desired == LocomotionPose::Kneel) ? cfg_.sneakSpeed
                    : desired == LocomotionPose::Crawl ? cfg_.crawlSpeed
@@ -159,8 +159,10 @@ void cLocomotionController::step(Entity& e, const LocomotionInput& in,
   // -- Targets for this step.
   double targetVx = 0, targetVz = 0, rate = cfg_.groundAccel;
   if (mode_ == LocomotionMode::Fly) {
-    targetVx = wishX * cfg_.flySpeed;
-    targetVz = wishZ * cfg_.flySpeed;
+    // 2026-10-24 (JD): Sprint while flying = faster flight, like Minecraft.
+    const double fs = in.sprint ? cfg_.flySpeed * cfg_.flySprintMultiplier : cfg_.flySpeed;
+    targetVx = wishX * fs;
+    targetVz = wishZ * fs;
   } else {
     double speed = cfg_.walkSpeed;
     if (pose_ == LocomotionPose::Sneak || pose_ == LocomotionPose::Kneel) speed = cfg_.sneakSpeed;  // Cortana 2026-10-15 2240
