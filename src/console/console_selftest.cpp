@@ -38,7 +38,7 @@ class Checker {
 /// Captures registry output lines.
 struct Capture {
   std::vector<std::string> lines;
-  void install(ConsoleRegistry& r) {
+  void install(cConsoleReg& r) {
     r.setOutput([this](const std::string& line) { lines.push_back(line); });
   }
   bool contains(const std::string& sub) const {
@@ -100,15 +100,15 @@ int runConsoleSelfTest() {
   // ---- tokenizer ----
   {
     bool ok = true;
-    auto t = ConsoleRegistry::tokenize(R"(echo "a b" c)");
+    auto t = cConsoleReg::tokenize(R"(echo "a b" c)");
     ok = ok && t.size() == 1 && t[0].size() == 3 && t[0][0] == "echo" && t[0][1] == "a b" && t[0][2] == "c";
-    t = ConsoleRegistry::tokenize(R"(echo a\;b "x\"y" z\\w)");
+    t = cConsoleReg::tokenize(R"(echo a\;b "x\"y" z\\w)");
     ok = ok && t.size() == 1 && t[0].size() == 4 && t[0][1] == "a;b" && t[0][2] == "x\"y" && t[0][3] == "z\\w";
-    t = ConsoleRegistry::tokenize("echo hi // a comment");
+    t = cConsoleReg::tokenize("echo hi // a comment");
     ok = ok && t.size() == 1 && t[0].size() == 2;  // comment stripped
-    t = ConsoleRegistry::tokenize(R"(echo "// not a comment")");
+    t = cConsoleReg::tokenize(R"(echo "// not a comment")");
     ok = ok && t.size() == 1 && t[0].size() == 2 && t[0][1] == "// not a comment";
-    t = ConsoleRegistry::tokenize("echo a;echo b;; echo c");
+    t = cConsoleReg::tokenize("echo a;echo b;; echo c");
     ok = ok && t.size() == 3 && t[2][1] == "c";  // empty commands dropped
     check(ok, "tokenizer: quotes, escapes, // comments, ';' splitting");
   }
@@ -116,43 +116,43 @@ int runConsoleSelfTest() {
   // ---- tokenizer: /* */ block comments ----
   {
     bool ok = true;
-    auto t = ConsoleRegistry::tokenize("echo a /* hidden */ b");
+    auto t = cConsoleReg::tokenize("echo a /* hidden */ b");
     ok = ok && t.size() == 1 && t[0].size() == 3 && t[0][0] == "echo" && t[0][1] == "a" &&
          t[0][2] == "b";  // block comment stripped mid-line
-    t = ConsoleRegistry::tokenize("/**/echo a/**/");
+    t = cConsoleReg::tokenize("/**/echo a/**/");
     ok = ok && t.size() == 1 && t[0].size() == 2 && t[0][1] == "a";  // adjacent markers
-    t = ConsoleRegistry::tokenize("echo a /* ; echo evil */ echo b");
+    t = cConsoleReg::tokenize("echo a /* ; echo evil */ echo b");
     ok = ok && t.size() == 1 && t[0].size() == 4;  // ';' inside a block comment does not split
-    t = ConsoleRegistry::tokenize("echo a /* // still comment */ b");
+    t = cConsoleReg::tokenize("echo a /* // still comment */ b");
     ok = ok && t.size() == 1 && t[0].size() == 3 && t[0][2] == "b";  // // inside /* */ is text
-    t = ConsoleRegistry::tokenize(R"(echo "/* not a comment */")");
+    t = cConsoleReg::tokenize(R"(echo "/* not a comment */")");
     ok = ok && t.size() == 1 && t[0].size() == 2 &&
          t[0][1] == "/* not a comment */";  // /* inside quotes is literal
-    t = ConsoleRegistry::tokenize(R"(echo "a */ b")");
+    t = cConsoleReg::tokenize(R"(echo "a */ b")");
     ok = ok && t.size() == 1 && t[0].size() == 2 && t[0][1] == "a */ b";  // */ in quotes literal
-    t = ConsoleRegistry::tokenize(R"(echo a\/*b)");
+    t = cConsoleReg::tokenize(R"(echo a\/*b)");
     ok = ok && t.size() == 1 && t[0].size() == 2 && t[0][1] == "a/*b";  // escaped marker is literal
-    t = ConsoleRegistry::tokenize("echo a /* x */ // y");
+    t = cConsoleReg::tokenize("echo a /* x */ // y");
     ok = ok && t.size() == 1 && t[0].size() == 2;  // mixed /* */ and //
-    t = ConsoleRegistry::tokenize("echo a // /* not a block");
+    t = cConsoleReg::tokenize("echo a // /* not a block");
     ok = ok && t.size() == 1 && t[0].size() == 2;  // /* inside a // comment is text
-    t = ConsoleRegistry::tokenize("echo a /* // unterminated");
+    t = cConsoleReg::tokenize("echo a /* // unterminated");
     ok = ok && t.empty();  // the // does not close the /*: unterminated -> empty
     check(ok, "tokenizer: /* */ stripped mid-line, ';' inside is inert, markers in "
               "strings/escapes//-comments are literal");
 
     // Unterminated /* is a clean tokenizer error, never a silent truncation.
     std::string err;
-    t = ConsoleRegistry::tokenize("echo a /* oops", &err);
+    t = cConsoleReg::tokenize("echo a /* oops", &err);
     ok = t.empty() && err == "unterminated block comment";
     err.clear();
-    t = ConsoleRegistry::tokenize("echo ok /* fine */ done", &err);
+    t = cConsoleReg::tokenize("echo ok /* fine */ done", &err);
     ok = ok && err.empty() && t.size() == 1 && t[0].size() == 3 && t[0][2] == "done";
     // The single-argument form keeps working: on error it yields the same
     // empty list (documented; the error is dropped).
-    t = ConsoleRegistry::tokenize("echo a /* oops");
+    t = cConsoleReg::tokenize("echo a /* oops");
     ok = ok && t.empty();
-    t = ConsoleRegistry::tokenize("echo fine /* closed */");
+    t = cConsoleReg::tokenize("echo fine /* closed */");
     ok = ok && t.size() == 1 && t[0].size() == 2;
     check(ok, "tokenizer: unterminated /* reports 'unterminated block comment' via the "
               "error overload; the one-argument form stays compatible");
@@ -162,7 +162,7 @@ int runConsoleSelfTest() {
   {
     bool ok = true;
     std::string err;
-    auto c = ConsoleRegistry::extractComments("// line one\n"
+    auto c = cConsoleReg::extractComments("// line one\n"
                                               "echo a /* block A */ b // trailing\n"
                                               "/* multi\n"
                                               "line */\n"
@@ -172,14 +172,14 @@ int runConsoleSelfTest() {
          c[2] == " trailing" && c[3] == " multi\nline ";
     // Bodies come back in source order, without markers; the quoted /* */
     // yields nothing. CRLF: the trailing \r is not part of a // body.
-    c = ConsoleRegistry::extractComments("echo hi // greeting\r\n", &err);
+    c = cConsoleReg::extractComments("echo hi // greeting\r\n", &err);
     ok = ok && err.empty() && c.size() == 1 && c[0] == " greeting";
     // No comments at all: empty, no error.
-    c = ConsoleRegistry::extractComments("echo a; echo \"//x\"\n", &err);
+    c = cConsoleReg::extractComments("echo a; echo \"//x\"\n", &err);
     ok = ok && err.empty() && c.empty();
     // Unterminated /*: the error is set, and what was extracted so far is kept.
     err.clear();
-    c = ConsoleRegistry::extractComments("/* a */ // b\n/* c", &err);
+    c = cConsoleReg::extractComments("/* a */ // b\n/* c", &err);
     ok = ok && err == "unterminated block comment" && c.size() == 2 && c[0] == " a " &&
          c[1] == " b";
     check(ok, "extractComments: // and /* */ bodies in source order without markers, "
@@ -189,12 +189,12 @@ int runConsoleSelfTest() {
 
   // ---- command dispatch incl. unknown-command error ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
     std::string err;
-    bool ok = r.registerCommand("add", "adds", [](ConsoleRegistry& rr, const ConsoleArgs& argv) {
+    bool ok = r.registerCommand("add", "adds", [](cConsoleReg& rr, const ConsoleArgs& argv) {
                   long sum = 0;
                   for (size_t i = 1; i < argv.size(); ++i) sum += std::stol(argv[i]);
                   rr.print(std::to_string(sum));
@@ -204,15 +204,15 @@ int runConsoleSelfTest() {
     ok = ok && cap.contains("9");
     r.executeLine("nope_nothing");
     ok = ok && cap.contains("Unknown command");
-    ok = ok && !r.registerCommand("add", "dup", [](ConsoleRegistry&, const ConsoleArgs&) {}, &err) &&
+    ok = ok && !r.registerCommand("add", "dup", [](cConsoleReg&, const ConsoleArgs&) {}, &err) &&
          !err.empty();
-    ok = ok && !r.registerCommand("BAD NAME", "x", [](ConsoleRegistry&, const ConsoleArgs&) {}, &err);
+    ok = ok && !r.registerCommand("BAD NAME", "x", [](cConsoleReg&, const ConsoleArgs&) {}, &err);
     check(ok, "commands: dispatch, unknown-command error, duplicate/invalid names refused");
   }
 
   // ---- aliases: definition, expansion, nesting, recursion cap ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -237,7 +237,7 @@ int runConsoleSelfTest() {
 
   // ---- cvars: get/set, type coercion, archived round-trip ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -275,7 +275,7 @@ int runConsoleSelfTest() {
     // saveArchived refuses to write outside the config dir (fail-closed)
     std::string err2;
     ok = ok && !r.saveArchived(dir.parent_path() / "escape.lth", &err2) && !err2.empty();
-    ConsoleRegistry r2;
+    cConsoleReg r2;
     r2.registerCVar("myint", CVarType::Int, "1", true, "", &err);
     r2.registerCVar("myfloat", CVarType::Float, "0.5", true, "", &err);
     r2.registerCVar("mybool", CVarType::Bool, "0", true, "", &err);
@@ -300,7 +300,7 @@ int runConsoleSelfTest() {
       std::ofstream out(dir / "old.cfg");
       out << "myint 12\necho from_legacy_cfg\n";
     }
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -340,7 +340,7 @@ int runConsoleSelfTest() {
       std::ofstream out(dir / "unterminated.lth");
       out << "myint 22\n/* never closed\n";
     }
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -364,7 +364,7 @@ int runConsoleSelfTest() {
 
   // ---- hardening: exec-chain depth cap, mutual recursion, wait omission ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(true);  // debug builtins included: still no wait/delay
@@ -438,7 +438,7 @@ int runConsoleSelfTest() {
     // The old resolve-then-open would FOLLOW this (it points inside the
     // config dir, so the containment check passes); O_NOFOLLOW refuses it.
     std::filesystem::create_symlink(dir / "real.lth", dir / "link.lth", ec);
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     std::string err;
@@ -458,7 +458,7 @@ int runConsoleSelfTest() {
 
   // ---- wait: cooperative tick-based suspension, hardened ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -543,7 +543,7 @@ int runConsoleSelfTest() {
       std::ofstream out(dir / "wb.lth");
       out << "wait 1\nexec wa.lth\n";
     }
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -565,7 +565,7 @@ int runConsoleSelfTest() {
       std::ofstream out(dir / "many.lth");
       for (int i = 0; i < 20000; ++i) out << "echo line\n";
     }
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -580,7 +580,7 @@ int runConsoleSelfTest() {
 
   // ---- toggle / incrementvar / ++/-- : HL1 language completion ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -674,7 +674,7 @@ int runConsoleSelfTest() {
 
   // ---- find / unbindall ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -701,7 +701,7 @@ int runConsoleSelfTest() {
 
   // ---- bind dispatch: console owns the table, the pump dispatches ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -756,7 +756,7 @@ int runConsoleSelfTest() {
 
   // ---- cvar flags: readonly / cheat / replicated (Decision 8) ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     std::string err;
@@ -788,7 +788,7 @@ int runConsoleSelfTest() {
 
   // ---- onChange hook ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -796,7 +796,7 @@ int runConsoleSelfTest() {
     bool ok = r.registerCVar("hooked", CVarType::Int, "0", false, "", &err);
     int calls = 0;
     std::string seen;
-    ok = ok && r.setCVarChangeFn("hooked", [&](ConsoleRegistry&, const CVar& cv) {
+    ok = ok && r.setCVarChangeFn("hooked", [&](cConsoleReg&, const CVar& cv) {
              ++calls;
              seen = cv.value;
            });
@@ -804,18 +804,18 @@ int runConsoleSelfTest() {
     ok = ok && calls == 1 && seen == "42";
     r.executeLine("toggle hooked");  // fires through toggle too
     ok = ok && calls == 2 && seen == "0";
-    ok = ok && !r.setCVarChangeFn("nope", [&](ConsoleRegistry&, const CVar&) {});
+    ok = ok && !r.setCVarChangeFn("nope", [&](cConsoleReg&, const CVar&) {});
     check(ok, "onChange: fires after successful set (incl. via toggle); false for unknown cvar");
   }
 
   // ---- end-to-end: the debug console input path drives lithoscript ----
   {
     ui::UiRoot ui;
-    ConsoleRegistry r;
+    cConsoleReg r;
     r.registerBuiltins(false);
     std::string err;
     r.registerCVar("e2e_int", CVarType::Int, "0", true, "", &err);
-    DebugConsole con(r);
+    cDebugConsole con(r);
     con.attach(ui);
     con.open();
     // Command, cvar set + read, and alias expansion — all through the console
@@ -836,7 +836,7 @@ int runConsoleSelfTest() {
 
   // ---- ';' sequences execute in order ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -848,7 +848,7 @@ int runConsoleSelfTest() {
 
   // ---- key-bind registry seam ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     std::string err;
     bool ok = r.setKeyBind("F5", "echo hi", &err);
     ok = ok && !r.setKeyBind("NoSuchKey", "echo x", &err) && !err.empty();
@@ -858,14 +858,14 @@ int runConsoleSelfTest() {
 
   // ---- key binds stamp the binder's authority (anti-laundering) ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
     std::string err;
     r.registerCommand(
         "dbg_cheatdrop", "test-only cheat-gated command",
-        [](ConsoleRegistry& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
+        [](cConsoleReg& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
         CommandFlags{true}, &err);
     r.setCheatsAllowed(true);  // the player context allows cheats...
     DeviceState ds;
@@ -896,18 +896,18 @@ int runConsoleSelfTest() {
 
   // ---- aliases stamp the definer's authority (anti-laundering, App. F H1) ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
     std::string err;
     r.registerCommand(
         "dbg_cheatdrop", "test-only cheat-gated command",
-        [](ConsoleRegistry& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
+        [](cConsoleReg& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
         CommandFlags{true}, &err);
     r.registerCommand(
         "dbg_sessionact", "test-only session-tier command",
-        [](ConsoleRegistry& rr, const ConsoleArgs&) { rr.print("SESSION_FIRED"); },
+        [](cConsoleReg& rr, const ConsoleArgs&) { rr.print("SESSION_FIRED"); },
         CommandFlags{false, true}, &err);
     r.setCheatsAllowed(true);  // the player context allows cheats...
 
@@ -977,7 +977,7 @@ int runConsoleSelfTest() {
 
   // ---- debug-build-only commands ----
   {
-    ConsoleRegistry rDbg, rRel;
+    cConsoleReg rDbg, rRel;
     rDbg.registerBuiltins(true);
     rRel.registerBuiltins(false);
     check(rDbg.hasCommand("dbg_logtap") && rDbg.hasCommand("dbg_registry") &&
@@ -993,7 +993,7 @@ int runConsoleSelfTest() {
                   uint32_t(kPermConsole);
     check(ok, "AngelScript: console decls on the allowlist, gated on kPermConsole");
 
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;  // (kept off: the console widget owns the sink in the game)
     r.registerBuiltins(false);
     std::string err;
@@ -1035,12 +1035,12 @@ int runConsoleSelfTest() {
   // ---- consoleCmd runs with the mod's mask, not ambient authority ----
   {
     registerConsoleScriptBindings();  // idempotent
-    ConsoleRegistry r;
+    cConsoleReg r;
     r.registerBuiltins(false);
     std::string err;
     r.registerCommand(
         "dbg_cheatdrop", "test-only cheat-gated command",
-        [](ConsoleRegistry& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
+        [](cConsoleReg& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
         CommandFlags{true}, &err);
     // The game enables cheats for the local console: ambient authority would
     // let any mod's consoleCmd run cheat commands. The binding must install
@@ -1070,11 +1070,11 @@ int runConsoleSelfTest() {
               "the registry allows cheats)");
   }
 
-  // ---- DebugConsole widget: toggle, tilde, confinement, history ----
+  // ---- cDebugConsole widget: toggle, tilde, confinement, history ----
   {
     ui::UiRoot ui;
-    ConsoleRegistry r;
-    DebugConsole con(r);
+    cConsoleReg r;
+    cDebugConsole con(r);
     con.attach(ui);
     bool ok = !con.isOpen();
 
@@ -1119,8 +1119,8 @@ int runConsoleSelfTest() {
   {
     engineLogTap().clear();
     ui::UiRoot ui;
-    ConsoleRegistry r;
-    DebugConsole con(r);
+    cConsoleReg r;
+    cDebugConsole con(r);
     con.attach(ui);
     con.open();
     logWarn("hello from the tap");
@@ -1133,7 +1133,7 @@ int runConsoleSelfTest() {
 
   // ---- query: no backend, bounds mandatory, strict parsing, region cap ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -1174,7 +1174,7 @@ int runConsoleSelfTest() {
       }
     } fake;
 
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -1218,7 +1218,7 @@ int runConsoleSelfTest() {
 
   // ---- cheat-gated commands (Decision 8) ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -1226,7 +1226,7 @@ int runConsoleSelfTest() {
     CommandFlags cheat;
     cheat.cheat = true;
     r.registerCommand("boom", "test cheat command",
-                      [&](ConsoleRegistry&, const ConsoleArgs&) { ran = true; }, cheat);
+                      [&](cConsoleReg&, const ConsoleArgs&) { ran = true; }, cheat);
     r.executeLine("boom");  // cheats not allowed here: refused, fn never runs
     const bool refused = !ran && cap.contains("requires cheats");
     r.setCheatsAllowed(true);
@@ -1240,7 +1240,7 @@ int runConsoleSelfTest() {
   // even when the player's context allows cheats. Default (mask never
   // installed) preserves the old behavior exactly.
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -1250,7 +1250,7 @@ int runConsoleSelfTest() {
     CommandFlags cheat;
     cheat.cheat = true;
     r.registerCommand("agent_boom", "cheat-gated probe",
-                      [&](ConsoleRegistry&, const ConsoleArgs&) { ran = true; }, cheat);
+                      [&](cConsoleReg&, const ConsoleArgs&) { ran = true; }, cheat);
     std::string err;
     CVarFlags cvf;
     cvf.cheat = true;
@@ -1291,7 +1291,7 @@ int runConsoleSelfTest() {
 
   // debug.defrag wiring: service install, command surface, per-tick pump.
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     Capture cap;
     cap.install(r);
     r.registerBuiltins(false);
@@ -1341,9 +1341,9 @@ int runConsoleSelfTest() {
 
   // ---- completer: HL1-style tab completion (pure logic, no UI) ----
   {
-    ConsoleRegistry r;
+    cConsoleReg r;
     std::string err;
-    auto noop = [](ConsoleRegistry&, const ConsoleArgs&) {};
+    auto noop = [](cConsoleReg&, const ConsoleArgs&) {};
     bool okReg = r.registerCommand("alpha_one", "first alpha", noop, &err);
     okReg = r.registerCommand("alpha_two", "second alpha", noop, &err) && okReg;
     okReg = r.registerCommand("beta", "a beta command", noop, &err) && okReg;
@@ -1356,7 +1356,7 @@ int runConsoleSelfTest() {
     std::ofstream(scriptDir / "other.cfg") << "echo c\n";
     std::ofstream(scriptDir / "notes.txt") << "not a script\n";
     r.setConfigDir(scriptDir);
-    RegistryCompletionSource src(r);
+    cRegCompletionSource src(r);
     Completer comp(src);
     bool ok = okReg;
 
@@ -1454,11 +1454,11 @@ int runConsoleSelfTest() {
     check(ok, "completer: splitCompletionLine + isContextCommand");
   }
 
-  // ---- DebugConsole autocomplete dropdown (headless UiRoot) ----
+  // ---- cDebugConsole autocomplete dropdown (headless UiRoot) ----
   {
     ui::UiRoot ui;
-    ConsoleRegistry r;
-    DebugConsole con(r);
+    cConsoleReg r;
+    cDebugConsole con(r);
     con.attach(ui);  // registers builtins: echo, exec, ...
     con.open();
     bool ok = !con.completionVisible();
@@ -1650,7 +1650,7 @@ int runConsoleSelfTest() {
       ok = true;
       for (const char* c : cases) {
         std::string err;
-        const auto comments = ConsoleRegistry::extractComments(c, &err);
+        const auto comments = cConsoleReg::extractComments(c, &err);
         const SES st = scanEndState(c);
         // extractComments yields one body per real comment; the pairing
         // scanner must see the same comment structure: compare the end

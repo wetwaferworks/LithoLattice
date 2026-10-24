@@ -156,7 +156,7 @@ class VelocityTracker {
   bool havePrev_ = false;
 };
 
-// Camera basis from yaw/pitch (same convention as Player::forward()).
+// cCamera basis from yaw/pitch (same convention as Player::forward()).
 inline Vec3 cullCamForward(float yawRad, float pitchRad) {
   const float cp = std::cos(pitchRad);
   return Vec3{cp * std::cos(yawRad), std::sin(pitchRad), cp * std::sin(yawRad)};

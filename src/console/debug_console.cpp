@@ -1,4 +1,4 @@
-// DebugConsole implementation.
+// cDebugConsole implementation.
 #include "litholattice/console/debug_console.h"
 
 #include "litholattice/core/log.h"
@@ -27,12 +27,12 @@ std::string truncate(std::string s, size_t maxLen) {
 
 }  // namespace
 
-DebugConsole::DebugConsole(ConsoleRegistry& registry)
+cDebugConsole::cDebugConsole(cConsoleReg& registry)
     : registry_(registry), completionSource_(registry), completer_(completionSource_) {
   lastToggle_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 }
 
-void DebugConsole::attach(ui::UiRoot& ui) {
+void cDebugConsole::attach(ui::UiRoot& ui) {
   ui_ = &ui;
   auto panel = std::make_unique<ui::StackPanel>(ui::Orientation::Vertical, 2, "console");
   // Top-anchored dropdown: full width, top 42% of the viewport.
@@ -81,14 +81,14 @@ void DebugConsole::attach(ui::UiRoot& ui) {
 #endif
   );
   registry_.registerCommand("toggleconsole", "toggleconsole: opens/closes the debug console",
-                            [this](ConsoleRegistry&, const ConsoleArgs&) { toggle(); });
+                            [this](cConsoleReg&, const ConsoleArgs&) { toggle(); });
   registry_.registerCommand("clear", "clear: clears the console log view",
-                            [this](ConsoleRegistry&, const ConsoleArgs&) {
+                            [this](cConsoleReg&, const ConsoleArgs&) {
                               if (logView_) logView_->buffer().setText("");
                             });
 }
 
-void DebugConsole::open() {
+void cDebugConsole::open() {
   if (open_ || !ui_) return;
   open_ = true;
   panel_->setVisible(true);
@@ -97,7 +97,7 @@ void DebugConsole::open() {
   pendingInput_.clear();
 }
 
-void DebugConsole::close() {
+void cDebugConsole::close() {
   if (!open_ || !ui_) return;
   open_ = false;
   hideCompletion();
@@ -105,12 +105,12 @@ void DebugConsole::close() {
   if (ui_->focus() == input_) ui_->setFocus(nullptr);
 }
 
-void DebugConsole::toggle() {
+void cDebugConsole::toggle() {
   if (open_) close();
   else open();
 }
 
-bool DebugConsole::handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e) {
+bool cDebugConsole::handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e) {
   if (e.type != ui::UiEvent::Type::Text) return false;
   if (e.codepoint != U'~' && e.codepoint != U'`') return false;
   const auto now = std::chrono::steady_clock::now();
@@ -130,7 +130,7 @@ bool DebugConsole::handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e) {
   return true;
 }
 
-bool DebugConsole::handleKeyPreFilter(const ui::UiEvent& e) {
+bool cDebugConsole::handleKeyPreFilter(const ui::UiEvent& e) {
   if (!open_ || e.type != ui::UiEvent::Type::KeyDown) return false;
   if (e.mods & (ui::kModCtrl | ui::kModAlt)) return false;
   // Tab: HL1-style completion (consumed before TextBox can insert spaces).
@@ -191,7 +191,7 @@ bool DebugConsole::handleKeyPreFilter(const ui::UiEvent& e) {
   }
 }
 
-void DebugConsole::update() {
+void cDebugConsole::update() {
   if (!ui_) return;
   const std::vector<LogRecord> records = engineLogTap().snapshot();
   bool added = false;
@@ -204,7 +204,7 @@ void DebugConsole::update() {
   if (added) trimLogView();
 }
 
-void DebugConsole::onSubmit() {
+void cDebugConsole::onSubmit() {
   const std::string line = input_->text();
   hideCompletion();
   input_->setText("");
@@ -221,7 +221,7 @@ void DebugConsole::onSubmit() {
   trimLogView();
 }
 
-void DebugConsole::appendLogLine(const std::string& line) {
+void cDebugConsole::appendLogLine(const std::string& line) {
   if (!logView_) return;
   ui::TextBuffer& buf = logView_->buffer();
   const bool atEnd = buf.caret() == buf.endPos();
@@ -233,7 +233,7 @@ void DebugConsole::appendLogLine(const std::string& line) {
   }
 }
 
-void DebugConsole::trimLogView() {
+void cDebugConsole::trimLogView() {
   if (!logView_) return;
   ui::TextBuffer& buf = logView_->buffer();
   const int over = buf.lineCount() - int(kMaxViewLines);
@@ -243,9 +243,9 @@ void DebugConsole::trimLogView() {
   }
 }
 
-std::string DebugConsole::inputText() const { return input_ ? input_->text() : std::string(); }
+std::string cDebugConsole::inputText() const { return input_ ? input_->text() : std::string(); }
 
-void DebugConsole::setInputTextForTest(const std::string& text) {
+void cDebugConsole::setInputTextForTest(const std::string& text) {
   if (input_) {
     input_->setText(text);
     refreshCompletion();
@@ -254,7 +254,7 @@ void DebugConsole::setInputTextForTest(const std::string& text) {
 
 // ---- autocomplete ----
 
-void DebugConsole::refreshCompletion() {
+void cDebugConsole::refreshCompletion() {
   if (!open_ || !input_ || !completionView_) {
     hideCompletion();
     return;
@@ -268,7 +268,7 @@ void DebugConsole::refreshCompletion() {
   showCompletion();
 }
 
-std::string DebugConsole::formatCompletionRow(const CompletionCandidate& c, size_t nameWidth) {
+std::string cDebugConsole::formatCompletionRow(const CompletionCandidate& c, size_t nameWidth) {
   const char* tag = completionKindTag(c.kind);
   std::string row = tag + std::string(6 - std::strlen(tag), ' ') + c.name +
                     std::string(nameWidth + 2 - c.name.size(), ' ');
@@ -281,7 +281,7 @@ std::string DebugConsole::formatCompletionRow(const CompletionCandidate& c, size
   return row;
 }
 
-void DebugConsole::showCompletion() {
+void cDebugConsole::showCompletion() {
   size_t nameWidth = 0;
   for (const auto& c : completionRows_) nameWidth = std::max(nameWidth, c.name.size());
   std::vector<std::string> items;
@@ -296,7 +296,7 @@ void DebugConsole::showCompletion() {
   completionView_->setVisible(true);
 }
 
-void DebugConsole::hideCompletion() {
+void cDebugConsole::hideCompletion() {
   completionRows_.clear();
   if (completionView_) {
     completionView_->setVisible(false);
@@ -304,7 +304,7 @@ void DebugConsole::hideCompletion() {
   }
 }
 
-void DebugConsole::tabComplete() {
+void cDebugConsole::tabComplete() {
   if (!input_) return;
   const CompletionResult r = completer_.complete(input_->text());
   if (r.matches.empty()) return;  // no matches: no-op
@@ -324,7 +324,7 @@ void DebugConsole::tabComplete() {
   refreshCompletion();
 }
 
-void DebugConsole::acceptCompletion() {
+void cDebugConsole::acceptCompletion() {
   if (!dropdownVisible() || completionRows_.empty() || !input_) return;
   int sel = completionView_->selected();
   if (sel < 0 || size_t(sel) >= completionRows_.size()) sel = 0;
@@ -345,7 +345,7 @@ void DebugConsole::acceptCompletion() {
   hideCompletion();
 }
 
-void DebugConsole::moveCompletionSelection(int delta) {
+void cDebugConsole::moveCompletionSelection(int delta) {
   if (!dropdownVisible() || completionRows_.empty()) return;
   int sel = completionView_->selected();
   if (sel < 0) sel = 0;
@@ -353,9 +353,9 @@ void DebugConsole::moveCompletionSelection(int delta) {
   completionView_->setSelected(sel);
 }
 
-size_t DebugConsole::logLineCount() const { return logView_ ? size_t(logView_->buffer().lineCount()) : 0; }
+size_t cDebugConsole::logLineCount() const { return logView_ ? size_t(logView_->buffer().lineCount()) : 0; }
 
-void DebugConsole::submitForTest(const std::string& line) {
+void cDebugConsole::submitForTest(const std::string& line) {
   if (input_) input_->setText(line);
   onSubmit();
 }

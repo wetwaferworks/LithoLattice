@@ -100,7 +100,7 @@ RpcParseOutcome parseRpcRequest(std::string_view text) {
   return out;
 }
 
-void RpcRouter::registerHandler(std::string method, RpcHandler handler) {
+void cRpcRouter::registerHandler(std::string method, RpcHandler handler) {
   for (auto& [name, h] : handlers_) {
     if (name == method) {
       h = std::move(handler);
@@ -110,14 +110,14 @@ void RpcRouter::registerHandler(std::string method, RpcHandler handler) {
   handlers_.emplace_back(std::move(method), std::move(handler));
 }
 
-bool RpcRouter::hasHandler(std::string_view method) const {
+bool cRpcRouter::hasHandler(std::string_view method) const {
   for (const auto& [name, h] : handlers_) {
     if (name == method) return true;
   }
   return false;
 }
 
-std::optional<JsonValue> RpcRouter::dispatch(const RpcRequest& request) {
+std::optional<JsonValue> cRpcRouter::dispatch(const RpcRequest& request) {
   if (request.isNotification) {
     // Notifications still invoke the handler (fire and forget) but never
     // produce a response. Handler errors on a notification are swallowed:
@@ -148,7 +148,7 @@ std::optional<JsonValue> RpcRouter::dispatch(const RpcRequest& request) {
                  JsonValue::string(request.method));
 }
 
-std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, RpcRouter& router) {
+std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, cRpcRouter& router) {
   // Invalid params type (present but neither Array nor Object): -32602.
   if (!req.params.isNull() && !req.params.isObject() && !req.params.isArray()) {
     if (req.isNotification) return std::nullopt;  // notifications: no response, ever
@@ -161,7 +161,7 @@ std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, RpcRouter& r
   }
 }
 
-std::optional<std::string> handleRpcMessage(std::string_view text, RpcRouter& router) {
+std::optional<std::string> handleRpcMessage(std::string_view text, cRpcRouter& router) {
   RpcParseOutcome outcome = parseRpcRequest(text);
   if (!outcome.ok) {
     return buildErrorResponse(outcome.errorId, outcome.errorCode, outcome.errorMessage)

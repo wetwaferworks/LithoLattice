@@ -5,7 +5,7 @@
 //
 // THREE EXPOSURES (by design, one registry serves all three):
 //   1. ENGINE: registerCommand / registerCVar / unregister* — the clean C++
-//      registration API. The engine owns the ConsoleRegistry; mods register
+//      registration API. The engine owns the cConsoleReg; mods register
 //      through it only when granted kPermConsole (namespaced "modid:...";
 //      the ModLoader wiring is builder follow-up).
 //   2. USER: typed in the debug console, plus .lth lithoscript files players
@@ -96,7 +96,7 @@
 // entry point is executeLine(); output goes to the installed OutputFn sink;
 // cvars are read/written via findCVar/setCVar without any UI. A future
 // Fragment integration therefore needs no console changes: it constructs (or
-// shares) a ConsoleRegistry, installs its own sink (journal page instead of
+// shares) a cConsoleReg, installs its own sink (journal page instead of
 // the debug console's TextEditor), and feeds it lines typed on the typewriter
 // item or tapped on the keyboard item. If the Fragment wants its own command
 // namespace, it registers commands on its own registry instance. Suggested
@@ -195,14 +195,14 @@ struct CommandFlags {
   bool session = false;
 };
 
-class ConsoleRegistry;
+class cConsoleReg;
 
 /// Called synchronously inside setCVar after a successful set (covers
 /// `name value` lines, `toggle`/`incrementvar`/`++`/`--`, and archived
 /// loads). Keep it short and non-recursive: setting a cvar from inside a
 /// callback re-enters setCVar, so guard if you do (the game's settings
 /// bridge uses a syncing flag for exactly this).
-using CVarChangeFn = std::function<void(ConsoleRegistry&, const struct CVar&)>;
+using CVarChangeFn = std::function<void(cConsoleReg&, const struct CVar&)>;
 
 struct CVar {
   std::string name;
@@ -226,16 +226,16 @@ struct CVarFlags {
   bool cheat = false;
 };
 
-class ConsoleRegistry;
+class cConsoleReg;
 /// argv[0] is the command name. Errors are reported through print().
 using ConsoleArgs = std::vector<std::string>;
-using ConsoleCommandFn = std::function<void(ConsoleRegistry&, const ConsoleArgs&)>;
+using ConsoleCommandFn = std::function<void(cConsoleReg&, const ConsoleArgs&)>;
 
 /// Quake/HL1-style console registry + executor. Not thread-safe by itself:
 /// the game drives it on the main thread; script bindings call into it on the
 /// script thread. The game serializes those (scripts run on the main thread
 /// in v1), so no internal locking — document, don't add.
-class ConsoleRegistry {
+class cConsoleReg {
  public:
   /// Where printed lines go (the debug console's log view, a test capture,
   /// a future Fragment journal page). Defaults to a no-op.
@@ -427,7 +427,7 @@ class ConsoleRegistry {
   /// incrementvar, find, cvarlist, cmdlist, bind, unbind, unbindall, version.
   /// `debugBuild` adds the extra verbose debug-build-only commands
   /// (dbg_logtap, dbg_registry). (toggleconsole and clear are registered by
-  /// DebugConsole::attach, not here.)
+  /// cDebugConsole::attach, not here.)
   void registerBuiltins(bool debugBuild);
 
   /// Tokenizes one line into `;`-separated commands (quotes, backslash

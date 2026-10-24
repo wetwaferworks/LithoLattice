@@ -1,4 +1,4 @@
-// IoScheduler: async file I/O on the JobSystem's submitIo().
+// cIoScheduler: async file I/O on the JobSystem's submitIo().
 // See async_io.h for the completion contract.
 #include "litholattice/storage/async_io.h"
 
@@ -12,9 +12,9 @@
 
 namespace litholattice::storage {
 
-IoScheduler::StrandGuard::~StrandGuard() { sched->finishStrand(path); }
+cIoScheduler::StrandGuard::~StrandGuard() { sched->finishStrand(path); }
 
-void IoScheduler::submitRead(std::filesystem::path path,
+void cIoScheduler::submitRead(std::filesystem::path path,
                              std::function<void(Bytes data, std::string err)> done,
                              IoFence* fence) {
   struct Result {
@@ -32,7 +32,7 @@ void IoScheduler::submitRead(std::filesystem::path path,
   submitStrand(std::move(path), std::move(op), fence);
 }
 
-void IoScheduler::submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
+void cIoScheduler::submitWrite(std::filesystem::path path, Bytes data, const FileWriteOptions& opts,
                               std::function<void(bool ok, std::string err)> done,
                               IoFence* fence) {
   struct Result {
@@ -48,14 +48,14 @@ void IoScheduler::submitWrite(std::filesystem::path path, Bytes data, const File
   submitStrand(std::move(path), std::move(op), fence);
 }
 
-void IoScheduler::submitWriteRecord(std::filesystem::path path, Bytes payload,
+void cIoScheduler::submitWriteRecord(std::filesystem::path path, Bytes payload,
                                     const FileWriteOptions& opts,
                                     std::function<void(bool ok, std::string err)> done,
                                     IoFence* fence) {
   submitWrite(std::move(path), frameRecord(payload), opts, std::move(done), fence);
 }
 
-void IoScheduler::submit(std::function<void()> work, std::function<void()> done,
+void cIoScheduler::submit(std::function<void()> work, std::function<void()> done,
                          IoFence* fence) {
   if (fence) {
     std::lock_guard<std::mutex> l(fence->m_);
@@ -79,7 +79,7 @@ void IoScheduler::submit(std::function<void()> work, std::function<void()> done,
   });
 }
 
-void IoScheduler::submitStrand(std::filesystem::path path, Op op, IoFence* fence) {
+void cIoScheduler::submitStrand(std::filesystem::path path, Op op, IoFence* fence) {
   // Canonical strand identity: absolute + lexically_normal, so "world/r.0.0.llr",
   // "./world/r.0.0.llr" and "world//r.0.0.llr" hash to ONE strand (and one
   // .tmp) instead of getting concurrent writers on the same file. Lexical
@@ -114,7 +114,7 @@ void IoScheduler::submitStrand(std::filesystem::path path, Op op, IoFence* fence
   }
 }
 
-IoScheduler::~IoScheduler() {
+cIoScheduler::~cIoScheduler() {
   // Drain: an op's StrandGuard touches `this` on completion, so the scheduler
   // must not die mid-flight. Ops run on the JobSystem's I/O threads (which must
   // outlive us), so waiting here cannot deadlock the pool.
@@ -122,7 +122,7 @@ IoScheduler::~IoScheduler() {
   drainCv_.wait(l, [this] { return inflight_ == 0; });
 }
 
-void IoScheduler::launchHead(const std::filesystem::path& path, Strand& s) {
+void cIoScheduler::launchHead(const std::filesystem::path& path, Strand& s) {
   Op op = std::move(s.queue.front());
   s.queue.pop_front();
   ++inflight_;
@@ -143,7 +143,7 @@ void IoScheduler::launchHead(const std::filesystem::path& path, Strand& s) {
   });
 }
 
-void IoScheduler::finishStrand(const std::filesystem::path& path) {
+void cIoScheduler::finishStrand(const std::filesystem::path& path) {
   std::lock_guard<std::mutex> l(m_);
   if (--inflight_ == 0) drainCv_.notify_all();
   auto it = strands_.find(path);

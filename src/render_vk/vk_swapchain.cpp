@@ -15,7 +15,7 @@ const char* presentModeName(VkPresentModeKHR m) {
   }
 }
 
-std::optional<SurfaceConfig> chooseSurfaceConfig(const VulkanDevice& dev, bool vsync, const std::string& forced) {
+std::optional<SurfaceConfig> chooseSurfaceConfig(const cVulkanDevice& dev, bool vsync, const std::string& forced) {
   uint32_t n = 0;
   vkGetPhysicalDeviceSurfaceFormatsKHR(dev.physical(), dev.surface(), &n, nullptr);
   std::vector<VkSurfaceFormatKHR> formats(n);
@@ -57,9 +57,9 @@ std::optional<SurfaceConfig> chooseSurfaceConfig(const VulkanDevice& dev, bool v
   return cfg;
 }
 
-std::unique_ptr<Swapchain> Swapchain::create(const VulkanDevice& dev, const SurfaceConfig& cfg, VkRenderPass pass,
+std::unique_ptr<cSwapchain> cSwapchain::create(const cVulkanDevice& dev, const SurfaceConfig& cfg, VkRenderPass pass,
                                              VkRenderPass compositePass, VkRenderPass blurPass, VkFormat glowFormat,
-                                             uint32_t width, uint32_t height, const Swapchain* old) {
+                                             uint32_t width, uint32_t height, const cSwapchain* old) {
   VkSurfaceCapabilitiesKHR caps;
   if (!check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.physical(), dev.surface(), &caps), "surface capabilities"))
     return nullptr;
@@ -72,7 +72,7 @@ std::unique_ptr<Swapchain> Swapchain::create(const VulkanDevice& dev, const Surf
   uint32_t images = caps.minImageCount + 1;
   if (caps.maxImageCount) images = std::min(images, caps.maxImageCount);
 
-  auto sc = std::make_unique<Swapchain>(Passkey{});
+  auto sc = std::make_unique<cSwapchain>(Passkey{});
   sc->extent_ = extent;
   auto ci = make<VkSwapchainCreateInfoKHR>(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
   ci.surface = dev.surface();

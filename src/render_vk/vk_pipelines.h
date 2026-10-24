@@ -25,7 +25,7 @@ class RenderPipelines {
   /// Builds the render pass for the given formats and every pipeline. nullptr + `error` on failure.
   /// `packed12` (0.0.1.59 [P59-1]): chunk + chunk-blend pipelines read the 12-byte Packed12 vertex
   /// (stride 12, vk/chunk12.vert); entities always keep the 16-byte PackedVertex.
-  static std::unique_ptr<RenderPipelines> create(const VulkanDevice& dev, VkFormat color, VkFormat depth,
+  static std::unique_ptr<RenderPipelines> create(const cVulkanDevice& dev, VkFormat color, VkFormat depth,
                                                  std::string* error, bool packed12 = false);
 
   VkRenderPass renderPass() const { return renderPass_.get(); }

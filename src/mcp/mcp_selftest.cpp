@@ -50,7 +50,7 @@ bool parsesFail(std::string_view text) { return !parseJson(text).ok; }
 
 // Runs one RPC message through a router and returns the parsed response
 // (null JsonValue when no response was produced).
-JsonValue rpcRoundTrip(RpcRouter& router, std::string_view text, bool* responded) {
+JsonValue rpcRoundTrip(cRpcRouter& router, std::string_view text, bool* responded) {
   std::optional<std::string> resp = handleRpcMessage(text, router);
   *responded = resp.has_value();
   if (!resp) return JsonValue::null();
@@ -211,7 +211,7 @@ int runMcpSelfTest() {
 
   // ---- 6. RPC framing: requests, notifications, ids ----
   {
-    RpcRouter router;
+    cRpcRouter router;
     router.registerHandler("ping", [](const JsonValue&) { return JsonValue::string("pong"); });
     router.registerHandler("echo",
                            [](const JsonValue& p) { return p; });  // params echo
@@ -249,7 +249,7 @@ int runMcpSelfTest() {
 
   // ---- 7. RPC error codes ----
   {
-    RpcRouter router;
+    cRpcRouter router;
     router.registerHandler("add", [](const JsonValue& p) {
       const JsonValue* a = p.find("a");
       if (!a || !a->isInt()) throw RpcError(kRpcInvalidParams, "need int param 'a'");

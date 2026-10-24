@@ -14,7 +14,7 @@
 
 namespace litholattice {
 
-/// Camera position and orientation for entering a dimension.
+/// cCamera position and orientation for entering a dimension.
 struct Spawn { float x, y, z, yaw, pitch; };
 
 struct Dimension {

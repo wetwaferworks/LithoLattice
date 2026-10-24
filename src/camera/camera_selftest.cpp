@@ -1,4 +1,4 @@
-// Camera module self-tests. Fakes only: a scripted target and scripted
+// cCamera module self-tests. Fakes only: a scripted target and scripted
 // worlds, no engine world, no renderer. Deterministic (fixed dt steps).
 #include "litholattice/camera/camera_selftest.h"
 
@@ -81,10 +81,10 @@ void testFirstPerson() {
   std::printf("camera: first person\n");
   auto target = std::make_shared<FakeTarget>();
   target->anchor = {10, 64, 10};
-  Camera cam;
+  cCamera cam;
   cam.setMode(CameraMode::FirstPerson);
   cam.attach(target);
-  NullCameraWorld world;
+  cNullCameraWorld world;
   cam.update(1.f / 60.f, world);
   const CameraPose p = cam.pose();
   check(vnear(p.position, {10, 65.625f, 10}), "FP eye = anchor + eye offset");
@@ -110,10 +110,10 @@ void testThirdPerson() {
   std::printf("camera: third person orbit + spring arm\n");
   auto target = std::make_shared<FakeTarget>();
   target->anchor = {0, 64, 0};
-  Camera cam;
+  cCamera cam;
   cam.setMode(CameraMode::ThirdPerson);
   cam.attach(target);
-  NullCameraWorld world;
+  cNullCameraWorld world;
   settle(cam, world);
   const Vec3 pivot{0, 65.5f, 0};  // anchor + pivotOffset
   const Vec3 pos = cam.pose().position;
@@ -141,7 +141,7 @@ void testThirdPerson() {
   // instantly (minus the probe radius), then it eases back out.
   DistWorld wall;
   wall.hitDist = 3.f;
-  Camera cam2;
+  cCamera cam2;
   cam2.setMode(CameraMode::ThirdPerson);
   cam2.attach(target);
   settle(cam2, world);
@@ -156,9 +156,9 @@ void testFollowDamping() {
   std::printf("camera: follow damping (frame-rate independence)\n");
   auto target = std::make_shared<FakeTarget>();
   target->anchor = {0, 64, 0};
-  NullCameraWorld world;
+  cNullCameraWorld world;
   auto runChase = [&](float dt, int frames) {
-    Camera cam;
+    cCamera cam;
     cam.setMode(CameraMode::Follow);
     cam.attach(target);
     cam.update(dt, world);  // seed behind the target at the origin
@@ -178,10 +178,10 @@ void testShake() {
   std::printf("camera: trauma shake\n");
   auto target = std::make_shared<FakeTarget>();
   target->anchor = {0, 64, 0};
-  Camera cam;
+  cCamera cam;
   cam.setMode(CameraMode::FirstPerson);
   cam.attach(target);
-  NullCameraWorld world;
+  cNullCameraWorld world;
   cam.update(1.f / 60.f, world);
   const Vec3 baseFwd = cam.pose().forward;
   const Vec3 basePos = cam.pose().position;
@@ -208,22 +208,22 @@ void testShake() {
 
 void testManagerBlend() {
   std::printf("camera: manager blending\n");
-  auto camA = std::make_shared<Camera>();
+  auto camA = std::make_shared<cCamera>();
   camA->setMode(CameraMode::Fixed);
   CameraPose pa;
   pa.position = {0, 64, 0};
   pa.forward = {1, 0, 0};
   pa.up = {0, 1, 0};
   camA->setPose(pa);
-  auto camB = std::make_shared<Camera>();
+  auto camB = std::make_shared<cCamera>();
   camB->setMode(CameraMode::Fixed);
   camB->config().fovDeg = 90.f;  // output FOV comes from the lens config
   CameraPose pb = pa;
   pb.position = {10, 64, 0};
   camB->setPose(pb);
 
-  CameraManager mgr;
-  NullCameraWorld world;
+  cCameraMgr mgr;
+  cNullCameraWorld world;
   check(!mgr.addCamera("", camA), "manager rejects an empty name");
   check(mgr.addCamera("a", camA), "manager adds camera a");
   check(mgr.addCamera("b", camB), "manager adds camera b");
@@ -266,9 +266,9 @@ void testFrustum() {
 
 void testLifetime() {
   std::printf("camera: attach/detach lifetime\n");
-  Camera cam;
+  cCamera cam;
   cam.setMode(CameraMode::FirstPerson);
-  NullCameraWorld world;
+  cNullCameraWorld world;
   {
     auto target = std::make_shared<FakeTarget>();
     target->anchor = {3, 64, 3};
@@ -294,7 +294,7 @@ void testLifetime() {
 
 void testCvars() {
   std::printf("camera: cvars\n");
-  console::ConsoleRegistry reg;
+  console::cConsoleReg reg;
   std::string err;
   check(registerCameraCvars(reg, &err), "camera cvars register");
   check(!registerCameraCvars(reg, &err), "duplicate registration fails cleanly");

@@ -1,4 +1,4 @@
-// Camera implementation. See camera.h for the design notes; the short
+// cCamera implementation. See camera.h for the design notes; the short
 // version: exponential damping everywhere (frame-rate independent), spring
 // arm pulls in instantly and eases out, shake is trauma^2 through smooth
 // deterministic noise, and nothing here reads a clock or touches the sim.
@@ -138,9 +138,9 @@ Mat4 cameraProjectionMatrix(float fovDeg, float aspect, float nearPlane, float f
   return perspective(clamped * kDegToRad, aspect, nearPlane, farPlane);
 }
 
-// ---------------------------------------------------------------- Camera
+// ---------------------------------------------------------------- cCamera
 
-Camera::Camera() {
+cCamera::cCamera() {
   // Per-instance noise seed so two shaken cameras do not move in lockstep.
   static uint32_t s_counter = 0;
   shakeSeed_ = 0x51F15EEDu + (++s_counter) * 0x9E3779B9u;
@@ -149,7 +149,7 @@ Camera::Camera() {
   effectiveFovDeg_ = cfg_.fovDeg;
 }
 
-void Camera::seedFromTarget(const ICameraTarget& t) {
+void cCamera::seedFromTarget(const ICameraTarget& t) {
   yaw_ = t.facingYaw();
   pitch_ = clampF(t.facingPitch(), -kMaxPitch, kMaxPitch);
   orbitYaw_ = smoothOrbitYaw_ = yaw_;
@@ -161,20 +161,20 @@ void Camera::seedFromTarget(const ICameraTarget& t) {
   stateSeeded_ = true;
 }
 
-void Camera::attach(std::weak_ptr<ICameraTarget> target) {
+void cCamera::attach(std::weak_ptr<ICameraTarget> target) {
   target_ = std::move(target);
   stateSeeded_ = false;
   if (auto t = lockTarget()) seedFromTarget(*t);
 }
 
-void Camera::detach() {
+void cCamera::detach() {
   target_.reset();
   stateSeeded_ = false;
 }
 
-bool Camera::hasTarget() const { return !target_.expired(); }
+bool cCamera::hasTarget() const { return !target_.expired(); }
 
-void Camera::setMode(CameraMode mode) {
+void cCamera::setMode(CameraMode mode) {
   if (mode == mode_) return;
   mode_ = mode;
   stateSeeded_ = false;
@@ -188,7 +188,7 @@ void Camera::setMode(CameraMode mode) {
   }
 }
 
-void Camera::addLookInput(float yawDeltaRad, float pitchDeltaRad) {
+void cCamera::addLookInput(float yawDeltaRad, float pitchDeltaRad) {
   sinceLookInputSec_ = 0.f;
   yaw_ += yawDeltaRad;
   pitch_ = clampF(pitch_ + pitchDeltaRad, -kMaxPitch, kMaxPitch);
@@ -198,7 +198,7 @@ void Camera::addLookInput(float yawDeltaRad, float pitchDeltaRad) {
   orbitPitch_ = clampF(orbitPitch_ + pitchDeltaRad, cfg_.orbitPitchMin, cfg_.orbitPitchMax);
 }
 
-void Camera::addZoomInput(float delta) {
+void cCamera::addZoomInput(float delta) {
   switch (mode_) {
     case CameraMode::ThirdPerson:
       orbitZoomed_ = true;  // CAM-3: a user zoom wins over the live config value from here on
@@ -217,7 +217,7 @@ void Camera::addZoomInput(float delta) {
   }
 }
 
-void Camera::snapToPose(const CameraPose& p) {
+void cCamera::snapToPose(const CameraPose& p) {
   basePose_ = p;
   pose_ = p;
   freePos_ = p.position;
@@ -232,17 +232,17 @@ void Camera::snapToPose(const CameraPose& p) {
   stateSeeded_ = true;
 }
 
-void Camera::setPose(const CameraPose& pose) {
+void cCamera::setPose(const CameraPose& pose) {
   CameraPose p = pose;
   orthonormalize(p.forward, p.up, p.forward, p.up);
   snapToPose(p);
 }
 
-void Camera::addTrauma(float amount) {
+void cCamera::addTrauma(float amount) {
   trauma_ = clampF(trauma_ + amount, 0.f, 1.f);
 }
 
-void Camera::update(float dt, const ICameraWorld& world) {
+void cCamera::update(float dt, const ICameraWorld& world) {
   dt = clampF(dt, 0.f, 5.f);  // a hitching frame must not teleport the noise clock
   sinceLookInputSec_ += dt;
   // CAM-3: config distances are LIVE until the user zooms. The cvar path
@@ -417,12 +417,12 @@ void Camera::update(float dt, const ICameraWorld& world) {
   }
 }
 
-Mat4 Camera::viewMatrix() const { return cameraViewMatrix(pose_); }
+Mat4 cCamera::viewMatrix() const { return cameraViewMatrix(pose_); }
 
-Mat4 Camera::projectionMatrix() const {
+Mat4 cCamera::projectionMatrix() const {
   return cameraProjectionMatrix(pose_.fovDeg, cfg_.aspect, cfg_.nearPlane, cfg_.farPlane);
 }
 
-Mat4 Camera::viewProjectionMatrix() const { return mul(projectionMatrix(), viewMatrix()); }
+Mat4 cCamera::viewProjectionMatrix() const { return mul(projectionMatrix(), viewMatrix()); }
 
 }  // namespace litholattice::camera

@@ -608,7 +608,7 @@ std::unique_ptr<IFeature> loadGroundCoverFeature(Loader& l, const Json& j,
     if (!loadBiomeDensity(l, e, biomeNames, section, entry.biomes.density)) return nullptr;
     s.entries.push_back(std::move(entry));
   }
-  return std::make_unique<GroundCoverFeature>(std::move(s));
+  return std::make_unique<cGroundCoverFeature>(std::move(s));
 }
 
 std::unique_ptr<IFeature> loadRockFormationFeature(Loader& l, const Json& j,
@@ -762,7 +762,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
     // worldgen JSON still loads, but say loudly that the requested dungeons will not place.
     logError("procgen: %s: dungeon generation is not implemented (issue R-PG-2); this feature places "
              "nothing, so this world gets no dungeons", section.c_str());
-    return std::make_unique<DungeonSlot>();
+    return std::make_unique<cDungeonSlot>();
   }
   if (type == "trace_tree") {
     TraceTreeSettings s;

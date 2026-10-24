@@ -11,18 +11,18 @@
 namespace litholattice::camera {
 namespace {
 
-float cvarFloat(const console::ConsoleRegistry& reg, const char* name, float fallback) {
+float cvarFloat(const console::cConsoleReg& reg, const char* name, float fallback) {
   const console::CVar* v = reg.findCVar(name);
   if (!v) return fallback;
   const float f = std::strtof(v->value.c_str(), nullptr);
   return f == 0.f && v->value != "0" && v->value != "0.0" ? fallback : f;
 }
-int cvarInt(const console::ConsoleRegistry& reg, const char* name, int fallback) {
+int cvarInt(const console::cConsoleReg& reg, const char* name, int fallback) {
   const console::CVar* v = reg.findCVar(name);
   if (!v) return fallback;
   return static_cast<int>(std::strtol(v->value.c_str(), nullptr, 10));
 }
-bool cvarBool(const console::ConsoleRegistry& reg, const char* name, bool fallback) {
+bool cvarBool(const console::cConsoleReg& reg, const char* name, bool fallback) {
   const console::CVar* v = reg.findCVar(name);
   if (!v) return fallback;
   return v->value == "1" || v->value == "true";
@@ -30,7 +30,7 @@ bool cvarBool(const console::ConsoleRegistry& reg, const char* name, bool fallba
 
 }  // namespace
 
-bool registerCameraCvars(console::ConsoleRegistry& reg, std::string* err) {
+bool registerCameraCvars(console::cConsoleReg& reg, std::string* err) {
   bool ok = true;
   std::string e;
   auto add = [&](const char* name, console::CVarType type, const char* def, const char* help) {
@@ -49,7 +49,7 @@ bool registerCameraCvars(console::ConsoleRegistry& reg, std::string* err) {
   return ok;
 }
 
-CameraCvarValues readCameraCvars(const console::ConsoleRegistry& reg) {
+CameraCvarValues readCameraCvars(const console::cConsoleReg& reg) {
   CameraCvarValues v;
   v.chunkRadiusChunks = cvarInt(reg, "camera.chunk_radius", v.chunkRadiusChunks);
   v.defaultFovDeg = cvarFloat(reg, "camera.default_fov", v.defaultFovDeg);

@@ -1,5 +1,5 @@
 // delimiter_pairing.cpp: block-comment delimiter pairing for lithoscript
-// text fields. The scanner below is the ConsoleRegistry::tokenize /
+// text fields. The scanner below is the cConsoleReg::tokenize /
 // extractComments state machine, restated for positional queries: it must
 // produce IDENTICAL delimiter decisions (see the cross-check tests in
 // console_selftest.cpp).

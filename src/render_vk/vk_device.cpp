@@ -85,12 +85,12 @@ std::string versionString(uint32_t packed) {
          std::to_string(VK_API_VERSION_PATCH(packed));
 }
 
-std::unique_ptr<VulkanDevice> VulkanDevice::create(const VulkanRendererDesc& desc, std::string* error) {
+std::unique_ptr<cVulkanDevice> cVulkanDevice::create(const VulkanRendererDesc& desc, std::string* error) {
   if (!loadLoader()) {
     *error = "no Vulkan loader (vulkan-1.dll / libvulkan.so.1) found";
     return nullptr;
   }
-  auto d = std::make_unique<VulkanDevice>(Passkey{});
+  auto d = std::make_unique<cVulkanDevice>(Passkey{});
   if (!d->createInstance(desc, error)) return nullptr;
   const uint64_t surface = desc.surface.createSurface ? desc.surface.createSurface(d->instance_) : 0;
   if (!surface) {
@@ -102,7 +102,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create(const VulkanRendererDesc& des
   return d;
 }
 
-VulkanDevice::~VulkanDevice() {
+cVulkanDevice::~cVulkanDevice() {
   if (device_) {
     vkDeviceWaitIdle(device_);
     vkDestroyDevice(device_, nullptr);
@@ -112,7 +112,7 @@ VulkanDevice::~VulkanDevice() {
   if (instance_) vkDestroyInstance(instance_, nullptr);
 }
 
-bool VulkanDevice::createInstance(const VulkanRendererDesc& desc, std::string* error) {
+bool cVulkanDevice::createInstance(const VulkanRendererDesc& desc, std::string* error) {
   if (vkEnumerateInstanceVersion) vkEnumerateInstanceVersion(&instanceVersion_);
   std::vector<const char*> extensions;
   for (const std::string& e : desc.surface.instanceExtensions) extensions.push_back(e.c_str());
@@ -153,7 +153,7 @@ bool VulkanDevice::createInstance(const VulkanRendererDesc& desc, std::string* e
   return true;
 }
 
-bool VulkanDevice::pickPhysicalDevice(std::string* error) {
+bool cVulkanDevice::pickPhysicalDevice(std::string* error) {
   const auto devices = enumerate<VkPhysicalDevice>([&](uint32_t* n, VkPhysicalDevice* p) {
     return vkEnumeratePhysicalDevices(instance_, n, p);
   });
@@ -198,7 +198,7 @@ bool VulkanDevice::pickPhysicalDevice(std::string* error) {
   return true;
 }
 
-bool VulkanDevice::createDevice(std::string* error) {
+bool cVulkanDevice::createDevice(std::string* error) {
   const float priority = 1.f;
   auto qi = make<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
   qi.queueFamilyIndex = queueFamily_;
@@ -229,7 +229,7 @@ bool VulkanDevice::createDevice(std::string* error) {
   return true;
 }
 
-uint32_t VulkanDevice::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags required,
+uint32_t cVulkanDevice::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags required,
                                       VkMemoryPropertyFlags preferred) const {
   uint32_t fallback = UINT32_MAX;
   for (uint32_t i = 0; i < memory_.memoryTypeCount; ++i) {
@@ -241,20 +241,20 @@ uint32_t VulkanDevice::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags r
   return fallback;
 }
 
-bool VulkanDevice::supportsFormat(VkFormat format, VkFormatFeatureFlags features, bool optimalTiling) const {
+bool cVulkanDevice::supportsFormat(VkFormat format, VkFormatFeatureFlags features, bool optimalTiling) const {
   VkFormatProperties p;
   vkGetPhysicalDeviceFormatProperties(physical_, format, &p);
   const VkFormatFeatureFlags have = optimalTiling ? p.optimalTilingFeatures : p.linearTilingFeatures;
   return (have & features) == features;
 }
 
-bool VulkanDevice::supportsVertexFormat(VkFormat format) const {
+bool cVulkanDevice::supportsVertexFormat(VkFormat format) const {
   VkFormatProperties p;
   vkGetPhysicalDeviceFormatProperties(physical_, format, &p);
   return (p.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
 }
 
-std::string VulkanDevice::description() const {
+std::string cVulkanDevice::description() const {
   return std::string(properties_.deviceName) + " | " + typeName(properties_.deviceType) + " | Vulkan " +
          versionString(properties_.apiVersion) + " | driver " + driverString(properties_) + " | instance " +
          versionString(instanceVersion_) + (validation_ ? " | validation on" : "");

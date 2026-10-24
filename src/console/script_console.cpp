@@ -10,7 +10,7 @@
 namespace litholattice::console {
 
 struct ConsoleScriptContext {
-  ConsoleRegistry* registry = nullptr;
+  cConsoleReg* registry = nullptr;
   std::string modId;
   /// The owning mod's granted permission mask, captured at bind time. Every
   /// binding installs it for the call duration (mirroring the MCP
@@ -27,7 +27,7 @@ namespace {
 // restores the ambient mask afterwards (re-entrant: bindings may nest).
 class ScopedCallerPermissions {
  public:
-  ScopedCallerPermissions(ConsoleRegistry* reg, uint32_t mask)
+  ScopedCallerPermissions(cConsoleReg* reg, uint32_t mask)
       : reg_(reg), saved_(reg ? reg->callerPermissions() : kCallerFullAuthority) {
     if (reg_) reg_->setCallerPermissions(mask);
   }
@@ -38,7 +38,7 @@ class ScopedCallerPermissions {
   ScopedCallerPermissions& operator=(const ScopedCallerPermissions&) = delete;
 
  private:
-  ConsoleRegistry* reg_;
+  cConsoleReg* reg_;
   uint32_t saved_;
 };
 
@@ -87,7 +87,7 @@ void registerConsoleScriptBindings() {
     ScriptBindingAllowlist::registerBinding({b.decl, uint32_t(kPermConsole), b.description});
 }
 
-std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se, ConsoleRegistry& registry,
+std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se, cConsoleReg& registry,
                                                            const std::string& modId) {
   auto ctx = std::make_shared<ConsoleScriptContext>();
   ctx->registry = &registry;

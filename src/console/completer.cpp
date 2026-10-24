@@ -151,16 +151,16 @@ std::vector<CompletionCandidate> Completer::filter(std::string_view line) {
   return rows;
 }
 
-// ---- RegistryCompletionSource ----
+// ---- cRegCompletionSource ----
 
-RegistryCompletionSource::RegistryCompletionSource(const ConsoleRegistry& registry)
+cRegCompletionSource::cRegCompletionSource(const cConsoleReg& registry)
     : registry_(registry) {}
 
-std::filesystem::path RegistryCompletionSource::scriptRoot() const {
+std::filesystem::path cRegCompletionSource::scriptRoot() const {
   return scriptRootSet_ ? scriptRoot_ : registry_.configDir();
 }
 
-std::vector<CompletionCandidate> RegistryCompletionSource::candidates() {
+std::vector<CompletionCandidate> cRegCompletionSource::candidates() {
   std::vector<CompletionCandidate> out;
   for (const std::string& name : registry_.commandNames()) {
     CompletionCandidate c;
@@ -189,7 +189,7 @@ std::vector<CompletionCandidate> RegistryCompletionSource::candidates() {
   return out;
 }
 
-std::vector<std::string> RegistryCompletionSource::scriptFiles(std::string_view prefix) {
+std::vector<std::string> cRegCompletionSource::scriptFiles(std::string_view prefix) {
   std::vector<std::string> out;
   const std::filesystem::path root = scriptRoot();  // lazy: tracks setConfigDir()
   if (root.empty()) return out;
@@ -210,7 +210,7 @@ std::vector<std::string> RegistryCompletionSource::scriptFiles(std::string_view 
   return out;
 }
 
-std::vector<std::string> RegistryCompletionSource::dimensionNames(std::string_view prefix) {
+std::vector<std::string> cRegCompletionSource::dimensionNames(std::string_view prefix) {
   std::vector<std::string> names = dimensionProvider_
                                        ? dimensionProvider_()
                                        : std::vector<std::string>{"organic", "cosmic", "underwafer",

@@ -1,4 +1,4 @@
-// Swapchain with its image views, a shared depth buffer and one framebuffer per image. Rebuilt
+// cSwapchain with its image views, a shared depth buffer and one framebuffer per image. Rebuilt
 // as a whole on resize (the render pass and formats stay). Private to render_vk.
 #pragma once
 #include <memory>
@@ -17,24 +17,24 @@ struct SurfaceConfig {
 
 /// Picks B8G8R8A8/R8G8B8A8 UNORM (matching the OpenGL backend's non-sRGB output), a depth format
 /// and FIFO (vsync) or MAILBOX / IMMEDIATE. nullopt if the surface offers nothing usable.
-std::optional<SurfaceConfig> chooseSurfaceConfig(const VulkanDevice& dev, bool vsync, const std::string& forced = {});
+std::optional<SurfaceConfig> chooseSurfaceConfig(const cVulkanDevice& dev, bool vsync, const std::string& forced = {});
 const char* presentModeName(VkPresentModeKHR m);
 
-class Swapchain {
+class cSwapchain {
  public:
-  /// Construction token: only Swapchain's own factory can make one, so it can use make_unique / make_shared.
+  /// Construction token: only cSwapchain's own factory can make one, so it can use make_unique / make_shared.
   class Passkey {
-    friend class Swapchain;
+    friend class cSwapchain;
     Passkey() = default;
   };
-  explicit Swapchain(Passkey) {}
+  explicit cSwapchain(Passkey) {}
   /// Creates a swapchain of about `width` x `height` (clamped to the surface limits). `old` is
   /// handed to the driver for reuse and may be null. nullptr on failure.
   /// JD Vulkan push (Cortana 2026-10-16): also builds the HDR glow target, the two half-res
   /// bloom images and the composite / blur framebuffers.
-  static std::unique_ptr<Swapchain> create(const VulkanDevice& dev, const SurfaceConfig& cfg, VkRenderPass pass,
+  static std::unique_ptr<cSwapchain> create(const cVulkanDevice& dev, const SurfaceConfig& cfg, VkRenderPass pass,
                                            VkRenderPass compositePass, VkRenderPass blurPass, VkFormat glowFormat,
-                                           uint32_t width, uint32_t height, const Swapchain* old);
+                                           uint32_t width, uint32_t height, const cSwapchain* old);
   VkFramebuffer compositeFramebuffer(uint32_t image) const { return compositeFbs_[image].get(); }
   VkFramebuffer blurFramebuffer(int i) const { return blurFbs_[size_t(i)].get(); }
   VkImageView glowView() const { return glow_->view(); }

@@ -47,13 +47,13 @@ void setTimeouts(NativeSocket s, int seconds) {
 }
 }  // namespace
 
-TcpConn::TcpConn() = default;
-TcpConn::TcpConn(NativeSocket sock) : sock_(sock) { setTimeouts(sock_, kDefaultIoTimeoutSec); }
-TcpConn::~TcpConn() { close(); }
-TcpConn::TcpConn(TcpConn&& other) noexcept : sock_(other.sock_) {
+cTcpConn::cTcpConn() = default;
+cTcpConn::cTcpConn(NativeSocket sock) : sock_(sock) { setTimeouts(sock_, kDefaultIoTimeoutSec); }
+cTcpConn::~cTcpConn() { close(); }
+cTcpConn::cTcpConn(cTcpConn&& other) noexcept : sock_(other.sock_) {
   other.sock_ = kInvalidSocketValue;
 }
-TcpConn& TcpConn::operator=(TcpConn&& other) noexcept {
+cTcpConn& cTcpConn::operator=(cTcpConn&& other) noexcept {
   if (this != &other) {
     close();
     sock_ = other.sock_;
@@ -61,16 +61,16 @@ TcpConn& TcpConn::operator=(TcpConn&& other) noexcept {
   }
   return *this;
 }
-void TcpConn::close() {
+void cTcpConn::close() {
   if (sock_ != kInvalidSocketValue) {
     closesocket(sock_);
     sock_ = kInvalidSocketValue;
   }
 }
-void TcpConn::setTimeout(int seconds) {
+void cTcpConn::setTimeout(int seconds) {
   if (valid()) setTimeouts(sock_, seconds);
 }
-std::string TcpConn::readSome(std::size_t maxBytes) {
+std::string cTcpConn::readSome(std::size_t maxBytes) {
   std::string out;
   out.resize(maxBytes > 0 ? maxBytes : 1);
   int n = recv(sock_, out.data(), static_cast<int>(out.size()), 0);
@@ -78,7 +78,7 @@ std::string TcpConn::readSome(std::size_t maxBytes) {
   out.resize(static_cast<std::size_t>(n));
   return out;
 }
-bool TcpConn::sendAll(std::string_view data) {
+bool cTcpConn::sendAll(std::string_view data) {
   const char* p = data.data();
   std::size_t left = data.size();
   while (left > 0) {
@@ -168,7 +168,7 @@ bool TcpListener::bind(const std::string& address, std::uint16_t port,
   boundPort_ = actualPort;
   return true;
 }
-bool TcpListener::accept(TcpConn& conn, int timeoutMs, std::string& error) {
+bool TcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
   WSAPOLLFD pfd{};
   pfd.fd = sock_;
   pfd.events = POLLRDNORM;
@@ -183,7 +183,7 @@ bool TcpListener::accept(TcpConn& conn, int timeoutMs, std::string& error) {
     error = "accept() failed";
     return false;
   }
-  conn = TcpConn(c);
+  conn = cTcpConn(c);
   return true;
 }
 }  // namespace litholattice::mcp
@@ -214,15 +214,15 @@ void setTimeouts(int fd, int seconds) {
 }
 }  // namespace
 
-TcpConn::TcpConn() = default;
-TcpConn::TcpConn(NativeSocket sock) : sock_(sock) {
+cTcpConn::cTcpConn() = default;
+cTcpConn::cTcpConn(NativeSocket sock) : sock_(sock) {
   setTimeouts(sock_, kDefaultIoTimeoutSec);
 }
-TcpConn::~TcpConn() { close(); }
-TcpConn::TcpConn(TcpConn&& other) noexcept : sock_(other.sock_) {
+cTcpConn::~cTcpConn() { close(); }
+cTcpConn::cTcpConn(cTcpConn&& other) noexcept : sock_(other.sock_) {
   other.sock_ = kInvalidSocketValue;
 }
-TcpConn& TcpConn::operator=(TcpConn&& other) noexcept {
+cTcpConn& cTcpConn::operator=(cTcpConn&& other) noexcept {
   if (this != &other) {
     close();
     sock_ = other.sock_;
@@ -230,16 +230,16 @@ TcpConn& TcpConn::operator=(TcpConn&& other) noexcept {
   }
   return *this;
 }
-void TcpConn::close() {
+void cTcpConn::close() {
   if (sock_ != kInvalidSocketValue) {
     ::close(sock_);
     sock_ = kInvalidSocketValue;
   }
 }
-void TcpConn::setTimeout(int seconds) {
+void cTcpConn::setTimeout(int seconds) {
   if (valid()) setTimeouts(sock_, seconds);
 }
-std::string TcpConn::readSome(std::size_t maxBytes) {
+std::string cTcpConn::readSome(std::size_t maxBytes) {
   std::string out;
   out.resize(maxBytes > 0 ? maxBytes : 1);
   // MSG_NOSIGNAL: a peer that went away mid-write must not SIGPIPE the game.
@@ -248,7 +248,7 @@ std::string TcpConn::readSome(std::size_t maxBytes) {
   out.resize(static_cast<std::size_t>(n));
   return out;
 }
-bool TcpConn::sendAll(std::string_view data) {
+bool cTcpConn::sendAll(std::string_view data) {
   const char* p = data.data();
   std::size_t left = data.size();
   while (left > 0) {
@@ -324,7 +324,7 @@ bool TcpListener::bind(const std::string& address, std::uint16_t port,
   boundPort_ = actualPort;
   return true;
 }
-bool TcpListener::accept(TcpConn& conn, int timeoutMs, std::string& error) {
+bool TcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
   pollfd pfd{};
   pfd.fd = sock_;
   pfd.events = POLLIN;
@@ -341,7 +341,7 @@ bool TcpListener::accept(TcpConn& conn, int timeoutMs, std::string& error) {
     error = "accept() failed: " + std::string(std::strerror(errno));
     return false;
   }
-  conn = TcpConn(c);
+  conn = cTcpConn(c);
   return true;
 }
 }  // namespace litholattice::mcp

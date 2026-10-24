@@ -5,7 +5,7 @@
 // The console module owns the command, its syntax validation, and its caps:
 // region bounds are MANDATORY (fail-closed: no unbounded scans), result sets
 // are capped, ordering is deterministic. The game registers the backend via
-// ConsoleRegistry::setWorldQuery(). This is also the primitive the future
+// cConsoleReg::setWorldQuery(). This is also the primitive the future
 // agent/proxy builders use to SEE the world — read-only, budgeted, logged.
 //
 // TRUST: queries are read-only. A semi-trusted (Fragment-authored) script may

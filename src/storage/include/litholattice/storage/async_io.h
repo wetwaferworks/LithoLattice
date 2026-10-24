@@ -1,4 +1,4 @@
-// Async file I/O on the JobSystem: litholattice::storage::IoScheduler.
+// Async file I/O on the JobSystem: litholattice::storage::cIoScheduler.
 //
 // ==== THE COMPLETION CONTRACT (read this before submitting I/O) ====
 // Who runs the work: the JobSystem's dedicated I/O threads, via submitIo().
@@ -28,7 +28,7 @@
 // from the file contract (file_contract.h): temp + fsync + atomic rename, with
 // optional backup rotation.
 //
-// Lifetime: ops may outlive the caller's stack frame but not the IoScheduler or
+// Lifetime: ops may outlive the caller's stack frame but not the cIoScheduler or
 // the JobSystem. The scheduler holds no JobSystem ownership — construct it after
 // the JobSystem and destroy it before.
 #pragma once
@@ -47,14 +47,14 @@
 
 namespace litholattice::storage {
 
-class IoScheduler;
+class cIoScheduler;
 
-/// A group of I/O ops on an IoScheduler that can be waited on by itself — the
+/// A group of I/O ops on an cIoScheduler that can be waited on by itself — the
 /// async counterpart of JobFence. The destructor waits, so a fence must not
 /// outlive the data its callbacks touch.
 class IoFence {
  public:
-  explicit IoFence(IoScheduler& io) : io_(io) {}
+  explicit IoFence(cIoScheduler& io) : io_(io) {}
   ~IoFence();  // defined in async_io.cpp: fail-closed on job-thread misuse
   IoFence(const IoFence&) = delete;
   IoFence& operator=(const IoFence&) = delete;
@@ -78,10 +78,10 @@ class IoFence {
   int wait();
 
  private:
-  friend class IoScheduler;
+  friend class cIoScheduler;
   void onOpDone(bool ok);
 
-  IoScheduler& io_;
+  cIoScheduler& io_;
   std::mutex m_;
   std::condition_variable cv_;
   int pending_ = 0, failed_ = 0;
@@ -89,14 +89,14 @@ class IoFence {
 
 /// Routes file I/O through the JobSystem's submitIo(). See the completion
 /// contract at the top of this file.
-class IoScheduler {
+class cIoScheduler {
  public:
-  explicit IoScheduler(JobSystem& jobs) : jobs_(jobs) {}
+  explicit cIoScheduler(JobSystem& jobs) : jobs_(jobs) {}
   /// Drains: waits for in-flight ops to finish before destroying strands.
   /// The JobSystem must outlive the scheduler (ops run on its I/O threads).
-  ~IoScheduler();
-  IoScheduler(const IoScheduler&) = delete;
-  IoScheduler& operator=(const IoScheduler&) = delete;
+  ~cIoScheduler();
+  cIoScheduler(const cIoScheduler&) = delete;
+  cIoScheduler& operator=(const cIoScheduler&) = delete;
 
   /// Read `path` asynchronously; `done(data, err)` runs on an I/O thread.
   /// Ops to the same path run in submission order (strand); different paths may
@@ -135,7 +135,7 @@ class IoScheduler {
   // RAII: advances the strand even if the op throws, so one bad op can never
   // wedge its path's queue. Nested (not anonymous-namespace) for private access.
   struct StrandGuard {
-    IoScheduler* sched;
+    cIoScheduler* sched;
     std::filesystem::path path;
     ~StrandGuard();
   };

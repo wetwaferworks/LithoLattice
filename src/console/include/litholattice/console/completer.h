@@ -4,7 +4,7 @@
 // script editor can reuse it by implementing ICompletionSource.
 //
 // FRAGMENT SEAM: the completer takes ALL of its candidates from the injected
-// ICompletionSource. The debug console feeds it a RegistryCompletionSource
+// ICompletionSource. The debug console feeds it a cRegCompletionSource
 // (below); the Fragment script editor later implements its own source (e.g.
 // lithoscript keywords plus Fragment-specific commands) and gets identical
 // completion behavior with zero console code.
@@ -35,7 +35,7 @@
 
 namespace litholattice::console {
 
-class ConsoleRegistry;  // concmd.h
+class cConsoleReg;  // concmd.h
 
 /// Kind of a completion candidate. Command/Cvar/Alias come from the console
 /// registry; File/Dimension only appear after `exec` / `map`.
@@ -113,15 +113,15 @@ class Completer {
   ICompletionSource& source_;
 };
 
-/// ICompletionSource backed by a ConsoleRegistry: commands (help as the
+/// ICompletionSource backed by a cConsoleReg: commands (help as the
 /// description), cvars (help + CURRENT VALUE as the detail), aliases
 /// (body truncated to 64 chars as the description). exec's file lister is
 /// sandboxed to the script root (defaults to the registry's config dir —
 /// the same directory `exec` itself reads); dimension names default to the
 /// five LithoKraft dimensions and can be overridden by the game.
-class RegistryCompletionSource : public ICompletionSource {
+class cRegCompletionSource : public ICompletionSource {
  public:
-  explicit RegistryCompletionSource(const ConsoleRegistry& registry);
+  explicit cRegCompletionSource(const cConsoleReg& registry);
 
   /// Overrides the script root (default: the registry's config dir, read
   /// lazily so setConfigDir() after construction still takes effect). The
@@ -143,7 +143,7 @@ class RegistryCompletionSource : public ICompletionSource {
   std::vector<std::string> dimensionNames(std::string_view prefix) override;
 
  private:
-  const ConsoleRegistry& registry_;
+  const cConsoleReg& registry_;
   std::filesystem::path scriptRoot_;
   bool scriptRootSet_ = false;
   std::function<std::vector<std::string>()> dimensionProvider_;

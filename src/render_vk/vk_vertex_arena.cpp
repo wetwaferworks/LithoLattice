@@ -33,7 +33,7 @@ bool VertexArena::parseKind(const std::string& s, Kind& out) {
   return false;
 }
 
-VertexArena::VertexArena(const VulkanDevice& dev, Kind kind, VkDeviceSize blockSize, VkDeviceSize alignment)
+VertexArena::VertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize, VkDeviceSize alignment)
     : dev_(dev), kind_(kind), blockSize_(blockSize) {
   // 0.0.1.59 [P59-1]: only the two supported granularities; anything else falls back to the 16-byte one.
   alignment_ = (alignment == kAlignment12) ? kAlignment12 : kAlignment16;

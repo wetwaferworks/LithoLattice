@@ -10,16 +10,16 @@ namespace litholattice::vk {
 
 /// Uploads a single-mip 2D image (`bytesPerPixel` 1 or 4) through a staging buffer and leaves it
 /// in SHADER_READ_ONLY_OPTIMAL. nullopt on failure.
-std::optional<Image> uploadImage2D(const VulkanDevice& dev, VkCommandPool pool, VkFormat format, uint32_t width,
+std::optional<Image> uploadImage2D(const cVulkanDevice& dev, VkCommandPool pool, VkFormat format, uint32_t width,
                                    uint32_t height, const uint8_t* pixels, uint32_t bytesPerPixel);
 
 /// Nearest-filter, clamp-to-edge sampler (palettes, font).
-UniqueSampler createNearestSampler(const VulkanDevice& dev);
+UniqueSampler createNearestSampler(const cVulkanDevice& dev);
 
 class VkTextureArray final : public ITextureArray {
  public:
   /// `onReplaced` runs after every successful upload (device idle): rebind the new image views.
-  VkTextureArray(const VulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced);
+  VkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced);
 
   /// Waits for the device to go idle, then replaces both images. Keeps the old ones on failure.
   bool upload(const TextureRegistry& textures) override;
@@ -32,7 +32,7 @@ class VkTextureArray final : public ITextureArray {
  private:
   std::optional<Image> uploadArray(const TextureRegistry& textures, uint32_t mipLevels) const;
 
-  const VulkanDevice& dev_;
+  const cVulkanDevice& dev_;
   VkCommandPool pool_;
   std::function<void()> onReplaced_;
   UniqueSampler arraySampler_, paletteSampler_;

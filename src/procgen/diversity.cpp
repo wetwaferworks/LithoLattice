@@ -52,7 +52,7 @@ uint64_t featSeedFor(uint64_t dimensionSeed, const std::string& seedName, const 
 
 // ---- 1. ground cover ---------------------------------------------------------------
 
-void GroundCoverFeature::place(StageContext& ctx, Rng&) const {
+void cGroundCoverFeature::place(StageContext& ctx, Rng&) const {
   if (s_.entries.empty()) return;
   const uint64_t featSeed = featSeedFor(ctx.chunk.dimensionSeed, s_.seedName, "groundcover");
   const int n = ctx.chunk.size, top = ctx.blocks.height();

@@ -53,7 +53,7 @@ static_assert(sizeof(vk_sprite::SpriteVertex) == 40, "sprite vertex layout (vk_p
 /// Linear, clamp-to-edge sampler for the sprite atlas pages (GL33 uses
 /// GL_LINEAR for its sprite page textures; the block texture array's
 /// nearest-mag filtering is the chunk path's choice, not the sprites').
-UniqueSampler createLinearSampler(const VulkanDevice& dev) {
+UniqueSampler createLinearSampler(const cVulkanDevice& dev) {
   auto si = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
   si.magFilter = si.minFilter = VK_FILTER_LINEAR;
   si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -79,7 +79,7 @@ class cVulkanRenderer final : public IRenderer {
   }
 
   bool init(const VulkanRendererDesc& desc, std::string* error) {
-    dev_ = VulkanDevice::create(desc, error);
+    dev_ = cVulkanDevice::create(desc, error);
     if (!dev_) return false;
     const VkDevice d = dev_->device();
     auto pi = make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
@@ -621,7 +621,7 @@ class cVulkanRenderer final : public IRenderer {
 
   bool recreateSwapchain(uint32_t width, uint32_t height) {
     vkDeviceWaitIdle(dev_->device());
-    auto next = Swapchain::create(*dev_, surface_, pipelines_->renderPass(), pipelines_->compositePass(),
+    auto next = cSwapchain::create(*dev_, surface_, pipelines_->renderPass(), pipelines_->compositePass(),
                                   pipelines_->blurPass(), RenderPipelines::kGlowFormat, width, height, swapchain_.get());
     swapchain_ = std::move(next);
     if (!swapchain_) {  // minimized or lost: try again next frame
@@ -1286,7 +1286,7 @@ class cVulkanRenderer final : public IRenderer {
   }
 
   // Declaration order is destruction order reversed: the device goes last.
-  std::unique_ptr<VulkanDevice> dev_;
+  std::unique_ptr<cVulkanDevice> dev_;
   UniqueCommandPool pool_;
   SurfaceConfig surface_;
   std::unique_ptr<RenderPipelines> pipelines_;
@@ -1305,7 +1305,7 @@ class cVulkanRenderer final : public IRenderer {
   std::array<FrameSlot, kFramesInFlight> frames_;
   UniqueDescriptorPool descriptorPool_;
   std::unique_ptr<VkTextureArray> textures_;
-  std::unique_ptr<Swapchain> swapchain_;
+  std::unique_ptr<cSwapchain> swapchain_;
   std::vector<UniqueSemaphore> renderDone_;  // per swapchain image
   VkExtent2D requested_{};    // window size the swapchain was built for
   bool swapchainStale_ = false;  // out of date / suboptimal: rebuild before the next frame

@@ -1,4 +1,4 @@
-// Camera module self-test entry point.
+// cCamera module self-test entry point.
 #pragma once
 
 namespace litholattice::camera {

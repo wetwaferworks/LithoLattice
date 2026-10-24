@@ -32,9 +32,9 @@ struct GroundCoverSettings {
 /// Cheap single-column decoration: at most one cover per column, picked by a single roll
 /// against the entries' cumulative density. Position-keyed (no chunk RNG), vertical only,
 /// writes into air above the surface. The biggest visual-diversity win per line of code.
-class GroundCoverFeature final : public IFeature {
+class cGroundCoverFeature final : public IFeature {
  public:
-  explicit GroundCoverFeature(GroundCoverSettings s) : s_(std::move(s)) {}
+  explicit cGroundCoverFeature(GroundCoverSettings s) : s_(std::move(s)) {}
   void place(StageContext& ctx, Rng& rng) const override;
   const GroundCoverSettings& settings() const { return s_; }
 

@@ -14,7 +14,7 @@ class Buffer {
  public:
   Buffer() = default;
   /// Returns nullopt (with a log line) if no memory type has `required`.
-  static std::optional<Buffer> create(const VulkanDevice& dev, VkDeviceSize size, VkBufferUsageFlags usage,
+  static std::optional<Buffer> create(const cVulkanDevice& dev, VkDeviceSize size, VkBufferUsageFlags usage,
                                       VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred = 0);
   VkBuffer handle() const { return buffer_.get(); }
   VkDeviceSize size() const { return size_; }
@@ -32,7 +32,7 @@ class Buffer {
 class Image {
  public:
   Image() = default;
-  static std::optional<Image> create(const VulkanDevice& dev, const VkImageCreateInfo& info, VkImageViewType viewType,
+  static std::optional<Image> create(const cVulkanDevice& dev, const VkImageCreateInfo& info, VkImageViewType viewType,
                                      VkImageAspectFlags aspect);
   VkImage handle() const { return image_.get(); }
   VkImageView view() const { return view_.get(); }
@@ -45,7 +45,7 @@ class Image {
 
 /// Records commands with `record` into a temporary command buffer, submits it and waits for the
 /// queue (uploads at load time only, never per frame).
-bool submitOnce(const VulkanDevice& dev, VkCommandPool pool, const std::function<void(VkCommandBuffer)>& record);
+bool submitOnce(const cVulkanDevice& dev, VkCommandPool pool, const std::function<void(VkCommandBuffer)>& record);
 
 /// Image layout transition barrier for all mips and layers of `image` (colour aspect).
 void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to,

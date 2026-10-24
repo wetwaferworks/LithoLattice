@@ -9,7 +9,7 @@
 // types the `/` completing a `*/`, and balancePastedDelimiters() on
 // paste; all return plain data the editor splices in.
 //
-// LEXICAL RULES (identical to ConsoleRegistry::tokenize /
+// LEXICAL RULES (identical to cConsoleReg::tokenize /
 // extractComments — same state machine, same outcomes):
 //   * `/*` opens a block comment; the FIRST `*/` closes it (no nesting).
 //   * `//` starts a line comment running to `\n`; delimiters inside it

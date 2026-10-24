@@ -11,7 +11,7 @@
 //   - The server NEVER touches engine subsystems directly. Every data source
 //     is an injectable seam interface declared below (ISimStatus, IWorldReader,
 //     ...). The game adapts its real classes (SimThread, ModLoader, ChunkMap,
-//     EntityManager, ConsoleRegistry, cTextIndexer, cDefragService, ...) to
+//     EntityManager, cConsoleReg, cTextIndexer, cDefragService, ...) to
 //     these seams; the self-tests use stub seams. Consequence: the mcp library
 //     has no link dependencies on any other engine module — it only reads
 //     three header-only public headers (kPerm* bits, engine version macros,
@@ -319,12 +319,12 @@ class IWorldWriter {
   virtual bool setBlock(int x, int y, int z, uint16_t id, int timeoutMs, std::string& why) = 0;
 };
 
-/// console/concmd.h ConsoleRegistry::executeLine, agent-scoped (Phase 4).
+/// console/concmd.h cConsoleReg::executeLine, agent-scoped (Phase 4).
 ///
 /// THE critical rule (research §6 + the console's own SCRIPT TRUST MODEL):
 /// the line runs at the AGENT's permission mask, NEVER the player's. The
 /// game adapter enforces it by installing `callerMask` on the registry via
-/// ConsoleRegistry::setCallerPermissions() for the duration of the call —
+/// cConsoleReg::setCallerPermissions() for the duration of the call —
 /// cheat-gated commands/cvars are refused for any restricted mask even when
 /// the player's context allows cheats — capturing the OutputFn sink into
 /// `out`, and restoring both afterwards.
@@ -350,7 +350,7 @@ class IDefragView {
   virtual std::vector<std::string> storeNames() = 0;
 };
 
-/// console/concmd.h ConsoleRegistry: the live console surface for the
+/// console/concmd.h cConsoleReg: the live console surface for the
 /// lithoscript://commands and lithoscript://cvars resources.
 class IConsoleSurface {
  public:
@@ -542,7 +542,7 @@ class IStdioTransport {
 };
 
 /// The real stdin/stdout transport.
-class FdStdioTransport : public IStdioTransport {
+class cFdStdioTransport : public IStdioTransport {
  public:
   bool readLine(std::string& out) override;
   void writeLine(std::string_view line) override;
@@ -556,7 +556,7 @@ class FdStdioTransport : public IStdioTransport {
 /// Fix run 2 (2026-10-23, Cortana; review R-RACE-1): stop a thread that is
 /// running McpServer::runStdio() on the REAL stdin and join it, so the server
 /// can be freed safely. `done` must be set by the thread as its last action.
-/// Sets the process-wide stdin stop flag (FdStdioTransport returns EOF without
+/// Sets the process-wide stdin stop flag (cFdStdioTransport returns EOF without
 /// dispatching once it is set), then on Windows repeatedly CancelSynchronousIo()s
 /// the blocked read until the thread finishes or `timeout` passes.
 /// Returns true when the thread was joined. On false the thread is STILL
@@ -665,7 +665,7 @@ class McpServer {
   McpBackends backends_;
   McpAgent agent_;
   mutable std::mutex agentMutex_;
-  RpcRouter router_;
+  cRpcRouter router_;
   std::vector<ToolDescriptor> tools_;
   /// Name -> index into tools_: the per-call linear scan was fine at ~20
   /// tools, but the count grows with every phase. Rebuilt lazily (tools_

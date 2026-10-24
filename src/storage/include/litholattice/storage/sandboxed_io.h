@@ -1,4 +1,4 @@
-// litholattice::storage::SandboxedFile — TOCTOU-hardened mod file opens.
+// litholattice::storage::cSandboxedFile — TOCTOU-hardened mod file opens.
 //
 // The TOCTOU problem: ModSandbox::resolve() guarantees containment at resolve()
 // time, but a hostile mod racing the filesystem could swap a symlink between
@@ -36,20 +36,20 @@ namespace litholattice::storage {
 
 /// RAII handle for a hardened sandboxed open. Owns the fd; closes on
 /// destruction. Move-only. Invalid when the fd is -1 (check operator bool).
-class SandboxedFile {
+class cSandboxedFile {
  public:
   /// Open `resolved` — an absolute path already vetted by ModSandbox::resolve —
   /// for reading, with O_NOFOLLOW + fstat + fd containment re-check.
   /// On any failure returns an invalid handle and sets err.
-  static SandboxedFile openRead(const std::filesystem::path& resolved,
+  static cSandboxedFile openRead(const std::filesystem::path& resolved,
                                 const ModSandbox& sandbox, std::string* err);
 
-  SandboxedFile() = default;
-  ~SandboxedFile();
-  SandboxedFile(SandboxedFile&& other) noexcept;
-  SandboxedFile& operator=(SandboxedFile&& other) noexcept;
-  SandboxedFile(const SandboxedFile&) = delete;
-  SandboxedFile& operator=(const SandboxedFile&) = delete;
+  cSandboxedFile() = default;
+  ~cSandboxedFile();
+  cSandboxedFile(cSandboxedFile&& other) noexcept;
+  cSandboxedFile& operator=(cSandboxedFile&& other) noexcept;
+  cSandboxedFile(const cSandboxedFile&) = delete;
+  cSandboxedFile& operator=(const cSandboxedFile&) = delete;
 
   explicit operator bool() const;
   /// The open fd (a real OS descriptor on Linux; -1 when invalid or on the
@@ -65,7 +65,7 @@ class SandboxedFile {
   /// this instead of open-coding (or explicitly invoking the destructor on
   /// *this, which is formally UB).
   void close() noexcept;
-  explicit SandboxedFile(int fd) : fd_(fd) {}
+  explicit cSandboxedFile(int fd) : fd_(fd) {}
 #if defined(__linux__)
   int fd_ = -1;
 #else

@@ -4,7 +4,7 @@
 namespace litholattice::vk {
 namespace {
 
-std::optional<UniqueMemory> allocate(const VulkanDevice& dev, const VkMemoryRequirements& req,
+std::optional<UniqueMemory> allocate(const cVulkanDevice& dev, const VkMemoryRequirements& req,
                                      VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) {
   const uint32_t type = dev.findMemoryType(req.memoryTypeBits, required, required | preferred);
   if (type == UINT32_MAX) {
@@ -21,7 +21,7 @@ std::optional<UniqueMemory> allocate(const VulkanDevice& dev, const VkMemoryRequ
 
 }  // namespace
 
-std::optional<Buffer> Buffer::create(const VulkanDevice& dev, VkDeviceSize size, VkBufferUsageFlags usage,
+std::optional<Buffer> Buffer::create(const cVulkanDevice& dev, VkDeviceSize size, VkBufferUsageFlags usage,
                                      VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) {
   Buffer b;
   auto ci = make<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
@@ -46,7 +46,7 @@ std::optional<Buffer> Buffer::create(const VulkanDevice& dev, VkDeviceSize size,
   return b;
 }
 
-std::optional<Image> Image::create(const VulkanDevice& dev, const VkImageCreateInfo& info, VkImageViewType viewType,
+std::optional<Image> Image::create(const cVulkanDevice& dev, const VkImageCreateInfo& info, VkImageViewType viewType,
                                    VkImageAspectFlags aspect) {
   Image img;
   VkImage handle = VK_NULL_HANDLE;
@@ -69,7 +69,7 @@ std::optional<Image> Image::create(const VulkanDevice& dev, const VkImageCreateI
   return img;
 }
 
-bool submitOnce(const VulkanDevice& dev, VkCommandPool pool, const std::function<void(VkCommandBuffer)>& record) {
+bool submitOnce(const cVulkanDevice& dev, VkCommandPool pool, const std::function<void(VkCommandBuffer)>& record) {
   auto ai = make<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
   ai.commandPool = pool;
   ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;

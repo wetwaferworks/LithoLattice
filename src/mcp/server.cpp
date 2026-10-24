@@ -148,7 +148,7 @@ std::vector<std::string> permBitNameList(uint32_t mask) {
 // Serializes one parsed-request dispatch; nullopt when no response is owed
 // (notification). Lets handleMessage parse the body once and reuse the DOM
 // instead of re-parsing inside handleRpcMessage.
-std::optional<std::string> dispatchParsed(const RpcRequest& req, RpcRouter& router) {
+std::optional<std::string> dispatchParsed(const RpcRequest& req, cRpcRouter& router) {
   std::optional<JsonValue> resp = handleParsedRequest(req, router);
   if (!resp) return std::nullopt;
   return resp->serialize();
@@ -459,7 +459,7 @@ void McpServer::runStdio(IStdioTransport& transport) {
 }
 
 void McpServer::runStdio() {
-  FdStdioTransport transport;
+  cFdStdioTransport transport;
   runStdio(transport);
 }
 
@@ -1117,10 +1117,10 @@ void McpServer::registerPhase1Tools() {
 // server.h for the marshaling contract and MCP-GAME-SEAM.md §9 for the
 // game's SimThread::edit adapter recipe.
 //
-// lithoscript_exec: one lithoscript line via ConsoleRegistry::executeLine,
+// lithoscript_exec: one lithoscript line via cConsoleReg::executeLine,
 // output captured into the result. Runs at the AGENT's permission mask,
 // NEVER the player's (the IConsoleExec adapter installs the mask via the
-// ConsoleRegistry::setCallerPermissions seam — cheat-gated commands are
+// cConsoleReg::setCallerPermissions seam — cheat-gated commands are
 // refused for any restricted mask).
 //
 // NOT in v1 (research §5, v2): sim_pause/sim_resume, angelscript_eval.
@@ -1871,7 +1871,7 @@ void McpServer::registerPhase1Resources() {
 // stdio transport on real stdin/stdout.
 // ---------------------------------------------------------------------------
 
-bool FdStdioTransport::readLine(std::string& out) {
+bool cFdStdioTransport::readLine(std::string& out) {
   // Chunked read with an early cap: the old std::getline buffered the ENTIRE
   // line before runStdio's kMaxStdioLineBytes check could fire, so one giant
   // line OOMed the server first. Now the cap trips DURING the read — at most
@@ -1945,7 +1945,7 @@ bool FdStdioTransport::readLine(std::string& out) {
   return true;
 }
 
-void FdStdioTransport::writeLine(std::string_view line) {
+void cFdStdioTransport::writeLine(std::string_view line) {
   std::cout << line << '\n';
   std::cout.flush();
 }

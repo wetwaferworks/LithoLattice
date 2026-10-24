@@ -794,7 +794,7 @@ HttpResponse McpHttpServer::handleRequest(const HttpRequest& req) {
 
 // --- connection serving ----------------------------------------------------
 
-McpHttpServer::ReadOutcome McpHttpServer::readRequest(TcpConn& conn,
+McpHttpServer::ReadOutcome McpHttpServer::readRequest(cTcpConn& conn,
                                                      std::string& buf) {
   ReadOutcome out;
   // Phase A: headers.
@@ -856,7 +856,7 @@ McpHttpServer::ReadOutcome McpHttpServer::readRequest(TcpConn& conn,
   return out;
 }
 
-void McpHttpServer::serveConnection(TcpConn& conn) {
+void McpHttpServer::serveConnection(cTcpConn& conn) {
   std::string buf;  // carry-over for pipelined requests
   for (int i = 0; i < kMaxHttpRequestsPerConn; ++i) {
     ReadOutcome ro = readRequest(conn, buf);
@@ -876,7 +876,7 @@ void McpHttpServer::acceptLoop() {
   log("mcp: http listening on " + boundAddress() + ":" +
       std::to_string(boundPort()));
   while (running_.load()) {
-    TcpConn conn;
+    cTcpConn conn;
     std::string err;
     if (!listener_.accept(conn, 50, err)) {
       if (!err.empty()) log("mcp: http accept: " + err);

@@ -37,9 +37,9 @@ bool hasDeletedSuffix(const std::string& p) {
 
 }  // namespace
 
-SandboxedFile::~SandboxedFile() { close(); }
+cSandboxedFile::~cSandboxedFile() { close(); }
 
-void SandboxedFile::close() noexcept {
+void cSandboxedFile::close() noexcept {
 #if defined(__linux__)
   if (fd_ >= 0) {
     ::close(fd_);
@@ -53,7 +53,7 @@ void SandboxedFile::close() noexcept {
 #endif
 }
 
-SandboxedFile::SandboxedFile(SandboxedFile&& other) noexcept {
+cSandboxedFile::cSandboxedFile(cSandboxedFile&& other) noexcept {
 #if defined(__linux__)
   fd_ = other.fd_;
   other.fd_ = -1;
@@ -63,7 +63,7 @@ SandboxedFile::SandboxedFile(SandboxedFile&& other) noexcept {
 #endif
 }
 
-SandboxedFile& SandboxedFile::operator=(SandboxedFile&& other) noexcept {
+cSandboxedFile& cSandboxedFile::operator=(cSandboxedFile&& other) noexcept {
   if (this != &other) {
     close();  // memberwise move after release: no explicit destructor call
 #if defined(__linux__)
@@ -78,18 +78,18 @@ SandboxedFile& SandboxedFile::operator=(SandboxedFile&& other) noexcept {
 }
 
 #if defined(__linux__)
-SandboxedFile::operator bool() const { return fd_ >= 0; }
-int SandboxedFile::fd() const { return fd_; }
+cSandboxedFile::operator bool() const { return fd_ >= 0; }
+int cSandboxedFile::fd() const { return fd_; }
 #else
-SandboxedFile::operator bool() const { return f_ != nullptr; }
-int SandboxedFile::fd() const { return -1; }  // no fd abstraction on the fallback path
+cSandboxedFile::operator bool() const { return f_ != nullptr; }
+int cSandboxedFile::fd() const { return -1; }  // no fd abstraction on the fallback path
 #endif
 
-SandboxedFile SandboxedFile::openRead(const std::filesystem::path& resolved,
+cSandboxedFile cSandboxedFile::openRead(const std::filesystem::path& resolved,
                                       const ModSandbox& sandbox, std::string* err) {
   auto fail = [&](const std::string& m) {
     if (err) *err = m;
-    return SandboxedFile();
+    return cSandboxedFile();
   };
   if (resolved.empty() || !resolved.is_absolute())
     return fail("sandboxed open: path must be an absolute resolved path");
@@ -106,7 +106,7 @@ SandboxedFile SandboxedFile::openRead(const std::filesystem::path& resolved,
       return fail("sandboxed open refused: trailing symlink not followed: " + resolved.string());
     return fail("sandboxed open failed: " + resolved.string() + ": " + std::strerror(errno));
   }
-  SandboxedFile f(fd);
+  cSandboxedFile f(fd);
 
   // Gate 3a: fstat the descriptor — it must be a regular file. Refuses FIFOs,
   // devices, directories, and sockets even if one was swapped in post-resolve.
@@ -173,7 +173,7 @@ SandboxedFile SandboxedFile::openRead(const std::filesystem::path& resolved,
     ::_close(cfd);  // also closes the HANDLE
     return fail("sandboxed open failed (stream): " + resolved.string());
   }
-  SandboxedFile f;
+  cSandboxedFile f;
   f.f_ = fp;
   return f;
 #else
@@ -187,13 +187,13 @@ SandboxedFile SandboxedFile::openRead(const std::filesystem::path& resolved,
     return fail("sandboxed open refused: not a regular file: " + resolved.string());
   std::FILE* fp = std::fopen(resolved.string().c_str(), "rb");
   if (!fp) return fail("sandboxed open failed: " + resolved.string());
-  SandboxedFile f;
+  cSandboxedFile f;
   f.f_ = fp;
   return f;
 #endif
 }
 
-bool SandboxedFile::readAll(Bytes* out, std::string* err, uint64_t maxBytes) {
+bool cSandboxedFile::readAll(Bytes* out, std::string* err, uint64_t maxBytes) {
   if (!*this) {
     if (err) *err = "sandboxed read: invalid handle";
     return false;
@@ -251,7 +251,7 @@ std::optional<Bytes> readSandboxedFile(const ModSandbox& sandbox, std::string_vi
   }
   // No caller code runs between resolve() and openRead(): there is no TOCTOU
   // window left for anyone going through this convenience entry point.
-  auto f = SandboxedFile::openRead(*resolved, sandbox, err);
+  auto f = cSandboxedFile::openRead(*resolved, sandbox, err);
   if (!f) return std::nullopt;
   Bytes out;
   if (!f.readAll(&out, err)) return std::nullopt;

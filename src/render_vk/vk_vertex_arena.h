@@ -31,7 +31,7 @@ class VertexArena {
 
   /// `alignment` (0.0.1.59 [P59-1]): slice offset/size granularity; must be a whole number of vertices
   /// (64 for the 16-byte PackedVertex, 192 = lcm(12, 64) for Packed12) so baseVertex = offset / stride.
-  VertexArena(const VulkanDevice& dev, Kind kind, VkDeviceSize blockSize = VkDeviceSize(32) << 20, VkDeviceSize alignment = 64);
+  VertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize = VkDeviceSize(32) << 20, VkDeviceSize alignment = 64);
   // 0.0.1.53 [C53-2] (Proposed by JD, Built by Cortana): thread-safe. allocate/free/clear lock a mutex;
   // blocks live in a fixed table (never reallocated), so buffer()/data() of a slice the caller
   // owns need no lock. Mesh worker threads allocate + write ReBAR slices directly.
@@ -65,7 +65,7 @@ class VertexArena {
   };
   bool addBlock(VkDeviceSize size);
 
-  const VulkanDevice& dev_;
+  const cVulkanDevice& dev_;
   std::atomic<Kind> kind_;
   VkDeviceSize blockSize_;
   std::atomic<VkDeviceSize> deviceBytes_{0}, hostBytes_{0};

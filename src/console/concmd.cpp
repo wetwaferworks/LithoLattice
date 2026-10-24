@@ -103,7 +103,7 @@ bool parseDouble(const std::string& s, double& out) {
 }
 
 #if defined(__linux__)
-// TOCTOU-hardened open for executeFile: mirrors the storage::SandboxedFile
+// TOCTOU-hardened open for executeFile: mirrors the storage::cSandboxedFile
 // gates (storage/sandboxed_io.h):
 //   1. open() with O_NOFOLLOW — a trailing symlink fails closed with ELOOP
 //      instead of being followed out of the config dir;
@@ -161,7 +161,7 @@ FILE* openExecFileHardened(const std::filesystem::path& full,
 namespace {
 // Strips `/* ... */` block comments from `text` (they may span lines).
 // Double-quoted strings and backslash escapes protect comment markers,
-// exactly like ConsoleRegistry::tokenize(). `//` line comments pass through
+// exactly like cConsoleReg::tokenize(). `//` line comments pass through
 // untouched — tokenize() still drops them per line — and a `/*` inside one
 // is just comment text, never a block opener. On an unterminated `/*`
 // returns false and sets `err` (callers refuse fail-closed); `out` is left
@@ -216,7 +216,7 @@ bool stripBlockComments(std::string_view text, std::string& out, std::string& er
 }
 }  // namespace
 
-bool ConsoleRegistry::isValidName(std::string_view name) {
+bool cConsoleReg::isValidName(std::string_view name) {
   if (name.empty() || name.size() > 64) return false;
   for (char c : name) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == ':';
@@ -225,7 +225,7 @@ bool ConsoleRegistry::isValidName(std::string_view name) {
   return true;
 }
 
-std::vector<std::vector<std::string>> ConsoleRegistry::tokenize(std::string_view line,
+std::vector<std::vector<std::string>> cConsoleReg::tokenize(std::string_view line,
                                                                 std::string* err) {
   std::vector<std::vector<std::string>> cmds;
   std::vector<std::string> cur;
@@ -301,12 +301,12 @@ std::vector<std::vector<std::string>> ConsoleRegistry::tokenize(std::string_view
   return cmds;
 }
 
-std::vector<std::vector<std::string>> ConsoleRegistry::tokenize(std::string_view line) {
+std::vector<std::vector<std::string>> cConsoleReg::tokenize(std::string_view line) {
   std::string err;
   return tokenize(line, &err);  // documented: the error form's empty list, error dropped
 }
 
-std::vector<std::string> ConsoleRegistry::extractComments(std::string_view text,
+std::vector<std::string> cConsoleReg::extractComments(std::string_view text,
                                                           std::string* err) {
   std::vector<std::string> out;
   bool inQuotes = false;
@@ -348,7 +348,7 @@ std::vector<std::string> ConsoleRegistry::extractComments(std::string_view text,
   return out;
 }
 
-bool ConsoleRegistry::coerce(CVarType type, std::string_view raw, std::string& canonical) {
+bool cConsoleReg::coerce(CVarType type, std::string_view raw, std::string& canonical) {
   switch (type) {
     case CVarType::String:
       canonical = std::string(raw);
@@ -396,7 +396,7 @@ bool ConsoleRegistry::coerce(CVarType type, std::string_view raw, std::string& c
   return false;
 }
 
-bool ConsoleRegistry::registerCommand(std::string name, std::string help, ConsoleCommandFn fn,
+bool cConsoleReg::registerCommand(std::string name, std::string help, ConsoleCommandFn fn,
                                       std::string* err) {
   if (!isValidName(name)) {
     if (err) *err = "invalid command name '" + name + "'";
@@ -410,7 +410,7 @@ bool ConsoleRegistry::registerCommand(std::string name, std::string help, Consol
   return true;
 }
 
-bool ConsoleRegistry::registerCommand(std::string name, std::string help, ConsoleCommandFn fn,
+bool cConsoleReg::registerCommand(std::string name, std::string help, ConsoleCommandFn fn,
                                       CommandFlags flags, std::string* err) {
   if (!isValidName(name)) {
     if (err) *err = "invalid command name '" + name + "'";
@@ -424,29 +424,29 @@ bool ConsoleRegistry::registerCommand(std::string name, std::string help, Consol
   return true;
 }
 
-bool ConsoleRegistry::unregisterCommand(const std::string& name) {
+bool cConsoleReg::unregisterCommand(const std::string& name) {
   return commands_.erase(name) > 0;
 }
 
-bool ConsoleRegistry::hasCommand(const std::string& name) const { return commands_.count(name) > 0; }
+bool cConsoleReg::hasCommand(const std::string& name) const { return commands_.count(name) > 0; }
 
-std::string ConsoleRegistry::commandHelp(const std::string& name) const {
+std::string cConsoleReg::commandHelp(const std::string& name) const {
   const auto it = commands_.find(name);
   return it == commands_.end() ? std::string() : it->second.help;
 }
 
-std::string ConsoleRegistry::aliasBody(const std::string& name) const {
+std::string cConsoleReg::aliasBody(const std::string& name) const {
   const auto it = aliases_.find(name);
   return it == aliases_.end() ? std::string() : it->second.body;
 }
 
-bool ConsoleRegistry::registerCVar(std::string name, CVarType type, std::string defaultValue,
+bool cConsoleReg::registerCVar(std::string name, CVarType type, std::string defaultValue,
                                    bool archived, std::string help, std::string* err) {
   return registerCVar(std::move(name), type, std::move(defaultValue), archived, std::move(help),
                       CVarFlags{}, err);
 }
 
-bool ConsoleRegistry::registerCVar(std::string name, CVarType type, std::string defaultValue,
+bool cConsoleReg::registerCVar(std::string name, CVarType type, std::string defaultValue,
                                     bool archived, std::string help, CVarFlags flags,
                                     std::string* err) {
   if (!isValidName(name)) {
@@ -476,14 +476,14 @@ bool ConsoleRegistry::registerCVar(std::string name, CVarType type, std::string 
   return true;
 }
 
-bool ConsoleRegistry::unregisterCVar(const std::string& name) { return cvars_.erase(name) > 0; }
+bool cConsoleReg::unregisterCVar(const std::string& name) { return cvars_.erase(name) > 0; }
 
-const CVar* ConsoleRegistry::findCVar(const std::string& name) const {
+const CVar* cConsoleReg::findCVar(const std::string& name) const {
   const auto it = cvars_.find(name);
   return it == cvars_.end() ? nullptr : &it->second;
 }
 
-bool ConsoleRegistry::setCVar(const std::string& name, const std::string& rawValue, std::string* err) {
+bool cConsoleReg::setCVar(const std::string& name, const std::string& rawValue, std::string* err) {
   const auto it = cvars_.find(name);
   if (it == cvars_.end()) {
     if (err) *err = "unknown cvar '" + name + "'";
@@ -507,26 +507,26 @@ bool ConsoleRegistry::setCVar(const std::string& name, const std::string& rawVal
   return true;
 }
 
-bool ConsoleRegistry::setCVarChangeFn(const std::string& name, CVarChangeFn fn) {
+bool cConsoleReg::setCVarChangeFn(const std::string& name, CVarChangeFn fn) {
   const auto it = cvars_.find(name);
   if (it == cvars_.end()) return false;
   it->second.onChange = std::move(fn);
   return true;
 }
 
-std::vector<std::string> ConsoleRegistry::commandNames() const {
+std::vector<std::string> cConsoleReg::commandNames() const {
   std::vector<std::string> out;
   for (const auto& [name, _] : commands_) out.push_back(name);
   return out;
 }
 
-std::vector<const CVar*> ConsoleRegistry::cvars() const {
+std::vector<const CVar*> cConsoleReg::cvars() const {
   std::vector<const CVar*> out;
   for (const auto& [_, cv] : cvars_) out.push_back(&cv);
   return out;
 }
 
-bool ConsoleRegistry::setAlias(std::string name, std::string body, std::string* err) {
+bool cConsoleReg::setAlias(std::string name, std::string body, std::string* err) {
   if (!isValidName(name)) {
     if (err) *err = "invalid alias name '" + name + "'";
     return false;
@@ -542,16 +542,16 @@ bool ConsoleRegistry::setAlias(std::string name, std::string body, std::string* 
   return true;
 }
 
-bool ConsoleRegistry::removeAlias(const std::string& name) { return aliases_.erase(name) > 0; }
-bool ConsoleRegistry::hasAlias(const std::string& name) const { return aliases_.count(name) > 0; }
+bool cConsoleReg::removeAlias(const std::string& name) { return aliases_.erase(name) > 0; }
+bool cConsoleReg::hasAlias(const std::string& name) const { return aliases_.count(name) > 0; }
 
-std::vector<std::string> ConsoleRegistry::aliasNames() const {
+std::vector<std::string> cConsoleReg::aliasNames() const {
   std::vector<std::string> out;
   for (const auto& [name, _] : aliases_) out.push_back(name);
   return out;
 }
 
-bool ConsoleRegistry::setKeyBind(std::string keyName, std::string command, std::string* err) {
+bool cConsoleReg::setKeyBind(std::string keyName, std::string command, std::string* err) {
   const auto key = keyFromName(keyName);
   if (!key) {
     if (err) *err = "unknown key '" + keyName + "'";
@@ -569,17 +569,17 @@ bool ConsoleRegistry::setKeyBind(std::string keyName, std::string command, std::
   return true;
 }
 
-bool ConsoleRegistry::removeKeyBind(const std::string& keyName) {
+bool cConsoleReg::removeKeyBind(const std::string& keyName) {
   return keyBinds_.erase(keyName) > 0;
 }
 
-std::map<std::string, std::string> ConsoleRegistry::keyBinds() const {
+std::map<std::string, std::string> cConsoleReg::keyBinds() const {
   std::map<std::string, std::string> out;
   for (const auto& [name, bind] : keyBinds_) out.emplace(name, bind.command);
   return out;
 }
 
-void ConsoleRegistry::executeLine(std::string_view line) {
+void cConsoleReg::executeLine(std::string_view line) {
   // A command fn may call executeLine re-entrantly: save/restore the
   // transient execution state around the nested invocation. A nested
   // suspension queues its own continuation independently. The caller
@@ -590,7 +590,7 @@ void ConsoleRegistry::executeLine(std::string_view line) {
   // RAII transient-state guard: a throwing command fn must not corrupt
   // execDepth_/currentCtx_/callerPermissions_/ticking_ for the next command.
   struct TransientGuard {
-    ConsoleRegistry* self;
+    cConsoleReg* self;
     ExecCtx* savedCtx;
     WaitUnwind savedWait;
     uint32_t savedMask;
@@ -634,7 +634,7 @@ void ConsoleRegistry::executeLine(std::string_view line) {
   // (TransientGuard restores currentCtx_/callerPermissions_/waitUnwind_.)
 }
 
-ConsoleRegistry::ExecResult ConsoleRegistry::executeCommandList(
+cConsoleReg::ExecResult cConsoleReg::executeCommandList(
     const std::vector<std::vector<std::string>>& cmds, int aliasDepth, ExecCtx& ctx) {
   const int savedDepth = currentAliasDepth_;
   currentAliasDepth_ = aliasDepth;
@@ -655,7 +655,7 @@ ConsoleRegistry::ExecResult ConsoleRegistry::executeCommandList(
   return r;
 }
 
-ConsoleRegistry::ExecResult ConsoleRegistry::executeTokens(const std::vector<std::string>& argv,
+cConsoleReg::ExecResult cConsoleReg::executeTokens(const std::vector<std::string>& argv,
                                                            int aliasDepth, ExecCtx& ctx) {
   if (argv.empty()) return ExecResult::Ok;
   // Per-invocation step budget: bounds per-tick CPU no matter how the
@@ -745,7 +745,7 @@ ConsoleRegistry::ExecResult ConsoleRegistry::executeTokens(const std::vector<std
   return ExecResult::Ok;
 }
 
-void ConsoleRegistry::cmdWait(const ConsoleArgs& argv) {
+void cConsoleReg::cmdWait(const ConsoleArgs& argv) {
   ExecCtx* ctx = currentCtx_;
   if (!ctx) {  // defensive: wait only makes sense inside an execution
     print("wait: no execution context");
@@ -789,7 +789,7 @@ void ConsoleRegistry::cmdWait(const ConsoleArgs& argv) {
   waitUnwind_.hasCallerMask = true;
 }
 
-void ConsoleRegistry::queueSuspended(SuspendedScript s) {
+void cConsoleReg::queueSuspended(SuspendedScript s) {
   if (suspended_.size() >= static_cast<size_t>(kMaxSuspendedScripts)) {    print("lithoscript: too many suspended scripts (" + std::to_string(kMaxSuspendedScripts) +
           "); script terminated");
     return;
@@ -802,7 +802,7 @@ void ConsoleRegistry::queueSuspended(SuspendedScript s) {
   suspended_.push_back(std::move(s));
 }
 
-bool ConsoleRegistry::bumpCVar(const std::string& name, double delta, bool clamp, double lo,
+bool cConsoleReg::bumpCVar(const std::string& name, double delta, bool clamp, double lo,
                                double hi) {
   const auto it = cvars_.find(name);
   if (it == cvars_.end()) return false;
@@ -843,7 +843,7 @@ bool ConsoleRegistry::bumpCVar(const std::string& name, double delta, bool clamp
   return setCVar(name, raw, &err);  // fires onChange
 }
 
-ConsoleRegistry::ExecResult ConsoleRegistry::execIncDec(const std::string& cvarName, bool inc,
+cConsoleReg::ExecResult cConsoleReg::execIncDec(const std::string& cvarName, bool inc,
                                                         const ConsoleArgs& argv) {
   if (argv.size() != 1) {
     print("usage: <cvar>++ / <cvar>--   (no arguments)");
@@ -859,7 +859,7 @@ ConsoleRegistry::ExecResult ConsoleRegistry::execIncDec(const std::string& cvarN
   return ExecResult::Ok;
 }
 
-void ConsoleRegistry::dispatchKeyBinds(const DeviceState& devices, bool textCapture) {
+void cConsoleReg::dispatchKeyBinds(const DeviceState& devices, bool textCapture) {
   if (textCapture || keyBinds_.empty()) return;
   for (const auto& [_, bind] : keyBinds_) {
     if (!devices.keyPressed(bind.key)) continue;  // key parsed once at setKeyBind
@@ -875,7 +875,7 @@ void ConsoleRegistry::dispatchKeyBinds(const DeviceState& devices, bool textCapt
   }
 }
 
-void ConsoleRegistry::tick() {
+void cConsoleReg::tick() {
   if (ticking_) {
     // A resumed command must not pump the queue it came from.
     print("lithoscript: tick() re-entered; ignoring");
@@ -924,7 +924,7 @@ void ConsoleRegistry::tick() {
   ticking_ = false;
 }
 
-bool ConsoleRegistry::executeFile(std::string_view name) {
+bool cConsoleReg::executeFile(std::string_view name) {
   const std::string n(name);
   // Exec-chain depth cap: nesting at/past the cap is refused fail-closed.
   // The bound is enforced at every entry; synchronous a.lth -> b.lth ->
@@ -965,7 +965,7 @@ bool ConsoleRegistry::executeFile(std::string_view name) {
   // Hardened open: a resolve-then-open containment check here would be TOCTOU
   // (a symlink swap between check and open escapes the sandbox), so the open
   // itself goes through O_NOFOLLOW + fstat + /proc/self/fd re-validation on
-  // Linux — the same three gates as storage::SandboxedFile.
+  // Linux — the same three gates as storage::cSandboxedFile.
   std::string contents;
 #if defined(__linux__)
   {
@@ -1026,7 +1026,7 @@ bool ConsoleRegistry::executeFile(std::string_view name) {
   ++execDepth_;
   // RAII: a throwing executeCommandList must not leak execDepth_ or currentCtx_.
   struct ExecDepthGuard {
-    ConsoleRegistry* self;
+    cConsoleReg* self;
     ExecCtx* savedCtx;
     ~ExecDepthGuard() { --self->execDepth_; self->currentCtx_ = savedCtx; }
   };
@@ -1071,7 +1071,7 @@ bool ConsoleRegistry::executeFile(std::string_view name) {
   return r != ExecResult::Aborted;
 }
 
-bool ConsoleRegistry::saveArchived(const std::filesystem::path& path, std::string* err) const {
+bool cConsoleReg::saveArchived(const std::filesystem::path& path, std::string* err) const {
   const auto fail = [&](const std::string& m) {
     if (err) *err = m;
     return false;
@@ -1111,8 +1111,8 @@ bool ConsoleRegistry::saveArchived(const std::filesystem::path& path, std::strin
   return true;
 }
 
-void ConsoleRegistry::registerBuiltins(bool debugBuild) {
-  registerCommand("help", "help [command]: list commands, or describe one", [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+void cConsoleReg::registerBuiltins(bool debugBuild) {
+  registerCommand("help", "help [command]: list commands, or describe one", [](cConsoleReg& r, const ConsoleArgs& argv) {
     if (argv.size() > 1) {
       const auto it = r.commands_.find(argv[1]);
       if (it != r.commands_.end()) {
@@ -1132,12 +1132,12 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
     r.print("(cvars are set with `name value` and read with `name`; try \"cvarlist\")");
   });
 
-  registerCommand("echo", "echo ...: prints its arguments", [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+  registerCommand("echo", "echo ...: prints its arguments", [](cConsoleReg& r, const ConsoleArgs& argv) {
     r.print(joinRest(argv));
   });
 
   registerCommand("alias", "alias <name> \"cmd1; cmd2\": define a named command sequence (no args: list)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() == 1) {
                       if (r.aliases_.empty()) r.print("(no aliases)");
                       for (const auto& [name, a] : r.aliases_) r.print("alias " + name + " \"" + a.body + "\"");
@@ -1164,7 +1164,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                     if (!r.setAlias(argv[1], body, &err)) r.print(err);
                   });
 
-  registerCommand("unalias", "unalias <name>: removes an alias", [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+  registerCommand("unalias", "unalias <name>: removes an alias", [](cConsoleReg& r, const ConsoleArgs& argv) {
     if (argv.size() < 2) {
       r.print("usage: unalias <name>");
       return;
@@ -1173,7 +1173,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
   });
 
   registerCommand("exec", "exec <name.lth>: runs a lithoscript script from the config dir (sandboxed; .cfg still works as a legacy alias)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() < 2) {
                       r.print("usage: exec <name.lth>");
                       return;
@@ -1182,10 +1182,10 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                   });
 
   registerCommand("wait", "wait [N]: suspends the rest of the script for N world ticks (default 1; max 512, clamped; wait 0 = no-op)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) { r.cmdWait(argv); });
+                  [](cConsoleReg& r, const ConsoleArgs& argv) { r.cmdWait(argv); });
 
   registerCommand("toggle", "toggle <cvar> [value...]: flip a bool/int cvar 0/1, or cycle through the given values",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() < 2) {
                       r.print("usage: toggle <cvar> [value...]");
                       return;
@@ -1225,7 +1225,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
 
   registerCommand("incrementvar",
                   "incrementvar <cvar> <min> <max> <delta>: add delta to an int/float cvar, clamped to [min,max]",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() != 5) {
                       r.print("usage: incrementvar <cvar> <min> <max> <delta>");
                       return;
@@ -1264,7 +1264,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                   });
 
   registerCommand("find", "find <text>: lists commands, cvars and aliases containing <text> (case-insensitive)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() < 2) {
                       r.print("usage: find <text>");
                       return;
@@ -1303,12 +1303,12 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                     if (!any) r.print("(no matches for \"" + needle + "\")");
                   });
 
-  registerCommand("unbindall", "unbindall: removes all key binds", [](ConsoleRegistry& r, const ConsoleArgs&) {
+  registerCommand("unbindall", "unbindall: removes all key binds", [](cConsoleReg& r, const ConsoleArgs&) {
     r.clearKeyBinds();
   });
 
   registerCommand("cvarlist", "cvarlist: lists all cvars with types, values, flags and archive state",
-                  [](ConsoleRegistry& r, const ConsoleArgs&) {
+                  [](cConsoleReg& r, const ConsoleArgs&) {
                     for (const CVar* cv : r.cvars()) {
                       std::string flags;
                       if (cv->archived) flags += ", archived";
@@ -1320,12 +1320,12 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                     }
                   });
 
-  registerCommand("cmdlist", "cmdlist: lists all commands with their help text", [](ConsoleRegistry& r, const ConsoleArgs&) {
+  registerCommand("cmdlist", "cmdlist: lists all commands with their help text", [](cConsoleReg& r, const ConsoleArgs&) {
     for (const auto& [name, cmd] : r.commands_) r.print(name + ": " + cmd.help);
   });
 
   registerCommand("bind", "bind <key> \"command\": binds a key to a command (dispatched by the input pump; not while typing)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     if (argv.size() == 1) {
                       const auto binds = r.keyBinds();
                       if (binds.empty()) r.print("(no key binds)");
@@ -1343,7 +1343,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                     if (!r.setKeyBind(argv[1], joinRest(argv), &err)) r.print(err);
                   });
 
-  registerCommand("unbind", "unbind <key>: removes a key bind", [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+  registerCommand("unbind", "unbind <key>: removes a key bind", [](cConsoleReg& r, const ConsoleArgs& argv) {
     if (argv.size() < 2) {
       r.print("usage: unbind <key>");
       return;
@@ -1351,7 +1351,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
     if (!r.removeKeyBind(argv[1])) r.print("no bind on \"" + argv[1] + "\"");
   });
 
-  registerCommand("version", "version: prints the lithoscript/engine version", [](ConsoleRegistry& r, const ConsoleArgs&) {
+  registerCommand("version", "version: prints the lithoscript/engine version", [](cConsoleReg& r, const ConsoleArgs&) {
     r.print("lithoscript console (SDK 1)");
   });
 
@@ -1366,7 +1366,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
   registerCommand("debug.defrag",
                   "debug.defrag [<store>|status|cancel]: defrag a registered store "
                   "(no args: status)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     defrag::cDefragService* d = r.defragService();
                     if (!d) {
                       r.print("debug.defrag: no defrag service registered");
@@ -1393,13 +1393,13 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
   if (debugBuild) {
     // Debug builds get the extra verbose introspection commands.
     registerCommand("dbg_logtap", "dbg_logtap: engine-log tap stats (debug builds only)",
-                    [](ConsoleRegistry& r, const ConsoleArgs&) {
+                    [](cConsoleReg& r, const ConsoleArgs&) {
                       const LogTap& tap = engineLogTap();
                       r.print("log tap: " + std::to_string(tap.size()) + "/" +
                               std::to_string(LogTap::kCapacity) + " records");
                     });
     registerCommand("dbg_registry", "dbg_registry: console registry counts (debug builds only)",
-                    [](ConsoleRegistry& r, const ConsoleArgs&) {
+                    [](cConsoleReg& r, const ConsoleArgs&) {
                       r.print("registry: " + std::to_string(r.commands_.size()) + " commands, " +
                               std::to_string(r.cvars_.size()) + " cvars, " +
                               std::to_string(r.aliases_.size()) + " aliases, " +
@@ -1418,7 +1418,7 @@ void ConsoleRegistry::registerBuiltins(bool debugBuild) {
                   "query blocks|count <blockId> <x1> <y1> <z1> <x2> <y2> <z2> | "
                   "query entities <type|*> <cx> <cy> <cz> <radius> — read-only world queries "
                   "(bounds mandatory)",
-                  [](ConsoleRegistry& r, const ConsoleArgs& argv) {
+                  [](cConsoleReg& r, const ConsoleArgs& argv) {
                     IWorldQuery* q = r.worldQuery();
                     if (!q) {
                       r.print("query: no world backend registered");

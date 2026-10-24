@@ -1,4 +1,4 @@
-// CameraManager: the "brain" — named virtual cameras, timed eased blends,
+// cCameraMgr: the "brain" — named virtual cameras, timed eased blends,
 // one live output pose. See camera.h for the design notes.
 #include "litholattice/camera/camera.h"
 
@@ -52,7 +52,7 @@ float cameraBlendFactor(CameraBlendEase ease, float t) {
   return t;
 }
 
-bool CameraManager::addCamera(const std::string& name, std::shared_ptr<ICamera> cam) {
+bool cCameraMgr::addCamera(const std::string& name, std::shared_ptr<ICamera> cam) {
   if (name.empty() || !cam) return false;
   const bool first = cameras_.empty();
   cameras_[name] = Entry{std::move(cam)};
@@ -63,7 +63,7 @@ bool CameraManager::addCamera(const std::string& name, std::shared_ptr<ICamera> 
   return true;
 }
 
-void CameraManager::removeCamera(const std::string& name) {
+void cCameraMgr::removeCamera(const std::string& name) {
   cameras_.erase(name);
   if (name == blendFromName_) blendFromName_.clear();
   if (name == activeName_) {
@@ -72,16 +72,16 @@ void CameraManager::removeCamera(const std::string& name) {
   }
 }
 
-ICamera* CameraManager::camera(const std::string& name) {
+ICamera* cCameraMgr::camera(const std::string& name) {
   const auto it = cameras_.find(name);
   return it == cameras_.end() ? nullptr : it->second.cam.get();
 }
-const ICamera* CameraManager::camera(const std::string& name) const {
+const ICamera* cCameraMgr::camera(const std::string& name) const {
   const auto it = cameras_.find(name);
   return it == cameras_.end() ? nullptr : it->second.cam.get();
 }
 
-bool CameraManager::setActive(const std::string& name, float blendSeconds, CameraBlendEase ease) {
+bool cCameraMgr::setActive(const std::string& name, float blendSeconds, CameraBlendEase ease) {
   const auto it = cameras_.find(name);
   if (it == cameras_.end()) return false;
   if (name == activeName_ && !blending_) return true;  // already live
@@ -96,7 +96,7 @@ bool CameraManager::setActive(const std::string& name, float blendSeconds, Camer
   return true;
 }
 
-void CameraManager::update(float dt, const ICameraWorld& world) {
+void cCameraMgr::update(float dt, const ICameraWorld& world) {
   // Every registered camera advances: damping state stays warm, so a blend
   // target never swoops in from wherever it was left.
   for (auto& [name, entry] : cameras_) entry.cam->update(dt, world);
@@ -121,7 +121,7 @@ void CameraManager::update(float dt, const ICameraWorld& world) {
   }
 }
 
-Mat4 CameraManager::projectionMatrix() const {
+Mat4 cCameraMgr::projectionMatrix() const {
   if (const ICamera* active = camera(activeName_)) {
     const CameraConfig& c = active->config();
     return cameraProjectionMatrix(outPose_.fovDeg, c.aspect, c.nearPlane, c.farPlane);
@@ -129,7 +129,7 @@ Mat4 CameraManager::projectionMatrix() const {
   return cameraProjectionMatrix(outPose_.fovDeg, 16.f / 9.f, 0.05f, 1000.f);
 }
 
-int CameraManager::chunkLoadRadiusChunks() const {
+int cCameraMgr::chunkLoadRadiusChunks() const {
   if (const ICamera* active = camera(activeName_)) return active->chunkLoadRadiusChunks();
   return 0;
 }

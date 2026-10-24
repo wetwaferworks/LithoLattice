@@ -24,7 +24,7 @@
 // before the commit rename, and recoverCrashedWrite() heals that crash window.
 //
 // Concurrency: not safe for two writers to the same path at once. Serialize
-// per-path writers with IoScheduler (async_io.h), which strands same-path ops in
+// per-path writers with cIoScheduler (async_io.h), which strands same-path ops in
 // FIFO order.
 #pragma once
 
@@ -47,7 +47,7 @@ inline constexpr const char* kAtomicTmpSuffix = ".tmp";
 /// Suffix pattern for rotated backups: "<target>.bak.1" .. "<target>.bak.N".
 inline constexpr const char* kBackupSuffix = ".bak";
 
-/// Default cap for whole-file reads (64 MiB). readFileAll(), SandboxedFile::readAll()
+/// Default cap for whole-file reads (64 MiB). readFileAll(), cSandboxedFile::readAll()
 /// and RecordStore::load() refuse larger inputs (fail closed) instead of OOMing on
 /// hostile multi-GB files. The size is pre-checked (file_size/fstat) before a byte
 /// is read, with a running cap while streaming for non-regular files. Callers with

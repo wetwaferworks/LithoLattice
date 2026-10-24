@@ -7,7 +7,7 @@
 // SpringArm3D/Camera3D, Eiserloh's GDC 2016 camera-shake talk — re-derived
 // here, no code copied):
 //  - Virtual cameras, not one camera: gameplay owns several named cameras
-//    (first person, orbit, overwatch...) and a "brain" (CameraManager) picks
+//    (first person, orbit, overwatch...) and a "brain" (cCameraMgr) picks
 //    the live one and BLENDS poses between them with an easing curve and a
 //    duration; a blend of 0 is a cut. Blending position + orientation (and
 //    FOV) is what makes transitions feel intentional instead of teleporting.
@@ -59,7 +59,7 @@
 #include "litholattice/core/math.h"
 
 namespace litholattice::console {
-class ConsoleRegistry;  // console/concmd.h — only the cvar TU includes it
+class cConsoleReg;  // console/concmd.h — only the cvar TU includes it
 }  // namespace litholattice::console
 
 namespace litholattice::camera {
@@ -103,7 +103,7 @@ class ICameraWorld {
   virtual CameraRayHit castRay(Vec3 origin, Vec3 dir, float maxDist) const = 0;
 };
 /// A world with no geometry: rays never hit (open-sky cameras, tests, menus).
-class NullCameraWorld final : public ICameraWorld {
+class cNullCameraWorld final : public ICameraWorld {
  public:
   CameraRayHit castRay(Vec3, Vec3, float) const override { return {}; }
 };
@@ -203,10 +203,10 @@ Mat4 cameraViewMatrix(const CameraPose& pose);
 Mat4 cameraProjectionMatrix(float fovDeg, float aspect, float nearPlane, float farPlane);
 
 /// The camera interface. One concrete implementation ships in this module
-/// (class Camera); the interface exists so the game can substitute (e.g. a
+/// (class cCamera); the interface exists so the game can substitute (e.g. a
 /// scripted cinematic camera) without the manager caring.
 ///
-/// Ownership: cameras are shared_ptr-managed by CameraManager or the game.
+/// Ownership: cameras are shared_ptr-managed by cCameraMgr or the game.
 /// Targets are held WEAKLY: attach() takes a weak_ptr, and when it expires
 /// the camera reports hasTarget() == false and holds its last pose.
 class ICamera {
@@ -261,10 +261,10 @@ class ICamera {
 };
 
 /// The shipping camera: all five modes, spring-arm collision, trauma shake.
-class Camera final : public ICamera {
+class cCamera final : public ICamera {
  public:
-  Camera();
-  explicit Camera(CameraConfig cfg) : Camera() { cfg_ = cfg; }
+  cCamera();
+  explicit cCamera(CameraConfig cfg) : cCamera() { cfg_ = cfg; }
 
   void attach(std::weak_ptr<ICameraTarget> target) override;
   void detach() override;
@@ -344,7 +344,7 @@ float cameraBlendFactor(CameraBlendEase ease, float t);
 /// through BOTH cameras' live poses — to the new camera. All registered
 /// cameras update every frame so their damping state is warm when a blend
 /// reaches them (no swoop-in from stale state).
-class CameraManager {
+class cCameraMgr {
  public:
   /// Registers (or replaces) a named camera. Returns false on empty name.
   bool addCamera(const std::string& name, std::shared_ptr<ICamera> cam);
@@ -404,9 +404,9 @@ struct CameraCvarValues {
 /// Registers the camera.* cvars on a console registry (dotted scheme,
 /// archived). False + `err` when a name is taken or invalid. Engine code
 /// never owns a registry; the game calls this during its cvar setup.
-bool registerCameraCvars(console::ConsoleRegistry& reg, std::string* err = nullptr);
+bool registerCameraCvars(console::cConsoleReg& reg, std::string* err = nullptr);
 /// Reads the current camera.* values back (defaults when unregistered).
-CameraCvarValues readCameraCvars(const console::ConsoleRegistry& reg);
+CameraCvarValues readCameraCvars(const console::cConsoleReg& reg);
 /// Applies a snapshot to a config (chunk radius, FOV, boom, shake, bob,
 /// kick). Call after registerCameraCvars and whenever cvars may have moved.
 void applyCameraCvars(const CameraCvarValues& v, CameraConfig& cfg);

@@ -1534,7 +1534,7 @@ void testMicroMesher() {
         for (int x = 0; x < 2; ++x) solid.set(1, x, y, z, 4);
     store.setBlockOctree(3, 5, 7, solid);
 
-    // Camera at the block centre -> LOD 6; solid 64^3 block -> 6 merged quads.
+    // cCamera at the block centre -> LOD 6; solid 64^3 block -> 6 merged quads.
     std::vector<MicroQuad> near;
     const size_t nn =
         micro::appendChunkMicroGeometry(store, 16, 0, -32, 19.5f, 5.5f, -24.5f, near);
@@ -1545,7 +1545,7 @@ void testMicroMesher() {
     }
     check(baked, "micro mesher: near camera -> LOD6 micro-geometry with the block origin baked in");
 
-    // Camera far away -> LOD 0 single cube.
+    // cCamera far away -> LOD 0 single cube.
     std::vector<MicroQuad> far;
     const size_t nf = micro::appendChunkMicroGeometry(store, 16, 0, -32, 1.0e6f, 0.0f, 0.0f, far);
     bool coarse = nf == 6 && far.size() == 6;
@@ -3429,7 +3429,7 @@ void testPbrTrueRefraction() {
 
 void testFrustumMargin() {
   std::printf("render: frustum margin culling (JD 2026-10-11)\n");
-  // Camera at origin looking down -Z, 90-degree FOV, square aspect.
+  // cCamera at origin looking down -Z, 90-degree FOV, square aspect.
   // At depth |z| the frustum half-width is |z| (tan(45 deg) = 1).
   const float kHalfPi = 3.14159265358979323846f * 0.5f;
   const Mat4 vp = mul(perspective(kHalfPi, 1.f, 0.1f, 1000.f), lookDir({0, 0, 0}, {0, 0, -1}));
@@ -5284,7 +5284,7 @@ void testAsyncIo() {
   cfg.workerThreads = 2;
   cfg.ioThreads = 2;
   JobSystem jobs(cfg);
-  st::IoScheduler io(jobs);
+  st::cIoScheduler io(jobs);
   st::FileWriteOptions opts;
   {  // completions run on an I/O thread, never the submitting (sim stand-in) thread
     std::atomic<bool> cbOnJobThread{false}, cbOnSimThread{false};
@@ -5484,7 +5484,7 @@ void testSandboxedOpen() {
       std::printf("  [SKIP] sandboxed open: file->symlink swap (host cannot create symlinks)\n");
     }
     err.clear();
-    const auto f = st::SandboxedFile::openRead(*resolved, sb, &err);
+    const auto f = st::cSandboxedFile::openRead(*resolved, sb, &err);
 #if defined(__linux__)
     check(!f, "sandboxed open: swapped trailing symlink refused (O_NOFOLLOW)");
     check(!err.empty(), "sandboxed open: refusal explains itself");
@@ -5527,7 +5527,7 @@ void testSandboxedOpen() {
       std::printf("  [SKIP] sandboxed open: intermediate dir->symlink swap (host cannot create symlinks)\n");
     }
     err.clear();
-    const auto f = st::SandboxedFile::openRead(*resolved, sb, &err);
+    const auto f = st::cSandboxedFile::openRead(*resolved, sb, &err);
 #if defined(__linux__)
     check(!f, "sandboxed open: intermediate-component swap caught by fd re-check");
     check(err.find("sandbox") != std::string::npos,
@@ -5538,13 +5538,13 @@ void testSandboxedOpen() {
   }
   {  // 4. non-regular files are refused even when they resolve inside the root
     err.clear();
-    const auto d = st::SandboxedFile::openRead(dir / "mod" / "data", sb, &err);
+    const auto d = st::cSandboxedFile::openRead(dir / "mod" / "data", sb, &err);
     check(!d, "sandboxed open: directory refused (not a regular file)");
 #if defined(__linux__)
     const auto fifo = dir / "mod" / "data" / "pipe";
     ::mkfifo(fifo.c_str(), 0600);
     err.clear();
-    const auto p = st::SandboxedFile::openRead(fifo, sb, &err);
+    const auto p = st::cSandboxedFile::openRead(fifo, sb, &err);
     check(!p, "sandboxed open: FIFO refused (not a regular file)");
 #endif
   }

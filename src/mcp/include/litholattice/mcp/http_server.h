@@ -163,7 +163,7 @@ class McpHttpServer {
   /// Serve sequential requests on one connection until the peer closes,
   /// keep-alive ends, kMaxHttpRequestsPerConn is hit, or a fatal framing
   /// error occurs (413/431 close the connection after responding).
-  void serveConnection(TcpConn& conn);
+  void serveConnection(cTcpConn& conn);
   /// Read one full request (headers + Content-Length body). False when the
   /// peer closed, timed out, or sent framing this server refuses; `resp`
   /// carries the error response to send (if any) and whether to close.
@@ -174,7 +174,7 @@ class McpHttpServer {
     HttpResponse errorResp;
     bool hasErrorResp = false;
   };
-  ReadOutcome readRequest(TcpConn& conn, std::string& buf);
+  ReadOutcome readRequest(cTcpConn& conn, std::string& buf);
 
   /// Session map helpers (caller need not hold the mutex; taken inside).
   /// findSession touches the session's last-activity stamp (every authed

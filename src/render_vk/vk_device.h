@@ -1,4 +1,4 @@
-// VulkanDevice: instance (+ validation messenger), window surface, the chosen physical device
+// cVulkanDevice: instance (+ validation messenger), window surface, the chosen physical device
 // (discrete GPU preferred), logical device and its graphics+present queue. Private to render_vk.
 #pragma once
 #include <cstdint>
@@ -10,19 +10,19 @@
 
 namespace litholattice::vk {
 
-class VulkanDevice {
+class cVulkanDevice {
  public:
-  /// Construction token: only VulkanDevice's own factory can make one, so it can use make_unique / make_shared.
+  /// Construction token: only cVulkanDevice's own factory can make one, so it can use make_unique / make_shared.
   class Passkey {
-    friend class VulkanDevice;
+    friend class cVulkanDevice;
     Passkey() = default;
   };
-  explicit VulkanDevice(Passkey) {}
+  explicit cVulkanDevice(Passkey) {}
   /// Creates everything up to the logical device. Returns nullptr and sets `error` on failure.
-  static std::unique_ptr<VulkanDevice> create(const VulkanRendererDesc& desc, std::string* error);
-  ~VulkanDevice();
-  VulkanDevice(const VulkanDevice&) = delete;
-  VulkanDevice& operator=(const VulkanDevice&) = delete;
+  static std::unique_ptr<cVulkanDevice> create(const VulkanRendererDesc& desc, std::string* error);
+  ~cVulkanDevice();
+  cVulkanDevice(const cVulkanDevice&) = delete;
+  cVulkanDevice& operator=(const cVulkanDevice&) = delete;
 
   VkInstance instance() const { return instance_; }
   VkPhysicalDevice physical() const { return physical_; }

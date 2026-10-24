@@ -23,7 +23,7 @@
 namespace litholattice::vk {
 namespace {
 
-UniqueShaderModule shaderModule(const VulkanDevice& dev, std::span<const uint32_t> code) {
+UniqueShaderModule shaderModule(const cVulkanDevice& dev, std::span<const uint32_t> code) {
   auto ci = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
   ci.codeSize = code.size_bytes();
   ci.pCode = code.data();
@@ -49,7 +49,7 @@ struct PipelineDesc {
   int glow = 0;
 };
 
-UniquePipeline buildPipeline(const VulkanDevice& dev, VkRenderPass pass, VkPipelineLayout layout,
+UniquePipeline buildPipeline(const cVulkanDevice& dev, VkRenderPass pass, VkPipelineLayout layout,
                              const PipelineDesc& d) {
   const UniqueShaderModule vs = shaderModule(dev, d.vertexCode), fs = shaderModule(dev, d.fragmentCode);
   if (!vs || !fs) return {};
@@ -177,7 +177,7 @@ void blurDependencies(VkSubpassDependency (&dep)[2]) {
   dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 }
 
-UniqueRenderPass makePass(const VulkanDevice& dev, const VkAttachmentDescription* att, uint32_t attCount,
+UniqueRenderPass makePass(const cVulkanDevice& dev, const VkAttachmentDescription* att, uint32_t attCount,
                           const VkAttachmentReference* colorRefs, uint32_t colorCount, const VkAttachmentReference* depthRef) {
   VkSubpassDescription sub{};
   sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -215,7 +215,7 @@ VkAttachmentDescription attachment(VkFormat f, VkAttachmentLoadOp load, VkAttach
 
 /// Main pass: frame colour (left in COLOR_ATTACHMENT for the composite pass), depth (kept for the
 /// depth-tested block outline) and the HDR glow target (sampled by the bloom).
-UniqueRenderPass buildMainPass(const VulkanDevice& dev, VkFormat color, VkFormat depth) {
+UniqueRenderPass buildMainPass(const cVulkanDevice& dev, VkFormat color, VkFormat depth) {
   const VkAttachmentDescription att[3] = {
       attachment(color, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
@@ -230,7 +230,7 @@ UniqueRenderPass buildMainPass(const VulkanDevice& dev, VkFormat color, VkFormat
 }
 
 /// Composite pass: loads the frame and depth, adds the bloom, draws lines + HUD, presents.
-UniqueRenderPass buildCompositePass(const VulkanDevice& dev, VkFormat color, VkFormat depth) {
+UniqueRenderPass buildCompositePass(const cVulkanDevice& dev, VkFormat color, VkFormat depth) {
   const VkAttachmentDescription att[2] = {
       attachment(color, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR),
@@ -242,7 +242,7 @@ UniqueRenderPass buildCompositePass(const VulkanDevice& dev, VkFormat color, VkF
 }
 
 /// Bloom blur pass: one half-resolution glow image, fully overwritten, then sampled.
-UniqueRenderPass buildBlurPass(const VulkanDevice& dev) {
+UniqueRenderPass buildBlurPass(const cVulkanDevice& dev) {
   const VkAttachmentDescription att = attachment(RenderPipelines::kGlowFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                                  VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -250,7 +250,7 @@ UniqueRenderPass buildBlurPass(const VulkanDevice& dev) {
   return makePass(dev, &att, 1, &colorRef, 1, nullptr);
 }
 
-[[maybe_unused]] UniqueRenderPass buildRenderPass(const VulkanDevice& dev, VkFormat color, VkFormat depth) {
+[[maybe_unused]] UniqueRenderPass buildRenderPass(const cVulkanDevice& dev, VkFormat color, VkFormat depth) {
   VkAttachmentDescription att[2]{};
   att[0].format = color;
   att[0].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -293,7 +293,7 @@ UniqueRenderPass buildBlurPass(const VulkanDevice& dev) {
 
 }  // namespace
 
-std::unique_ptr<RenderPipelines> RenderPipelines::create(const VulkanDevice& dev, VkFormat color, VkFormat depth,
+std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& dev, VkFormat color, VkFormat depth,
                                                          std::string* error, bool packed12) {
   auto p = std::make_unique<RenderPipelines>(Passkey{});
   p->renderPass_ = buildMainPass(dev, color, depth);  // JD Vulkan push: + glow target

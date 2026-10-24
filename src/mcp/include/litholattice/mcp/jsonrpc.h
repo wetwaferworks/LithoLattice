@@ -100,7 +100,7 @@ JsonValue buildErrorResponse(const JsonValue& id, int code, std::string_view mes
 using RpcHandler = std::function<JsonValue(const JsonValue& params)>;
 
 /// Routes method names to handlers. Unknown method -> RpcError(-32601).
-class RpcRouter {
+class cRpcRouter {
  public:
   /// Registers (or replaces) the handler for a method name.
   void registerHandler(std::string method, RpcHandler handler);
@@ -121,7 +121,7 @@ class RpcRouter {
 /// (notification) or, per spec, when the request was a notification that
 /// failed validation (a notification that fails to parse gets no response).
 /// This function never throws for protocol-level problems.
-std::optional<std::string> handleRpcMessage(std::string_view text, RpcRouter& router);
+std::optional<std::string> handleRpcMessage(std::string_view text, cRpcRouter& router);
 
 /// Dispatches an already-parsed request: the invalid-params check,
 /// notification swallowing, and RpcError conversion of handleRpcMessage,
@@ -131,6 +131,6 @@ std::optional<std::string> handleRpcMessage(std::string_view text, RpcRouter& ro
 /// to avoid parsing the body a second time; dispatchStateless additionally
 /// merges its envelope into the value BEFORE serializing (no
 /// serialize-then-re-parse round trip).
-std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, RpcRouter& router);
+std::optional<JsonValue> handleParsedRequest(const RpcRequest& req, cRpcRouter& router);
 
 }  // namespace litholattice::mcp

@@ -11,7 +11,7 @@
 namespace litholattice::vk {
 namespace {
 
-std::optional<Buffer> stagingBuffer(const VulkanDevice& dev, VkDeviceSize size) {
+std::optional<Buffer> stagingBuffer(const cVulkanDevice& dev, VkDeviceSize size) {
   return Buffer::create(dev, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 }
@@ -33,7 +33,7 @@ VkImageCreateInfo imageInfo(VkFormat format, uint32_t w, uint32_t h, uint32_t mi
 
 }  // namespace
 
-std::optional<Image> uploadImage2D(const VulkanDevice& dev, VkCommandPool pool, VkFormat format, uint32_t width,
+std::optional<Image> uploadImage2D(const cVulkanDevice& dev, VkCommandPool pool, VkFormat format, uint32_t width,
                                    uint32_t height, const uint8_t* pixels, uint32_t bytesPerPixel) {
   const VkDeviceSize bytes = VkDeviceSize(width) * height * bytesPerPixel;
   auto staging = stagingBuffer(dev, bytes);
@@ -56,7 +56,7 @@ std::optional<Image> uploadImage2D(const VulkanDevice& dev, VkCommandPool pool, 
   return image;
 }
 
-UniqueSampler createNearestSampler(const VulkanDevice& dev) {
+UniqueSampler createNearestSampler(const cVulkanDevice& dev) {
   auto si = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
   si.magFilter = si.minFilter = VK_FILTER_NEAREST;
   si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -66,7 +66,7 @@ UniqueSampler createNearestSampler(const VulkanDevice& dev) {
   return UniqueSampler(dev.device(), s);
 }
 
-VkTextureArray::VkTextureArray(const VulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced)
+VkTextureArray::VkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced)
     : dev_(dev), pool_(pool), onReplaced_(std::move(onReplaced)), paletteSampler_(createNearestSampler(dev)) {
   // Same filtering as the OpenGL backend: crisp texels up close, trilinear in the distance.
   auto si = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);

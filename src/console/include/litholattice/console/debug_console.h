@@ -1,4 +1,4 @@
-// DebugConsole: the Half-Life-style dropdown console for lithoscript. Tilde
+// cDebugConsole: the Half-Life-style dropdown console for lithoscript. Tilde
 // drops it from the top of the screen; it renders through the ui framework (a StackPanel holding
 // a read-only TextEditor log view over a TextBox command line — composition,
 // no new widgets).
@@ -31,12 +31,12 @@
 
 namespace litholattice::console {
 
-class DebugConsole {
+class cDebugConsole {
  public:
-  explicit DebugConsole(ConsoleRegistry& registry);
-  ~DebugConsole() = default;
-  DebugConsole(const DebugConsole&) = delete;
-  DebugConsole& operator=(const DebugConsole&) = delete;
+  explicit cDebugConsole(cConsoleReg& registry);
+  ~cDebugConsole() = default;
+  cDebugConsole(const cDebugConsole&) = delete;
+  cDebugConsole& operator=(const cDebugConsole&) = delete;
 
   /// Builds the panel (hidden) and adds it on top of ui.root(). Call once,
   /// after the UiRoot exists. Available in ALL builds, not just debug.
@@ -96,8 +96,8 @@ class DebugConsole {
   void moveCompletionSelection(int delta);
   static std::string formatCompletionRow(const CompletionCandidate& c, size_t nameWidth);
 
-  ConsoleRegistry& registry_;
-  RegistryCompletionSource completionSource_;  ///< injected candidate source (the Fragment seam)
+  cConsoleReg& registry_;
+  cRegCompletionSource completionSource_;  ///< injected candidate source (the Fragment seam)
   Completer completer_;
   ui::UiRoot* ui_ = nullptr;
   ui::Widget* panel_ = nullptr;

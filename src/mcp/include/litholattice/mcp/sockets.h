@@ -4,7 +4,7 @@
 //
 // Threading model (locked): the McpHttpServer runs ONE accept/dispatch
 // thread. TcpListener::accept is poll-based with a timeout so the thread
-// notices stop(); each accepted TcpConn is served synchronously on that same
+// notices stop(); each accepted cTcpConn is served synchronously on that same
 // thread (sequential requests, keep-alive, bounded per connection). No
 // connection threads and no thread pool in v1. Blocking reads use an I/O
 // timeout so a stalled peer cannot wedge the loop forever.
@@ -37,15 +37,15 @@ inline constexpr NativeSocket kInvalidSocketValue = -1;
 inline constexpr int kDefaultIoTimeoutSec = 5;
 
 /// RAII TCP connection (one accepted socket). Move-only.
-class TcpConn {
+class cTcpConn {
  public:
-  TcpConn();
-  ~TcpConn();
+  cTcpConn();
+  ~cTcpConn();
 
-  TcpConn(const TcpConn&) = delete;
-  TcpConn& operator=(const TcpConn&) = delete;
-  TcpConn(TcpConn&& other) noexcept;
-  TcpConn& operator=(TcpConn&& other) noexcept;
+  cTcpConn(const cTcpConn&) = delete;
+  cTcpConn& operator=(const cTcpConn&) = delete;
+  cTcpConn(cTcpConn&& other) noexcept;
+  cTcpConn& operator=(cTcpConn&& other) noexcept;
 
   bool valid() const { return sock_ != kInvalidSocketValue; }
   void close();
@@ -61,7 +61,7 @@ class TcpConn {
 
  private:
   friend class TcpListener;
-  explicit TcpConn(NativeSocket sock);
+  explicit cTcpConn(NativeSocket sock);
 
   NativeSocket sock_ = kInvalidSocketValue;
 };
@@ -85,7 +85,7 @@ class TcpListener {
   /// accept; false on timeout. A fatal error sets `error` and also returns
   /// false — the caller stops the loop only when told to, so a transient
   /// accept failure does not kill the server.
-  bool accept(TcpConn& conn, int timeoutMs, std::string& error);
+  bool accept(cTcpConn& conn, int timeoutMs, std::string& error);
   void close();
   bool listening() const { return sock_ != kInvalidSocketValue; }
 

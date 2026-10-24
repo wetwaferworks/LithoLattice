@@ -34,7 +34,7 @@ void registerConsoleScriptBindings();
 /// failure); the caller keeps it alive for the ScriptEngine's lifetime.
 /// False/null when the allowlist or the mod's permissions refuse.
 std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se,
-                                                           ConsoleRegistry& registry,
+                                                           cConsoleReg& registry,
                                                            const std::string& modId);
 
 }  // namespace litholattice::console
