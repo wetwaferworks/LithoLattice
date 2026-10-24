@@ -18,10 +18,10 @@ namespace litholattice::procgen {
 // ---- climate
 
 /// Climate parameters read from graph outputs; parameters without an output use `fallback`.
-class GraphClimate final : public IClimateStage {
+class cGraphClimate final : public IClimateStage {
  public:
   /// outputs[p] = graph output index for parameter p, or -1.
-  GraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback = 0.5f);
+  cGraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback = 0.5f);
   void sample(StageContext& ctx) const override;
 
  private:
@@ -61,11 +61,11 @@ class MultiNoiseBiomeSelector final : public IBiomeSelector {
 /// ColumnMaps::biomeWeight; the dominant (nearest) biome still goes into ColumnMaps::biome.
 /// Deterministic: a pure function of the climate point. General system: any dimension opts
 /// in through its generator JSON ("biomes": {"selector": {"type": "blended", ...}}).
-class BlendedBiomeSelector final : public IBiomeSelector {
+class cBlendedBiomeSel final : public IBiomeSelector {
  public:
   /// blendRadius: climate-space distance with nonzero weight (> 0). blendCount: biomes kept
   /// per column, clamped to 2..4 by the loader.
-  BlendedBiomeSelector(std::vector<BiomePoint> biomes, float blendRadius, int blendCount);
+  cBlendedBiomeSel(std::vector<BiomePoint> biomes, float blendRadius, int blendCount);
   uint8_t select(const ClimatePoint& climate) const override;
   size_t biomeCount() const override { return biomes_.size(); }
   void blendWeights(const ClimatePoint& climate, float* out) const override;
@@ -240,11 +240,11 @@ struct CavernSettings {
   std::vector<float> density;    ///< per-biome density multiplier; missing entries = 1
 };
 
-class CavernCarver final : public ICarver {
+class cCavernCarver final : public ICarver {
  public:
   /// Dominant biome-table index at a world column; bound to the pipeline by onPipelineBuilt.
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  explicit CavernCarver(CavernSettings s);
+  explicit cCavernCarver(CavernSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
@@ -449,10 +449,10 @@ struct RiverSettings {
 /// routing output (usually the same "height" the terrain uses, or a smoothed variant);
 /// where the routing height and the terrain disagree, the carve takes min(actual, channel)
 /// so rivers never raise terrain or float water in the air.
-class RiverCarver final : public ICarver {
+class cRiverCarver final : public ICarver {
  public:
   /// `heightOutput`: graph output index used for downhill routing (see caveat above).
-  RiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s);
+  cRiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// Override the biome probe (used for the per-biome spawn density). Bound to the
@@ -712,7 +712,7 @@ struct StructureSettings {
 /// to the extra place()-only gates listed there), so overview maps mark the candidate
 /// structures chunk gen may place. The long-term fix — probing biome/height by WORLD
 /// position instead of the clamped in-chunk column — is deferred (P3-2 B-M5).
-class StructureFeature final : public IFeature {
+class cStructureFeature final : public IFeature {
  public:
   /// Dominant biome-table index at a world column; bound to the pipeline by onPipelineBuilt.
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
@@ -721,11 +721,11 @@ class StructureFeature final : public IFeature {
     std::vector<BlueprintCell> cells;
     float weight = 1.f;
   };
-  StructureFeature(StructureSettings s, std::vector<BlueprintCell> blueprint,
+  cStructureFeature(StructureSettings s, std::vector<BlueprintCell> blueprint,
                    BiomeProbe probe = nullptr);
   /// Registry-backed: variants + rules come from a StructureEntry (resolved by name
   /// in the loader). Explicit JSON fields in `s` override the entry's rules.
-  StructureFeature(StructureSettings s, std::vector<Variant> variants, BiomeProbe probe = nullptr);
+  cStructureFeature(StructureSettings s, std::vector<Variant> variants, BiomeProbe probe = nullptr);
   void place(StageContext& ctx, Rng& rng) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// CANDIDATE base (x, z) positions with any part inside [x0, x1) x [z0, z1),
@@ -791,7 +791,7 @@ struct LithoStampSettings {
 
 /// Stamps a baked Litho Formula model (unit cells from a .lthm, via ModelResolver) into
 /// the world on a coarse cell lattice: at most one base per cell, density-gated, biome-gated,
-/// rotated in 90-degree steps. Like StructureFeature but driven by model cells instead of
+/// rotated in 90-degree steps. Like cStructureFeature but driven by model cells instead of
 /// a JSON blueprint. Cells write into air only, never overwriting terrain.
 class cLithoStampFeature final : public IFeature {
  public:

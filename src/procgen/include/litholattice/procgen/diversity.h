@@ -1,7 +1,7 @@
 // Ecosystem & environment diversity stages (2026-10-12): ground cover, rock formations,
 // biome transition bands, Worley ore veins, fauna spawn hooks, and weather-shaped surface
 // rules (snow caps, sand drifts). All deterministic: every decision is a pure function of
-// (dimensionSeed, world position), following the StructureFeature discipline, so chunks and
+// (dimensionSeed, world position), following the cStructureFeature discipline, so chunks and
 // --seed runs agree exactly. Everything is data-driven from generator JSON (see
 // generator_loader.cpp); no hardcoded biomes or materials here.
 #pragma once
@@ -80,7 +80,7 @@ class cRockFormationFeature final : public IFeature {
 /// One transition rule: where biome `a` meets biome `b` (within `width` columns), columns of
 /// either side become `result` -- the beach between ocean and land, scree at mountain feet.
 /// Symmetric in a/b. Narrow by design (2-4 columns); the band is a distinct biome, not a
-/// gradient (gradients are BlendedBiomeSelector's job).
+/// gradient (gradients are cBlendedBiomeSel's job).
 struct BiomeTransition {
   uint8_t a = 0, b = 0;      ///< biome indices, resolved from names by the loader
   uint8_t result = 0;        ///< transition biome index

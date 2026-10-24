@@ -4,7 +4,7 @@
 //
 //   GraphDesc::parse(text) -> GraphDesc -> NoiseGraph::compile(desc, seed) -> evaluate(output, ctx)
 //
-// Node types: constant, coordinate, noise, add, multiply, min, max, clamp, curve, select, blend,
+// cNode types: constant, coordinate, noise, add, multiply, min, max, clamp, curve, select, blend,
 // terrace, scale_bias, cache, wave, abs, invert, power, fractal, warp (the last two are the
 // standalone operator forms of the noise node's fractal/warp parameter blocks). Inputs reference
 // other nodes by name, or are given inline
@@ -56,7 +56,7 @@ class GraphContext {
   GraphContext& operator=(const GraphContext&) = delete;
 
   /// Sets the positions for following evaluate() calls. The spans must outlive the binding.
-  /// Node results are reused between outputs evaluated over the same binding.
+  /// cNode results are reused between outputs evaluated over the same binding.
   void bind(const PointsView& points);
   const PointsView& points() const { return points_; }
 

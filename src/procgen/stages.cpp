@@ -12,10 +12,10 @@ namespace litholattice::procgen {
 
 // ---- climate
 
-GraphClimate::GraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback)
+cGraphClimate::cGraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback)
     : graph_(std::move(graph)), outputs_(outputs), fallback_(fallback) {}
 
-void GraphClimate::sample(StageContext& ctx) const {
+void cGraphClimate::sample(StageContext& ctx) const {
   std::vector<float> values(ctx.columns.size());
   for (size_t p = 0; p < kClimateParamCount; ++p) {
     if (outputs_[p] < 0) {
@@ -62,10 +62,10 @@ uint8_t MultiNoiseBiomeSelector::select(const ClimatePoint& climate) const {
   return uint8_t(best);
 }
 
-BlendedBiomeSelector::BlendedBiomeSelector(std::vector<BiomePoint> biomes, float blendRadius, int blendCount)
+cBlendedBiomeSel::cBlendedBiomeSel(std::vector<BiomePoint> biomes, float blendRadius, int blendCount)
     : biomes_(std::move(biomes)), blendRadius_(blendRadius), blendCount_(blendCount) {}
 
-uint8_t BlendedBiomeSelector::select(const ClimatePoint& climate) const {
+uint8_t cBlendedBiomeSel::select(const ClimatePoint& climate) const {
   // Dominant = nearest; matches the argmax of blendWeights (kernel decreases with distance).
   size_t best = 0;
   float bestDist = std::numeric_limits<float>::max();
@@ -79,7 +79,7 @@ uint8_t BlendedBiomeSelector::select(const ClimatePoint& climate) const {
   return uint8_t(best);
 }
 
-void BlendedBiomeSelector::blendWeights(const ClimatePoint& climate, float* out) const {
+void cBlendedBiomeSel::blendWeights(const ClimatePoint& climate, float* out) const {
   const size_t nb = biomes_.size();
   for (size_t b = 0; b < nb; ++b) out[b] = 0.f;
   if (nb == 0 || blendRadius_ <= 0.f) return;
@@ -473,7 +473,7 @@ void RavineCarver::carve(StageContext& ctx) const {
     }
 }
 
-CavernCarver::CavernCarver(CavernSettings s) : s_(std::move(s)) {
+cCavernCarver::cCavernCarver(CavernSettings s) : s_(std::move(s)) {
   s_.cellSize = std::max(16, s_.cellSize);
   s_.chance = std::clamp(s_.chance, 0.f, 1.f);
   s_.minRadius = std::max(2, s_.minRadius);
@@ -486,13 +486,13 @@ CavernCarver::CavernCarver(CavernSettings s) : s_(std::move(s)) {
   s_.coreFrac = std::clamp(s_.coreFrac, 0.f, 1.f);
 }
 
-void CavernCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
+void cCavernCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void CavernCarver::carve(StageContext& ctx) const {
+void cCavernCarver::carve(StageContext& ctx) const {
   const ChunkInfo& c = ctx.chunk;
   const int n = c.size, height = ctx.blocks.height();
   const int cell = s_.cellSize, maxR = s_.maxRadius;
@@ -1281,7 +1281,7 @@ uint64_t cellSeed(uint64_t featSeed, int32_t ccx, int32_t ccz) {
 
 }  // namespace
 
-struct StructureFeature::Base {
+struct cStructureFeature::Base {
   int32_t bx = 0, bz = 0;  ///< world base position (after snap)
   int rot = 0;             ///< blueprint rotation (0..3)
   float gateRoll = 0.f;    ///< [0,1) roll for the biome gate
@@ -1291,7 +1291,7 @@ struct StructureFeature::Base {
 namespace {
 
 // Shared constructor logic: normalize settings, measure all variants.
-void initStructureFeature(const StructureSettings& s, const std::vector<StructureFeature::Variant>& variants,
+void initStructureFeature(const StructureSettings& s, const std::vector<cStructureFeature::Variant>& variants,
                           int& reach, int& maxDy, int& minDy, uint64_t& decaySalt) {
   int extent = 0;
   maxDy = 0;
@@ -1310,7 +1310,7 @@ void initStructureFeature(const StructureSettings& s, const std::vector<Structur
 
 }  // namespace
 
-StructureFeature::StructureFeature(StructureSettings s, std::vector<BlueprintCell> blueprint, BiomeProbe probe)
+cStructureFeature::cStructureFeature(StructureSettings s, std::vector<BlueprintCell> blueprint, BiomeProbe probe)
     : s_(std::move(s)), probe_(std::move(probe)) {
   s_.cellSize = std::max(8, s_.cellSize);
   s_.density = std::clamp(s_.density, 0.f, 1.f);
@@ -1323,7 +1323,7 @@ StructureFeature::StructureFeature(StructureSettings s, std::vector<BlueprintCel
   initStructureFeature(s_, variants_, reach_, maxDy_, minDy_, decaySalt_);
 }
 
-StructureFeature::StructureFeature(StructureSettings s, std::vector<Variant> variants, BiomeProbe probe)
+cStructureFeature::cStructureFeature(StructureSettings s, std::vector<Variant> variants, BiomeProbe probe)
     : s_(std::move(s)), variants_(std::move(variants)), probe_(std::move(probe)) {
   s_.cellSize = std::max(8, s_.cellSize);
   s_.density = std::clamp(s_.density, 0.f, 1.f);
@@ -1335,11 +1335,11 @@ StructureFeature::StructureFeature(StructureSettings s, std::vector<Variant> var
   initStructureFeature(s_, variants_, reach_, maxDy_, minDy_, decaySalt_);
 }
 
-uint64_t StructureFeature::featSeed(uint64_t dimensionSeed) const {
+uint64_t cStructureFeature::featSeed(uint64_t dimensionSeed) const {
   return deriveSeed(dimensionSeed, nameHash(s_.seedName));
 }
 
-std::optional<StructureFeature::Base> StructureFeature::baseForCell(uint64_t featSeed, int32_t ccx,
+std::optional<cStructureFeature::Base> cStructureFeature::baseForCell(uint64_t featSeed, int32_t ccx,
                                                                   int32_t ccz) const {
   Rng r(cellSeed(featSeed, ccx, ccz));
   if (r.uniform() >= s_.density) return std::nullopt;
@@ -1402,13 +1402,13 @@ std::optional<StructureFeature::Base> StructureFeature::baseForCell(uint64_t fea
   return b;
 }
 
-void StructureFeature::onPipelineBuilt(const cGenPipeline* pipeline) {
+void cStructureFeature::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // features, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void StructureFeature::place(StageContext& ctx, Rng&) const {
+void cStructureFeature::place(StageContext& ctx, Rng&) const {
   // The per-chunk rng is intentionally unused: every decision is a pure function of the
   // world position (cell-keyed seeds), so all chunks and all --seed runs agree exactly.
   if (variants_.empty() || s_.density <= 0.f) return;
@@ -1518,7 +1518,7 @@ void StructureFeature::place(StageContext& ctx, Rng&) const {
 // (height band / slope / near-water / anchor fit / surface material) need
 // a height+surface probe this query does not have, so they are NOT
 // applied here and the result over-reports by design.
-std::vector<std::array<int32_t, 2>> StructureFeature::basesInRect(uint64_t dimensionSeed, int32_t x0,
+std::vector<std::array<int32_t, 2>> cStructureFeature::basesInRect(uint64_t dimensionSeed, int32_t x0,
                                                   int32_t z0, int32_t x1, int32_t z1) const {
   std::vector<std::array<int32_t, 2>> out;
   bool anyCells = false;
@@ -1545,7 +1545,7 @@ std::vector<std::array<int32_t, 2>> StructureFeature::basesInRect(uint64_t dimen
 
 // ---- rivers
 
-RiverCarver::RiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s)
+cRiverCarver::cRiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s)
     : graph_(std::move(graph)), heightOutput_(heightOutput), s_(std::move(s)) {
   s_.cellSize = std::max(16, s_.cellSize);
   s_.chance = std::clamp(s_.chance, 0.f, 1.f);
@@ -1564,14 +1564,14 @@ RiverCarver::RiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutp
   reach_ = int(std::ceil(maxLen / float(s_.cellSize))) + 1;
 }
 
-void RiverCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
+void cRiverCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline (the river spawn density gate).
   // The pipeline outlives its carvers, so the raw pointer is safe. An explicitly set probe
   // (tests, tools) is left alone.
   if (!probe_) probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-std::vector<RiverPoint> RiverCarver::traceRiver(const NoiseGraph& graph, int heightOutput,
+std::vector<RiverPoint> cRiverCarver::traceRiver(const NoiseGraph& graph, int heightOutput,
                                                uint64_t dimensionSeed, int32_t cellX, int32_t cellZ,
                                                const RiverSettings& s, const BiomeProbe& probe) {
   std::vector<RiverPoint> pts;
@@ -1659,7 +1659,7 @@ std::vector<RiverPoint> RiverCarver::traceRiver(const NoiseGraph& graph, int hei
   return pts;
 }
 
-void RiverCarver::carve(StageContext& ctx) const {
+void cRiverCarver::carve(StageContext& ctx) const {
   const ChunkInfo& c = ctx.chunk;
   if (s_.water == kAirMaterial || heightOutput_ < 0 || !graph_) return;
   const int n = c.size, height = ctx.blocks.height();
@@ -1753,7 +1753,7 @@ std::optional<cLithoStampFeature::Base> cLithoStampFeature::baseForCell(uint64_t
 }
 
 void cLithoStampFeature::onPipelineBuilt(const cGenPipeline* pipeline) {
-  // Same discipline as StructureFeature: the pipeline outlives its features.
+  // Same discipline as cStructureFeature: the pipeline outlives its features.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
@@ -1787,7 +1787,7 @@ void cLithoStampFeature::place(StageContext& ctx, Rng&) const {
         biome = i < ncols ? ctx.maps.biome[i] : 0;
       }
       if (base->gateRoll >= s_.biomes.at(biome)) continue;
-      // Surface: the clamped column's height map (same approximation as StructureFeature
+      // Surface: the clamped column's height map (same approximation as cStructureFeature
       // for margin-replayed bases); the model then only writes air.
       const int lx = std::clamp(int(base->bx) - wx0, 0, n - 1);
       const int lz = std::clamp(int(base->bz) - wz0, 0, n - 1);

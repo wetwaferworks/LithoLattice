@@ -99,7 +99,7 @@ std::unique_ptr<IClimateStage> loadClimate(Loader& l, const Json& j) {
   for (size_t p = 0; p < kClimateParamCount; ++p)
     if (j.get(std::string(kClimateNames[p])) && !l.output(j, std::string(kClimateNames[p]).c_str(), outputs[p], "climate"))
       return nullptr;
-  return std::make_unique<GraphClimate>(l.graph, outputs, float(j.getNum("fallback", 0.5)));
+  return std::make_unique<cGraphClimate>(l.graph, outputs, float(j.getNum("fallback", 0.5)));
 }
 
 bool loadBiomes(Loader& l, const Json& list, std::vector<BiomePoint>& points, std::vector<SurfaceLayers>& surfaces) {
@@ -268,7 +268,7 @@ std::unique_ptr<ICarver> loadRiverCarver(Loader& l, const Json& j, const std::ve
       s.density[size_t(it - biomeNames.begin())] = d;
     }
   }
-  return std::make_unique<RiverCarver>(l.graph, out, std::move(s));
+  return std::make_unique<cRiverCarver>(l.graph, out, std::move(s));
 }
 
 /// Per-biome density multipliers for the cross-chunk carvers ("density": {"biome": m}).
@@ -325,7 +325,7 @@ std::unique_ptr<ICarver> loadCavernCarver(Loader& l, const Json& j,
   s.noiseFreq = float(j.getNum("noise_freq", s.noiseFreq));
   s.coreFrac = float(j.getNum("core_frac", s.coreFrac));
   if (!loadCarverDensity(l, j, biomeNames, section, s.density)) return nullptr;
-  return std::make_unique<CavernCarver>(s);
+  return std::make_unique<cCavernCarver>(s);
 }
 
 std::unique_ptr<ICarver> loadCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
@@ -544,10 +544,10 @@ std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
     s.fixedY = rules.fixedY;
     s.hoverHeight = rules.hoverHeight;
     s.structureName = structName;
-    std::vector<StructureFeature::Variant> variants;
+    std::vector<cStructureFeature::Variant> variants;
     variants.reserve(e->variants.size());
     for (const auto& v : e->variants) variants.push_back({v.cells, v.weight});
-    return std::make_unique<StructureFeature>(std::move(s), std::move(variants));
+    return std::make_unique<cStructureFeature>(std::move(s), std::move(variants));
   }
   if (!bp || bp->type != Json::Type::Array || bp->arr.empty())
     return l.fail(section, "'blueprint' must be a non-empty array of {d, m} cells (or use 'structure': \"<name>\")"), nullptr;
@@ -579,7 +579,7 @@ std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
     cell.decay = std::clamp(float(c.getNum("decay", 0)), 0.f, 1.f);
     cells.push_back(cell);
   }
-  return std::make_unique<StructureFeature>(std::move(s), std::move(cells));
+  return std::make_unique<cStructureFeature>(std::move(s), std::move(cells));
 }
 
 // ---- ecosystem diversity (2026-10-12) ----
@@ -909,7 +909,7 @@ bool loadShoreLayers(Loader& l, const Json& j, const char* section, SurfaceLayer
 }
 
 bool loadShorelineSettings(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
-                           ShorelineRule::Settings& out) {
+                           cShorelineRule::Settings& out) {
   constexpr const char* section = "shoreline";
   out.band = int(j.getNum("band", out.band));
   out.depth = int(j.getNum("depth", out.depth));
@@ -1016,7 +1016,7 @@ std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dim
       }
       if (blendCount < 2) blendCount = 2;
       if (blendCount > 4) blendCount = 4;
-      b.biomes(std::make_unique<BlendedBiomeSelector>(std::move(points), blendRadius, blendCount));
+      b.biomes(std::make_unique<cBlendedBiomeSel>(std::move(points), blendRadius, blendCount));
     } else if (selectorType == "multi_noise") {
       b.biomes(std::make_unique<MultiNoiseBiomeSelector>(std::move(points)));
     } else {
@@ -1058,10 +1058,10 @@ std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dim
     haveLake = true;
   }
   if (haveOcean || haveLake || json.get("shoreline")) {
-    ShorelineRule::Settings shore;
+    cShorelineRule::Settings shore;
     if (const Json* sh = json.get("shoreline"))
       if (!loadShorelineSettings(l, *sh, biomeNames, shore)) return nullptr;
-    b.surface(std::make_unique<ShorelineRule>(shore, oceanSettings, haveOcean, lakeSettings, haveLake));
+    b.surface(std::make_unique<cShorelineRule>(shore, oceanSettings, haveOcean, lakeSettings, haveLake));
   }
   if (const Json* list = json.get("carvers"))
     for (const Json& c : list->arr) {

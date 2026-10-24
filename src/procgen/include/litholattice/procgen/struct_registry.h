@@ -34,7 +34,7 @@ struct StructureVariant {
 };
 
 /// Data-driven placement rules. From worldgen JSON or the mod API; the
-/// StructureFeature merges these with its per-feature StructureSettings
+/// cStructureFeature merges these with its per-feature StructureSettings
 /// (explicit JSON fields win over the registry entry's rules).
 struct StructurePlacementRules {
   float spacing = 0.f;  ///< min distance between placed bases (separation)

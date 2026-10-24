@@ -162,7 +162,7 @@ class ICarver {
 };
 
 /// Dominant biome-table index at a world column; bound to the finished pipeline by
-/// onPipelineBuilt. Same signature as StructureFeature::BiomeProbe.
+/// onPipelineBuilt. Same signature as cStructureFeature::BiomeProbe.
 using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
 
 /// Places a feature (ores, structures) using an RNG seeded for this chunk and feature.

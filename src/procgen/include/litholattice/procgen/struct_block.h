@@ -43,7 +43,7 @@ std::vector<BlueprintCell> captureRegion(BlockReader reader, int32_t minX, int32
                                         int32_t maxZ, MaterialId structureBlockMaterial);
 
 /// Place blueprint cells at (bx, by, bz) with rotation rot (0..3, like
-/// StructureFeature). Returns the number of cells written. Writes through
+/// cStructureFeature). Returns the number of cells written. Writes through
 /// `writer` (the game decides overwrite vs. air-only policy).
 size_t placeCells(BlockWriter writer, const std::vector<BlueprintCell>& cells, int32_t bx,
                   int32_t by, int32_t bz, int rot);

@@ -878,7 +878,7 @@ constexpr const char* kBlendGradientText = R"JSON({
 void biomeBlendChecks(Checker& check) {
   // Unit: the selector math on synthetic climate points.
   {
-    BlendedBiomeSelector sel({{"a", {0.2f, 0.5f, 0.5f, 0.5f}, {1, 0, 0, 0}},
+    cBlendedBiomeSel sel({{"a", {0.2f, 0.5f, 0.5f, 0.5f}, {1, 0, 0, 0}},
                               {"b", {0.8f, 0.5f, 0.5f, 0.5f}, {1, 0, 0, 0}}},
                              0.5f, 2);
     float w[2] = {};
@@ -1541,7 +1541,7 @@ void treeFeatureChecks(Checker& check) {
   blendChecks(check);
 }
 
-// ---- structures (StructureFeature framework)
+// ---- structures (cStructureFeature framework)
 
 constexpr const char* kStructureGeneratorText = R"({
   "graph": {"nodes": {
@@ -1557,10 +1557,10 @@ constexpr const char* kStructureGeneratorText = R"({
                               {"d": [0, 1, 0], "m": "ore"}, {"d": [0, 0, 1], "m": "turf", "decay": 0.5}]}]
 })";
 
-const StructureFeature* findStructure(const cGenPipeline& pipe, const char* name) {
-  const StructureFeature* out = nullptr;
+const cStructureFeature* findStructure(const cGenPipeline& pipe, const char* name) {
+  const cStructureFeature* out = nullptr;
   pipe.visitFeatures([&](std::string_view n, const IFeature& f) {
-    if (n == name) out = dynamic_cast<const StructureFeature*>(&f);
+    if (n == name) out = dynamic_cast<const cStructureFeature*>(&f);
   });
   return out;
 }
@@ -1571,7 +1571,7 @@ void structureLoaderChecks(Checker& check) {
   check(gen != nullptr, "structures: generator JSON with a structure feature loads" +
                             (err.empty() ? std::string() : " (" + err + ")"));
   if (!gen) return;
-  const StructureFeature* hut = findStructure(*gen, "hut");
+  const cStructureFeature* hut = findStructure(*gen, "hut");
   check(hut != nullptr, "structures: feature visits as a StructureFeature");
   if (hut) {
     check(hut->reach() == 1, "structures: reach = blueprint extent (1)");
@@ -1634,7 +1634,7 @@ void structurePlacementChecks(Checker& check) {
   const auto gen = loadGenerator(std::string(kStructureGeneratorText), dimSeed, testMaterial, err);
   check(gen != nullptr, "structures: placement generator loads");
   if (!gen) return;
-  const StructureFeature* hut = findStructure(*gen, "hut");
+  const cStructureFeature* hut = findStructure(*gen, "hut");
   check(hut != nullptr, "structures: hut found");
   if (!hut) return;
 
@@ -1810,7 +1810,7 @@ struct ReplicaChamber {
   float ox, oz, cy, radius, ry;
 };
 
-/// Independent replica of CavernCarver for one coarse cell. `gen` supplies biomeAt for the
+/// Independent replica of cCavernCarver for one coarse cell. `gen` supplies biomeAt for the
 /// density gate (null = no gate, exactly like the carver without a bound pipeline).
 void replicaCavern(uint64_t dimSeed, int ccx, int ccz, const CavernSettings& st,
                    const cGenPipeline* gen, int tcx, int tcz, int yLimit,
@@ -2066,7 +2066,7 @@ void cavernChecks(Checker& check) {
   st.surfaceMargin = 6;
   st.coreFrac = 1.f;  // pure ellipsoid: exactly replicable
   std::vector<std::unique_ptr<ICarver>> cv;
-  cv.push_back(std::make_unique<CavernCarver>(st));
+  cv.push_back(std::make_unique<cCavernCarver>(st));
   const auto gen = makeCarverPipeline(dimSeed, std::move(cv));
   check(gen != nullptr, "caves: cavern code-built pipeline builds");
   if (!gen) return;
@@ -2111,7 +2111,7 @@ void cavernChecks(Checker& check) {
   wst.coreFrac = 0.5f;
   wst.noiseFreq = 0.125f;
   std::vector<std::unique_ptr<ICarver>> cv2;
-  cv2.push_back(std::make_unique<CavernCarver>(wst));
+  cv2.push_back(std::make_unique<cCavernCarver>(wst));
   const auto genW = makeCarverPipeline(dimSeed, std::move(cv2));
   check(genW != nullptr, "caves: wobble-rim cavern pipeline builds");
   if (genW) {
@@ -2935,8 +2935,8 @@ void riverChecks(Checker& check) {
   const NoiseGraph& g = gen->graph();
   const int hOut = g.outputIndex("height");
   const uint64_t ds = dimensionSeed(7, "wafer");
-  const auto p1 = RiverCarver::traceRiver(g, hOut, ds, 0, 0, s, nullptr);
-  const auto p2 = RiverCarver::traceRiver(g, hOut, ds, 0, 0, s, nullptr);
+  const auto p1 = cRiverCarver::traceRiver(g, hOut, ds, 0, 0, s, nullptr);
+  const auto p2 = cRiverCarver::traceRiver(g, hOut, ds, 0, 0, s, nullptr);
   bool same = p1.size() == p2.size() && !p1.empty();
   for (size_t i = 0; same && i < p1.size(); ++i)
     same = p1[i].x == p2[i].x && p1[i].z == p2[i].z && p1[i].h == p2[i].h;
@@ -3000,7 +3000,7 @@ void riverChecks(Checker& check) {
                            1;
     for (int ccz = -reachCells; ccz <= reachCells; ++ccz)
       for (int ccx = -reachCells; ccx <= reachCells; ++ccx) {
-        auto p = RiverCarver::traceRiver(g, hOut, ds, ccx, ccz, s, nullptr);
+        auto p = cRiverCarver::traceRiver(g, hOut, ds, ccx, ccz, s, nullptr);
         pts.insert(pts.end(), p.begin(), p.end());
       }
     const float w2 = (s.width + 0.5f) * (s.width + 0.5f);

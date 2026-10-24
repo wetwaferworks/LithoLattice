@@ -163,9 +163,9 @@ bool cGenPipeline::Builder::feature(std::string name, std::unique_ptr<IFeature> 
 }
 std::unique_ptr<const cGenPipeline> cGenPipeline::Builder::build() {
   if (!p_ || !p_->terrain_ || !p_->graph_) return nullptr;
-  // Let features bind pipeline services (StructureFeature's biome probe); every pipeline
+  // Let features bind pipeline services (cStructureFeature's biome probe); every pipeline
   // built through the Builder gets this automatically, including test pipelines.
-  // Let features and carvers bind pipeline services (StructureFeature's and RiverCarver's
+  // Let features and carvers bind pipeline services (cStructureFeature's and cRiverCarver's
   // biome probes); every pipeline built through the Builder gets this automatically,
   // including test pipelines.
   p_->features_.forEach([p = p_.get()](std::string_view, IFeature& f) { f.onPipelineBuilt(p); });

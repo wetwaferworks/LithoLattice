@@ -84,7 +84,7 @@ void separationChecks(Check& check) {
   s.density = 1.0f;
   s.spacing = 24.f;  // larger than the cell: neighbours must yield
   s.biomes.density.fill(1.f);
-  StructureFeature feat(std::move(s), testCells());
+  cStructureFeature feat(std::move(s), testCells());
   feat.setBiomeProbe([](int32_t, int32_t) -> uint8_t { return 0; });
 
   const uint64_t dimSeed = 0x12345678ull;
@@ -111,18 +111,18 @@ void variantChecks(Check& check) {
     s.cellSize = 16;
     s.density = 1.0f;
     s.biomes.density.fill(1.f);
-    std::vector<StructureFeature::Variant> variants;
+    std::vector<cStructureFeature::Variant> variants;
     for (int i = 0; i < 3; ++i) {
-      StructureFeature::Variant v;
+      cStructureFeature::Variant v;
       v.cells = testCells();
       v.cells.front().material = static_cast<MaterialId>(10 + i);  // tag each variant
       v.weight = float(i + 1);                        // weights 1, 2, 3
       variants.push_back(std::move(v));
     }
-    return StructureFeature(std::move(s), std::move(variants));
+    return cStructureFeature(std::move(s), std::move(variants));
   };
-  StructureFeature feat = makeFeat();
-  StructureFeature feat2 = makeFeat();
+  cStructureFeature feat = makeFeat();
+  cStructureFeature feat2 = makeFeat();
   feat.setBiomeProbe([](int32_t, int32_t) -> uint8_t { return 0; });
   feat2.setBiomeProbe([](int32_t, int32_t) -> uint8_t { return 0; });
   check(feat.variants().size() == 3, "variants: pool holds 3 variants");

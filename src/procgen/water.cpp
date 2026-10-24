@@ -133,7 +133,7 @@ void cLakeFillRule::apply(StageContext& ctx) const {
 
 // ---- shoreline
 
-ShorelineRule::ShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, LakeSettings lake, bool hasLake)
+cShorelineRule::cShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, LakeSettings lake, bool hasLake)
     : s_(std::move(s)),
       ocean_(std::move(ocean)),
       hasOcean_(hasOcean),
@@ -151,7 +151,7 @@ ShorelineRule::ShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, Lak
   }
 }
 
-void ShorelineRule::apply(StageContext& ctx) const {
+void cShorelineRule::apply(StageContext& ctx) const {
   if (s_.perBiome.empty() || (!hasOcean_ && !hasLake_)) return;
   const int n = ctx.chunk.size, top = ctx.blocks.height() - 1;
   const size_t last = s_.perBiome.size() - 1;

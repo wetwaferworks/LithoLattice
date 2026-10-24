@@ -5,7 +5,7 @@
 //                    (capped), water filled flat to sea level.
 //   cLakeFillRule   - still-water bodies in terrain depressions below a water table,
 //                    inside smooth noise-mask regions, filled flat to the spill level.
-//   ShorelineRule  - sand/gravel-ish rim around both, applied after the game's surface
+//   cShorelineRule  - sand/gravel-ish rim around both, applied after the game's surface
 //                    rules so it wins at the waterline.
 //
 // Everything is a pure function of (dimensionSeed, world x, z): same seed -> same water,
@@ -148,7 +148,7 @@ class cLakeFillRule final : public ISurfaceRule {
 /// top (and filler below) rewritten with the dominant biome's shore layers. Pure
 /// per-column function of (height, biome, region masks): continuous across chunk borders,
 /// never touches water cells. Thread-safe.
-class ShorelineRule final : public ISurfaceRule {
+class cShorelineRule final : public ISurfaceRule {
  public:
   struct Settings {
     int band = 2;    ///< dry-side blocks above the water surface rewritten
@@ -157,7 +157,7 @@ class ShorelineRule final : public ISurfaceRule {
   };
   /// Copies of the fill settings are taken (the rule must outlive the loader's stack).
   /// hasOcean/hasLake say which bodies exist; null bodies are skipped.
-  ShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, LakeSettings lake, bool hasLake);
+  cShorelineRule(Settings s, OceanSettings ocean, bool hasOcean, LakeSettings lake, bool hasLake);
   void apply(StageContext& ctx) const override;
   const Settings& settings() const { return s_; }
 

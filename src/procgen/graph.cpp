@@ -160,7 +160,7 @@ Json GraphDesc::toJson() const {
 
 struct NoiseGraph::Compiled {
   struct Entry {
-    std::unique_ptr<detail::Node> node;
+    std::unique_ptr<detail::cNode> node;
     std::vector<size_t> inputs;
     int cacheSlot = -1;  ///< >= 0 for cache nodes
   };

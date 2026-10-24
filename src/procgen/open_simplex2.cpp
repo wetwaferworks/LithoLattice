@@ -1,4 +1,4 @@
-// OpenSimplex2-style gradient noise, our own implementation of the published approach (no code
+// cOpenSimplex2-style gradient noise, our own implementation of the published approach (no code
 // ported from any reference):
 //  - 2D: the triangular (simplex) lattice. F sums the 3 vertices of the containing triangle with
 //    a radius^2 0.5 falloff; S sums every vertex within radius^2 2/3 (smoother, more overlap).
@@ -86,9 +86,9 @@ constexpr float kG2 = 0.21132486540f;  // (3 - sqrt(3)) / 6
 constexpr float kF4 = 0.30901699437f;  // (sqrt(5) - 1) / 4
 constexpr float kG4 = 0.13819660113f;  // (5 - sqrt(5)) / 20
 
-class OpenSimplex2 final : public INoise {
+class cOpenSimplex2 final : public INoise {
  public:
-  OpenSimplex2(uint64_t seed, bool smooth) : seed_(seed), smooth_(smooth) {}
+  cOpenSimplex2(uint64_t seed, bool smooth) : seed_(seed), smooth_(smooth) {}
 
   float sample2(float x, float y) const override {
     const float s = (x + y) * kF2;
@@ -185,7 +185,7 @@ class OpenSimplex2 final : public INoise {
 }  // namespace
 
 std::unique_ptr<INoise> makeOpenSimplex2(uint64_t seed, bool smooth) {
-  return std::make_unique<OpenSimplex2>(seed, smooth);
+  return std::make_unique<cOpenSimplex2>(seed, smooth);
 }
 
 }  // namespace litholattice::procgen::detail

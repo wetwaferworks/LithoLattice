@@ -1,4 +1,4 @@
-// Improved Perlin noise (Ken Perlin, "Improving Noise", SIGGRAPH 2002): quintic fade, gradient
+// Improved cPerlin noise (Ken cPerlin, "Improving Noise", SIGGRAPH 2002): quintic fade, gradient
 // selection from a permutation table. Our own implementation; the permutation is shuffled from
 // the seed, and 2D / 4D use the analogous axis-and-diagonal gradient sets.
 #include <array>
@@ -25,7 +25,7 @@ float grad2(uint32_t h, float x, float y) {
   }
 }
 
-float grad3(uint32_t h, float x, float y, float z) {  // Perlin's 12 edge directions (+4 repeats)
+float grad3(uint32_t h, float x, float y, float z) {  // cPerlin's 12 edge directions (+4 repeats)
   const uint32_t g = h & 15;
   const float u = g < 8 ? x : y, v = g < 4 ? y : (g == 12 || g == 14 ? x : z);
   return ((g & 1) ? -u : u) + ((g & 2) ? -v : v);
@@ -37,9 +37,9 @@ float grad4(uint32_t h, float x, float y, float z, float w) {  // 32 edge direct
   return ((g & 1) ? -a : a) + ((g & 2) ? -b : b) + ((g & 4) ? -c : c);
 }
 
-class Perlin final : public INoise {
+class cPerlin final : public INoise {
  public:
-  explicit Perlin(uint64_t seed) {
+  explicit cPerlin(uint64_t seed) {
     std::array<uint8_t, 256> p{};
     for (int i = 0; i < 256; ++i) p[size_t(i)] = uint8_t(i);
     Rng rng(seed);
@@ -95,6 +95,6 @@ class Perlin final : public INoise {
 
 }  // namespace
 
-std::unique_ptr<INoise> makePerlin(uint64_t seed) { return std::make_unique<Perlin>(seed); }
+std::unique_ptr<INoise> makePerlin(uint64_t seed) { return std::make_unique<cPerlin>(seed); }
 
 }  // namespace litholattice::procgen::detail

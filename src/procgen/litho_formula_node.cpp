@@ -97,7 +97,7 @@ std::array<std::array<double, 3>, 3> unrotateMatrix(double rx, double ry, double
   return u;
 }
 
-class cLithoformNode final : public Node {
+class cLithoformNode final : public cNode {
  public:
   cLithoformNode(LithoParams theta, LithoParams phi, double radius, double falloff,
                 std::array<std::array<double, 3>, 3> unrot, std::array<double, 3> center)
@@ -157,7 +157,7 @@ class cLithoformNode final : public Node {
 
 }  // namespace
 
-std::unique_ptr<Node> makeLithoform(const Json& p, uint64_t /*seed*/, std::string& err) {
+std::unique_ptr<cNode> makeLithoform(const Json& p, uint64_t /*seed*/, std::string& err) {
   // No seed: the shape is a deterministic analytic function; variety comes from scatter.
   LithoParams theta, phi;
   if (!readLithoParams(p, "theta", theta, err)) return nullptr;
