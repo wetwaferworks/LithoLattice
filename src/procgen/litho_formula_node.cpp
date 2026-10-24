@@ -97,9 +97,9 @@ std::array<std::array<double, 3>, 3> unrotateMatrix(double rx, double ry, double
   return u;
 }
 
-class LithoformNode final : public Node {
+class cLithoformNode final : public Node {
  public:
-  LithoformNode(LithoParams theta, LithoParams phi, double radius, double falloff,
+  cLithoformNode(LithoParams theta, LithoParams phi, double radius, double falloff,
                 std::array<std::array<double, 3>, 3> unrot, std::array<double, 3> center)
       : theta_(theta),
         phi_(phi),
@@ -175,7 +175,7 @@ std::unique_ptr<Node> makeLithoform(const Json& p, uint64_t /*seed*/, std::strin
   std::array<double, 3> rot{0.0, 0.0, 0.0}, center{0.0, 0.0, 0.0};
   if (!readVec3Local(p, "rotation", rot, err)) return nullptr;
   if (!readVec3Local(p, "center", center, err)) return nullptr;
-  return std::make_unique<LithoformNode>(theta, phi, radius, falloff,
+  return std::make_unique<cLithoformNode>(theta, phi, radius, falloff,
                                          unrotateMatrix(rot[0], rot[1], rot[2]), center);
 }
 

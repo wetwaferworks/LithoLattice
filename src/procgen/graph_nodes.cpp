@@ -33,18 +33,18 @@ std::span<const float> axisOf(const PointsView& p, int axis) { return axis == 0 
 
 // ---- leaf nodes
 
-class ConstantNode final : public Node {
+class cConstantNode final : public Node {
  public:
-  explicit ConstantNode(float v) : v_(v) {}
+  explicit cConstantNode(float v) : v_(v) {}
   void eval(const PointsView&, Inputs, std::span<float> out) const override { std::fill(out.begin(), out.end(), v_); }
 
  private:
   float v_;
 };
 
-class CoordinateNode final : public Node {
+class cCoordinateNode final : public Node {
  public:
-  explicit CoordinateNode(int axis) : axis_(axis) {}
+  explicit cCoordinateNode(int axis) : axis_(axis) {}
   void eval(const PointsView& p, Inputs, std::span<float> out) const override {
     const auto a = axisOf(p, axis_);
     std::copy(a.begin(), a.end(), out.begin());
@@ -54,9 +54,9 @@ class CoordinateNode final : public Node {
   int axis_;
 };
 
-class WaveNode final : public Node {
+class cWaveNode final : public Node {
  public:
-  WaveNode(std::array<float, 3> dir, float freq, float amp, float phase, bool cosine)
+  cWaveNode(std::array<float, 3> dir, float freq, float amp, float phase, bool cosine)
       : dir_(dir), freq_(freq), amp_(amp), phase_(phase), cosine_(cosine) {}
   void eval(const PointsView& p, Inputs, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) {
@@ -72,9 +72,9 @@ class WaveNode final : public Node {
 };
 
 /// Samples a noise at (p * frequency + offset). 2D noise reads the horizontal plane (x, z).
-class NoiseNode final : public Node {
+class cNoiseNode final : public Node {
  public:
-  NoiseNode(std::shared_ptr<const INoise> noise, int dims, std::array<float, 3> freq, std::array<float, 3> offset, float w)
+  cNoiseNode(std::shared_ptr<const INoise> noise, int dims, std::array<float, 3> freq, std::array<float, 3> offset, float w)
       : noise_(std::move(noise)), dims_(dims), freq_(freq), offset_(offset), w_(w) {}
 
   void eval(const PointsView& p, Inputs, std::span<float> out) const override {
@@ -104,9 +104,9 @@ class NoiseNode final : public Node {
 
 enum class Combine { Add, Multiply, Min, Max };
 
-class CombineNode final : public Node {
+class cCombineNode final : public Node {
  public:
-  explicit CombineNode(Combine op) : op_(op) {}
+  explicit cCombineNode(Combine op) : op_(op) {}
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     std::copy(in[0].begin(), in[0].end(), out.begin());
     for (size_t k = 1; k < in.size(); ++k)
@@ -127,9 +127,9 @@ class CombineNode final : public Node {
 
 /// Shared shape of the one-input transforms: out[i] = f(in[0][i]).
 template <typename F>
-class MapNode final : public Node {
+class cMapNode final : public Node {
  public:
-  explicit MapNode(F f) : f_(std::move(f)) {}
+  explicit cMapNode(F f) : f_(std::move(f)) {}
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) out[i] = f_(in[0][i]);
   }
@@ -140,7 +140,7 @@ class MapNode final : public Node {
 
 template <typename F>
 std::unique_ptr<Node> mapNode(F f) {
-  return std::make_unique<MapNode<F>>(std::move(f));
+  return std::make_unique<cMapNode<F>>(std::move(f));
 }
 
 /// Piecewise curve through control points: linear, or monotone cubic (Fritsch-Carlson, no
@@ -191,9 +191,9 @@ class Curve {
 inline float smoothstep01(float t) { return t * t * (3.f - 2.f * t); }
 
 /// a where control < threshold, b above; smoothstep blend within threshold +- falloff.
-class SelectNode final : public Node {
+class cSelectNode final : public Node {
  public:
-  SelectNode(float threshold, float falloff) : threshold_(threshold), falloff_(falloff) {}
+  cSelectNode(float threshold, float falloff) : threshold_(threshold), falloff_(falloff) {}
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) {
       const float c = in[0][i], a = in[1][i], b = in[2][i];
@@ -210,7 +210,7 @@ class SelectNode final : public Node {
   float threshold_, falloff_;
 };
 
-class BlendNode final : public Node {
+class cBlendNode final : public Node {
  public:
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) out[i] = in[0][i] + (in[1][i] - in[0][i]) * std::clamp(in[2][i], 0.f, 1.f);
@@ -222,9 +222,9 @@ class BlendNode final : public Node {
 /// The mask (a low-frequency field, e.g. scaled fbm in [0, 1]) carves the ranges out of the
 /// plains: where it is low the uplift fades to zero (foothills), where it is high the full
 /// ridged relief applies. Pass a constant 1 for `mask` to disable the foothill gating.
-class MountainRangeNode final : public Node {
+class cMountainRangeNode final : public Node {
  public:
-  MountainRangeNode(float amplitude, float power, float maskLo, float maskHi)
+  cMountainRangeNode(float amplitude, float power, float maskLo, float maskHi)
       : amp_(amplitude), power_(power), lo_(maskLo), hi_(maskHi) {}
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) {
@@ -241,9 +241,9 @@ class MountainRangeNode final : public Node {
 /// Cone peak from a distance field (e.g. cellular F1):
 ///   out = amplitude * max(0, 1 - distance / radius)^sharpness
 /// Sharpness 1 is a straight cone; higher values narrow the summit.
-class PeakNode final : public Node {
+class cPeakNode final : public Node {
  public:
-  PeakNode(float amplitude, float radius, float sharpness)
+  cPeakNode(float amplitude, float radius, float sharpness)
       : amp_(amplitude), radius_(radius), sharp_(sharpness) {}
   void eval(const PointsView&, Inputs in, std::span<float> out) const override {
     for (size_t i = 0; i < out.size(); ++i) {
@@ -267,7 +267,7 @@ std::unique_ptr<Node> makeMountainRange(const Json& p, uint64_t, std::string& er
   if (!(power >= 0)) { err = "'power' must be >= 0"; return nullptr; }
   const float amp = float(p.getNum("amplitude", 1));
   if (!std::isfinite(amp)) { err = "'amplitude' must be finite"; return nullptr; }
-  return std::make_unique<MountainRangeNode>(amp, power, lo, hi);
+  return std::make_unique<cMountainRangeNode>(amp, power, lo, hi);
 }
 
 std::unique_ptr<Node> makePeak(const Json& p, uint64_t, std::string& err) {
@@ -277,14 +277,14 @@ std::unique_ptr<Node> makePeak(const Json& p, uint64_t, std::string& err) {
   if (!(sharp >= 0)) { err = "'sharpness' must be >= 0"; return nullptr; }
   const float amp = float(p.getNum("amplitude", 1));
   if (!std::isfinite(amp)) { err = "'amplitude' must be finite"; return nullptr; }
-  return std::make_unique<PeakNode>(amp, radius, sharp);
+  return std::make_unique<cPeakNode>(amp, radius, sharp);
 }
 
 
 std::unique_ptr<Node> makeCoordinate(const Json& p, uint64_t, std::string& err) {
   const int axis = axisIndex(p.getStr("axis", "y"));
   if (axis < 0) err = "'axis' must be \"x\", \"y\" or \"z\"";
-  return axis < 0 ? nullptr : std::make_unique<CoordinateNode>(axis);
+  return axis < 0 ? nullptr : std::make_unique<cCoordinateNode>(axis);
 }
 
 std::unique_ptr<Node> makeWave(const Json& p, uint64_t, std::string& err) {
@@ -298,7 +298,7 @@ std::unique_ptr<Node> makeWave(const Json& p, uint64_t, std::string& err) {
   if (!readVec3(p, "direction", dir, err)) return nullptr;
   const std::string fn = p.getStr("function", "sin");
   if (fn != "sin" && fn != "cos") { err = "'function' must be \"sin\" or \"cos\""; return nullptr; }
-  return std::make_unique<WaveNode>(dir, float(p.getNum("frequency", 1)), float(p.getNum("amplitude", 1)),
+  return std::make_unique<cWaveNode>(dir, float(p.getNum("frequency", 1)), float(p.getNum("amplitude", 1)),
                                     float(p.getNum("phase", 0)), fn == "cos");
 }
 
@@ -355,7 +355,7 @@ std::unique_ptr<Node> makeNoiseImpl(const Json& p, uint64_t seed, std::string& e
   if (dims < 2 || dims > 4) { err = "'dims' must be 2, 3 or 4"; return nullptr; }
   std::array<float, 3> freq{1, 1, 1}, offset{0, 0, 0};
   if (!readVec3(p, "frequency", freq, err) || !readVec3(p, "offset", offset, err)) return nullptr;
-  return std::make_unique<NoiseNode>(std::move(n), dims, freq, offset, float(p.getNum("w", 0)));
+  return std::make_unique<cNoiseNode>(std::move(n), dims, freq, offset, float(p.getNum("w", 0)));
 }
 
 std::unique_ptr<Node> makeNoise(const Json& p, uint64_t seed, std::string& err) {
@@ -388,7 +388,7 @@ std::unique_ptr<Node> makePower(const Json& p, uint64_t, std::string& err) {
 
 template <Combine Op>
 std::unique_ptr<Node> makeCombine(const Json&, uint64_t, std::string&) {
-  return std::make_unique<CombineNode>(Op);
+  return std::make_unique<cCombineNode>(Op);
 }
 
 std::unique_ptr<Node> makeClamp(const Json& p, uint64_t, std::string& err) {
@@ -415,10 +415,10 @@ std::unique_ptr<Node> makeCurve(const Json& p, uint64_t, std::string& err) {
 std::unique_ptr<Node> makeSelect(const Json& p, uint64_t, std::string& err) {
   const float falloff = float(p.getNum("falloff", 0));
   if (falloff < 0) { err = "'falloff' must be >= 0"; return nullptr; }
-  return std::make_unique<SelectNode>(float(p.getNum("threshold", 0)), falloff);
+  return std::make_unique<cSelectNode>(float(p.getNum("threshold", 0)), falloff);
 }
 
-std::unique_ptr<Node> makeBlend(const Json&, uint64_t, std::string&) { return std::make_unique<BlendNode>(); }
+std::unique_ptr<Node> makeBlend(const Json&, uint64_t, std::string&) { return std::make_unique<cBlendNode>(); }
 
 /// Quantizes to multiples of `step`; `smoothness` (0..1) rounds the step edges.
 std::unique_ptr<Node> makeTerrace(const Json& p, uint64_t, std::string& err) {
@@ -478,6 +478,6 @@ const NodeType* findNodeType(std::string_view name) {
   return nullptr;
 }
 
-std::unique_ptr<Node> makeConstant(float value) { return std::make_unique<ConstantNode>(value); }
+std::unique_ptr<Node> makeConstant(float value) { return std::make_unique<cConstantNode>(value); }
 
 }  // namespace litholattice::procgen::detail

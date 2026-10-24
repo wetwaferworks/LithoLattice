@@ -4,9 +4,9 @@
 namespace litholattice::procgen::detail {
 namespace {
 
-class ValueNoise final : public INoise {
+class cValueNoise final : public INoise {
  public:
-  explicit ValueNoise(uint64_t seed) : seed_(seed) {}
+  explicit cValueNoise(uint64_t seed) : seed_(seed) {}
 
   float sample2(float x, float y) const override {
     const int32_t xi = fastFloor(x), yi = fastFloor(y);
@@ -43,6 +43,6 @@ class ValueNoise final : public INoise {
 
 }  // namespace
 
-std::unique_ptr<INoise> makeValue(uint64_t seed) { return std::make_unique<ValueNoise>(seed); }
+std::unique_ptr<INoise> makeValue(uint64_t seed) { return std::make_unique<cValueNoise>(seed); }
 
 }  // namespace litholattice::procgen::detail

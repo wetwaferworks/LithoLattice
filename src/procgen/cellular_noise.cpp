@@ -8,9 +8,9 @@
 namespace litholattice::procgen::detail {
 namespace {
 
-class CellularNoise final : public INoise {
+class cCellularNoise final : public INoise {
  public:
-  explicit CellularNoise(const NoiseSettings& s)
+  explicit cCellularNoise(const NoiseSettings& s)
       : seed_(s.seed), ret_(s.cellularReturn), metric_(s.metric), jitter_(std::clamp(s.jitter, 0.f, 1.f)) {}
 
   float sample2(float x, float y) const override { return sampleN(x, y, 0, 0, 2); }
@@ -121,9 +121,9 @@ class CellularNoise final : public INoise {
   float jitter_;
 };
 
-class WhiteNoise final : public INoise {
+class cWhiteNoise final : public INoise {
  public:
-  explicit WhiteNoise(uint64_t seed) : seed_(seed) {}
+  explicit cWhiteNoise(uint64_t seed) : seed_(seed) {}
   float sample2(float x, float y) const override { return signedUnitFloat(latticeHash(seed_, fastFloor(x), fastFloor(y))); }
   float sample3(float x, float y, float z) const override {
     return signedUnitFloat(latticeHash(seed_, fastFloor(x), fastFloor(y), fastFloor(z)));
@@ -138,7 +138,7 @@ class WhiteNoise final : public INoise {
 
 }  // namespace
 
-std::unique_ptr<INoise> makeCellular(const NoiseSettings& s) { return std::make_unique<CellularNoise>(s); }
-std::unique_ptr<INoise> makeWhite(uint64_t seed) { return std::make_unique<WhiteNoise>(seed); }
+std::unique_ptr<INoise> makeCellular(const NoiseSettings& s) { return std::make_unique<cCellularNoise>(s); }
+std::unique_ptr<INoise> makeWhite(uint64_t seed) { return std::make_unique<cWhiteNoise>(seed); }
 
 }  // namespace litholattice::procgen::detail
