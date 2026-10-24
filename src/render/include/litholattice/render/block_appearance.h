@@ -85,6 +85,10 @@ class IBlockAppearance {
   /// Box model of an attachable block (kAttachable with an attach face), or nullptr to keep its
   /// Shape. The mesher orients it toward the support and draws every box face (no culling).
   virtual const BoxModel* boxModel(const BlockDef& /*def*/) const { return nullptr; }
+  /// State-aware variant (2026-10-24: lever on/off, button pressed). Default: the stateless model.
+  virtual const BoxModel* boxModel(const BlockDef& def, CellState /*st*/) const { return boxModel(def); }
+  /// Quarter turns about Y for a floor / ceiling mount (default: the cell facing for blocks that keep one).
+  virtual int boxModelTurns(const BlockDef& /*def*/, CellState /*st*/) const { return 0; }
   /// While BlockMaterials are built: fills the shader bindings from block `def`'s model.
   virtual void bindMaterials(const BlockDef& /*def*/, const BlockModel& /*model*/, MaterialBindings& /*bindings*/) const {}
 };

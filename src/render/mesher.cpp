@@ -337,7 +337,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
         const int mn[3] = {x * 16, y * 16, z * 16};
         const BlockDef& def = jobDef(b);  // jobDefs only grows via jobDef(), called once per cell: ref stays valid for this cell
         if ((def.flags & kAttachable) && stAttach(st)) {
-          if (const BoxModel* bm = look.boxModel(def)) {  // attached: the oriented box model
+          if (const BoxModel* bm = look.boxModel(def, st)) {  // attached: the oriented box model
             const CustomBlock cell{in, reg, mats, b, st, x, y, z};
             const bool on = look.active(def, st);
             // 2026-10-16 (JD): a sprite-shaped attachable (Red/Blue LED) on a wall leans out like a
@@ -348,7 +348,8 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
             int wdx = 0, wdy = 0, wdz = 0;
             attachOffset(af, wdx, wdy, wdz);
             const size_t tiltFrom = out.verts.size();
-            for (BoxModel::Box box : bm->orientedBoxes(tilt ? 1 : af)) {
+            const int turns = (af == 1 || af == 2) ? look.boxModelTurns(def, st) : 0;  // 2026-10-24: floor / ceiling facing
+            for (BoxModel::Box box : bm->orientedBoxes(tilt ? 1 : af, turns)) {
               if (tilt) {
                 box.min[1] += 3; box.max[1] += 3;
                 box.min[0] += 7 * wdx; box.max[0] += 7 * wdx;

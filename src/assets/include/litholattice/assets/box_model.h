@@ -29,7 +29,10 @@ struct BoxModel {
   static std::optional<BoxModel> parse(const std::string& json, std::string* err);
   /// Every node's boxes in cell space for attach face `attach` (stAttach: 1 support below,
   /// 2 above, 3 -Z, 4 +Z, 5 -X, 6 +X; 0 is treated as 1), each with min < max per axis.
-  std::vector<Box> orientedBoxes(int attach) const;
+  /// turnsY (2026-10-24): extra quarter turns about Y applied first (the facing of floor / ceiling
+  /// mounts: 0 N, 1 E, 2 S, 3 W). Ceiling (attach 2) is the floor model turned 180 about X
+  /// (y and z mirrored), so its front stays the facing seen from below.
+  std::vector<Box> orientedBoxes(int attach, int turnsY = 0) const;
 };
 
 }  // namespace litholattice

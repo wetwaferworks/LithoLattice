@@ -77,7 +77,7 @@ std::optional<BoxModel> BoxModel::parse(const std::string& text, std::string* er
   return m;
 }
 
-std::vector<BoxModel::Box> BoxModel::orientedBoxes(int attach) const {
+std::vector<BoxModel::Box> BoxModel::orientedBoxes(int attach, int turnsY) const {
   std::vector<Box> out;
   for (const Node& n : nodes)
     for (Box b : meshes[size_t(n.mesh)].boxes) {
@@ -87,9 +87,15 @@ std::vector<BoxModel::Box> BoxModel::orientedBoxes(int attach) const {
         b.min[2] = o.min[0]; b.max[2] = o.max[0];
       }
       for (int i = 0; i < 3; ++i) { b.min[i] += n.translation[i]; b.max[i] += n.translation[i]; }
+      for (int t = 0; t < (turnsY & 3); ++t) {  // facing (floor / ceiling mounts), same turn as above
+        const Box o = b;
+        b.min[0] = 16 - o.max[2]; b.max[0] = 16 - o.min[2];
+        b.min[2] = o.min[0]; b.max[2] = o.max[0];
+      }
       Box r = b;  // authored with the support below (-Y); y = distance from the support face
       switch (attach) {
-        case 2: r.min[1] = 16 - b.max[1]; r.max[1] = 16 - b.min[1]; break;                          // support above
+        case 2: r.min[1] = 16 - b.max[1]; r.max[1] = 16 - b.min[1];                                 // support above: 180 about X
+                r.min[2] = 16 - b.max[2]; r.max[2] = 16 - b.min[2]; break;
         case 3: r.min[2] = b.min[1]; r.max[2] = b.max[1]; r.min[1] = b.min[2]; r.max[1] = b.max[2]; break;  // -Z
         case 4: r.min[2] = 16 - b.max[1]; r.max[2] = 16 - b.min[1]; r.min[1] = b.min[2]; r.max[1] = b.max[2]; break;
         case 5: r.min[0] = b.min[1]; r.max[0] = b.max[1]; r.min[1] = b.min[0]; r.max[1] = b.max[0]; break;  // -X
