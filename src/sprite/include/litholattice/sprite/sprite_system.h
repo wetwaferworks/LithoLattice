@@ -32,7 +32,7 @@ namespace litholattice::sprite {
 
 class SpriteSystem {
  public:
-  explicit SpriteSystem(ISpriteRegistry& registry) : registry_(registry) {}
+  explicit SpriteSystem(ISpriteReg& registry) : registry_(registry) {}
 
   /// Spawn an instance of a registered sprite def. Returns the instance
   /// handle (never 0), or 0 when the def id is unknown. The instance's
@@ -86,7 +86,7 @@ class SpriteSystem {
   void appendQuad(const SpriteInstance& inst, Vec3 cameraPos, Vec3 cameraForward, Vec3 camRight,
                   Vec3 camTrueUp);
 
-  ISpriteRegistry& registry_;
+  ISpriteReg& registry_;
   std::vector<SpriteInstance> instances_;  // spawn order, always
   std::vector<Emitter> emitters_;          // add order, always
   uint64_t nextInstanceId_ = 1;            // 0 = "no instance" sentinel

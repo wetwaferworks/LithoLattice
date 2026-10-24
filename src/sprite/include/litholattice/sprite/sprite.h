@@ -114,15 +114,15 @@ struct SpriteDef {
 /// (u right, v down from the page's top-left; see header conventions).
 struct SpriteUvRect {
   float u0 = 0.f, v0 = 0.f, u1 = 0.f, v1 = 0.f;
-  int page = -1;  ///< index into ISpriteRegistry::atlasPages(); -1 = unplaced
+  int page = -1;  ///< index into ISpriteReg::atlasPages(); -1 = unplaced
   friend bool operator==(const SpriteUvRect&, const SpriteUvRect&) = default;
 };
 
 /// The sprite-type registry: content defs plus the runtime texture atlas
 /// built from their resolved images.
-class ISpriteRegistry {
+class ISpriteReg {
  public:
-  virtual ~ISpriteRegistry() = default;
+  virtual ~ISpriteReg() = default;
 
   // -- Registration (one entry point per image source) --------------------
   // All four are FIRST-WINS BY NAME: registering an existing name returns
