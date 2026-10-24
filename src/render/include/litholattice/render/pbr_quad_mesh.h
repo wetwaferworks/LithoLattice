@@ -16,7 +16,7 @@
 // VERTEX LAYOUT (20 bytes; matches assets/shaders/chunk_pbr.vert locations):
 //   loc 0: uvec3 aPos      - 1/16 block units, local to the sub-chunk (x,y,z)
 //   loc 1: uint  aFace      - 0..5 (+X,-X,+Y,-Y,+Z,-Z, same order as BinaryQuad::dir)
-//   loc 2: uint  aMaterial  - compact MaterialRegistry ID (flat per quad)
+//   loc 2: uint  aMaterial  - compact cMaterialReg ID (flat per quad)
 //   loc 3: uvec2 aLight     - flood-fill block/sky level 0..64 (flat per quad)
 //
 // Corner winding: the 4 verts of a quad are emitted so that triangles (0,1,2) and
@@ -40,7 +40,7 @@ struct PbrQuadVertex {
   uint16_t x = 0, y = 0, z = 0;  ///< aPos: 1/16 block units, local to the sub-chunk
   uint16_t _pad0 = 0;
   uint32_t face = 0;      ///< aFace: 0..5, same order as BinaryQuad::dir
-  uint32_t material = 0;  ///< aMaterial: compact MaterialRegistry ID
+  uint32_t material = 0;  ///< aMaterial: compact cMaterialReg ID
   uint8_t blockLight = 0, skyLight = 0;  ///< aLight: flood-fill levels 0..64
   uint8_t _pad1[2]{};
 };

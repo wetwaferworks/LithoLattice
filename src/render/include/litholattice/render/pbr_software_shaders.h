@@ -1,7 +1,7 @@
 // PBR fragment path for the software (CPU) renderer (PBR phase 5).
 //
 // WHAT: pbrFragmentShader - a FragmentInput-compatible fragment shader that resolves the
-//   fragment's compact material ID through the MaterialRegistry, evaluates the exact
+//   fragment's compact material ID through the cMaterialReg, evaluates the exact
 //   Cook-Torrance core (pbr_brdf.h) against the K-nearest analytic lights from the
 //   LightCollector (pbr_lights.h), adds the flood-fill light-level irradiance, and
 //   outputs an sRGB RGBA8 pixel. Plus SoftwareShadingConfig, the tier/config switch that
@@ -36,7 +36,7 @@
 //   needs is implemented and engine-tested in pbr_transparency_tiers.h
 //   (snellRefractEta / refractionScreenOffset / resolveTrueRefraction - the exact
 //   mirror of the GLSL the GL33 backend runs). The follow-up is a software-renderer
-//   rework: a PbrTransparencyTier selection on SoftwareRenderer plus a two-pass
+//   rework: a PbrTransparencyTier selection on cSoftwareRenderer plus a two-pass
 //   rasterizer (opaque -> framebuffer copy -> refractive fragments sampling the
 //   copy). Until then the software path stays honestly non-refractive.
 #pragma once
@@ -76,10 +76,10 @@ struct IEmissiveProvider {
                                float intensity)>& sink) const = 0;
 };
 
-/// Per-pixel context for pbrFragmentShader. The SoftwareRenderer owns one (or none);
+/// Per-pixel context for pbrFragmentShader. The cSoftwareRenderer owns one (or none);
 //   it must outlive any render call that uses it.
 struct PbrFragmentContext {
-  const MaterialRegistry* registry = nullptr;  ///< compact ID -> MaterialDef (required)
+  const cMaterialReg* registry = nullptr;  ///< compact ID -> MaterialDef (required)
   LightCollector collector;                    ///< K-nearest reduction; default K = 8
   const IEmissiveProvider* emissive = nullptr;  ///< null = no analytic lights (documented seam)
   uint8_t blockLight = 0;  ///< flood-fill block level at the fragment's block (0-64)
@@ -109,7 +109,7 @@ inline float pbrLinearToSrgb(float c) {
 /// PBR fragment shader for the CPU renderer. Many-lights hybrid, exactly JD's locked
 //   design: the 1-64 flood-fill light level (irradianceFromLightLevel) handles diffuse
 //   for unlimited lights; the K nearest analytic lights drive the specular term through
-//   the exact CookTorrance::shade core; the registry's emissive term is added straight.
+//   the exact cCookTorrance::shade core; the registry's emissive term is added straight.
 //   Output is sRGB RGBA8. Falls back to basicFragmentShader when the context, the
 //   registry, or the material is missing (graceful degradation, never black).
 inline uint32_t pbrFragmentShader(const FragmentInput& in) {
@@ -123,7 +123,7 @@ inline uint32_t pbrFragmentShader(const FragmentInput& in) {
   {
     const float l2 = nx * nx + ny * ny + nz * nz;
     if (l2 > 1e-12f) {
-      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal CookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
+      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal cCookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
       nx *= s; ny *= s; nz *= s;
     } else {
       nx = 0.f; ny = 1.f; nz = 0.f;
@@ -137,7 +137,7 @@ inline uint32_t pbrFragmentShader(const FragmentInput& in) {
   {
     const float l2 = vx * vx + vy * vy + vz * vz;
     if (l2 > 1e-12f) {
-      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal CookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
+      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal cCookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
       vx *= s; vy *= s; vz *= s;
     } else {
       vx = 0.f; vy = 1.f; vz = 0.f;
@@ -169,10 +169,10 @@ inline uint32_t pbrFragmentShader(const FragmentInput& in) {
       float lx = l.x - fx, ly = l.y - fy, lz = l.z - fz;
       const float l2 = lx * lx + ly * ly + lz * lz;
       if (l2 <= 1e-12f) continue;  // light exactly at the fragment: no direction
-      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal CookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
+      const float s = 1.0f / std::sqrt(l2);  // EXACT (bug-fix run): pbr-software must equal cCookTorrance::shade within epsilon and Snell geometry is pinned -- approximation reverted
       const std::array<float, 3> ldir{lx * s, ly * s, lz * s};
       lo = pbr_sw_detail::add3(
-          lo, CookTorrance::shade(def->albedo, metal, def->roughness, n, v, ldir,
+          lo, cCookTorrance::shade(def->albedo, metal, def->roughness, n, v, ldir,
                                   attenuatedRadiance(l)));
     }
   }

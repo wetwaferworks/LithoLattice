@@ -49,8 +49,8 @@ inline constexpr bool isAirStableId(StableId id) { return id == kAirStableId; }
 /// The registry is one table keyed by (kind, namespaced string id); the stable id
 /// folds the kind name in, so `lithokraft:copper` can be both a block and an item
 /// with no collision. Engine kinds are fixed below; mods and IExtensible nested
-/// extensions add kinds at runtime via ContentRegistry::registerKind() — the same
-/// door, no new plumbing (see "Adding a content kind" on ContentRegistry).
+/// extensions add kinds at runtime via cContentReg::registerKind() — the same
+/// door, no new plumbing (see "Adding a content kind" on cContentReg).
 ///
 /// Numeric kind ids are SESSION-LOCAL; only the kind NAME is stable (it feeds
 /// stable-id derivation). Never persist the number.
@@ -161,12 +161,12 @@ struct ItemDef {
   uint32_t crc32 = 0;
 };
 
-/// Typed view over a ContentRegistry, filtered to blocks. This is the phase-1
+/// Typed view over a cContentReg, filtered to blocks. This is the phase-1
 /// BlockRegistry API, unchanged: the 109+ game call sites, ChunkMap, the mesher
 /// path and the tests keep working with zero churn. Owns its registry when
 /// default-constructed; views an external one when given.
 class BlockRegistry;
-/// Typed view over a ContentRegistry, filtered to items. Mirrors the BlockRegistry
+/// Typed view over a cContentReg, filtered to items. Mirrors the BlockRegistry
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
 class cItemReg;
@@ -194,9 +194,9 @@ class cItemReg;
 ///   3. Derive stable ids as `stableIdFor(kindName(kind), stringId)`.
 /// That's it: no new id scheme, no new remap path, no new wire codec, no new
 /// save table. When forks 2/3 (seal, quarantine) land, they apply once, to all kinds.
-class ContentRegistry {
+class cContentReg {
  public:
-  ContentRegistry();
+  cContentReg();
 
   // ---- kinds: the extension door ----
   /// Register a content kind by name ("block"/"item" are pre-registered).
@@ -298,12 +298,12 @@ class ContentRegistry {
   /// the inner scope disables the fast path until it ends.
   class StableDefScope {
    public:
-    explicit StableDefScope(const ContentRegistry& r);
+    explicit StableDefScope(const cContentReg& r);
     ~StableDefScope() { tlStableOwner_ = prevOwner_; tlStableDefs_ = prevDefs_; }
     StableDefScope(const StableDefScope&) = delete;
     StableDefScope& operator=(const StableDefScope&) = delete;
    private:
-    const ContentRegistry* prevOwner_;
+    const cContentReg* prevOwner_;
     const std::vector<BlockDef>* prevDefs_;
   };
   size_t stagedUpdateCount() const { return staged_.size(); }
@@ -342,7 +342,7 @@ class ContentRegistry {
   /// Review F-M3 enforcement: records (first call) and thereafter asserts
   /// (debug builds) that every registry mutator runs on that one thread —
   /// the single-threaded mod-init window, made checkable. Release builds
-  /// pay one relaxed atomic load + compare. Mutable: the ContentRegistry
+  /// pay one relaxed atomic load + compare. Mutable: the cContentReg
   /// ctor's air registration is the usual first mutation.
   void noteMutatorThread() const {
 #ifndef NDEBUG
@@ -380,12 +380,12 @@ class ContentRegistry {
   static uint64_t nextInstanceId() { static std::atomic<uint64_t> n{0}; return n.fetch_add(1, std::memory_order_relaxed) + 1; }
   const uint64_t instanceId_ = nextInstanceId();
   // Cortana 2026-10-15 1335: StableDefScope's per-thread view (see above).
-  inline static thread_local const ContentRegistry* tlStableOwner_ = nullptr;
+  inline static thread_local const cContentReg* tlStableOwner_ = nullptr;
   inline static thread_local const std::vector<BlockDef>* tlStableDefs_ = nullptr;
   std::unordered_map<BlockId, BlockDef> staged_;  // BlockId -> pending replacement def
 };
 
-inline ContentRegistry::ContentRegistry() {
+inline cContentReg::cContentReg() {
   kindNames_.push_back("block");
   kindNames_.push_back("item");
   // Row 0 is always kAir, as in phase 1 — now with its kind-tagged stable id.
@@ -395,7 +395,7 @@ inline ContentRegistry::ContentRegistry() {
   assert(id && *id == kAir);
 }
 
-inline EntryKind ContentRegistry::registerKind(std::string_view name) {
+inline EntryKind cContentReg::registerKind(std::string_view name) {
   noteMutatorThread();
   for (size_t i = 0; i < kindNames_.size(); ++i)
     if (kindNames_[i] == name) return EntryKind(static_cast<uint16_t>(i));
@@ -403,17 +403,17 @@ inline EntryKind ContentRegistry::registerKind(std::string_view name) {
   return EntryKind(static_cast<uint16_t>(kindNames_.size() - 1));
 }
 
-inline std::string_view ContentRegistry::kindName(EntryKind k) const {
+inline std::string_view cContentReg::kindName(EntryKind k) const {
   const size_t i = static_cast<uint16_t>(k);
   return i < kindNames_.size() ? std::string_view(kindNames_[i]) : std::string_view{};
 }
 
-inline std::string ContentRegistry::blockStringIdOf(const BlockDef& d) {
+inline std::string cContentReg::blockStringIdOf(const BlockDef& d) {
   if (!d.id.empty()) return std::string(d.id);
   return "anonymous:" + std::string(d.tex.empty() ? d.name : d.tex);
 }
 
-inline std::string ContentRegistry::itemStringIdOf(const ItemDef& d) {
+inline std::string cContentReg::itemStringIdOf(const ItemDef& d) {
   if (!d.id.empty()) return std::string(d.id);
   return "anonymous:" + std::string(d.name);
 }
@@ -422,7 +422,7 @@ inline std::string ContentRegistry::itemStringIdOf(const ItemDef& d) {
 /// Explicit little-endian, length-prefixed strings, field-by-field (no struct
 /// padding): byte-identical on every platform for equal defs. Excludes the
 /// string id (identity, not content) and the crc32 field itself.
-inline uint32_t ContentRegistry::blockContentCrc(const BlockDef& d) {
+inline uint32_t cContentReg::blockContentCrc(const BlockDef& d) {
   std::string buf;
   buf.reserve(96);
   const auto putU8 = [&](uint32_t v) { buf.push_back(char(v & 0xFF)); };
@@ -449,7 +449,7 @@ inline uint32_t ContentRegistry::blockContentCrc(const BlockDef& d) {
   return crc32(buf);
 }
 
-inline uint32_t ContentRegistry::itemContentCrc(const ItemDef& d) {
+inline uint32_t cContentReg::itemContentCrc(const ItemDef& d) {
   std::string buf;
   buf.reserve(64);
   const auto putU8 = [&](uint32_t v) { buf.push_back(char(v & 0xFF)); };
@@ -467,7 +467,7 @@ inline uint32_t ContentRegistry::itemContentCrc(const ItemDef& d) {
   return crc32(buf);
 }
 
-inline bool ContentRegistry::insertEntry(EntryKind kind, const std::string& stringId,
+inline bool cContentReg::insertEntry(EntryKind kind, const std::string& stringId,
                                          StableId stable, uint32_t crc,
                                          uint32_t localIndex) {
   noteMutatorThread();
@@ -481,7 +481,7 @@ inline bool ContentRegistry::insertEntry(EntryKind kind, const std::string& stri
   return true;
 }
 
-inline BlockId ContentRegistry::addBlock(const BlockDef& d) {
+inline BlockId cContentReg::addBlock(const BlockDef& d) {
   noteMutatorThread();
   if (sealed_) throw std::runtime_error("ContentRegistry::addBlock: registry is sealed");
   const std::string sid = blockStringIdOf(d);
@@ -505,7 +505,7 @@ inline BlockId ContentRegistry::addBlock(const BlockDef& d) {
   return *id;
 }
 
-inline std::optional<BlockId> ContentRegistry::addBlockWithStableId(const BlockDef& d,
+inline std::optional<BlockId> cContentReg::addBlockWithStableId(const BlockDef& d,
                                                                     StableId stable) {
   noteMutatorThread();
   if (sealed_) return std::nullopt;
@@ -531,17 +531,17 @@ inline std::optional<BlockId> ContentRegistry::addBlockWithStableId(const BlockD
   return BlockId(local);
 }
 
-inline void ContentRegistry::reserveBlocks(size_t n) {
+inline void cContentReg::reserveBlocks(size_t n) {
   noteMutatorThread();
   blockDefs_.reserve(n);
   blockEntryIdx_.reserve(n);
 }
 
-inline ContentRegistry::StableDefScope::StableDefScope(const ContentRegistry& r)
+inline cContentReg::StableDefScope::StableDefScope(const cContentReg& r)
     : prevOwner_(tlStableOwner_), prevDefs_(tlStableDefs_) {
   if (prevOwner_ == &r) return;  // nested on the same registry: already stable
   if (prevOwner_) { tlStableOwner_ = nullptr; tlStableDefs_ = nullptr; return; }  // other registry: locked path
-  struct Table { const ContentRegistry* reg = nullptr; uint64_t id = 0; /* Cortana 2026-10-15 1658: F-5 */ uint64_t epoch = ~uint64_t(0); size_t n = 0; const void* data = nullptr; std::vector<BlockDef> defs; };
+  struct Table { const cContentReg* reg = nullptr; uint64_t id = 0; /* Cortana 2026-10-15 1658: F-5 */ uint64_t epoch = ~uint64_t(0); size_t n = 0; const void* data = nullptr; std::vector<BlockDef> defs; };
   static thread_local Table t;
   {
     std::shared_lock lock(r.defMutex_);
@@ -555,24 +555,24 @@ inline ContentRegistry::StableDefScope::StableDefScope(const ContentRegistry& r)
   tlStableDefs_ = &t.defs;
 }
 
-inline BlockDef ContentRegistry::blockDef(BlockId id) const {
+inline BlockDef cContentReg::blockDef(BlockId id) const {
   if (tlStableOwner_ == this && id < tlStableDefs_->size()) return (*tlStableDefs_)[id];  // Cortana 2026-10-15 1335
   std::shared_lock lock(defMutex_);
   return id < blockDefs_.size() ? blockDefs_[id] : blockDefs_[0];  // air fallback, as before
 }
 
-inline StableId ContentRegistry::blockStableId(BlockId id) const {
+inline StableId cContentReg::blockStableId(BlockId id) const {
   return id < blockEntryIdx_.size() ? entries_[blockEntryIdx_[id]].stableId : kAirStableId;
 }
 
-inline uint32_t ContentRegistry::blockCrc(BlockId id) const { return blockDef(id).crc32; }
+inline uint32_t cContentReg::blockCrc(BlockId id) const { return blockDef(id).crc32; }
 
-inline std::string ContentRegistry::blockStringId(BlockId id) const {
+inline std::string cContentReg::blockStringId(BlockId id) const {
   return id < blockEntryIdx_.size() ? entries_[blockEntryIdx_[id]].stringId
                                     : entries_[0].stringId;  // air
 }
 
-inline std::optional<BlockId> ContentRegistry::findBlock(std::string_view id) const {
+inline std::optional<BlockId> cContentReg::findBlock(std::string_view id) const {
   // Iterative alias resolution with a cycle guard: a mod-crafted alias cycle
   // must not recurse unbounded (stack overflow). Any chain longer than the
   // alias table itself necessarily repeats, so cap the hops there.
@@ -589,7 +589,7 @@ inline std::optional<BlockId> ContentRegistry::findBlock(std::string_view id) co
   return std::nullopt;  // cycle: treat as unresolvable rather than overflowing
 }
 
-inline std::optional<BlockId> ContentRegistry::findBlockByStableId(StableId sid) const {
+inline std::optional<BlockId> cContentReg::findBlockByStableId(StableId sid) const {
   const auto it = byStable_.find(sid);
   if (it == byStable_.end()) return std::nullopt;
   const Entry& e = entries_[it->second];
@@ -597,7 +597,7 @@ inline std::optional<BlockId> ContentRegistry::findBlockByStableId(StableId sid)
   return BlockId(e.localIndex);
 }
 
-inline std::optional<BlockId> ContentRegistry::findBlockByTexture(std::string_view tex) const {
+inline std::optional<BlockId> cContentReg::findBlockByTexture(std::string_view tex) const {
   if (tex.empty()) return std::nullopt;
   std::shared_lock lock(defMutex_);
   for (size_t i = 0; i < blockDefs_.size(); ++i)
@@ -605,7 +605,7 @@ inline std::optional<BlockId> ContentRegistry::findBlockByTexture(std::string_vi
   return std::nullopt;
 }
 
-inline bool ContentRegistry::addBlockAlias(std::string_view oldId, std::string_view newId) {
+inline bool cContentReg::addBlockAlias(std::string_view oldId, std::string_view newId) {
   noteMutatorThread();  // review F-M3: aliases_ was mutated with no enforcement at all
   if (oldId.empty() || oldId == newId) return false;
   // Reject alias cycles at registration: walk the chain from newId; if it
@@ -622,9 +622,9 @@ inline bool ContentRegistry::addBlockAlias(std::string_view oldId, std::string_v
   return true;
 }
 
-inline size_t ContentRegistry::blockCount() const { return blockDefs_.size(); }
+inline size_t cContentReg::blockCount() const { return blockDefs_.size(); }
 
-inline bool ContentRegistry::stageBlockUpdate(BlockId id, const BlockDef& newDef) {
+inline bool cContentReg::stageBlockUpdate(BlockId id, const BlockDef& newDef) {
   if (sealed_) return false;
   // Unique lock: staged_ is WRITTEN here. A shared lock would let two staging
   // threads race on the map.
@@ -637,7 +637,7 @@ inline bool ContentRegistry::stageBlockUpdate(BlockId id, const BlockDef& newDef
   return true;
 }
 
-inline size_t ContentRegistry::refreshStaged() {
+inline size_t cContentReg::refreshStaged() {
   // Unique lock FIRST: checking staged_.empty() before the lock races with a
   // concurrent stageBlockUpdate write. No reader sees a torn BlockDef
   // mid-refresh. The epoch is bumped BEFORE the lock releases, so the
@@ -657,7 +657,7 @@ inline size_t ContentRegistry::refreshStaged() {
   return n;
 }
 
-inline ItemId ContentRegistry::addItem(const ItemDef& d) {
+inline ItemId cContentReg::addItem(const ItemDef& d) {
   noteMutatorThread();
   if (sealed_) throw std::runtime_error("ContentRegistry::addItem: registry is sealed");
   const std::string sid = itemStringIdOf(d);
@@ -667,7 +667,7 @@ inline ItemId ContentRegistry::addItem(const ItemDef& d) {
   return addItemWithStableId(d, derived).value();
 }
 
-inline std::optional<ItemId> ContentRegistry::addItemWithStableId(const ItemDef& d,
+inline std::optional<ItemId> cContentReg::addItemWithStableId(const ItemDef& d,
                                                                   StableId stable) {
   noteMutatorThread();
   if (sealed_) return std::nullopt;
@@ -685,33 +685,33 @@ inline std::optional<ItemId> ContentRegistry::addItemWithStableId(const ItemDef&
   return ItemId(local + 1);  // ids start at 1; 0 is the empty sentinel
 }
 
-inline ItemDef ContentRegistry::itemDef(ItemId id) const {
+inline ItemDef cContentReg::itemDef(ItemId id) const {
   // By value under the shared lock (review F-M3), mirroring blockDef().
   std::shared_lock lock(defMutex_);
   if (id == 0 || size_t(id - 1) >= itemDefs_.size()) return kEmptyItem;
   return itemDefs_[id - 1];
 }
 
-inline StableId ContentRegistry::itemStableId(ItemId id) const {
+inline StableId cContentReg::itemStableId(ItemId id) const {
   if (id == 0 || size_t(id - 1) >= itemEntryIdx_.size()) return 0;
   return entries_[itemEntryIdx_[id - 1]].stableId;
 }
 
-inline uint32_t ContentRegistry::itemCrc(ItemId id) const { return itemDef(id).crc32; }
+inline uint32_t cContentReg::itemCrc(ItemId id) const { return itemDef(id).crc32; }
 
-inline std::string ContentRegistry::itemStringId(ItemId id) const {
+inline std::string cContentReg::itemStringId(ItemId id) const {
   if (id == 0 || size_t(id - 1) >= itemEntryIdx_.size()) return {};
   return entries_[itemEntryIdx_[id - 1]].stringId;
 }
 
-inline std::optional<ItemId> ContentRegistry::findItem(std::string_view id) const {
+inline std::optional<ItemId> cContentReg::findItem(std::string_view id) const {
   const Key key{EntryKind::Item, std::string(id)};
   const auto it = byKey_.find(key);
   if (it == byKey_.end()) return std::nullopt;
   return ItemId(entries_[it->second].localIndex + 1);
 }
 
-inline std::optional<ItemId> ContentRegistry::findItemByStableId(StableId sid) const {
+inline std::optional<ItemId> cContentReg::findItemByStableId(StableId sid) const {
   const auto it = byStable_.find(sid);
   if (it == byStable_.end()) return std::nullopt;
   const Entry& e = entries_[it->second];
@@ -719,15 +719,15 @@ inline std::optional<ItemId> ContentRegistry::findItemByStableId(StableId sid) c
   return ItemId(e.localIndex + 1);
 }
 
-inline size_t ContentRegistry::itemCount() const { return itemDefs_.size(); }
+inline size_t cContentReg::itemCount() const { return itemDefs_.size(); }
 
-inline std::optional<EntryKind> ContentRegistry::kindOf(StableId sid) const {
+inline std::optional<EntryKind> cContentReg::kindOf(StableId sid) const {
   const auto it = byStable_.find(sid);
   if (it == byStable_.end()) return std::nullopt;
   return entries_[it->second].kind;
 }
 
-inline std::optional<StableId> ContentRegistry::stableIdOf(EntryKind kind,
+inline std::optional<StableId> cContentReg::stableIdOf(EntryKind kind,
                                                            std::string_view id) const {
   if (kind == EntryKind::Block) {
     const auto b = findBlock(id);
@@ -742,14 +742,14 @@ inline std::optional<StableId> ContentRegistry::stableIdOf(EntryKind kind,
   return it == byKey_.end() ? std::nullopt : std::optional<StableId>(entries_[it->second].stableId);
 }
 
-/// Typed view over a ContentRegistry, filtered to blocks. This is the phase-1
+/// Typed view over a cContentReg, filtered to blocks. This is the phase-1
 /// BlockRegistry API, unchanged: the 109+ game call sites, ChunkMap, the mesher
 /// path and the tests keep working with zero churn. Owns its registry when
 /// default-constructed; views an external one when given.
 class BlockRegistry {
  public:
-  BlockRegistry() : owned_(std::make_unique<ContentRegistry>()), reg_(owned_.get()) {}
-  explicit BlockRegistry(ContentRegistry& content) : reg_(&content) {}
+  BlockRegistry() : owned_(std::make_unique<cContentReg>()), reg_(owned_.get()) {}
+  explicit BlockRegistry(cContentReg& content) : reg_(&content) {}
   BlockRegistry(BlockRegistry&&) noexcept = default;
   BlockRegistry& operator=(BlockRegistry&&) noexcept = default;
 
@@ -801,21 +801,21 @@ class BlockRegistry {
   /// Voxel-palette LUT builds use this for the fail-fast kind check.
   std::optional<EntryKind> kindOf(StableId sid) const { return reg_->kindOf(sid); }
   /// The unified registry underneath (items, future kinds).
-  ContentRegistry& content() { return *reg_; }
-  const ContentRegistry& content() const { return *reg_; }
+  cContentReg& content() { return *reg_; }
+  const cContentReg& content() const { return *reg_; }
 
  private:
-  std::unique_ptr<ContentRegistry> owned_;  // set when default-constructed
-  ContentRegistry* reg_;
+  std::unique_ptr<cContentReg> owned_;  // set when default-constructed
+  cContentReg* reg_;
 };
 
-/// Typed view over a ContentRegistry, filtered to items. Mirrors the BlockRegistry
+/// Typed view over a cContentReg, filtered to items. Mirrors the BlockRegistry
 /// facade: owns its registry when default-constructed, views an external one when
 /// given. ItemIds are dense from 1; 0 is the empty sentinel.
 class cItemReg {
  public:
-  cItemReg() : owned_(std::make_unique<ContentRegistry>()), reg_(owned_.get()) {}
-  explicit cItemReg(ContentRegistry& content) : reg_(&content) {}
+  cItemReg() : owned_(std::make_unique<cContentReg>()), reg_(owned_.get()) {}
+  explicit cItemReg(cContentReg& content) : reg_(&content) {}
   cItemReg(cItemReg&&) noexcept = default;
   cItemReg& operator=(cItemReg&&) noexcept = default;
 
@@ -824,7 +824,7 @@ class cItemReg {
     return reg_->addItemWithStableId(d, stable);
   }
   /// ItemId 0 / out-of-range -> the empty sentinel def. By value, like
-  /// ContentRegistry::itemDef (review F-M3).
+  /// cContentReg::itemDef (review F-M3).
   ItemDef def(ItemId id) const { return reg_->itemDef(id); }
   size_t size() const { return reg_->itemCount(); }
   std::string idOf(ItemId id) const { return reg_->itemStringId(id); }
@@ -836,15 +836,15 @@ class cItemReg {
     return reg_->findItemByStableId(sid);
   }
   std::optional<EntryKind> kindOf(StableId sid) const { return reg_->kindOf(sid); }
-  ContentRegistry& content() { return *reg_; }
-  const ContentRegistry& content() const { return *reg_; }
+  cContentReg& content() { return *reg_; }
+  const cContentReg& content() const { return *reg_; }
 
  private:
-  std::unique_ptr<ContentRegistry> owned_;  // set when default-constructed
-  ContentRegistry* reg_;
+  std::unique_ptr<cContentReg> owned_;  // set when default-constructed
+  cContentReg* reg_;
 };
 
-inline BlockRegistry ContentRegistry::blocks() { return BlockRegistry(*this); }
-inline cItemReg ContentRegistry::items() { return cItemReg(*this); }
+inline BlockRegistry cContentReg::blocks() { return BlockRegistry(*this); }
+inline cItemReg cContentReg::items() { return cItemReg(*this); }
 
 }  // namespace litholattice

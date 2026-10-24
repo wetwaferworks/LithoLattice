@@ -113,7 +113,7 @@ void cDeterministicScheduler::runTick(uint64_t tick, void* world, JobPool& pool)
   }
 }
 
-void cDeterministicScheduler::runTick(uint64_t tick, void* world, JobSystem& jobs) {
+void cDeterministicScheduler::runTick(uint64_t tick, void* world, cJobSystem& jobs) {
   for (size_t s = 0; s < stages_.size(); ++s) {
     JobFence fence(jobs);  // the stage barrier: all systems done before the drain
     for (const size_t id : stages_[s]) {

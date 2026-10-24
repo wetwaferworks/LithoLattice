@@ -1,9 +1,9 @@
 // Lock-free work-stealing deque (Chase-Lev, SPAA 2005): the owner pushes and pops
 // from the bottom (LIFO); any number of thief threads steal from the top (FIFO).
-// This is the per-thread queue behind JobSystem.
+// This is the per-thread queue behind cJobSystem.
 //
 // OWNERSHIP (read this — it bit us once): the Chase-Lev algorithm requires a
-// single owner thread for pushBottom/popBottom. JobSystem submits come from ANY
+// single owner thread for pushBottom/popBottom. cJobSystem submits come from ANY
 // thread, so a per-deque mutex (`ownerM_`) serializes the owner operations and
 // restores the invariant. steal() never takes it and stays fully lock-free, so
 // cross-thread load balancing never contends with the owner. The mutex is a leaf
@@ -30,7 +30,7 @@
 //    safe read/read overlap into a read/write data race.
 //  - Fixed capacity on purpose: a growable array would let a thief that loaded the
 //    old array pointer steal a moved-from slot after the owner grew (phantom job).
-//    When full, pushBottom returns false and the JobSystem spills to a shared
+//    When full, pushBottom returns false and the cJobSystem spills to a shared
 //    overflow queue (cold path, mutex-protected). T must therefore be cheaply
 //    copyable (std::function is).
 #pragma once
@@ -56,12 +56,12 @@ class cChaseLevDeque {
     buffer_ = std::make_unique<Buffer>();
     array_.store(buffer_.get(), std::memory_order_relaxed);
   }
-  ~cChaseLevDeque() = default;  // threads must be joined before this runs (JobSystem does)
+  ~cChaseLevDeque() = default;  // threads must be joined before this runs (cJobSystem does)
   cChaseLevDeque(const cChaseLevDeque&) = delete;
   cChaseLevDeque& operator=(const cChaseLevDeque&) = delete;
 
   // ---- owner operations (serialized by ownerM_) ----------------------------------
-  // Single logical owner: JobSystem submits arrive from any thread, so the mutex
+  // Single logical owner: cJobSystem submits arrive from any thread, so the mutex
   // restores the one-owner-at-a-time invariant the algorithm requires. Uncontended
   // in the common case (the worker owns its deque); a submitting thread only
   // contends briefly with that worker's pops.
@@ -87,7 +87,7 @@ class cChaseLevDeque {
   /// job was neither returned nor restored and silently vanished, while the
   /// caller's in-flight accounting had already counted it. Now a throwing
   /// copy propagates with bottom_/top_ untouched and the job still queued;
-  /// the caller (JobSystem::workerLoop) catches, counts, and retries.
+  /// the caller (cJobSystem::workerLoop) catches, counts, and retries.
   /// Owner operations are serialized by ownerM_, so no other owner can move
   /// bottom_ between the copy and the commit; thieves only take from the
   /// top, and the last-item race is still settled by the seq_cst CAS below.

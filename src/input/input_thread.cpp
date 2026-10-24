@@ -31,7 +31,7 @@ cInputPump::~cInputPump() {
 
 void cInputPump::threadLoop() {
   ThreadUtil::setName("litho-input");
-  if (const uint64_t mask = JobSystem::realtimeAffinityMask(); mask != 0)
+  if (const uint64_t mask = cJobSystem::realtimeAffinityMask(); mask != 0)
     ThreadUtil::pinToCores(mask);  // off the sim workers' cores (see job_system.h policy)
   while (running_.load(std::memory_order_acquire)) {
     pollOnce();

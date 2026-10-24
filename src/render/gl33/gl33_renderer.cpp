@@ -258,7 +258,7 @@ class cGL33Renderer final : public IRenderer {
   // ---- PBR (BinaryQuad) path (phase 2, Worker 3) ----
   bool supportsPbrPath() const override { return pbrProg_.id() != 0; }
 
-  void setPbrMaterials(const MaterialRegistry& reg) override {
+  void setPbrMaterials(const cMaterialReg& reg) override {
     if (!supportsPbrPath()) return;
     const uint64_t gen = reg.generation();
     if (gen == pbrMatGeneration_) return;  // table is current; uploads are rare

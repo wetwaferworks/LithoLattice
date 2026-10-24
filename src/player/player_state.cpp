@@ -1,4 +1,4 @@
-// PlayerState wire format + PlayerManager implementation.
+// PlayerState wire format + cPlayerMgr implementation.
 //
 // Wire format (kSerializedSize = 68 bytes, explicit little-endian — never a
 // raw struct copy, so the bytes are identical on every platform):
@@ -99,7 +99,7 @@ uint32_t PlayerState::deserialize(const uint8_t* in, uint32_t len) {
 
 // ---------------------------------------------------------------------------
 
-PlayerManager::PlayerManager() : abilities_(stats_) {
+cPlayerMgr::cPlayerMgr() : abilities_(stats_) {
   // Route every registry change into the owning player's listeners. The
   // registries fire synchronously, so listeners observe changes in exactly
   // the order the game makes them.
@@ -111,9 +111,9 @@ PlayerManager::PlayerManager() : abilities_(stats_) {
       [this](uint64_t p, uint32_t a, bool active) { routeAbilityChanged(p, a, active); });
 }
 
-PlayerManager::~PlayerManager() = default;
+cPlayerMgr::~cPlayerMgr() = default;
 
-Player& PlayerManager::ensurePlayer(uint64_t playerId) {
+Player& cPlayerMgr::ensurePlayer(uint64_t playerId) {
   const auto it = players_.find(playerId);
   if (it != players_.end()) return *it->second;
   auto p = std::make_unique<Player>(playerId, "", vitals_, stats_, abilities_);
@@ -123,7 +123,7 @@ Player& PlayerManager::ensurePlayer(uint64_t playerId) {
   return ref;
 }
 
-Player& PlayerManager::addPlayer(uint64_t playerId, std::string displayName) {
+Player& cPlayerMgr::addPlayer(uint64_t playerId, std::string displayName) {
   if (playerId == 0) {  // 0 is "nobody": hand out the next free id instead
     playerId = players_.empty() ? 1 : players_.rbegin()->first + 1;
     if (playerId == 0) playerId = 1;  // id space wrapped (theoretical)
@@ -133,35 +133,35 @@ Player& PlayerManager::addPlayer(uint64_t playerId, std::string displayName) {
   return p;
 }
 
-Player& PlayerManager::localPlayer() { return ensurePlayer(localId_); }
+Player& cPlayerMgr::localPlayer() { return ensurePlayer(localId_); }
 
-PlayerState& PlayerManager::local() { return localPlayer().state(); }
+PlayerState& cPlayerMgr::local() { return localPlayer().state(); }
 
-const PlayerState& PlayerManager::get(uint64_t playerId) const {
+const PlayerState& cPlayerMgr::get(uint64_t playerId) const {
   const Player* p = player(playerId);
   if (p) return p->state();
   static const PlayerState kNobody;  // playerId 0 sentinel
   return kNobody;
 }
 
-Player* PlayerManager::player(uint64_t playerId) {
+Player* cPlayerMgr::player(uint64_t playerId) {
   const auto it = players_.find(playerId);
   return it == players_.end() ? nullptr : it->second.get();
 }
 
-const Player* PlayerManager::player(uint64_t playerId) const {
+const Player* cPlayerMgr::player(uint64_t playerId) const {
   const auto it = players_.find(playerId);
   return it == players_.end() ? nullptr : it->second.get();
 }
 
-std::vector<uint64_t> PlayerManager::playerIds() const {
+std::vector<uint64_t> cPlayerMgr::playerIds() const {
   std::vector<uint64_t> out;
   out.reserve(players_.size());
   for (const auto& [id, p] : players_) out.push_back(id);
   return out;  // map order = ascending id
 }
 
-uint32_t PlayerManager::healthVitalId() {
+uint32_t cPlayerMgr::healthVitalId() {
   // PLY-4: cache the health vital id in vitalsHealth_ instead of a string
   // map lookup on every vital change. Registration is first-wins and
   // append-only, so once resolved the id can never go stale; before
@@ -170,7 +170,7 @@ uint32_t PlayerManager::healthVitalId() {
   return vitalsHealth_;
 }
 
-void PlayerManager::addOrUpdate(const PlayerState& state) {
+void cPlayerMgr::addOrUpdate(const PlayerState& state) {
   if (state.playerId == 0) return;  // id 0 is "nobody": never a real player
   Player& p = ensurePlayer(state.playerId);
   p.state() = state;
@@ -179,20 +179,20 @@ void PlayerManager::addOrUpdate(const PlayerState& state) {
     vitals_.set(state.playerId, health, state.health);
 }
 
-void PlayerManager::remove(uint64_t playerId) {
+void cPlayerMgr::remove(uint64_t playerId) {
   abilities_.removePlayer(playerId);  // first: strips that player's boosts
   stats_.removePlayer(playerId);      // then: purges values
   vitals_.removePlayer(playerId);
   players_.erase(playerId);
 }
 
-void PlayerManager::tick(uint32_t dtTicks) { abilities_.tick(dtTicks); }
+void cPlayerMgr::tick(uint32_t dtTicks) { abilities_.tick(dtTicks); }
 
-void PlayerManager::notifyStateChanged(uint64_t playerId) {
+void cPlayerMgr::notifyStateChanged(uint64_t playerId) {
   if (Player* p = player(playerId)) p->notifyStateChanged();
 }
 
-void PlayerManager::routeVitalChanged(uint64_t playerId, uint32_t vitalId, int32_t oldValue,
+void cPlayerMgr::routeVitalChanged(uint64_t playerId, uint32_t vitalId, int32_t oldValue,
                                       int32_t newValue) {
   Player* p = player(playerId);
   if (!p) return;
@@ -202,14 +202,14 @@ void PlayerManager::routeVitalChanged(uint64_t playerId, uint32_t vitalId, int32
   p->dispatchVitalChanged(vitalId, oldValue, newValue);
 }
 
-void PlayerManager::routeStatChanged(uint64_t playerId, uint32_t statId, int32_t oldValue,
+void cPlayerMgr::routeStatChanged(uint64_t playerId, uint32_t statId, int32_t oldValue,
                                      int32_t newValue) {
   Player* p = player(playerId);
   if (!p) return;
   p->dispatchStatChanged(statId, oldValue, newValue);
 }
 
-void PlayerManager::routeAbilityChanged(uint64_t playerId, uint32_t abilityId, bool active) {
+void cPlayerMgr::routeAbilityChanged(uint64_t playerId, uint32_t abilityId, bool active) {
   if (Player* p = player(playerId)) p->dispatchAbilityChanged(abilityId, active);
 }
 

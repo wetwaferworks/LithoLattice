@@ -5,7 +5,7 @@
 //   for one shaded position, sorted nearest-first. Also an irradiance helper mapping
 //   the existing 1-64 flood-fill light level + sky to normalized diffuse/ambient
 //   irradiance, and an attenuated-radiance helper producing the lightColor argument
-//   CookTorrance::shade expects.
+//   cCookTorrance::shade expects.
 // WHY: JD's locked many-lights hybrid: the 1-64 light-level flood fill handles diffuse
 //   for unlimited torches; the K nearest emissive blocks become analytic lights for the
 //   PBR specular term. NO full global illumination.
@@ -162,7 +162,7 @@ inline Irradiance irradianceFromLightLevel(uint8_t blockLevel, uint8_t skyLevel,
   return out;
 }
 
-/// Incoming radiance of one analytic light for CookTorrance::shade's lightColor
+/// Incoming radiance of one analytic light for cCookTorrance::shade's lightColor
 /// argument: rgb * intensity * (1 / (1 + d^2)). Inverse-square falloff with a +1
 /// softener so the light never blows up at distance 0; an approximation documented
 /// as such (JD's locked design: these lights drive specular only, never diffuse).

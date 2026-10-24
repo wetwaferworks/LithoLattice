@@ -1,7 +1,7 @@
-// Async file I/O on the JobSystem: litholattice::storage::cIoScheduler.
+// Async file I/O on the cJobSystem: litholattice::storage::cIoScheduler.
 //
 // ==== THE COMPLETION CONTRACT (read this before submitting I/O) ====
-// Who runs the work: the JobSystem's dedicated I/O threads, via submitIo().
+// Who runs the work: the cJobSystem's dedicated I/O threads, via submitIo().
 // Blocking file work NEVER runs on a worker thread, and the sim/tick threads
 // NEVER block on disk: every submit*() below returns immediately; waiting is
 // opt-in through cIoFence, which must not be waited on from a job thread.
@@ -11,7 +11,7 @@
 // sim/tick/worker threads. A callback must be short and non-blocking — the
 // pattern is push-into-a-lock-free-queue (cSpscQueue, the cInputPump idiom) and
 // let the tick thread drain it once per frame. A callback must never wait on
-// sim state, take game locks, or call cIoFence::wait()/JobSystem::waitIdle()
+// sim state, take game locks, or call cIoFence::wait()/cJobSystem::waitIdle()
 // (thread-local assert: that would deadlock the pool). Exceptions thrown by a
 // callback are caught and counted as failures.
 //
@@ -29,8 +29,8 @@
 // optional backup rotation.
 //
 // Lifetime: ops may outlive the caller's stack frame but not the cIoScheduler or
-// the JobSystem. The scheduler holds no JobSystem ownership — construct it after
-// the JobSystem and destroy it before.
+// the cJobSystem. The scheduler holds no cJobSystem ownership — construct it after
+// the cJobSystem and destroy it before.
 #pragma once
 
 #include <condition_variable>
@@ -87,13 +87,13 @@ class cIoFence {
   int pending_ = 0, failed_ = 0;
 };
 
-/// Routes file I/O through the JobSystem's submitIo(). See the completion
+/// Routes file I/O through the cJobSystem's submitIo(). See the completion
 /// contract at the top of this file.
 class cIoScheduler {
  public:
-  explicit cIoScheduler(JobSystem& jobs) : jobs_(jobs) {}
+  explicit cIoScheduler(cJobSystem& jobs) : jobs_(jobs) {}
   /// Drains: waits for in-flight ops to finish before destroying strands.
-  /// The JobSystem must outlive the scheduler (ops run on its I/O threads).
+  /// The cJobSystem must outlive the scheduler (ops run on its I/O threads).
   ~cIoScheduler();
   cIoScheduler(const cIoScheduler&) = delete;
   cIoScheduler& operator=(const cIoScheduler&) = delete;
@@ -120,7 +120,7 @@ class cIoScheduler {
   /// runs on the same thread. For file work prefer the pathed submits (ordering).
   void submit(std::function<void()> work, std::function<void()> done, cIoFence* fence = nullptr);
 
-  JobSystem& jobs() { return jobs_; }
+  cJobSystem& jobs() { return jobs_; }
 
  private:
   friend class cIoFence;
@@ -130,7 +130,7 @@ class cIoScheduler {
   };
   struct Strand {
     std::deque<Op> queue;
-    bool active = false;  // an op from this strand is currently on the JobSystem
+    bool active = false;  // an op from this strand is currently on the cJobSystem
   };
   // RAII: advances the strand even if the op throws, so one bad op can never
   // wedge its path's queue. Nested (not anonymous-namespace) for private access.
@@ -145,10 +145,10 @@ class cIoScheduler {
   void launchHead(const std::filesystem::path& path, Strand& s);  // m_ held
   void finishStrand(const std::filesystem::path& path);
 
-  JobSystem& jobs_;
+  cJobSystem& jobs_;
   std::mutex m_;
   std::condition_variable drainCv_;
-  int inflight_ = 0;  ///< ops currently on the JobSystem (m_ held)
+  int inflight_ = 0;  ///< ops currently on the cJobSystem (m_ held)
   std::map<std::filesystem::path, Strand> strands_;  // one FIFO per path, keyed by
                                                      // the canonical spelling
                                                      // (absolute + lexically_normal):

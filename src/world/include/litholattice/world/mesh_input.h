@@ -26,7 +26,7 @@ struct MeshInput {
   uint8_t mat[kMeshPadVolume];  // per-voxel 8-bit material palette index (PBR chunk materials);
                                // 0 when the source cell has none
   // Column material palette for the BinaryQuad path (PBR phase 2, Worker 3): matPalette[i]
-  // maps a mat[] byte to a compact MaterialRegistry ID. Copied at snapshot time so mesh
+  // maps a mat[] byte to a compact cMaterialReg ID. Copied at snapshot time so mesh
   // workers never touch the live ChunkMap (same immutability contract as id[]/st[]/mat[]).
   // matPaletteSize == 0 (old save, no MATS payload) means every byte resolves to ID 0.
   uint16_t matPalette[256]{};

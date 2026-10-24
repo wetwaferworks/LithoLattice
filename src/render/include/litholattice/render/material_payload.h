@@ -4,7 +4,7 @@
 //   per-column string-ID table (ChunkColumn::materialPalette) into the chunk record.
 // WHY: JD's locked rule — saves persist STRING IDs, never raw compact IDs (compact IDs are
 //   registration-order dependent and differ across sessions/mods). On load the strings resolve
-//   through the MaterialRegistry, so a save written when iron was ID 13 loads correctly when
+//   through the cMaterialReg, so a save written when iron was ID 13 loads correctly when
 //   iron is ID 1.
 // HOW: the game registers it — cWorldSave adds makeMaterialPayload(*materials) to its
 //   PayloadRegistry (the game owns the registry instance; see initMaterialRegistry). It is a
@@ -108,7 +108,7 @@ inline bool decodeMatBytes(storage::ByteReader& r, uint8_t* v, std::string* err)
 /// Builds the engine's "MATS" payload for `reg`. The save/load lambdas capture `reg` by
 /// reference: the registry (owned by the game, e.g. LithoKraft's main()) must outlive the
 /// PayloadRegistry / WorldStore using this payload.
-inline storage::PayloadType makeMaterialPayload(const MaterialRegistry& reg) {
+inline storage::PayloadType makeMaterialPayload(const cMaterialReg& reg) {
   storage::PayloadType mats;
   mats.tag = kMaterialsTag;
   mats.version = kMaterialsVersion;
@@ -188,7 +188,7 @@ inline storage::PayloadType makeMaterialPayload(const MaterialRegistry& reg) {
     std::vector<std::string> finalTable;
     finalTable.reserve(n + 1);
     for (uint16_t i = 0; i < n; ++i)
-      if (reg.idFor(table[i]) != MaterialRegistry::kInvalidMaterialId) {
+      if (reg.idFor(table[i]) != cMaterialReg::kInvalidMaterialId) {
         remap[i] = uint8_t(finalTable.size());
         finalTable.push_back(table[i]);
       }

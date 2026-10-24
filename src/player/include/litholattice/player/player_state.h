@@ -47,12 +47,12 @@ struct PlayerState {
 /// addOrUpdate() writes the synced health into the vital, and vital
 /// changes write the health back into the state field — so either side
 /// can be read and both agree.
-class PlayerManager {
+class cPlayerMgr {
  public:
-  PlayerManager();
-  ~PlayerManager();
-  PlayerManager(const PlayerManager&) = delete;
-  PlayerManager& operator=(const PlayerManager&) = delete;
+  cPlayerMgr();
+  ~cPlayerMgr();
+  cPlayerMgr(const cPlayerMgr&) = delete;
+  cPlayerMgr& operator=(const cPlayerMgr&) = delete;
 
   /// The local player's state (created on first call, id = localId()).
   PlayerState& local();

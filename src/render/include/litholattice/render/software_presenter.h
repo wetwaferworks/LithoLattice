@@ -1,4 +1,4 @@
-// Software-renderer present path: gets a SoftwareRenderer framebuffer onto
+// Software-renderer present path: gets a cSoftwareRenderer framebuffer onto
 // a window. The CPU renderer has no swapchain of its own (IRenderer::
 // presentMode() == "framebuffer"), so the host uploads the framebuffer as a
 // GL texture and draws it as a fullscreen triangle into the window's back
@@ -24,7 +24,7 @@ class ISoftwarePresenter {
   /// Uploads `pixels` (w * h uint32 texels, 0xAARRGGBB, top row first — the
   /// SoftwareFramebuffer layout) and draws it upright over the whole
   /// (fbW x fbH) default framebuffer. Call with a GL 3.3 core context
-  /// current, after SoftwareRenderer::renderFrame() and before
+  /// current, after cSoftwareRenderer::renderFrame() and before
   /// Window::swap(). Steady state allocates nothing on the CPU side: the
   /// texture object is reused and its storage re-specified only when the
   /// frame size changes.

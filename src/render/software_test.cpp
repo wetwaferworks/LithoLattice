@@ -37,7 +37,7 @@ static bool writePPM(const char* path, const SoftwareFramebuffer& fb) {
 }
 
 int testSoftwareRenderer() {
-  SoftwareRenderer renderer;
+  cSoftwareRenderer renderer;
   renderer.resize(400, 300);
   // The legacy pixel assertions below predate model dithering (JD
   // 2026-10-13) and use an ortho MVP whose clip w = 1 sits inside the
@@ -358,7 +358,7 @@ int testSoftwareRenderer() {
   // axis-aligned quads (both windings, so back-face culling is exercised),
   // perspective camera, per-pixel path, 1 vs 2/4/8 threads.
   {
-    SoftwareRenderer mt;
+    cSoftwareRenderer mt;
     mt.setModelDither(false);
     mt.setPerPixelShading(true);
     uint32_t rng = 12345u;
@@ -395,12 +395,12 @@ int testSoftwareRenderer() {
     std::vector<uint32_t> ref;
     bool same = true;
     for (unsigned th : {1u, 2u, 4u, 8u}) {
-      SoftwareRenderer::setRenderThreads(th);
+      cSoftwareRenderer::setRenderThreads(th);
       mt.renderFrame(fp);
       if (th == 1) ref = mt.framebuffer().pixels;
       else if (mt.framebuffer().pixels != ref) { same = false; std::printf("FAIL: chunk pass differs at %u threads\n", th); }
     }
-    SoftwareRenderer::setRenderThreads(0);
+    cSoftwareRenderer::setRenderThreads(0);
     size_t lit = 0;
     for (uint32_t px : ref) if (px != ref[0]) ++lit;
     std::printf("Multithreaded chunk pass: 1/2/4/8 threads %s (%zu non-sky px)\n", same ? "bit-identical" : "DIFFER", lit);
@@ -453,7 +453,7 @@ int testSoftwareRenderer() {
     // A near quad and a larger far quad behind it, drawn far-then-near (Hi-Z can
     // reject nothing) and near-then-far (Hi-Z skips the far quad's occluded rows),
     // must give the same frame. UVs span 3 tiles, so swTile is exercised too.
-    SoftwareRenderer hz;
+    cSoftwareRenderer hz;
     hz.resize(256, 192);
     hz.setModelDither(false);
     hz.setPerPixelShading(true);
@@ -482,13 +482,13 @@ int testSoftwareRenderer() {
     std::printf("Hi-Z order independence: same=%d drawn=%zu\n", int(same), drawn);
     if (!same) return 1;
   }  {  // Cortana 2026-10-15 1450 (JD ruling 14:41): auto render threads.
-    const bool ok = SoftwareRenderer::autoRenderThreads(12) == 8 && SoftwareRenderer::autoRenderThreads(8) == 4 &&
-                    SoftwareRenderer::autoRenderThreads(4) == 2 && SoftwareRenderer::autoRenderThreads(2) == 2 &&
-                    SoftwareRenderer::autoRenderThreads(1) == 2 && SoftwareRenderer::autoRenderThreads(18) == 16 &&
-                    SoftwareRenderer::autoRenderThreads(64) == 16;
-    std::printf("Auto render threads: 12->%u 8->%u 4->%u 2->%u 64->%u %s\n", SoftwareRenderer::autoRenderThreads(12),
-                SoftwareRenderer::autoRenderThreads(8), SoftwareRenderer::autoRenderThreads(4),
-                SoftwareRenderer::autoRenderThreads(2), SoftwareRenderer::autoRenderThreads(64), ok ? "ok" : "FAIL");
+    const bool ok = cSoftwareRenderer::autoRenderThreads(12) == 8 && cSoftwareRenderer::autoRenderThreads(8) == 4 &&
+                    cSoftwareRenderer::autoRenderThreads(4) == 2 && cSoftwareRenderer::autoRenderThreads(2) == 2 &&
+                    cSoftwareRenderer::autoRenderThreads(1) == 2 && cSoftwareRenderer::autoRenderThreads(18) == 16 &&
+                    cSoftwareRenderer::autoRenderThreads(64) == 16;
+    std::printf("Auto render threads: 12->%u 8->%u 4->%u 2->%u 64->%u %s\n", cSoftwareRenderer::autoRenderThreads(12),
+                cSoftwareRenderer::autoRenderThreads(8), cSoftwareRenderer::autoRenderThreads(4),
+                cSoftwareRenderer::autoRenderThreads(2), cSoftwareRenderer::autoRenderThreads(64), ok ? "ok" : "FAIL");
     if (!ok) return 1;
   }  if (writePPM("/tmp/sw_test.ppm", fb)) {
     std::printf("Wrote /tmp/sw_test.ppm\n");

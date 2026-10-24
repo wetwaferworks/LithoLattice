@@ -35,7 +35,7 @@ class cCpuTextureArray final : public ITextureArray {
   int mipLevels() const { return levels_; }
   const uint32_t* mipData(int k) const { return k <= 0 ? data() : (k < levels_ && !mips_[k].empty() ? mips_[k].data() : data()); }
 
-  /// Raw upload behind SoftwareRenderer::setTextures: `layers` tiles of
+  /// Raw upload behind cSoftwareRenderer::setTextures: `layers` tiles of
   /// kTileSize x kTileSize uint32 texels (0xAARRGGBB), copied. Null data or
   /// zero layers clears the array.
   void setRaw(const uint32_t* data, uint32_t layers);

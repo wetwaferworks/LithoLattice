@@ -101,7 +101,7 @@ namespace litholattice {
 
 class BlockMaterials;
 class ITextureArray;
-class MaterialRegistry;  // pbr_materials.h (forward: only used as a const ref here)
+class cMaterialReg;  // pbr_materials.h (forward: only used as a const ref here)
 class ShaderLibrary;
 struct PbrChunkMesh;  // pbr_quad_mesh.h (forward: only used as a const ref here)
 
@@ -286,7 +286,7 @@ class IRenderer {
   /// the default applies immediately; a ring backend announces the table
   /// and applies it at the next seal, ahead of that seal's meshes (the
   /// game's update order: materials first, then uploads).
-  virtual void enqueuePbrMaterials(const MaterialRegistry& reg) { setPbrMaterials(reg); }
+  virtual void enqueuePbrMaterials(const cMaterialReg& reg) { setPbrMaterials(reg); }
   /// True when this backend stages mesh uploads for the render side to
   /// drain (Stage 2 ring): the game's upload phase then takes no
   /// RendererGuard — nothing waits in line behind the in-flight render.
@@ -319,9 +319,9 @@ class IRenderer {
   /// True when the backend tiles chunk UVs beyond 1 per block (greedy-merged quads).
   /// GPU backends clamp (CLAMP_TO_EDGE) and keep per-block quads. Constant; any thread.
   virtual bool prefersGreedyMeshes() const { return false; }
-  /// Uploads the MaterialRegistry as the GPU material table (48-byte std430 rows,
+  /// Uploads the cMaterialReg as the GPU material table (48-byte std430 rows,
   /// pbr_gl_upload.h). Backends re-upload only when reg.generation() moved.
-  virtual void setPbrMaterials(const MaterialRegistry& reg) { (void)reg; }
+  virtual void setPbrMaterials(const cMaterialReg& reg) { (void)reg; }
   /// Selects the PBR transparency tier. BACKEND AVAILABILITY (exact, P3-3
   /// Appendix D M7): the tier ladder is implemented ONLY on the GL33
   /// backend for BinaryQuad (PbrChunkMesh) uploads — Simple / ScreenDoor /

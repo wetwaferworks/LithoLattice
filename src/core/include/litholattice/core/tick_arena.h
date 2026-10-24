@@ -18,7 +18,7 @@
 // function of the allocation sequence (deterministic). totalReserved() reports the
 // high-water mark for telemetry.
 //
-// THREAD SAFETY: not thread-safe by design (v1). One TickArena is owned by the single
+// THREAD SAFETY: not thread-safe by design (v1). One cTickArena is owned by the single
 // tick thread; sharing one across threads is a data race.
 #pragma once
 
@@ -32,7 +32,7 @@
 
 namespace litholattice {
 
-class TickArena {
+class cTickArena {
  public:
   static constexpr size_t kDefaultAlign = alignof(std::max_align_t);
 
@@ -49,13 +49,13 @@ class TickArena {
   /// reset(); they are only zeroed.
   using Handle = uint64_t;
 
-  explicit TickArena(size_t capacityBytes);
-  ~TickArena();
+  explicit cTickArena(size_t capacityBytes);
+  ~cTickArena();
 
-  TickArena(const TickArena&) = delete;
-  TickArena& operator=(const TickArena&) = delete;
-  TickArena(TickArena&&) noexcept;
-  TickArena& operator=(TickArena&&) noexcept;
+  cTickArena(const cTickArena&) = delete;
+  cTickArena& operator=(const cTickArena&) = delete;
+  cTickArena(cTickArena&&) noexcept;
+  cTickArena& operator=(cTickArena&&) noexcept;
 
   /// Bump-allocate `size` bytes with `align` (defaults to max_align_t). A
   /// non-power-of-two `align` is rounded up to the next power of two (never

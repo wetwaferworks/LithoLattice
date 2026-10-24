@@ -26,14 +26,14 @@ namespace {
 // cannot corrupt the outer item's context, and a throwing WorkFn still
 // restores it (the destructor runs as the try block unwinds).
 struct SubPullFrame {
-  const TimingHandshakeAuthority* auth = nullptr;
+  const cTimingHandshakeAuthority* auth = nullptr;
   uint32_t index = 0;
   uint32_t count = 1;
 };
 thread_local SubPullFrame tSubPull;
 struct SubPullScope {
   SubPullFrame prev;
-  explicit SubPullScope(const TimingHandshakeAuthority* a, uint32_t i, uint32_t n) : prev(tSubPull) {
+  explicit SubPullScope(const cTimingHandshakeAuthority* a, uint32_t i, uint32_t n) : prev(tSubPull) {
     tSubPull.auth = a; tSubPull.index = i; tSubPull.count = n;
   }
   ~SubPullScope() { tSubPull = prev; }
@@ -42,23 +42,23 @@ struct SubPullScope {
 };
 }  // namespace
 
-uint32_t TimingHandshakeAuthority::currentSubPullIndex() const {
+uint32_t cTimingHandshakeAuthority::currentSubPullIndex() const {
   return tSubPull.auth == this ? tSubPull.index : 0;
 }
-uint32_t TimingHandshakeAuthority::currentSubPullCount() const {
+uint32_t cTimingHandshakeAuthority::currentSubPullCount() const {
   return tSubPull.auth == this ? tSubPull.count : 1;
 }
-bool TimingHandshakeAuthority::isFinalSubPull() const {
+bool cTimingHandshakeAuthority::isFinalSubPull() const {
   return currentSubPullIndex() + 1 >= currentSubPullCount();
 }
 
-uint64_t TimingHandshakeAuthority::nowNs() {
+uint64_t cTimingHandshakeAuthority::nowNs() {
   return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count());
 }
 
-TimingHandshakeAuthority::TimingHandshakeAuthority(Config cfg) : cfg_(std::move(cfg)) {
+cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg) : cfg_(std::move(cfg)) {
   if (cfg_.phasesPerCycle < 1) cfg_.phasesPerCycle = 1;
   if (cfg_.phasesPerCycle > 64) cfg_.phasesPerCycle = 64;
   ceiling_ = cfg_.watchdogCeiling.count() > 0 ? cfg_.watchdogCeiling : std::chrono::milliseconds(250);
@@ -76,7 +76,7 @@ TimingHandshakeAuthority::TimingHandshakeAuthority(Config cfg) : cfg_(std::move(
   for (int i = 0; i < workerCount_; ++i) workerExited_.emplace_back(false);
 }
 
-TimingHandshakeAuthority::~TimingHandshakeAuthority() {
+cTimingHandshakeAuthority::~cTimingHandshakeAuthority() {
   if (!stop()) {
     // C2 contract: a poisoned authority must not be destroyed while a
     // worker is outstanding — its members are exactly what the worker
@@ -89,7 +89,7 @@ TimingHandshakeAuthority::~TimingHandshakeAuthority() {
   }
 }
 
-uint32_t TimingHandshakeAuthority::registerComponent(HsComponentDesc desc, WorkFn fn) {
+uint32_t cTimingHandshakeAuthority::registerComponent(HsComponentDesc desc, WorkFn fn) {
   if (startedOnce_) {
     logError("timing-handshake: registerComponent('%s') after start() — registration is frozen", desc.name);
     return UINT32_MAX;
@@ -140,7 +140,7 @@ uint32_t TimingHandshakeAuthority::registerComponent(HsComponentDesc desc, WorkF
   return id;
 }
 
-uint32_t TimingHandshakeAuthority::componentIdByName(std::string_view name) const {
+uint32_t cTimingHandshakeAuthority::componentIdByName(std::string_view name) const {
   // Lookup only (JD 2026-10-14, rate scaling): the unordered_map index is
   // never iterated for scheduling — execution order is registration id
   // order, always.
@@ -148,7 +148,7 @@ uint32_t TimingHandshakeAuthority::componentIdByName(std::string_view name) cons
   return it != compIndex_.end() ? it->second : UINT32_MAX;
 }
 
-void TimingHandshakeAuthority::setCommitFn(std::function<void(uint64_t, uint64_t, uint32_t)> fn) {
+void cTimingHandshakeAuthority::setCommitFn(std::function<void(uint64_t, uint64_t, uint32_t)> fn) {
   // Review A-L9: a second installation replaces the first hook — previously
   // silently, so a Config-supplied hook would vanish the moment a subsystem
   // (Signal) registered its own. The replacement semantics stay (last
@@ -161,13 +161,13 @@ void TimingHandshakeAuthority::setCommitFn(std::function<void(uint64_t, uint64_t
   cfg_.commitFn = std::move(fn);
 }
 
-std::chrono::nanoseconds TimingHandshakeAuthority::phaseBudgetForGroup(uint32_t group) const {
+std::chrono::nanoseconds cTimingHandshakeAuthority::phaseBudgetForGroup(uint32_t group) const {
   if (group == 1 && cfg_.phaseBudgetGroup1.count() > 0) return cfg_.phaseBudgetGroup1;
   if (group == 2 && cfg_.phaseBudgetGroup2.count() > 0) return cfg_.phaseBudgetGroup2;
   return cfg_.phaseBudget;
 }
 
-std::chrono::nanoseconds TimingHandshakeAuthority::cycleBudgetForGroup(uint32_t group) const {
+std::chrono::nanoseconds cTimingHandshakeAuthority::cycleBudgetForGroup(uint32_t group) const {
   const std::chrono::nanoseconds pb = phaseBudgetForGroup(group);
   if (pb.count() <= 0) return pb;  // accounting off for this group
   // Group 2 runs ONE phase per master step: its cycle is that single phase.
@@ -177,7 +177,7 @@ std::chrono::nanoseconds TimingHandshakeAuthority::cycleBudgetForGroup(uint32_t 
   return pb * cfg_.phasesPerCycle;
 }
 
-bool TimingHandshakeAuthority::dueFor(const Comp& c, uint64_t phase, uint64_t cycle, uint32_t group) const {
+bool cTimingHandshakeAuthority::dueFor(const Comp& c, uint64_t phase, uint64_t cycle, uint32_t group) const {
   const HsComponentDesc& d = c.desc;
   if (!d.tickCritical || d.cadence == CadenceClass::FreeRun) return false;
   // Group matching, BOTH directions explicit (A-M1): a group-0 COMPONENT
@@ -203,7 +203,7 @@ bool TimingHandshakeAuthority::dueFor(const Comp& c, uint64_t phase, uint64_t cy
   return true;
 }
 
-bool TimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleTick) {
+bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleTick) {
   const uint64_t t0 = nowNs();
   c.startStampNs.store(t0, std::memory_order_release);
   c.started.store(true, std::memory_order_release);
@@ -243,7 +243,7 @@ bool TimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleTi
   return ok;
 }
 
-void TimingHandshakeAuthority::recordFailure(const Comp& c, uint64_t phase, uint64_t cycleTick,
+void cTimingHandshakeAuthority::recordFailure(const Comp& c, uint64_t phase, uint64_t cycleTick,
                                              const char* what) {
   {
     std::lock_guard lk(failureM_);
@@ -265,7 +265,7 @@ void TimingHandshakeAuthority::recordFailure(const Comp& c, uint64_t phase, uint
            what ? what : "unknown exception");
 }
 
-void TimingHandshakeAuthority::convertPendingFailureIfAny() {
+void cTimingHandshakeAuthority::convertPendingFailureIfAny() {
   PendingFailure f;
   {
     std::lock_guard lk(failureM_);
@@ -283,7 +283,7 @@ void TimingHandshakeAuthority::convertPendingFailureIfAny() {
   simFailFastFromException(std::runtime_error(msg), "timing_handshake", f.cycleTick);
 }
 
-bool TimingHandshakeAuthority::readPublished(PublishedPhase& out) const {
+bool cTimingHandshakeAuthority::readPublished(PublishedPhase& out) const {
   // CH-H2: seqlock-style revalidation around the publication tuple.
   const uint64_t gen1 = generation_.load(std::memory_order_acquire);
   const uint64_t seq1 = publishSeq_.load(std::memory_order_acquire);
@@ -301,7 +301,7 @@ bool TimingHandshakeAuthority::readPublished(PublishedPhase& out) const {
   return true;
 }
 
-void TimingHandshakeAuthority::resetAfterFreeze() {
+void cTimingHandshakeAuthority::resetAfterFreeze() {
   // CH-H1: bump the generation under m_ first — a stale worker's barrier
   // arrival revalidates (seq, generation) under the same mutex, so it can
   // no longer be counted toward the next phase — then clear the latch.
@@ -314,7 +314,7 @@ void TimingHandshakeAuthority::resetAfterFreeze() {
   publishCv_.notify_all();
 }
 
-bool TimingHandshakeAuthority::start() {
+bool cTimingHandshakeAuthority::start() {
   if (workersOutstanding_.load(std::memory_order_acquire)) {
     // C2 poison: an old worker is still running against this authority
     // (and, through its WorkFn captures, the world). Refuse to spawn a
@@ -355,7 +355,7 @@ bool TimingHandshakeAuthority::start() {
   return true;
 }
 
-bool TimingHandshakeAuthority::stop() {
+bool cTimingHandshakeAuthority::stop() {
   if (!startedOnce_ && workers_.empty()) return true;
   stop_.store(true, std::memory_order_release);
   publishCv_.notify_all();
@@ -399,7 +399,7 @@ bool TimingHandshakeAuthority::stop() {
   return false;
 }
 
-bool TimingHandshakeAuthority::pollPhase(uint32_t shard, uint64_t seenSeq, PublishedPhase& out) const {
+bool cTimingHandshakeAuthority::pollPhase(uint32_t shard, uint64_t seenSeq, PublishedPhase& out) const {
   // THE poll (A-M3): snapshot read + newness + due scan in exactly one
   // place. workerLoop and canTick both go through here.
   if (shard >= shards_.size()) return false;
@@ -413,7 +413,7 @@ bool TimingHandshakeAuthority::pollPhase(uint32_t shard, uint64_t seenSeq, Publi
   return true;
 }
 
-bool TimingHandshakeAuthority::canTick(uint32_t shard, uint64_t& phaseOut) const {
+bool cTimingHandshakeAuthority::canTick(uint32_t shard, uint64_t& phaseOut) const {
   if (shard >= shards_.size()) return false;
   // "Not yet pushed for this publication" == the shard's done-seq is the
   // caller's seen marker: poll for anything newer than what it pushed.
@@ -424,12 +424,12 @@ bool TimingHandshakeAuthority::canTick(uint32_t shard, uint64_t& phaseOut) const
   return true;
 }
 
-HsStats TimingHandshakeAuthority::statsSnapshot() const {
+HsStats cTimingHandshakeAuthority::statsSnapshot() const {
   std::lock_guard lk(statsM_);
   return stats_;
 }
 
-void TimingHandshakeAuthority::workerLoop(int shard) {
+void cTimingHandshakeAuthority::workerLoop(int shard) {
   uint64_t seenSeq = 0;
   uint64_t idleSinceNs = nowNs();
   while (!stop_.load(std::memory_order_acquire)) {
@@ -507,7 +507,7 @@ void TimingHandshakeAuthority::workerLoop(int shard) {
     workerExited_[size_t(shard)].store(true, std::memory_order_release);
 }
 
-bool TimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uint32_t group) {
+bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uint32_t group) {
   // C3: a worker failure recorded since the last boundary converts here,
   // before anything else in this phase (noreturn: fail-fast abort).
   convertPendingFailureIfAny();
@@ -697,7 +697,7 @@ bool TimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uint
   return true;
 }
 
-void TimingHandshakeAuthority::resetStats() {
+void cTimingHandshakeAuthority::resetStats() {
   std::lock_guard lk(statsM_);  // A-M6: same mutex as the fold + snapshots
   HsStats fresh;
   fresh.perComponent.assign(stats_.perComponent.size(), HsComponentStats{});

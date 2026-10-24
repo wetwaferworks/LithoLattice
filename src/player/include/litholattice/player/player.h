@@ -2,7 +2,7 @@
 // borrows the shared cVitalReg/cStatReg/cAbilityReg it is
 // keyed into.
 //
-// Notification routing: when a PlayerManager owns this player it installs
+// Notification routing: when a cPlayerMgr owns this player it installs
 // the registries' change callbacks and routes them here (attachRouting()).
 // A standalone Player has no routing, so its own mutators fire listeners
 // directly — the two paths are mutually exclusive (routed players never
@@ -53,7 +53,7 @@ class Player final : public IPlayer {
   void removeListener(IPlayerListener* listener) override;
   void notifyStateChanged() override;
 
-  // -- Routing plumbing (PlayerManager calls these; games should not) -----
+  // -- Routing plumbing (cPlayerMgr calls these; games should not) -----
   /// Mark this player as registry-routed by a manager: its listeners are
   /// then fired by the manager's routing, not by its own mutators.
   void attachRouting() { routed_ = true; }

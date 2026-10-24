@@ -338,7 +338,7 @@ namespace {
 int floorDiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 }  // namespace
 
-WorldStore::WorldStore(std::filesystem::path dir, const PayloadRegistry& payloads, JobSystem* jobs)
+WorldStore::WorldStore(std::filesystem::path dir, const PayloadRegistry& payloads, cJobSystem* jobs)
     : dir_(std::move(dir)), payloads_(payloads), jobsys_(jobs) {
   std::filesystem::create_directories(dir_);
   if (!jobsys_) thread_ = std::thread([this] { run(); });
@@ -346,7 +346,7 @@ WorldStore::WorldStore(std::filesystem::path dir, const PayloadRegistry& payload
 
 WorldStore::~WorldStore() {
   flush();
-  if (jobsys_) return;  // the engine owns the JobSystem: never stop or join it here
+  if (jobsys_) return;  // the engine owns the cJobSystem: never stop or join it here
   { std::lock_guard l(m_); stop_ = true; }
   cv_.notify_all();
   thread_.join();
@@ -384,7 +384,7 @@ void WorldStore::post(std::function<void()> job) {
   }
 }
 
-// JobSystem mode: run one queued store job per submitIo(), tail-chained. Strict
+// cJobSystem mode: run one queued store job per submitIo(), tail-chained. Strict
 // FIFO is preserved (the queue is the order), no I/O thread ever blocks waiting
 // for more work, and other I/O can interleave between chained jobs.
 void WorldStore::pumpOne() {

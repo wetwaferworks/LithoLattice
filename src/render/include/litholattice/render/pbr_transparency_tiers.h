@@ -16,7 +16,7 @@
 // HOW: header-only, renderer-agnostic CPU reference (mirrors the pbr_lights.h pattern).
 //   shadeTransparent() composes MaterialDef params with the existing transparency
 //   machinery (screenDoorTest, sortTransparent, oitWeight from transparency.h) and the
-//   Cook-Torrance core (CookTorrance::shade from pbr_brdf.h) for the PBR tiers. GPU
+//   Cook-Torrance core (cCookTorrance::shade from pbr_brdf.h) for the PBR tiers. GPU
 //   shaders mirror these exact formulas.
 //
 // BACKEND AVAILABILITY (exact claim, P3-3 Appendix D M7 — do not widen):
@@ -289,7 +289,7 @@ inline std::array<float, 3> resolveTrueRefraction(const std::array<float, 3>& f0
                                                  const std::array<float, 3>& specular,
                                                  const std::array<float, 3>& transmittedLinear,
                                                  const std::array<float, 3>& emissive) {
-  const std::array<float, 3> F = CookTorrance::fresnelSchlick(f0, nDotV);
+  const std::array<float, 3> F = cCookTorrance::fresnelSchlick(f0, nDotV);
   std::array<float, 3> out{};
   for (int i = 0; i < 3; ++i)
     out[i] = specular[i] + (1.0f - F[i]) * transmittedLinear[i] + emissive[i];
@@ -306,7 +306,7 @@ inline bool refractionPassKeepsFragment(float alpha, int pass) {
 
 /// Reflection/transmission energy split for the PbrReflections tier.
 ///   reflected   = F            (Schlick Fresnel at the view angle; F0 = mix(0.04, albedo,
-///                               metalness), same F0 convention as CookTorrance::shade)
+///                               metalness), same F0 convention as cCookTorrance::shade)
 ///   transmitted = (1 - F) * alpha   (simple alpha transmission, NO refraction bend)
 /// Energy-conserving by construction: reflected + transmitted <= 1, and the BRDF side
 /// (pbr_brdf.h) never emits more than it receives. The Ultra tier will put the Fresnel
@@ -317,7 +317,7 @@ struct ReflectionTransmissionSplit {
 };
 
 inline ReflectionTransmissionSplit splitReflectionTransmission(float f0, float nDotV, float alpha) {
-  const float f = CookTorrance::fresnelSchlick({f0, f0, f0}, nDotV)[0];
+  const float f = cCookTorrance::fresnelSchlick({f0, f0, f0}, nDotV)[0];
   ReflectionTransmissionSplit s;
   s.reflected = f;
   s.transmitted = (1.0f - f) * alpha;
@@ -338,9 +338,9 @@ inline uint8_t alphaToByte(float alpha) {
 ///   its additive blend state (additive glow never dithers and never refracts).
 /// - Simple: classic alpha blend — albedo * alpha + background * (1 - alpha) — no PBR.
 ///   The renderer still orders fragments with sortTransparent() for AlphaBlend materials.
-/// - ScreenDoor: full PBR shade (CookTorrance::shade + emissive) + 4x4 Bayer discard via
+/// - ScreenDoor: full PBR shade (cCookTorrance::shade + emissive) + 4x4 Bayer discard via
 ///   screenDoorTest. No sorting needed (opaque pipeline).
-/// - PbrReflections: PBR reflection (CookTorrance::shade + emissive) + simple alpha
+/// - PbrReflections: PBR reflection (cCookTorrance::shade + emissive) + simple alpha
 ///   transmission of the background: color = reflection + background * (1 - alpha).
 ///   No refraction bend — that is the Ultra tier's job.
 /// - TrueRefraction: STUB — returns refractionRequested = true with the request filled in
@@ -353,7 +353,7 @@ inline TransparencyResult shadeTransparent(const MaterialDef& mat, const Transpa
   const PbrTransparencyTier tier = cfg.tier;
 
   auto pbrSurface = [&]() {
-    std::array<float, 3> c = CookTorrance::shade(mat.albedo, mat.metalness, mat.roughness,
+    std::array<float, 3> c = cCookTorrance::shade(mat.albedo, mat.metalness, mat.roughness,
                                                  ctx.normal, ctx.viewDir, ctx.lightDir,
                                                  ctx.lightColor);
     for (int i = 0; i < 3; ++i) c[i] += mat.emissive[i] * mat.emissiveIntensity;

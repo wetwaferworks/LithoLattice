@@ -286,7 +286,7 @@ class cVulkanRenderer final : public IRenderer {
     static bool warned = false;
     if (!warned) { warned = true; logWarn("vulkan: uploadPbrChunkMesh not implemented — PBR (BinaryQuad) meshes invisible on Vulkan"); }
   }
-  void setPbrMaterials(const MaterialRegistry&) override {
+  void setPbrMaterials(const cMaterialReg&) override {
     static bool warned = false;
     if (!warned) { warned = true; logWarn("vulkan: setPbrMaterials not implemented — no PBR material table on Vulkan"); }
   }

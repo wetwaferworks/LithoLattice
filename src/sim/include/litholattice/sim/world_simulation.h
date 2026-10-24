@@ -11,7 +11,7 @@
 
 namespace litholattice {
 
-class TimingHandshakeAuthority;
+class cTimingHandshakeAuthority;
 
 /// Something the simulation reports to the game thread (a sound cue, ...). `kind` and `value`
 /// are game-defined; the cell position lets the game place it in the world.
@@ -56,7 +56,7 @@ class IWorldSimulation {
   /// its phase components with the authority. Default: no-op — simulations
   /// that do not opt in are never touched by the handshake, and in legacy
   /// mode this is never called at all.
-  virtual void registerHandshake(TimingHandshakeAuthority& /*authority*/) {}
+  virtual void registerHandshake(cTimingHandshakeAuthority& /*authority*/) {}
   /// May the player place `block` into the empty cell (x, y, z)? Default: yes.
   virtual bool canPlace(const ChunkMap& /*world*/, int /*x*/, int /*y*/, int /*z*/, BlockId /*block*/) const { return true; }
   /// After a neighbour lost its solid block: may the (non-attachable) block at x, y, z stay? false pops it.

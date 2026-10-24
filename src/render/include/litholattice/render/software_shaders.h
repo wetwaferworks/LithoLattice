@@ -25,7 +25,7 @@ struct ShaderVaryings {
   uint32_t layer;    ///< texture layer
   float wx, wy, wz;  ///< world position (for future point lights)
   float ao = 1.0f;   ///< Cortana 2026-10-16 (render.ao): baked corner AO factor (1 = open)
-  uint16_t materialId = 0xFFFF;  ///< compact MaterialRegistry ID (flat per quad, like
+  uint16_t materialId = 0xFFFF;  ///< compact cMaterialReg ID (flat per quad, like
                                  ///  layer); 0xFFFF = none -> basic shading
 };
 

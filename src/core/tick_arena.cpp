@@ -33,30 +33,30 @@ void* bump(void* data, size_t size, size_t& used, size_t reqSize, size_t align) 
 
 }  // namespace
 
-void* TickArena::allocBlock(size_t size) {
+void* cTickArena::allocBlock(size_t size) {
   assert(size <= 0xFFFFFFFFu && "TickArena: blocks are limited to 4 GiB (32-bit handle offsets)");
   return ::operator new(size, std::align_val_t(kDefaultAlign));
 }
 
-void TickArena::freeBlock(void* p, size_t size) noexcept {
+void cTickArena::freeBlock(void* p, size_t size) noexcept {
   ::operator delete(p, size, std::align_val_t(kDefaultAlign));
 }
 
-TickArena::TickArena(size_t capacityBytes) {
+cTickArena::cTickArena(size_t capacityBytes) {
   if (capacityBytes < kMinCapacity) capacityBytes = kMinCapacity;
   blocks_.push_back(Block{allocBlock(capacityBytes), capacityBytes, 0});
 }
 
-TickArena::~TickArena() {
+cTickArena::~cTickArena() {
   for (const Block& b : blocks_) freeBlock(b.data, b.size);
 }
 
-TickArena::TickArena(TickArena&& other) noexcept
+cTickArena::cTickArena(cTickArena&& other) noexcept
     : blocks_(std::move(other.blocks_)), cur_(other.cur_) {
   other.cur_ = 0;
 }
 
-TickArena& TickArena::operator=(TickArena&& other) noexcept {
+cTickArena& cTickArena::operator=(cTickArena&& other) noexcept {
   if (this != &other) {
     for (const Block& b : blocks_) freeBlock(b.data, b.size);
     blocks_ = std::move(other.blocks_);
@@ -66,7 +66,7 @@ TickArena& TickArena::operator=(TickArena&& other) noexcept {
   return *this;
 }
 
-void* TickArena::allocate(size_t size, size_t align) {
+void* cTickArena::allocate(size_t size, size_t align) {
   // Moved-from arena (review A-L4): the move left blocks_ empty, and the
   // bump below would dereference blocks_[cur_] — UB. A moved-from arena is
   // a shell for destruction/assignment only; allocating from it fails fast.
@@ -84,7 +84,7 @@ void* TickArena::allocate(size_t size, size_t align) {
   return allocateSlow(size, align);
 }
 
-void* TickArena::allocateSlow(size_t size, size_t align) {
+void* cTickArena::allocateSlow(size_t size, size_t align) {
   // Reuse an existing overflow block that fits (keeps block indices stable for handles).
   for (size_t i = cur_ + 1; i < blocks_.size(); ++i) {
     if (void* p = bump(blocks_[i].data, blocks_[i].size, blocks_[i].used, size, align)) {
@@ -110,12 +110,12 @@ void* TickArena::allocateSlow(size_t size, size_t align) {
   return p;
 }
 
-void TickArena::reset() {
+void cTickArena::reset() {
   for (Block& b : blocks_) b.used = 0;
   cur_ = 0;
 }
 
-void TickArena::rewind(Marker m) {
+void cTickArena::rewind(Marker m) {
   assert(m.block <= cur_ && "TickArena::rewind: marker is newer than the current position");
   assert(m.used <= blocks_[m.block].used && "TickArena::rewind: marker is inside live memory");
   for (size_t i = m.block + 1; i <= cur_; ++i) blocks_[i].used = 0;
@@ -123,7 +123,7 @@ void TickArena::rewind(Marker m) {
   blocks_[cur_].used = m.used;
 }
 
-uint32_t TickArena::offsetOf(const void* p) const {
+uint32_t cTickArena::offsetOf(const void* p) const {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
   for (const Block& b : blocks_) {
     const uintptr_t base = reinterpret_cast<uintptr_t>(b.data);
@@ -134,7 +134,7 @@ uint32_t TickArena::offsetOf(const void* p) const {
   return 0;
 }
 
-TickArena::Handle TickArena::toHandle(const void* p) const {
+cTickArena::Handle cTickArena::toHandle(const void* p) const {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
   for (size_t i = 0; i < blocks_.size(); ++i) {
     const uintptr_t base = reinterpret_cast<uintptr_t>(blocks_[i].data);
@@ -145,7 +145,7 @@ TickArena::Handle TickArena::toHandle(const void* p) const {
   return 0;
 }
 
-void* TickArena::fromHandle(Handle h) const {
+void* cTickArena::fromHandle(Handle h) const {
   const size_t i = static_cast<size_t>(h >> 32);
   const size_t off = static_cast<size_t>(h & 0xFFFFFFFFu);
   // Validated in ALL builds (review A-L4): the check is two comparisons, and
@@ -158,13 +158,13 @@ void* TickArena::fromHandle(Handle h) const {
   return static_cast<char*>(blocks_[i].data) + off;
 }
 
-size_t TickArena::used() const {
+size_t cTickArena::used() const {
   size_t total = 0;
   for (const Block& b : blocks_) total += b.used;
   return total;
 }
 
-size_t TickArena::totalReserved() const {
+size_t cTickArena::totalReserved() const {
   size_t total = 0;
   for (const Block& b : blocks_) total += b.size;
   return total;

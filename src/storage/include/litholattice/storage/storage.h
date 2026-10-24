@@ -21,7 +21,7 @@
 #include "litholattice/storage/file_contract.h"
 #include "litholattice/world/chunk.h"
 
-namespace litholattice { class JobSystem; }  // optional async back-end, see WorldStore
+namespace litholattice { class cJobSystem; }  // optional async back-end, see WorldStore
 
 namespace litholattice::storage {
 
@@ -150,13 +150,13 @@ class RegionFile {
 /// on the store's own I/O thread; callbacks run on that thread.
 class WorldStore {
  public:
-  /// `jobs`: when non-null, saves/loads/region writes run on the JobSystem via
+  /// `jobs`: when non-null, saves/loads/region writes run on the cJobSystem via
   /// submitIo() (tail-chained, strict FIFO, one op per submitIo so other I/O work
   /// can interleave); when null, the store keeps its own private I/O thread.
-  /// Either way the sim/tick threads never block on disk. The JobSystem (if any)
+  /// Either way the sim/tick threads never block on disk. The cJobSystem (if any)
   /// must outlive the store.
   explicit WorldStore(std::filesystem::path dir, const PayloadRegistry& payloads,
-                      JobSystem* jobs = nullptr);
+                      cJobSystem* jobs = nullptr);
   ~WorldStore();  ///< finishes queued work
   WorldStore(const WorldStore&) = delete;
   WorldStore& operator=(const WorldStore&) = delete;
@@ -187,7 +187,7 @@ class WorldStore {
  private:
   void post(std::function<void()> job);
   void run();   ///< private-I/O-thread mode only
-  void pumpOne();  ///< JobSystem mode: run one queued job per submitIo, tail-chained
+  void pumpOne();  ///< cJobSystem mode: run one queued job per submitIo, tail-chained
   RegionFile& region(int rx, int rz);
   std::filesystem::path dir_;
   const PayloadRegistry& payloads_;
@@ -197,10 +197,10 @@ class WorldStore {
   std::deque<std::function<void()>> jobs_;
   bool stop_ = false, busy_ = false, pumping_ = false;
   std::thread thread_;
-  JobSystem* jobsys_ = nullptr;  // not owned
+  cJobSystem* jobsys_ = nullptr;  // not owned
   size_t quarantined_ = 0;
   // Flush-job outcome (SV-H1): written by the I/O job, read after the queue
-  // drains. Atomics because the JobSystem back-end runs jobs off this thread.
+  // drains. Atomics because the cJobSystem back-end runs jobs off this thread.
   std::atomic<bool> lastFlushOk_{true};
   std::atomic<int> lastFlushFailures_{0};
 };

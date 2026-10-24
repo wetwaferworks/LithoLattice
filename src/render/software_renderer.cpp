@@ -176,26 +176,26 @@ void cCpuTextureArray::setRaw(const uint32_t* data, uint32_t layers) {
 }
 
 // ---------------------------------------------------------------------------
-// SoftwareRenderer
+// cSoftwareRenderer
 // ---------------------------------------------------------------------------
 
-SoftwareRenderer::SoftwareRenderer() {
+cSoftwareRenderer::cSoftwareRenderer() {
   fb_.resize(800, 600);
   depth_.resize(size_t(800) * 600, 1.0f);
 }
 
-SoftwareRenderer::~SoftwareRenderer() = default;
+cSoftwareRenderer::~cSoftwareRenderer() = default;
 
-void SoftwareRenderer::resize(uint32_t w, uint32_t h) {
+void cSoftwareRenderer::resize(uint32_t w, uint32_t h) {
   fb_.resize(w, h);
   depth_.assign(size_t(w) * h, 1.0f);
   hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z off until the next clear()
 }
 
-thread_local SoftwareRenderer::GroundFx SoftwareRenderer::groundFx_{};
-thread_local float SoftwareRenderer::meshOriginX_ = 0.f;
-thread_local float SoftwareRenderer::meshOriginY_ = 0.f;
-thread_local float SoftwareRenderer::meshOriginZ_ = 0.f;
+thread_local cSoftwareRenderer::GroundFx cSoftwareRenderer::groundFx_{};
+thread_local float cSoftwareRenderer::meshOriginX_ = 0.f;
+thread_local float cSoftwareRenderer::meshOriginY_ = 0.f;
+thread_local float cSoftwareRenderer::meshOriginZ_ = 0.f;
 
 // RND-H3 banding (2026-10-15): the rows this thread may write. The full
 // frame by default; the chunk pass narrows it per band thread.
@@ -242,7 +242,7 @@ static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_
 namespace {
 // Persistent band threads for the chunk pass (no per-frame thread creation).
 // Cortana 2026-10-15 1156: thread count. Default 4 (JD: entry/older consumer
-// hardware); override with SoftwareRenderer::setRenderThreads (CLI
+// hardware); override with cSoftwareRenderer::setRenderThreads (CLI
 // --render-threads, settings key renderThreads). Always a power of two,
 // clamped to <= hardware threads, capped at kSwMaxRenderThreads, >= 1.
 std::atomic<unsigned> g_swRequestedThreads{0};  // 0 = default
@@ -302,7 +302,7 @@ class cSwBandPool {
     // frames instead — it re-checks on every submit.
     if (want != bands_ && !tlDetachedBody_) { stopAll(); start(want); }
     if (bands_ <= 1) { fn(0); return; }
-    // Several SoftwareRenderer instances share the pool (the game view and
+    // Several cSoftwareRenderer instances share the pool (the game view and
     // the MCP vision capture for the Daemon's pilots): one frame at a time.
     // run() returns only after every band has finished, so the framebuffer
     // is fully resolved before any post pass, grabFramebuffer or capture.
@@ -472,8 +472,8 @@ class cSwBandPool {
 };
 }  // namespace
 
-void SoftwareRenderer::setRenderThreads(unsigned n) { g_swRequestedThreads.store(n); }
-unsigned SoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
+void cSoftwareRenderer::setRenderThreads(unsigned n) { g_swRequestedThreads.store(n); }
+unsigned cSoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
 
 // Design B Stage 2: forward declaration (defined with the store, below) +
 // the (store key, ring kind) map key for drain coalescing.
@@ -498,7 +498,7 @@ struct PairHash {
 // and never takes the guard, so the upload rendezvous Stage 1 measured
 // is gone. Drained source buffers are retired after the render (Argon
 // trap 3), even when the render throws.
-void SoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drainTarget,
+void cSoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drainTarget,
                                            const std::function<void(std::exception_ptr)>& onDone) {
   cSwBandPool::get().runDetached(
       [this, fp, drainTarget] {
@@ -520,7 +520,7 @@ void SoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drain
 // These run on the main thread (the game's upload phase). While the ring
 // is disabled they are the direct calls they replace, byte for byte.
 
-bool SoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
+bool cSoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
   if (!uploadRingEnabled_) { uploadChunkMesh(mesh); return true; }
   const bool tombstone = mesh.verts.empty();  // removals are must-push: never refused for bytes
   cSwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PackedVertex)), tombstone);
@@ -531,7 +531,7 @@ bool SoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
   return true;
 }
 
-bool SoftwareRenderer::enqueuePbrChunkMesh(PbrChunkMesh&& mesh) {
+bool cSoftwareRenderer::enqueuePbrChunkMesh(PbrChunkMesh&& mesh) {
   if (!uploadRingEnabled_) { uploadPbrChunkMesh(mesh); return true; }
   const bool tombstone = mesh.verts.empty();
   cSwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PbrQuadVertex)), tombstone);
@@ -542,7 +542,7 @@ bool SoftwareRenderer::enqueuePbrChunkMesh(PbrChunkMesh&& mesh) {
   return true;
 }
 
-bool SoftwareRenderer::enqueueClearChunkMeshes() {
+bool cSoftwareRenderer::enqueueClearChunkMeshes() {
   if (!uploadRingEnabled_) { clearChunkMeshes(); return true; }
   cSwUploadRing::Slot* s = uploadRing_.claim(0, /*mustPush=*/true);  // a clear is never dropped
   if (!s) return false;
@@ -551,7 +551,7 @@ bool SoftwareRenderer::enqueueClearChunkMeshes() {
   return true;
 }
 
-void SoftwareRenderer::enqueuePbrMaterials(const MaterialRegistry& reg) {
+void cSoftwareRenderer::enqueuePbrMaterials(const cMaterialReg& reg) {
   if (!uploadRingEnabled_) { setPbrMaterials(reg); return; }
   // The table is announced, not copied: setPbrMaterials stores the pointer
   // and the render side reads the registry live through it, so announcing
@@ -564,7 +564,7 @@ void SoftwareRenderer::enqueuePbrMaterials(const MaterialRegistry& reg) {
   pendingPbrMaterials_.store(&reg, std::memory_order_release);
 }
 
-SoftwareRenderer::UploadRingStats SoftwareRenderer::uploadRingStats() const {
+cSoftwareRenderer::UploadRingStats cSoftwareRenderer::uploadRingStats() const {
   UploadRingStats st;
   st.pushed = uploadRing_.pushedCount();
   st.pushFull = uploadRing_.pushFullCount();
@@ -582,11 +582,11 @@ SoftwareRenderer::UploadRingStats SoftwareRenderer::uploadRingStats() const {
 // survivors apply through the same three entry points (each bumps
 // storeGen_), in ring order, and nothing else on the split path mutates
 // the store — main's uploads all arrive here.
-void SoftwareRenderer::drainUploadRing(uint64_t target) {
+void cSoftwareRenderer::drainUploadRing(uint64_t target) {
   if (!uploadRingEnabled_) return;
   // The announced PBR material table lands first (the game's update order:
   // setPbrMaterials precedes uploadMeshes), ahead of this seal's meshes.
-  if (const MaterialRegistry* reg = pendingPbrMaterials_.exchange(nullptr, std::memory_order_acq_rel))
+  if (const cMaterialReg* reg = pendingPbrMaterials_.exchange(nullptr, std::memory_order_acq_rel))
     setPbrMaterials(*reg);
   drainBatch_.clear();  // normally already retired after the last render; a throwing drain leaves it for here
   const size_t n = uploadRing_.drainUpTo(target, drainBatch_);
@@ -636,9 +636,9 @@ void SoftwareRenderer::drainUploadRing(uint64_t target) {
   ringApplied_ += appliedNow;
   ringCoalesced_ += n - appliedNow;  // pre-clear wipe + superseded: drained but never applied
 }
-void SoftwareRenderer::setDetachedPoolMode(bool on) { cSwBandPool::get().setDetachedMode(on); }
+void cSoftwareRenderer::setDetachedPoolMode(bool on) { cSwBandPool::get().setDetachedMode(on); }
 
-void SoftwareRenderer::clear(uint32_t color) {
+void cSoftwareRenderer::clear(uint32_t color) {
   // Cortana 2026-10-15 1455: runtime-dispatched fill (AVX2 or baseline; identical bytes).
   swsimd::fill32(fb_.pixels.data(), fb_.pixels.size(), color);
   swsimd::fillF(depth_.data(), depth_.size(), 1.0f);
@@ -646,7 +646,7 @@ void SoftwareRenderer::clear(uint32_t color) {
 }
 
 // Cortana 2026-10-15 1715: hierarchical-Z [ENGINE] (see software_renderer.h).
-void SoftwareRenderer::hizReset() {
+void cSoftwareRenderer::hizReset() {
   hizFbW_ = fb_.width;
   hizFbH_ = fb_.height;
   hizTilesX_ = (fb_.width + kHizTile - 1) / kHizTile;
@@ -656,7 +656,7 @@ void SoftwareRenderer::hizReset() {
   if (depth_.size() != size_t(fb_.width) * fb_.height) hizFbW_ = 0;  // unpaired: stay off
 }
 
-float SoftwareRenderer::hizTileMax(int tx, int ty) {
+float cSoftwareRenderer::hizTileMax(int tx, int ty) {
   const size_t i = size_t(ty) * hizTilesX_ + size_t(tx);
   if (hizDirty_[i]) {
     hizDirty_[i] = 0;
@@ -722,7 +722,7 @@ static int ditherTriClass(bool on, float near, float far, const float* v0,
   return 2;
 }
 
-void SoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
+void cSoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
                                          const float* v2, uint32_t color) {
   if (isBackface(v0, v1, v2)) return;  // cull
   const int ditherCls = ditherTriClass(ditherEnabled_, ditherNear_, ditherFar_, v0, v1, v2);
@@ -833,7 +833,7 @@ static uint32_t traceTint(uint32_t texel, uint32_t shaded, bool blue, uint8_t va
 // Per row it runs triangle A's span then triangle B's span, so every pixel sees the same
 // sequence of depth tests and writes as two separate rasterizeTriangleShaded calls: output is
 // byte-identical (Hi-Z row skips stay exact per triangle). LL_SW_P2 bit 0 (default on).
-void SoftwareRenderer::rasterizeTriangleShaded(const float* v0, const float* v1,
+void cSoftwareRenderer::rasterizeTriangleShaded(const float* v0, const float* v1,
                                               const float* v2, const ShaderVaryings* s0,
                                               const ShaderVaryings* s1, const ShaderVaryings* s2,
                                               FragmentShaderFn shader, bool groundFx) {
@@ -856,7 +856,7 @@ struct SwTriSetup {
 };
 }  // namespace
 
-void SoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
+void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
                                            const ShaderVaryings* const (*ts)[3],
                                            FragmentShaderFn shader, bool groundFx) {
   auto edgeFn = [](const float* a, const float* b, float x, float y) {
@@ -1282,7 +1282,7 @@ static void varyingsFromPackedVertex(const PackedVertex& v, ShaderVaryings& s) {
 
 // Transform all vertices to screen space (x, y, depth, clipW per vertex) in
 // the reusable screen_ scratch; returns the scratch pointer.
-const float* SoftwareRenderer::transformVerts(const PackedVertex* verts, size_t count,
+const float* cSoftwareRenderer::transformVerts(const PackedVertex* verts, size_t count,
                                               const float* viewProj) {
   if (tlPreScreen) { const float* s = tlPreScreen; tlPreScreen = nullptr; return s; }
   static thread_local std::vector<float> tlScreen;  // per band thread (RND-H3)
@@ -1294,7 +1294,7 @@ const float* SoftwareRenderer::transformVerts(const PackedVertex* verts, size_t 
   return screen;
 }
 
-void SoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
+void cSoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
                                        const float* viewProj) {
   if (!verts || count < 4 || !viewProj) return;
   const float* screen = transformVerts(verts, count, viewProj);
@@ -1357,7 +1357,7 @@ void SoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
   }
 }
 
-void SoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
+void cSoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
                                   const float* viewProj) {
   if (!verts || vertCount < 3 || !viewProj) return;
 
@@ -1474,7 +1474,7 @@ void SoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
   tlQuadMode = 0; tlQuadValue = 0;  // Cortana 2026-10-15 1350: entity/PBR passes shade plain
 }
 
-void SoftwareRenderer::renderEntityVerts(const float* viewProj) {
+void cSoftwareRenderer::renderEntityVerts(const float* viewProj) {
   const PackedVertex* verts = entityVerts_.data();
   const size_t count = entityVerts_.size();
   if (count < 3 || !viewProj) return;
@@ -1500,11 +1500,11 @@ void SoftwareRenderer::renderEntityVerts(const float* viewProj) {
   }
 }
 
-void SoftwareRenderer::setTextures(const uint32_t* data, uint32_t layers) {
+void cSoftwareRenderer::setTextures(const uint32_t* data, uint32_t layers) {
   textures_.setRaw(data, layers);
 }
 
-void SoftwareRenderer::applyFXAA() {
+void cSoftwareRenderer::applyFXAA() {
   // FXAA-lite (P3-3, Appendix D L2): a 3x3 box blend applied ONLY at
   // high-contrast edges — a pixel blends toward its neighbourhood average
   // when the neighbourhood's luminance range exceeds kEdgeThreshold;
@@ -1543,11 +1543,11 @@ void SoftwareRenderer::applyFXAA() {
 // IRenderer interface
 // ---------------------------------------------------------------------------
 
-std::string SoftwareRenderer::deviceInfo() const {
+std::string cSoftwareRenderer::deviceInfo() const {
   return "software rasterizer (CPU, no GPU)";
 }
 
-void SoftwareRenderer::setMaterials(const BlockMaterials& materials) {
+void cSoftwareRenderer::setMaterials(const BlockMaterials& materials) {
   // 2026-10-16 (JD bug 1): the colour-lamp palette rows and mask layers (kShadePalette16/32/64),
   // as GL33 / Vulkan bind them. PBR material data still arrives via setPbrContext().
   const MaterialBindings& b = materials.bindings();
@@ -1556,7 +1556,7 @@ void SoftwareRenderer::setMaterials(const BlockMaterials& materials) {
   tintMask_ = b.tintMask; stripPal_ = b.stripPalette;  // 2026-10-16 kShadeTraceTint
 }
 
-int SoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
+int cSoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
   return 0;  // no GPU programs; no program can use pack sources
 }
 
@@ -1603,7 +1603,7 @@ static void swFaceBuckets(const std::vector<PackedVertex>& v, std::vector<uint8_
 // the whole mesh on the legacy PackedVertex store. The 24-bit slot is the one
 // field not stored: no software consumer reads it (renderer.h), and expansion
 // reconstructs it as 0.
-bool SoftwareRenderer::packQuads(const std::vector<PackedVertex>& ordered,
+bool cSoftwareRenderer::packQuads(const std::vector<PackedVertex>& ordered,
                                  std::vector<StoredQuad>& out) {
   if (ordered.size() % 4 != 0) return false;
   // CREW TILE (shake 2026-10-18): build into `out` (the caller's store
@@ -1641,7 +1641,7 @@ bool SoftwareRenderer::packQuads(const std::vector<PackedVertex>& ordered,
 }
 
 // Byte-identical inverse of packQuads for the drawn range; legacy meshes copy.
-void SoftwareRenderer::expandStored(const StoredMesh& m, size_t vertBegin, size_t count,
+void cSoftwareRenderer::expandStored(const StoredMesh& m, size_t vertBegin, size_t count,
                                     PackedVertex* dst) {
   if (m.quads.empty()) {
     if (count) std::memcpy(dst, m.verts.data() + vertBegin, count * sizeof(PackedVertex));
@@ -1670,7 +1670,7 @@ void SoftwareRenderer::expandStored(const StoredMesh& m, size_t vertBegin, size_
   }
 }
 
-void SoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
+void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
   ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
   if (mesh.verts.empty()) {  // empty = remove, like the other backends
@@ -1766,14 +1766,14 @@ void SoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
 // --- PBR / culling surface (P1-RENDER H2): real implementations, no inherited
 // no-ops left on the paths the game calls. -----------------------------------
 
-void SoftwareRenderer::setPbrMaterials(const MaterialRegistry& reg) {
+void cSoftwareRenderer::setPbrMaterials(const cMaterialReg& reg) {
   pbrMaterials_ = &reg;
   ownedPbrCtx_.registry = &reg;
   ownedPbrCtx_.ambientMode = ambientMode_;
   ownedPbrCtx_.emissive = &frameLights_;  // FrameParams::pbrLights, fed per frame
 }
 
-void SoftwareRenderer::setPbrTier(PbrTransparencyTier t) {
+void cSoftwareRenderer::setPbrTier(PbrTransparencyTier t) {
   pbrTier_ = t;
   // Selecting a PBR transparency tier is the user's PBR opt-in: run the PBR
   // fragment tier on the per-pixel path. Classic PackedVertex fragments carry
@@ -1791,16 +1791,16 @@ void SoftwareRenderer::setPbrTier(PbrTransparencyTier t) {
   }
 }
 
-void SoftwareRenderer::setAmbientMode(AmbientMode m) {
+void cSoftwareRenderer::setAmbientMode(AmbientMode m) {
   ambientMode_ = m;
   ownedPbrCtx_.ambientMode = m;
 }
 
-void SoftwareRenderer::setFrustumMarginDeg(float degrees) {
+void cSoftwareRenderer::setFrustumMarginDeg(float degrees) {
   frustumMarginDeg_ = std::clamp(degrees, 0.f, 15.f);  // JD-locked 2026-10-11, as GL/VK
 }
 
-void SoftwareRenderer::setModelDither(bool enabled, float nearBlocks, float farBlocks) {
+void cSoftwareRenderer::setModelDither(bool enabled, float nearBlocks, float farBlocks) {
   ditherEnabled_ = enabled;
   ditherNear_ = std::clamp(nearBlocks, 0.f, 1024.f);
   ditherFar_ = std::clamp(farBlocks, ditherNear_, 2048.f);
@@ -1810,21 +1810,21 @@ void SoftwareRenderer::setModelDither(bool enabled, float nearBlocks, float farB
 // AA ladder + ASCII pipeline (JD 2026-10-13). Both are presentational
 // stages on the finished frame; neither touches sim or mesh state.
 // ---------------------------------------------------------------------------
-SoftwareAaScratch& SoftwareRenderer::ensureAaScratch() {
+SoftwareAaScratch& cSoftwareRenderer::ensureAaScratch() {
   if (!aaScratch_) aaScratch_ = std::make_unique<SoftwareAaScratch>();
   return *aaScratch_;
 }
 
-void SoftwareRenderer::setAo(bool on) { g_swAo = on; }  // Cortana 2026-10-16: render.ao
+void cSoftwareRenderer::setAo(bool on) { g_swAo = on; }  // Cortana 2026-10-16: render.ao
 
-void SoftwareRenderer::setAaMode(const char* modeName) {
+void cSoftwareRenderer::setAaMode(const char* modeName) {
   SoftwareAaMode mode;
   if (modeName && softwareAaModeFromName(modeName, mode)) aaMode_ = mode;
 }
 
-const char* SoftwareRenderer::aaModeName() const { return softwareAaModeName(aaMode_); }
+const char* cSoftwareRenderer::aaModeName() const { return softwareAaModeName(aaMode_); }
 
-void SoftwareRenderer::applyAaPostPass() {
+void cSoftwareRenderer::applyAaPostPass() {
   if (aaMode_ == SoftwareAaMode::Fxaa) {
     // Cortana 2026-10-16 (texture-preserving AA): depth gates FXAA to geometry edges.
     applyFxaaPost(fb_, ensureAaScratch(), (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr);
@@ -1838,32 +1838,32 @@ void SoftwareRenderer::applyAaPostPass() {
   // Off: no-op. Ssaa2x: render-time mode — nothing to post-apply.
 }
 
-void SoftwareRenderer::setAsciiMode(bool enabled, int cols) {
+void cSoftwareRenderer::setAsciiMode(bool enabled, int cols) {
   asciiEnabled_ = enabled;
   asciiCols_ = std::clamp(cols, 40, 400);
 }
 
-void SoftwareRenderer::setAsciiGlyphSet(const char* setName) {
+void cSoftwareRenderer::setAsciiGlyphSet(const char* setName) {
   AsciiGlyphSet set;
   if (setName && asciiGlyphSetFromName(setName, set)) asciiSet_ = static_cast<int>(set);
 }
 
-void SoftwareRenderer::setAsciiValueSpan(int span) {
+void cSoftwareRenderer::setAsciiValueSpan(int span) {
   asciiSpan_ = std::clamp(span, 1, kAsciiMaxValueSpan);  // JD amendment 2026-10-13
 }
 
-void SoftwareRenderer::applyAsciiPass() {
+void cSoftwareRenderer::applyAsciiPass() {
   framebufferToAsciiImage(fb_, asciiCols_, static_cast<AsciiGlyphSet>(asciiSet_),
                           &asciiText_, nullptr, asciiSpan_);
 }
 
-void SoftwareRenderer::setCullProtoConfig(const CullProtoConfig& cfg) {
+void cSoftwareRenderer::setCullProtoConfig(const CullProtoConfig& cfg) {
   cullProto_.configure(cfg);
 }
 
-CullProtoStats SoftwareRenderer::cullProtoStats() const { return cullProto_.stats(); }
+CullProtoStats cSoftwareRenderer::cullProtoStats() const { return cullProto_.stats(); }
 
-void SoftwareRenderer::uploadPbrChunkMesh(const PbrChunkMesh& mesh) {
+void cSoftwareRenderer::uploadPbrChunkMesh(const PbrChunkMesh& mesh) {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
   if (mesh.verts.empty()) {  // empty = remove, like the classic store
@@ -1873,11 +1873,11 @@ void SoftwareRenderer::uploadPbrChunkMesh(const PbrChunkMesh& mesh) {
   pbrMeshes_[key] = mesh;
 }
 
-void SoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts) {
+void cSoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts) {
   entityVerts_ = verts;  // dynamic: each upload replaces the previous batch
 }
 
-void SoftwareRenderer::clearChunkMeshes() {
+void cSoftwareRenderer::clearChunkMeshes() {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
   meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
   pbrMeshes_.clear();
@@ -1901,7 +1901,7 @@ static uint32_t swSkyColor(const Vec3& sky) {
   return 0xFF000000u | (ch(sky.x) << 16) | (ch(sky.y) << 8) | ch(sky.z);
 }
 
-void SoftwareRenderer::rasterizeBlendSprite(const BlendSprite& s) {
+void cSoftwareRenderer::rasterizeBlendSprite(const BlendSprite& s) {
   // Two triangles (0,1,2) + (0,2,3), barycentric like rasterizeTriangle,
   // with backface culling, a depth TEST against the world depth buffer,
   // and NO depth write: a nearer blended sprite must not occlude a farther
@@ -1951,7 +1951,7 @@ void SoftwareRenderer::rasterizeBlendSprite(const BlendSprite& s) {
   }
 }
 
-void SoftwareRenderer::drawSprites(const FrameParams& p) {
+void cSoftwareRenderer::drawSprites(const FrameParams& p) {
   if (!p.spriteQuads || p.spriteQuadCount == 0) return;
   // The game sprite host's software conversion (sprite_host.cpp), mirrored:
   // each SpriteDrawQuad becomes 4 PackedVerts relative to a 16-aligned
@@ -2083,7 +2083,7 @@ void SoftwareRenderer::drawSprites(const FrameParams& p) {
   for (const BlendSprite& bs : spriteBlendScratch_) rasterizeBlendSprite(bs);
 }
 
-void SoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
+void cSoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
   // BinaryQuad (PBR) meshes: positions convert to PackedVertex-shaped verts
   // for the shared transform; the varyings carry the REAL per-vertex compact
   // material ID (PbrQuadVertex::material) — the fix for the classic path's
@@ -2161,7 +2161,7 @@ void SoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
 // atlas coverage (NEAREST, like GL) multiplies the vertex alpha.
 // ---------------------------------------------------------------------------
 
-void SoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, float a) {
+void cSoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, float a) {
   if (x < 0 || y < 0 || x >= int(fb_.width) || y >= int(fb_.height)) return;
   if (a <= 0.f) return;
   uint32_t& dst = fb_.pixels[size_t(y) * fb_.width + size_t(x)];
@@ -2180,7 +2180,7 @@ void SoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, float
         uint32_t(std::lround(std::clamp(b * a + db * ia, 0.f, 1.f) * 255.f));
 }
 
-void SoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex& B,
+void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex& B,
                                             const HudVertex& C) {
   const float area = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
   if (std::abs(area) < 1e-9f) return;
@@ -2218,7 +2218,7 @@ void SoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex&
   }
 }
 
-void SoftwareRenderer::drawHud(const FrameParams& p) {
+void cSoftwareRenderer::drawHud(const FrameParams& p) {
   if (p.hud.rects.empty() && p.hud.texts.empty() && p.hud.draws.empty()) return;
   buildHudVertices(p.hud, hudVerts_);
   for (size_t i = 0; i + 2 < hudVerts_.size(); i += 3)
@@ -2230,7 +2230,7 @@ void SoftwareRenderer::drawHud(const FrameParams& p) {
 // segments crossing the near plane are clipped coarsely (endpoint w test —
 // the outline is 12 short edges around one block, so a fully-inside test
 // per endpoint with 32 subdivisions is ample).
-void SoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const Vec3& b,
+void cSoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const Vec3& b,
                                      uint32_t color) {
   auto project = [&](const Vec3& v, float out[3]) {
     const float* m = p.viewProj.m;
@@ -2267,7 +2267,7 @@ void SoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const 
 
 // NDC line segment, no depth test (crosshair: GL draws it on top). NDC y is
 // up; the framebuffer is y-down.
-void SoftwareRenderer::drawNdcLine(const Vec3& a, const Vec3& b, uint32_t color) {
+void cSoftwareRenderer::drawNdcLine(const Vec3& a, const Vec3& b, uint32_t color) {
   constexpr int kSteps = 64;
   for (int i = 0; i <= kSteps; ++i) {
     const float t = float(i) / kSteps;
@@ -2279,7 +2279,7 @@ void SoftwareRenderer::drawNdcLine(const Vec3& a, const Vec3& b, uint32_t color)
   }
 }
 
-void SoftwareRenderer::drawOverlayLines(const FrameParams& p) {
+void cSoftwareRenderer::drawOverlayLines(const FrameParams& p) {
   if (p.highlight) {
     const auto lines = blockOutlineLines(p.hx, p.hy, p.hz);
     for (size_t i = 0; i + 1 < lines.size(); i += 2)
@@ -2312,7 +2312,7 @@ struct SwProf {
 SwProf g_swProf;
 }  // namespace
 
-void SoftwareRenderer::renderFrame(const FrameParams& p) {
+void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // Ginny (Argon) 2026-10-16 Pass 2 A/B proof (Cortana): LL_SW_AB=<n> renders frame n with
   // the LL_SW_AB_A mask (default 0 = pre-Pass-2), then again with the active mask, and logs
   // how many pixels differ. Off (zero cost beyond one branch) unless the env var is set.
@@ -2730,7 +2730,7 @@ void SoftwareRenderer::renderFrame(const FrameParams& p) {
     }
   }}
 
-bool SoftwareRenderer::grabFramebuffer(std::vector<uint8_t>& rgb, int& w, int& h) {
+bool cSoftwareRenderer::grabFramebuffer(std::vector<uint8_t>& rgb, int& w, int& h) {
   if (!grabReady_) return false;
   rgb = grabRgb_;
   w = grabW_;
@@ -2742,7 +2742,7 @@ bool SoftwareRenderer::grabFramebuffer(std::vector<uint8_t>& rgb, int& w, int& h
 
 // Cortana 2026-10-15 1610 (ENGINE): Debug Overlay status strip (see header).
 namespace litholattice {
-void SoftwareRenderer::drawStatusStrip(uint32_t* px, int w, int h, const char* text) {
+void cSoftwareRenderer::drawStatusStrip(uint32_t* px, int w, int h, const char* text) {
   if (!px || w <= 0 || h < stripRows() || !text) return;
   const int rows = stripRows();
   for (int y = 0; y < rows; ++y)
@@ -2768,4 +2768,4 @@ void SoftwareRenderer::drawStatusStrip(uint32_t* px, int w, int h, const char* t
   }
 }
 }  // namespace litholattice
-namespace litholattice { unsigned SoftwareRenderer::autoRenderThreads(unsigned n) { return swAutoRenderThreads(n); } }  // Cortana 2026-10-15 1450
+namespace litholattice { unsigned cSoftwareRenderer::autoRenderThreads(unsigned n) { return swAutoRenderThreads(n); } }  // Cortana 2026-10-15 1450

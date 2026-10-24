@@ -245,8 +245,8 @@ int main() {
         "state deserialize: truncated rejected, state untouched");
   check(s.serialize(wire, 8) == 0, "state serialize: small buffer rejected");
 
-  // -- PlayerManager: local/add/get/remove, routing, cleanup -----------------
-  PlayerManager mgr;
+  // -- cPlayerMgr: local/add/get/remove, routing, cleanup -----------------
+  cPlayerMgr mgr;
   const StandardVitals mv = registerStandardVitals(mgr.vitals());
   RecordingListener listener;
   Player& local = mgr.localPlayer();

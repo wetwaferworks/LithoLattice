@@ -37,7 +37,7 @@
 namespace litholattice {
 
 /// Lean Cook-Torrance BRDF. All triples are linear-space RGB; N, V, L must be unit length.
-class CookTorrance {
+class cCookTorrance {
  public:
   /// Fresnel-Schlick: F0 + (1 - F0) * (1 - cosTheta)^5. Known-answer: cosTheta = 1
   /// returns exactly F0 (0.04 for dielectrics); cosTheta = 0 returns 1 (white at grazing).

@@ -236,7 +236,7 @@ class SimThread {
   IWorldSimulation& simulation() { return *sim_; }
   /// Timing Handshake authority (null in legacy mode). Registration is
   /// pre-start only; test harnesses may add components before start().
-  TimingHandshakeAuthority* handshakeAuthority() { return handshake_.get(); }
+  cTimingHandshakeAuthority* handshakeAuthority() { return handshake_.get(); }
   bool handshakeFrozen() const { return handshake_ && handshake_->frozen(); }
   /// Recovery from a watchdog freeze (the tick_unfreeze path in handshake
   /// mode): clears the authority latch; the interrupted cycle is abandoned
@@ -288,7 +288,7 @@ class SimThread {
   void flushDirty();
 
   // ---- Timing Handshake (null in legacy mode) ----
-  std::unique_ptr<TimingHandshakeAuthority> handshake_;
+  std::unique_ptr<cTimingHandshakeAuthority> handshake_;
   bool handshakeMode_ = false;
   std::atomic<bool> freezeReported_{false};  // the current freeze was reported
   std::atomic<bool> stepRefusalLogged_{false};  // frozen step refusal logged once

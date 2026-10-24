@@ -1,7 +1,7 @@
 // Material-table upload packing for the GPU PBR path (PBR phase 2, Worker 3).
 //
 // WHAT: the CPU side of the std430 `PbrMaterial` row documented in
-//   assets/shaders/pbr_shading.glsl. `packPbrMaterialTable` turns a MaterialRegistry
+//   assets/shaders/pbr_shading.glsl. `packPbrMaterialTable` turns a cMaterialReg
 //   into the dense row array the GL backend uploads (indexed by compact registry ID).
 // WHY: the shader's texelFetch math assumes the exact offsets below; this file is
 //   the single CPU definition of that layout, shared by the GL backend and the
@@ -68,7 +68,7 @@ inline void packPbrMaterialRow(const MaterialDef& def, PbrMaterialRow& row) {
 /// Packs the whole registry: row[i] is the def for compact ID i (dense, like the
 /// registry). The GL backend uploads rows.data() as the material table; shader index
 /// `vMaterialId` (the compact ID) addresses it directly.
-inline void packPbrMaterialTable(const MaterialRegistry& reg, std::vector<PbrMaterialRow>& rows) {
+inline void packPbrMaterialTable(const cMaterialReg& reg, std::vector<PbrMaterialRow>& rows) {
   rows.resize(reg.size());
   for (size_t i = 0; i < reg.size(); ++i) {
     const MaterialDef* def = reg.defFor(static_cast<uint16_t>(i));

@@ -15,7 +15,7 @@
 //  1. No false sharing: the producer-published cursor (tail_) and the
 //     consumer-published cursors (head_, consumedBytes_) sit on separate
 //     alignas(64) cache lines; the announce counter gets its own line.
-//  2. Coalescing is consumer-side at drain (in SoftwareRenderer): a later
+//  2. Coalescing is consumer-side at drain (in cSoftwareRenderer): a later
 //     entry for a key supersedes an earlier undrained one; superseded meshes
 //     are skipped whole (no face-bucket/emitter work runs for them — the
 //     store entry points are only called for survivors). Tombstones are
@@ -24,7 +24,7 @@
 //     ever superseded by a NEWER entry for its own key — never lost.
 //  3. No frees on the critical path: the consumer moves drained meshes into
 //     a retire batch whose buffers are released after renderFrame returns
-//     (see SoftwareRenderer::retireDrainedMeshes), outside the seal.
+//     (see cSoftwareRenderer::retireDrainedMeshes), outside the seal.
 //
 // Memory ordering (one pair per cursor, named):
 //  - tail_: producer stores with release AFTER writing the slot; consumer

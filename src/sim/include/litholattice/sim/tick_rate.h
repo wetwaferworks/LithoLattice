@@ -46,7 +46,7 @@
 //     WorkFn must keep sub-pull intermediates in its own private
 //     staging and publish to shared state ONLY on its final sub-pull.
 //     The final sub-pull is KNOWABLE, not guessable:
-//     TimingHandshakeAuthority::currentSubPullIndex(),
+//     cTimingHandshakeAuthority::currentSubPullIndex(),
 //     currentSubPullCount() and isFinalSubPull() report the executing
 //     item's sub-pull context on the calling thread; a WorkFn that
 //     prefers it may instead count its own invocations (the sub-pulls

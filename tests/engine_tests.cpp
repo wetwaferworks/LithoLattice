@@ -424,16 +424,16 @@ void testJobSystem() {
           "chase-lev: owner + 3 thieves consume every item exactly once");
   }
   {
-    JobSystem::Config cfg; cfg.workerThreads = 4;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 4;
+    cJobSystem js(cfg);
     std::atomic<int> n{0};
     for (int i = 0; i < 20000; ++i) js.submit([&n] { ++n; });
     js.waitIdle();
     check(n == 20000 && js.failedJobs() == 0, "jobsystem: 20000 jobs all run on 4 workers; waitIdle returns");
   }
   {
-    JobSystem::Config cfg; cfg.workerThreads = 2;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 2;
+    cJobSystem js(cfg);
     std::atomic<int> n{0};
     for (int i = 0; i < 100; ++i)
       js.submit([&, i] { ++n; if (i % 10 == 0) throw std::runtime_error("fixture"); });
@@ -443,8 +443,8 @@ void testJobSystem() {
   {
     // Priority order, deterministic: one worker held behind a gate while 20 low +
     // 20 high jobs queue; after the gate opens every high must finish before any low.
-    JobSystem::Config cfg; cfg.workerThreads = 1;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 1;
+    cJobSystem js(cfg);
     std::atomic<bool> gate{false}, entered{false};
     js.submit([&] { entered.store(true, std::memory_order_release);
                     while (!gate.load(std::memory_order_acquire)) std::this_thread::yield(); },
@@ -464,8 +464,8 @@ void testJobSystem() {
   }
   {
     // Steal storm: nested submits from worker threads across 4 workers.
-    JobSystem::Config cfg; cfg.workerThreads = 4;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 4;
+    cJobSystem js(cfg);
     std::atomic<int> n{0};
     for (int i = 0; i < 64; ++i) js.submit([&] {
       ++n;
@@ -475,8 +475,8 @@ void testJobSystem() {
     check(n == 64 + 64 * 8, "jobsystem: nested-submit steal storm (64 parents x 8 children, 4 workers)");
   }
   {
-    JobSystem::Config cfg; cfg.workerThreads = 4;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 4;
+    cJobSystem js(cfg);
     std::atomic<int> n{0};
     JobFence f1(js), f2(js);
     for (int i = 0; i < 50; ++i) { f1.submit([&] { ++n; }); f2.submit([&] { ++n; }); }
@@ -485,7 +485,7 @@ void testJobSystem() {
           "jobsystem: two interleaved fences each wait only for their own jobs");
   }
   {
-    JobSystem js;  // default config
+    cJobSystem js;  // default config
     JobFence f(js);
     for (int i = 0; i < 10; ++i) f.submit([i] { if (i % 3 == 0) throw std::runtime_error("x"); });
     check(f.wait() == 4, "jobsystem: a fence counts its throwing jobs (4 of 10)");
@@ -493,8 +493,8 @@ void testJobSystem() {
   {
     // Blocking I/O jobs must not occupy workers: 8 sleeping io jobs + 200 quick
     // worker jobs; everything completes.
-    JobSystem::Config cfg; cfg.workerThreads = 2; cfg.ioThreads = 2;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 2; cfg.ioThreads = 2;
+    cJobSystem js(cfg);
     std::atomic<int> ioDone{0}, workDone{0};
     for (int i = 0; i < 8; ++i)
       js.submitIo([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); ++ioDone; });
@@ -505,8 +505,8 @@ void testJobSystem() {
   }
   {
     // Overflow path: one gated worker, 5000 queued jobs (deque holds 1024).
-    JobSystem::Config cfg; cfg.workerThreads = 1;
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 1;
+    cJobSystem js(cfg);
     std::atomic<bool> gate{false}, entered{false};
     js.submit([&] { entered.store(true, std::memory_order_release);
                     while (!gate.load(std::memory_order_acquire)) std::this_thread::yield(); });
@@ -522,7 +522,7 @@ void testJobSystem() {
     // drain and join cleanly — no hang, no crash, every job ran.
     bool ok = true;
     for (int iter = 0; iter < 20; ++iter) {
-      auto js = std::make_unique<JobSystem>(JobSystem::Config{});
+      auto js = std::make_unique<cJobSystem>(cJobSystem::Config{});
       std::atomic<int> n{0};
       for (int i = 0; i < 2000; ++i) js->submit([&] { ++n; std::this_thread::yield(); });
       js.reset();
@@ -532,8 +532,8 @@ void testJobSystem() {
   }
 #if defined(__linux__)
   {
-    JobSystem::Config cfg; cfg.workerThreads = 2; cfg.workerAffinityMask = 0x1;  // core 0 only
-    JobSystem js(cfg);
+    cJobSystem::Config cfg; cfg.workerThreads = 2; cfg.workerAffinityMask = 0x1;  // core 0 only
+    cJobSystem js(cfg);
     std::atomic<int> ran{0}, pinned{0};
     for (int i = 0; i < 8; ++i) js.submit([&] {
       ++ran;
@@ -544,7 +544,7 @@ void testJobSystem() {
     check(ran == 8 && pinned == 8, "jobsystem: Linux affinity mask applied to worker threads");
   }
   {
-    JobSystem js;  // default policy: no pinning on this 2-core VM, must run clean
+    cJobSystem js;  // default policy: no pinning on this 2-core VM, must run clean
     std::atomic<int> n{0};
     for (int i = 0; i < 100; ++i) js.submit([&] { ++n; });
     js.waitIdle();
@@ -556,7 +556,7 @@ void testJobSystem() {
 void testTickArena() {
   std::printf("core: tick arena (per-tick bump allocator)\n");
   {
-    TickArena a(4096);
+    cTickArena a(4096);
     struct Payload { int x; double y; char tag[7]; };
     Payload* p = a.alloc<Payload>();
     p->x = 42; p->y = 2.5; std::memcpy(p->tag, "signal", 7);
@@ -564,7 +564,7 @@ void testTickArena() {
           "tick arena: basic alloc returns usable, writable memory");
   }
   {
-    TickArena a(4096);
+    cTickArena a(4096);
     bool aligned = true;
     for (size_t al : {size_t{1}, size_t{2}, size_t{4}, size_t{8}, size_t{16}, alignof(std::max_align_t)}) {
       for (int i = 0; i < 32; ++i) {  // odd sizes on purpose: padding must not break alignment
@@ -579,7 +579,7 @@ void testTickArena() {
     check(aligned, "tick arena: 1/2/4/8/16/max_align_t requests all come back aligned");
   }
   {
-    TickArena a(1024);
+    cTickArena a(1024);
     void* first = a.allocate(100, 8);
     const size_t usedBefore = a.used();
     a.reset();
@@ -590,7 +590,7 @@ void testTickArena() {
           "tick arena: reset() reclaims everything; the same sequence reproduces the same layout");
   }
   {
-    TickArena a(256);  // overflow policy: grow via chained blocks, retained across reset()
+    cTickArena a(256);  // overflow policy: grow via chained blocks, retained across reset()
     void* p1 = a.allocate(200, 8);
     const size_t reservedBefore = a.totalReserved();
     void* p2 = a.allocate(512, 8);  // does not fit in the 56 bytes left: must grow, not fail
@@ -608,8 +608,8 @@ void testTickArena() {
           "tick arena: overflow grows a chained block; retained blocks make warm ticks malloc-free");
   }
   {
-    TickArena a(64);  // tiny primary: forces overflow on the first realistic pass
-    TickArena::Marker m = a.mark();
+    cTickArena a(64);  // tiny primary: forces overflow on the first realistic pass
+    cTickArena::Marker m = a.mark();
     int* v = a.alloc<int>(16);
     for (int i = 0; i < 16; ++i) v[i] = i;
     a.rewind(m);
@@ -623,15 +623,15 @@ void testTickArena() {
     // Review A-L4: a moved-from arena is an inert shell (blockCount 0);
     // the moved-to arena allocates normally. (Allocating FROM the shell
     // fails fast by design — a death path, not exercised in-process.)
-    TickArena a(4096);
-    TickArena b(std::move(a));
+    cTickArena a(4096);
+    cTickArena b(std::move(a));
     int* p = b.alloc<int>(4);
     p[0] = 7; p[3] = 9;
     check(a.blockCount() == 0 && a.capacity() == 0 && b.blockCount() == 1 && p[0] == 7 && p[3] == 9,
           "tick arena: move transfers the blocks; the moved-from shell is inert");
   }
   {
-    TickArena a(4096);  // small primary: the warmup pass must overflow into chained blocks
+    cTickArena a(4096);  // small primary: the warmup pass must overflow into chained blocks
     for (int i = 0; i < 200; ++i) a.allocate(8 + (i * 13) % 120, 8);
     const size_t reservedWarm = a.totalReserved();
     const size_t blocksWarm = a.blockCount();
@@ -639,7 +639,7 @@ void testTickArena() {
     const bool warmedIntoOverflow = blocksWarm > 1;
     bool ok = warmedIntoOverflow;
     for (int tick = 0; tick < 1000 && ok; ++tick) {
-      TickArena::Handle handles[200];
+      cTickArena::Handle handles[200];
       for (int i = 0; i < 200; ++i) {
         uint32_t* slot = a.alloc<uint32_t>();
         *slot = uint32_t(tick * 200 + i);
@@ -828,7 +828,7 @@ void testInfiniteRegistryWorld() {
   }
 }
 
-// ---- Infinite Registry (phase 2): unified kind-tagged ContentRegistry ----
+// ---- Infinite Registry (phase 2): unified kind-tagged cContentReg ----
 
 void testInfiniteRegistryPhase2() {
   std::printf("world: infinite registry phase 2 (unified content registry)\\n");
@@ -846,7 +846,7 @@ void testInfiniteRegistryPhase2() {
           "registry: stableIdFor(kind, id) == fnv1a64(\"kind:id\")");
   }
 
-  ContentRegistry cr;
+  cContentReg cr;
   // Typed views share the registry underneath.
   BlockRegistry blocks(cr);
   cItemReg items(cr);
@@ -950,7 +950,7 @@ void testInfiniteRegistryPhase2() {
   // BlockId cap (review F-M5): registration fails closed at 65536 blocks
   // instead of truncating the 65537th BlockId onto air.
   {
-    ContentRegistry big;
+    cContentReg big;
     BlockDef proto{"Cap", kSolid, Shape::Cube, "cap", {}, 0, 0, 0, 0.8f, false, 0, ""};
     bool filled = true;
     for (uint32_t i = 1; i <= 0xFFFFu; ++i) {  // air already holds index 0
@@ -976,7 +976,7 @@ void testInfiniteRegistryPhase2() {
 
   // The extension door: registerKind.
   {
-    ContentRegistry er;
+    cContentReg er;
     const EntryKind fluid = er.registerKind("fluid");
     check(fluid != EntryKind::Block && fluid != EntryKind::Item,
           "registry: registerKind mints a new kind");
@@ -993,7 +993,7 @@ void testInfiniteRegistryPhase2() {
 
   // Seal & hot-swap (debug prototyping).
   {
-    ContentRegistry sr;
+    cContentReg sr;
     const BlockId b = sr.addBlock({"Hot", kSolid, Shape::Cube, "h", {}, 0, 0, 0, 0.8f, false, 0, "t:hot"});
     check(!sr.isSealed(), "registry: starts unsealed");
     // Stage an update: live def unchanged until refresh.
@@ -1050,7 +1050,7 @@ void testInfiniteRegistryPhase2() {
   // resolveBlockIds() asserts on exactly this predicate in debug builds; in
   // release the kind-filtered findByStableId maps the offender to kAir instead.
   {
-    ContentRegistry kr;
+    cContentReg kr;
     BlockRegistry kb(kr);
     cItemReg ki(kr);
     const BlockId b = kb.add({"B", kSolid, Shape::Cube, "b", {}, 0, 0, 0, 0.8f, false, 0, "t:b"});
@@ -1576,14 +1576,14 @@ void testMicroMesher() {
 // module list ("core world render sim ai storage procgen ui assets audio input net") stable.
 void testPbrMaterials() {
   std::printf("render: PBR material registry + chunk palette + defaults data file\n");
-  MaterialRegistry reg;
+  cMaterialReg reg;
   MaterialDef iron;
   iron.metalness = 1.0f;
   iron.roughness = 0.35f;
   iron.albedoTexture = "iron_block";
   const uint16_t ironId = reg.registerMaterial("test:iron", iron);
   check(ironId == 0, "pbr: first registration gets compact ID 0");
-  check(reg.idFor("test:iron") == 0 && reg.idFor("test:missing") == MaterialRegistry::kInvalidMaterialId,
+  check(reg.idFor("test:iron") == 0 && reg.idFor("test:missing") == cMaterialReg::kInvalidMaterialId,
         "pbr: string ID lookup hits and misses");
   const MaterialDef* ironDef = reg.defFor(0);
   check(ironDef && ironDef->metalness == 1.0f && ironDef->opaque(),
@@ -1598,7 +1598,7 @@ void testPbrMaterials() {
   MaterialDef conflict = iron;
   conflict.metalness = 0.0f;
   const uint16_t conflictId = reg.registerMaterial("test:iron", conflict);
-  check(conflictId == MaterialRegistry::kInvalidMaterialId && reg.size() == 1 &&
+  check(conflictId == cMaterialReg::kInvalidMaterialId && reg.size() == 1 &&
         reg.defFor(0)->metalness == 1.0f,
         "pbr: conflicting re-registration errors and keeps the original");
 
@@ -1622,7 +1622,7 @@ void testPbrMaterials() {
   check(!unknown.build(reg, {"test:nope"}, &perr), "pbr: palette rejects unknown string IDs");
 
   // Defaults data file: the engine ships LithoKraft materials as data, not C++ literals.
-  MaterialRegistry defaults;
+  cMaterialReg defaults;
   std::string derr;
   check(defaults.loadFile(LITHOKRAFT_MATERIALS_PATH, &derr), "pbr: defaults data file loads");
   check(defaults.size() == 16, "pbr: defaults file registers 16 materials");
@@ -1641,12 +1641,12 @@ void testPbrMaterials() {
         "pbr: lithokraft:glass is screen-door with glass IOR (spot check)");
   check(dLava && dLava->emissiveIntensity == 3.0f, "pbr: lithokraft:lava is emissive (spot check)");
   // File-level error paths.
-  MaterialRegistry bad;
+  cMaterialReg bad;
   check(!bad.loadText("{not json", &derr), "pbr: malformed file text fails to load");
-  MaterialRegistry dup;
+  cMaterialReg dup;
   check(!dup.loadText("{\"materials\": [{\"id\": \"x:a\", \"roughness\": 0.5}, {\"id\": \"x:a\", \"roughness\": 0.6}]}", &derr),
         "pbr: conflicting duplicate IDs in a data file fail the load");
-  MaterialRegistry idem;
+  cMaterialReg idem;
   check(idem.loadText("{\"materials\": [{\"id\": \"x:a\", \"roughness\": 0.5}, {\"id\": \"x:a\", \"roughness\": 0.5}]}", &derr) &&
         idem.size() == 1,
         "pbr: identical duplicate IDs in a data file load idempotently");
@@ -1663,23 +1663,23 @@ void testPbrBrdf() {
 
   // Known answers of the sub-terms.
   {
-    const auto f0 = CookTorrance::fresnelSchlick({0.04f, 0.04f, 0.04f}, 1.0f);
+    const auto f0 = cCookTorrance::fresnelSchlick({0.04f, 0.04f, 0.04f}, 1.0f);
     check(near(f0[0], 0.04f, 1e-6f) && near(f0[1], 0.04f, 1e-6f) && near(f0[2], 0.04f, 1e-6f),
           "pbr-brdf: dielectric at normal incidence reflects F0 = 0.04");
-    const auto fg = CookTorrance::fresnelSchlick({0.04f, 0.04f, 0.04f}, 0.0f);
+    const auto fg = cCookTorrance::fresnelSchlick({0.04f, 0.04f, 0.04f}, 0.0f);
     check(near(fg[0], 1.0f, 1e-6f) && near(fg[1], 1.0f, 1e-6f) && near(fg[2], 1.0f, 1e-6f),
           "pbr-brdf: grazing incidence reflects white");
-    check(near(CookTorrance::distributionGgx(1.0f, 1.0f), 1.0f / kPi, 1e-6f),
+    check(near(cCookTorrance::distributionGgx(1.0f, 1.0f), 1.0f / kPi, 1e-6f),
           "pbr-brdf: GGX D(NdotH = 1, roughness = 1) = 1/pi");
-    check(near(CookTorrance::geometrySmith(1.0f, 1.0f, 0.3f), 1.0f, 1e-6f) &&
-          near(CookTorrance::geometrySmith(1.0f, 1.0f, 0.9f), 1.0f, 1e-6f),
+    check(near(cCookTorrance::geometrySmith(1.0f, 1.0f, 0.3f), 1.0f, 1e-6f) &&
+          near(cCookTorrance::geometrySmith(1.0f, 1.0f, 0.9f), 1.0f, 1e-6f),
           "pbr-brdf: Smith geometry is exactly 1 at normal incidence, any roughness");
   }
 
   // Known answer of the full shade: rough (r = 1) dielectric at V = L = N.
   //   specular = F0 * D * G / (4 NdotV NdotL) = 0.04 / (4 pi); diffuse = 0.96 * albedo / pi.
   {
-    const auto lo = CookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 1.0f, n, up, up, white);
+    const auto lo = cCookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 1.0f, n, up, up, white);
     const float expected = 0.96f * 0.8f / kPi + 0.04f / (4.0f * kPi);
     check(near(lo[0], expected, 2e-4f) && near(lo[1], expected, 2e-4f) && near(lo[2], expected, 2e-4f),
           "pbr-brdf: rough dielectric matches the hand-computed combined value");
@@ -1690,8 +1690,8 @@ void testPbrBrdf() {
   {
     const std::array<float, 3> light{0.5f, 0.8660254f, 0.0f};
     const std::array<float, 3> refl{-0.5f, 0.8660254f, 0.0f};
-    const auto peak = CookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.02f, n, refl, light, white);
-    const auto off = CookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.02f, n, up, light, white);
+    const auto peak = cCookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.02f, n, refl, light, white);
+    const auto off = cCookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.02f, n, up, light, white);
     check(peak[0] > off[0] * 100.0f,
           "pbr-brdf: near-mirror specular lobe is tight around the reflection direction");
   }
@@ -1705,7 +1705,7 @@ void testPbrBrdf() {
                                                 : std::array<float, 3>{1.0f, 0.7f, 0.5f};
       float prev = std::numeric_limits<float>::infinity();
       for (float r : roughs) {
-        const auto lo = CookTorrance::shade(albedo, (float)m, r, n, up, up, white);
+        const auto lo = cCookTorrance::shade(albedo, (float)m, r, n, up, up, white);
         ok = ok && lo[0] <= prev + 1e-6f;
         prev = lo[0];
       }
@@ -1715,9 +1715,9 @@ void testPbrBrdf() {
 
   // Zero cases: light or view behind the surface contributes nothing.
   {
-    const auto lightBehind = CookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.5f, n, up,
+    const auto lightBehind = cCookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.5f, n, up,
                                                  {0.0f, -1.0f, 0.0f}, white);
-    const auto viewBehind = CookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.5f, n,
+    const auto viewBehind = cCookTorrance::shade({0.8f, 0.8f, 0.8f}, 0.0f, 0.5f, n,
                                                 {0.0f, -1.0f, 0.0f}, up, white);
     check(lightBehind[0] == 0.0f && lightBehind[1] == 0.0f && lightBehind[2] == 0.0f &&
           viewBehind[0] == 0.0f && viewBehind[1] == 0.0f && viewBehind[2] == 0.0f,
@@ -1782,9 +1782,9 @@ void testPbrBrdf() {
                                            2.0f * lDotH * h[2] - light[2]};
               const float nDotV = dot3(n, v);
               if (nDotV <= 0.0f) continue;
-              const float d = CookTorrance::distributionGgx(cosH, r);
-              const float g = CookTorrance::geometrySmith(nDotV, nDotL, r);
-              const auto f = CookTorrance::fresnelSchlick(f0, nDotV);
+              const float d = cCookTorrance::distributionGgx(cosH, r);
+              const float g = cCookTorrance::geometrySmith(nDotV, nDotL, r);
+              const auto f = cCookTorrance::fresnelSchlick(f0, nDotV);
               const float w = d * g * lDotH * sinH * thW[i] * dPhiH * nDotL;
               pSpec[0] += f[0] * w;
               pSpec[1] += f[1] * w;
@@ -1798,7 +1798,7 @@ void testPbrBrdf() {
             for (int j = 0; j < kPV; ++j) {
               const float ph = (float)j * dPhiV;
               const std::array<float, 3> v{sinT * std::cos(ph), cosT, sinT * std::sin(ph)};
-              const auto f = CookTorrance::fresnelSchlick(f0, cosT);
+              const auto f = cCookTorrance::fresnelSchlick(f0, cosT);
               const float w = nDotL * cosT * dOmega / kPi * (1.0f - metalness);
               pDiff[0] += (1.0f - f[0]) * albedo[0] * w;
               pDiff[1] += (1.0f - f[1]) * albedo[1] * w;
@@ -1990,7 +1990,7 @@ void testPbrTiers() {
     TransparencyTierConfig c;
     c.setTier(PbrTransparencyTier::ScreenDoor);
     const TransparencyResult r = shadeTransparent(glass, c, ctx, {0.f, 0.f, 0.f});
-    const std::array<float, 3> ref = CookTorrance::shade(
+    const std::array<float, 3> ref = cCookTorrance::shade(
         glass.albedo, glass.metalness, glass.roughness, ctx.normal, ctx.viewDir, ctx.lightDir,
         ctx.lightColor);
     check(near(r.color[0], ref[0], 1e-6f) && near(r.color[1], ref[1], 1e-6f) &&
@@ -2014,7 +2014,7 @@ void testPbrTiers() {
     TransparencyTierConfig c;
     c.setTier(PbrTransparencyTier::PbrReflections);
     const TransparencyResult r = shadeTransparent(glass, c, ctx, {0.f, 0.f, 0.f});
-    const std::array<float, 3> ref = CookTorrance::shade(
+    const std::array<float, 3> ref = cCookTorrance::shade(
         glass.albedo, glass.metalness, glass.roughness, ctx.normal, ctx.viewDir, ctx.lightDir,
         ctx.lightColor);
     check(near(r.color[0], ref[0] * 0.4f + 0.2f * 0.6f, 1e-5f) &&
@@ -2107,7 +2107,7 @@ void testPbrSoftware() {
   };
 
   // Registry with a metal (specular path) and an emissive dielectric (emissive path).
-  MaterialRegistry preg;
+  cMaterialReg preg;
   MaterialDef iron;
   iron.albedo = {0.56f, 0.57f, 0.58f};
   iron.roughness = 0.35f;
@@ -2120,8 +2120,8 @@ void testPbrSoftware() {
   torch.emissive = {1.0f, 0.45f, 0.1f};
   torch.emissiveIntensity = 2.5f;
   const uint16_t torchId = preg.registerMaterial("test:torch", torch);
-  check(ironId != MaterialRegistry::kInvalidMaterialId &&
-        torchId != MaterialRegistry::kInvalidMaterialId && ironId != torchId,
+  check(ironId != cMaterialReg::kInvalidMaterialId &&
+        torchId != cMaterialReg::kInvalidMaterialId && ironId != torchId,
         "pbr-software: fixture materials register with distinct compact IDs");
 
   // Context: zero flood-fill irradiance (pixel must equal the analytic term exactly),
@@ -2141,13 +2141,13 @@ void testPbrSoftware() {
   fin.varyings.materialId = ironId;
   fin.pbr = &pctx;
 
-  // Parity: same inputs through CookTorrance::shade directly. The shader derives
+  // Parity: same inputs through cCookTorrance::shade directly. The shader derives
   // n = v = l = (0,1,0) and light distance 10 from the context above.
   {
     const std::array<float, 3> n{0.f, 1.f, 0.f}, v{0.f, 1.f, 0.f}, l{0.f, 1.f, 0.f};
     const AnalyticLight al{0.f, 10.f, 0.f, 1.f, 0.9f, 0.8f, 2.0f, 10.f};
     const std::array<float, 3> lo =
-        CookTorrance::shade(iron.albedo, iron.metalness, iron.roughness, n, v, l,
+        cCookTorrance::shade(iron.albedo, iron.metalness, iron.roughness, n, v, l,
                             attenuatedRadiance(al));
     check(chanClose(pbrFragmentShader(fin), packLinear(lo), 2),
           "pbr-software: fragment == CookTorrance::shade on identical inputs (epsilon)");
@@ -2163,7 +2163,7 @@ void testPbrSoftware() {
     const std::array<float, 3> n{0.f, 1.f, 0.f}, v{0.f, 1.f, 0.f}, l{0.f, 1.f, 0.f};
     const AnalyticLight al{0.f, 10.f, 0.f, 1.f, 0.9f, 0.8f, 2.0f, 10.f};
     std::array<float, 3> lo =
-        CookTorrance::shade(torch.albedo, torch.metalness, torch.roughness, n, v, l,
+        cCookTorrance::shade(torch.albedo, torch.metalness, torch.roughness, n, v, l,
                             attenuatedRadiance(al));
     for (int i = 0; i < 3; ++i) lo[i] += torch.emissive[i] * torch.emissiveIntensity;
     check(chanClose(torchPx, packLinear(lo), 2),
@@ -2197,7 +2197,7 @@ void testPbrSoftware() {
     check(selectFragmentShader(SoftwareShadingTier::Basic) == &basicFragmentShader &&
           selectFragmentShader(SoftwareShadingTier::Pbr) == &pbrFragmentShader,
           "pbr-software: tier selects basicFragmentShader vs pbrFragmentShader");
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     check(sr.shadingTier() == SoftwareShadingTier::Basic,
           "pbr-software: renderer default tier is Basic");
     sr.setShadingTier(SoftwareShadingTier::Pbr);
@@ -2210,7 +2210,7 @@ void testPbrSoftware() {
   // quad with identity-ish MVP; Basic and Pbr tiers must agree here because the mesh
   // carries no material ID (documented vertex-format seam -> graceful fallback).
   {
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     sr.resize(800, 600);
     sr.setPerPixelShading(true);
     // MVP: block units [0,16] -> NDC [-1,1] on x/y, z passthrough, w = 1.
@@ -2254,7 +2254,7 @@ void testSoftwareBackfaceConvention() {
   mvp[0] = 0.125f; mvp[5] = 0.125f; mvp[10] = 1.f;
   mvp[12] = -1.f; mvp[13] = -1.f; mvp[15] = 1.f;
   auto renderQuad = [&](const uint16_t c[4][3]) {
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     sr.resize(800, 600);
     PackedVertex q[4] = {};
     for (int i = 0; i < 4; ++i) {
@@ -2310,7 +2310,7 @@ void testSoftwareRenderHonesty() {
 
   // M1: renderFrame frustum-culls with the margin; drawn counts submitted only.
   {
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     sr.setPerPixelShading(false);
     ChunkMesh front = makeQuad(kShadeTex);
     front.cx = 0; front.sy = 0; front.cz = 0;
@@ -2326,7 +2326,7 @@ void testSoftwareRenderHonesty() {
 
   // H3: HUD rect rasterizes over the world; text glyphs land; crosshair plots.
   {
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     FrameParams p = makeParams();
     p.hud.rects.push_back(HudRect{20.f, 20.f, 24.f, 24.f, 1.f, 0.f, 0.f, 1.f});
     p.hud.texts.push_back(HudText{0.f, 0.f, "HI", 1.f, 1.f, 1.f, 1.f});
@@ -2353,7 +2353,7 @@ void testSoftwareRenderHonesty() {
   // H2: supportsPbrPath tells the truth; BinaryQuad uploads shade by their
   // real per-vertex material ID (two materials -> two different pixels).
   {
-    MaterialRegistry reg;
+    cMaterialReg reg;
     MaterialDef stone;
     stone.albedo = {0.5f, 0.5f, 0.52f};
     stone.roughness = 0.95f;
@@ -2363,7 +2363,7 @@ void testSoftwareRenderHonesty() {
     iron.metalness = 1.0f;
     const uint16_t stoneId = reg.registerMaterial("test:stone", stone);
     const uint16_t ironId = reg.registerMaterial("test:iron", iron);
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     check(sr.supportsPbrPath(), "software-honesty: supportsPbrPath() is true (PBR path landed)");
     sr.setPbrMaterials(reg);
     auto renderMat = [&](uint32_t material) {
@@ -2392,7 +2392,7 @@ void testSoftwareRenderHonesty() {
   // H1: ground traces — the software backend consumes groundTraceEmissive.
   // Off must equal no-params (default frames unchanged); on must add light.
   {
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     sr.setPerPixelShading(true);
     ChunkMesh m = makeQuad(kShadeGroundPulse);
     // Trace params: density .5, speed 1, amplitude .6, dirMix .5, white tint.
@@ -2421,7 +2421,7 @@ void testSoftwareRenderHonesty() {
           "software-honesty: groundTraceOn adds trace emissive on the software backend (H1)");
     // Zero trace params (today's meshes everywhere else) -> no contribution
     // even with the toggle on: the default-frame gating pin.
-    SoftwareRenderer sr2;
+    cSoftwareRenderer sr2;
     sr2.setPerPixelShading(true);
     sr2.uploadChunkMesh(makeQuad(kShadeGroundPulse));
     FrameParams on2 = makeParams();
@@ -2468,7 +2468,7 @@ void testSoftwareSpritesAndPacer() {
   };
   const size_t kCenter = size_t(32) * 64 + 32;
   {  // AlphaBlend: src-over blend of the true average color against sky.
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     FrameParams p = makeParams();
     std::vector<Image> pages{solidPage(255, 0, 0)};
     p.spriteAtlasPages = pages;
@@ -2480,7 +2480,7 @@ void testSoftwareSpritesAndPacer() {
           "sprite-dm2: AlphaBlend sprite blends its average color over the sky (no opaque flattening)");
   }
   {  // Cutout: unchanged opaque luminance form.
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     FrameParams p = makeParams();
     std::vector<Image> pages{solidPage(255, 0, 0)};
     p.spriteAtlasPages = pages;
@@ -2494,7 +2494,7 @@ void testSoftwareSpritesAndPacer() {
   {  // No depth write between blended sprites: a FARTHER blended quad
      // supplied after a nearer one must still blend (it would be
      // depth-rejected if the nearer quad had written depth).
-    SoftwareRenderer sr;
+    cSoftwareRenderer sr;
     FrameParams p = makeParams();
     std::vector<Image> pages{solidPage(0, 0, 255), solidPage(255, 0, 0)};
     p.spriteAtlasPages = pages;
@@ -2531,11 +2531,11 @@ void testSoftwareSpritesAndPacer() {
 
 // PBR mesh chain (BinaryQuad -> registry, phase 6): BinaryQuad.material is an 8-bit
 // voxel palette index; it resolves end-to-end through ChunkPalette (voxel index ->
-// 16-bit global ID) and MaterialRegistry (global ID -> MaterialDef). This pins the whole
+// 16-bit global ID) and cMaterialReg (global ID -> MaterialDef). This pins the whole
 // passthrough: voxels in -> quads out -> defs, with material-aware merging intact.
 void testPbrMeshChain() {
   std::printf("render: PBR mesh chain (BinaryQuad.material -> palette -> registry)\n");
-  MaterialRegistry reg;
+  cMaterialReg reg;
   MaterialDef stone;
   stone.albedo = {0.5f, 0.5f, 0.52f};
   stone.roughness = 0.95f;
@@ -2646,7 +2646,7 @@ void testPbrMeshChain() {
   }
 
   // Integration: real materials from the shipped data file through the mesh chain.
-  MaterialRegistry dreg;
+  cMaterialReg dreg;
   std::string derr;
   check(dreg.loadFile(LITHOKRAFT_MATERIALS_PATH, &derr),
         "pbr-mesh-chain: defaults data file loads");
@@ -2684,15 +2684,15 @@ void testPbrMeshChain() {
 // defFor(0xFFFF) is always null - and the PBR tier degrades to basic shading per fragment.
 void testPbrVertexSeam() {
   std::printf("render: PBR vertex-format seam (PackedVertex has no material slot)\n");
-  check(MaterialRegistry::kInvalidMaterialId == 0xFFFF, "pbr-seam: the none-marker is 0xFFFF");
-  MaterialRegistry reg;
+  check(cMaterialReg::kInvalidMaterialId == 0xFFFF, "pbr-seam: the none-marker is 0xFFFF");
+  cMaterialReg reg;
   MaterialDef iron;
   iron.albedo = {0.55f, 0.58f, 0.62f};
   iron.roughness = 0.35f;
   iron.metalness = 1.0f;
-  check(reg.registerMaterial("test:iron", iron) != MaterialRegistry::kInvalidMaterialId,
+  check(reg.registerMaterial("test:iron", iron) != cMaterialReg::kInvalidMaterialId,
         "pbr-seam: fixture material registers");
-  check(reg.defFor(MaterialRegistry::kInvalidMaterialId) == nullptr,
+  check(reg.defFor(cMaterialReg::kInvalidMaterialId) == nullptr,
         "pbr-seam: defFor(0xFFFF) is null even on a populated registry");
   // Classic-mesh fragments start with the none-marker: ShaderVaryings defaults to 0xFFFF
   // (PackedVertex has no slot to stamp, so the software path keeps the default).
@@ -2723,12 +2723,12 @@ void testPbrVertexSeam() {
 // registry usable) — the engine's degrade-loudly init-error convention.
 void testPbrStartup() {
   std::printf("render: PBR startup wiring (initMaterialRegistry)\n");
-  MaterialRegistry reg;
+  cMaterialReg reg;
   std::string err;
   check(initMaterialRegistry(reg, LITHOKRAFT_MATERIALS_PATH, &err), "pbr-startup: data file loads via the startup path");
   check(reg.size() == 17, "pbr-startup: 16 file materials plus the built-in default");
   check(reg.idFor(kDefaultMaterialStringId) == 0, "pbr-startup: built-in default is compact ID 0");
-  check(reg.idFor("lithokraft:iron") != MaterialRegistry::kInvalidMaterialId,
+  check(reg.idFor("lithokraft:iron") != cMaterialReg::kInvalidMaterialId,
         "pbr-startup: file materials present after startup init");
   const MaterialDef* d = reg.defFor(0);
   check(d && d->opaque() && d->metalness == 0.0f && d->roughness == 0.9f,
@@ -2736,13 +2736,13 @@ void testPbrStartup() {
   const std::string* dName = reg.stringIdFor(0);
   check(dName && *dName == kDefaultMaterialStringId, "pbr-startup: default string ID round-trips");
 
-  MaterialRegistry missing;
+  cMaterialReg missing;
   std::string merr;
   check(!initMaterialRegistry(missing, "/nonexistent-dir/materials.file", &merr) && !merr.empty(),
         "pbr-startup: missing file reports an error");
   check(missing.size() == 1 && missing.idFor(kDefaultMaterialStringId) == 0,
         "pbr-startup: missing file still leaves a usable registry with the default");
-  MaterialRegistry noPath;
+  cMaterialReg noPath;
   check(!initMaterialRegistry(noPath, "", &merr) && noPath.size() == 1,
         "pbr-startup: empty path is graceful too");
 }
@@ -2753,11 +2753,11 @@ void testPbrStartup() {
 void testPbrChunkMaterials() {
   std::printf("render: per-voxel chunk material storage + MATS save/load round-trip\n");
   // Session A: the real startup path (default=0, stone=1, ..., iron=13).
-  MaterialRegistry regA;
+  cMaterialReg regA;
   std::string err;
   check(initMaterialRegistry(regA, LITHOKRAFT_MATERIALS_PATH, &err), "pbr-chunk: session A registry loads");
   // Session B: same strings, different registration order -> different compact IDs.
-  MaterialRegistry regB;
+  cMaterialReg regB;
   check(regB.registerMaterial(std::string(kDefaultMaterialStringId), defaultMaterialDef()) == 0,
         "pbr-chunk: session B default is compact ID 0");
   const uint16_t bIron = regB.registerMaterial("lithokraft:iron", *regA.defFor(regA.idFor("lithokraft:iron")));
@@ -2884,7 +2884,7 @@ void testPbrChunkMaterials() {
 // fallback keeps light-emitting blocks visible while no producer writes material bytes.
 void testPbrEmissiveEnumeration() {
   std::printf("render: world-side emissive enumeration (ChunkEmissiveProvider)\n");
-  MaterialRegistry reg;
+  cMaterialReg reg;
   std::string err;
   check(initMaterialRegistry(reg, LITHOKRAFT_MATERIALS_PATH, &err), "pbr-emissive: registry loads");
   const uint16_t torchId = reg.idFor("lithokraft:torch");
@@ -3054,7 +3054,7 @@ void testPbrGlWiring() {
 
   // --- 1. Row packing matches the glslang-verified std430 layout (48 bytes/row).
   {
-    MaterialRegistry reg;
+    cMaterialReg reg;
     MaterialDef iron;
     iron.albedo = {0.8f, 0.81f, 0.82f};
     iron.roughness = 0.35f;
@@ -3093,7 +3093,7 @@ void testPbrGlWiring() {
 
   // --- 2. Generation counter: the backend's cheap dirty flag.
   {
-    MaterialRegistry reg;
+    cMaterialReg reg;
     check(reg.generation() == 0, "pbr-gl: fresh registry generation is 0");
     const MaterialDef d = defaultMaterialDef();
     reg.registerMaterial("test:a", d);
@@ -3102,7 +3102,7 @@ void testPbrGlWiring() {
     check(reg.generation() == 1, "pbr-gl: idempotent re-registration does not bump");
     MaterialDef conflict = d;
     conflict.roughness = 0.1f;
-    check(reg.registerMaterial("test:a", conflict) == MaterialRegistry::kInvalidMaterialId,
+    check(reg.registerMaterial("test:a", conflict) == cMaterialReg::kInvalidMaterialId,
           "pbr-gl: conflicting re-registration rejected");
     check(reg.generation() == 1, "pbr-gl: rejected registration does not bump");
     reg.registerMaterial("test:b", d);
@@ -3179,12 +3179,12 @@ void testPbrGlWiring() {
   // --- 4. End-to-end (Worker 1's gap): mat[] + palette ride the snapshot into
   // binaryMeshSubChunk, and the expansion resolves bytes to compact IDs.
   {
-    MaterialRegistry reg;
+    cMaterialReg reg;
     std::string err;
     check(initMaterialRegistry(reg, LITHOKRAFT_MATERIALS_PATH, &err), "pbr-gl: registry loads");
     const uint16_t torchId = reg.idFor("lithokraft:torch");
     const uint16_t stoneId = reg.idFor("lithokraft:stone");
-    check(torchId != MaterialRegistry::kInvalidMaterialId, "pbr-gl: torch registered");
+    check(torchId != cMaterialReg::kInvalidMaterialId, "pbr-gl: torch registered");
     const BlockRegistry& breg = fixtureBlocks();
     ChunkMap w = worldWithColumns(1, &breg);
     ChunkColumn* col = w.column(0, 0);
@@ -3364,7 +3364,7 @@ void testPbrTrueRefraction() {
       for (float nDotV : {0.2f, 0.6f, 1.0f})
         for (float t : {0.f, 0.5f, 1.f}) {
           // Worst case: unit-white mirror (specular == F exactly) over a unit sample.
-          const std::array<float, 3> F = CookTorrance::fresnelSchlick({f0, f0, f0}, nDotV);
+          const std::array<float, 3> F = cCookTorrance::fresnelSchlick({f0, f0, f0}, nDotV);
           const std::array<float, 3> out = resolveTrueRefraction(
               {f0, f0, f0}, nDotV, {F[0], F[1], F[2]}, {t, t, t}, {0.f, 0.f, 0.f});
           for (float c : out) worst = std::max(worst, c);
@@ -4180,7 +4180,7 @@ void testStepTicks() {
 // ---- handshake group semantics (A-M1), poll (A-M3), stats snapshot (A-M6) ----
 void testHandshakeGroups() {
   std::printf("sim: handshake groups / poll / stats snapshot\n");
-  TimingHandshakeAuthority auth(TimingHandshakeAuthority::Config{});
+  cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
   std::atomic<int> g0{0}, g1{0}, g2{0};
   HsComponentDesc d0; d0.name = "t.g0"; d0.group = 0;
   auth.registerComponent(d0, [&](uint64_t, uint64_t) { ++g0; });
@@ -4198,9 +4198,9 @@ void testHandshakeGroups() {
   const HsStats snap = auth.statsSnapshot();
   check(snap.phases == 3 && snap.perGroup[0].phases == 2 && snap.perGroup[1].phases == 1,
         "handshake stats: snapshot copies the live stats (per-group split intact, kAllGroups folds to slot 0)");
-  TimingHandshakeAuthority fresh(TimingHandshakeAuthority::Config{});
+  cTimingHandshakeAuthority fresh(cTimingHandshakeAuthority::Config{});
   uint64_t ph = 0;
-  TimingHandshakeAuthority::PublishedPhase pp;
+  cTimingHandshakeAuthority::PublishedPhase pp;
   check(!fresh.canTick(0, ph) && !fresh.pollPhase(0, 0, pp),
         "handshake poll: with nothing published, canTick/pollPhase (the one shared poll) both say no");
   {
@@ -4208,7 +4208,7 @@ void testHandshakeGroups() {
     // phases 0 and 2 (divider = phasesPerCycle/2 = 2); an EXPLICIT
     // phaseDivider of 1 wins over the cadence and fires every phase (the
     // old "!= 1 means set" test could not express that).
-    TimingHandshakeAuthority auth2(TimingHandshakeAuthority::Config{});
+    cTimingHandshakeAuthority auth2(cTimingHandshakeAuthority::Config{});
     std::atomic<int> half{0}, forced{0};
     HsComponentDesc dh; dh.name = "t.half"; dh.cadence = CadenceClass::HalfCycle;
     auth2.registerComponent(dh, [&](uint64_t, uint64_t) { ++half; });
@@ -4425,7 +4425,7 @@ void testDetSched() {
     check(ok, "det-sched: 64-tick run with keyed RNG + cross-stage checksum hashes bit-identical on 1, 2, 4 threads");
   }
 
-  // --- JobSystem backend: threaded runs hash bit-identical to the JobPool path ---
+  // --- cJobSystem backend: threaded runs hash bit-identical to the JobPool path ---
   {
     auto runWorldJs = [](unsigned threads, uint64_t ticks) {
       SchedWorld w;
@@ -4433,8 +4433,8 @@ void testDetSched() {
       sched.addSystem(std::make_unique<AccSystem>("lo", kCellsLo, 0));
       sched.addSystem(std::make_unique<AccSystem>("hi", kCellsHi, 128));
       sched.addSystem(std::make_unique<FoldSystem>());
-      JobSystem::Config cfg; cfg.workerThreads = threads;
-      JobSystem js(cfg);
+      cJobSystem::Config cfg; cfg.workerThreads = threads;
+      cJobSystem js(cfg);
       sched.runTicks(0, ticks, &w, js);
       return schedWorldHash(w);
     };
@@ -5280,10 +5280,10 @@ void testAsyncIo() {
   const auto dir = std::filesystem::temp_directory_path() / "litholattice_asyncio_test";
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
-  JobSystem::Config cfg;
+  cJobSystem::Config cfg;
   cfg.workerThreads = 2;
   cfg.ioThreads = 2;
-  JobSystem jobs(cfg);
+  cJobSystem jobs(cfg);
   st::cIoScheduler io(jobs);
   st::FileWriteOptions opts;
   {  // completions run on an I/O thread, never the submitting (sim stand-in) thread
@@ -5291,7 +5291,7 @@ void testAsyncIo() {
     const std::thread::id simId = std::this_thread::get_id();
     st::cIoFence fence(io);
     fence.submitWrite(dir / "a.bin", st::Bytes{1, 2, 3}, opts, [&](bool ok, std::string) {
-      cbOnJobThread = JobSystem::onJobThread();
+      cbOnJobThread = cJobSystem::onJobThread();
       cbOnSimThread = std::this_thread::get_id() == simId;
       if (!ok) throw std::runtime_error("write failed");
     });
@@ -5350,7 +5350,7 @@ void testAsyncIo() {
     io.submit([] {}, [] { throw std::runtime_error("boom"); }, &fence);
     check(fence.wait() == 1, "async io: a throwing callback counts as one failed op");
   }
-  {  // WorldStore on a JobSystem: saves/loads/region writes go through submitIo()
+  {  // WorldStore on a cJobSystem: saves/loads/region writes go through submitIo()
     const auto wdir = dir / "world";
     st::PayloadRegistry reg;
     auto mkcol = [](int cx, int cz) {

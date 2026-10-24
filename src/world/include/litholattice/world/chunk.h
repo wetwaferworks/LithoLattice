@@ -195,7 +195,7 @@ struct SubChunk {
 
 // ---- Interned per-column material palette (audit F5, half 1) ----
 // The palette a column's SubChunk::materials bytes index into: palette[i] is the
-// global MaterialRegistry ID for material byte i. Phase 2 stored a private
+// global cMaterialReg ID for material byte i. Phase 2 stored a private
 // std::array<uint16_t, 256> (512 B) plus a size in EVERY column, although a
 // column's palette is installed whole (MATS load, worldgen setup, tests),
 // never edited entry-by-entry in production, and neighbouring columns
@@ -216,7 +216,7 @@ class MaterialPalette {
   size_t size() const { return entries_ ? entries_->size() : 0; }
   bool empty() const { return size() == 0; }
 
-  /// Global MaterialRegistry ID at palette position i. Precondition: i < size()
+  /// Global cMaterialReg ID at palette position i. Precondition: i < size()
   /// (every caller guards by size, exactly as with the old inline array).
   uint16_t operator[](size_t i) const { return (*entries_)[i]; }
 
@@ -300,7 +300,7 @@ struct ChunkColumn {
   }
   std::array<std::unique_ptr<SubChunk>, kSubChunks> subs;  // nullptr == all air
   // PBR chunk materials (phase 2): the per-column palette every SubChunk::materials byte
-  // indexes into. Byte i -> the global MaterialRegistry ID materialPalette[i].
+  // indexes into. Byte i -> the global cMaterialReg ID materialPalette[i].
   // materialPalette.size() == 0 (e.g. a column from an old save with no MATS payload) means
   // every byte maps to global ID 0, which initMaterialRegistry() guarantees is the built-in
   // default. The palette is interned (audit F5): see MaterialPalette above -- this member

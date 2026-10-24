@@ -39,7 +39,7 @@ bool parseRgb(const Json& j, const std::string& key, std::array<float, 3>& out, 
 
 }  // namespace
 
-uint16_t MaterialRegistry::registerMaterial(std::string id, const MaterialDef& def) {
+uint16_t cMaterialReg::registerMaterial(std::string id, const MaterialDef& def) {
   if (id.empty() || ids_.size() >= kMaxMaterials) return kInvalidMaterialId;
   for (size_t i = 0; i < ids_.size(); ++i) {
     if (ids_[i] == id) {
@@ -54,21 +54,21 @@ uint16_t MaterialRegistry::registerMaterial(std::string id, const MaterialDef& d
   return assigned;
 }
 
-uint16_t MaterialRegistry::idFor(std::string_view id) const {
+uint16_t cMaterialReg::idFor(std::string_view id) const {
   for (size_t i = 0; i < ids_.size(); ++i)
     if (ids_[i] == id) return static_cast<uint16_t>(i);
   return kInvalidMaterialId;
 }
 
-const MaterialDef* MaterialRegistry::defFor(uint16_t id) const {
+const MaterialDef* cMaterialReg::defFor(uint16_t id) const {
   return id < defs_.size() ? &defs_[id] : nullptr;
 }
 
-const std::string* MaterialRegistry::stringIdFor(uint16_t id) const {
+const std::string* cMaterialReg::stringIdFor(uint16_t id) const {
   return id < ids_.size() ? &ids_[id] : nullptr;
 }
 
-bool MaterialRegistry::loadText(const std::string& text, std::string* err) {
+bool cMaterialReg::loadText(const std::string& text, std::string* err) {
   // Data files may carry full-line `//` comments (the format doc lives at the top of the file);
   // the minimal Json parser does not understand them, so strip them before parsing.
   std::string stripped;
@@ -130,7 +130,7 @@ bool MaterialRegistry::loadText(const std::string& text, std::string* err) {
   return true;
 }
 
-bool MaterialRegistry::loadFile(const std::string& path, std::string* err) {
+bool cMaterialReg::loadFile(const std::string& path, std::string* err) {
   std::ifstream f(path, std::ios::binary);
   if (!f) {
     if (err) *err = "cannot open materials file '" + path + "'";
@@ -141,7 +141,7 @@ bool MaterialRegistry::loadFile(const std::string& path, std::string* err) {
   return loadText(ss.str(), err);
 }
 
-bool ChunkPalette::build(const MaterialRegistry& reg, const std::vector<std::string>& stringIds,
+bool ChunkPalette::build(const cMaterialReg& reg, const std::vector<std::string>& stringIds,
                          std::string* err) {
   if (stringIds.size() > kCapacity) {
     if (err) *err = "chunk palette holds at most 256 materials";
@@ -149,7 +149,7 @@ bool ChunkPalette::build(const MaterialRegistry& reg, const std::vector<std::str
   }
   for (size_t i = 0; i < stringIds.size(); ++i) {
     const uint16_t gid = reg.idFor(stringIds[i]);
-    if (gid == MaterialRegistry::kInvalidMaterialId) {
+    if (gid == cMaterialReg::kInvalidMaterialId) {
       if (err) *err = "unknown material '" + stringIds[i] + "'";
       return false;
     }
@@ -159,7 +159,7 @@ bool ChunkPalette::build(const MaterialRegistry& reg, const std::vector<std::str
   return true;
 }
 
-std::vector<std::string> ChunkPalette::stringIds(const MaterialRegistry& reg) const {
+std::vector<std::string> ChunkPalette::stringIds(const cMaterialReg& reg) const {
   std::vector<std::string> out;
   out.reserve(size_);
   for (size_t i = 0; i < size_; ++i) {
@@ -177,11 +177,11 @@ MaterialDef defaultMaterialDef() {
   return d;
 }
 
-bool initMaterialRegistry(MaterialRegistry& reg, const std::string& path, std::string* err) {
+bool initMaterialRegistry(cMaterialReg& reg, const std::string& path, std::string* err) {
   // The built-in default first: on a fresh registry this is compact ID 0, the defined
   // fallback for unknown string IDs and empty palettes.
   if (reg.registerMaterial(std::string(kDefaultMaterialStringId), defaultMaterialDef()) ==
-      MaterialRegistry::kInvalidMaterialId) {
+      cMaterialReg::kInvalidMaterialId) {
     if (err) *err = "could not register the built-in default material (conflicting prior registration)";
     return false;
   }

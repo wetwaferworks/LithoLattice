@@ -135,7 +135,7 @@ struct HsFreezeInfo {
   uint64_t elapsedNs = 0, ceilingNs = 0;
 };
 
-class TimingHandshakeAuthority {
+class cTimingHandshakeAuthority {
  public:
   struct Config {
     int phasesPerCycle = 4;                    // tunable; 1..64, power-of-two not required
@@ -162,11 +162,11 @@ class TimingHandshakeAuthority {
   using WorkFn = std::function<void(uint64_t phase, uint64_t cycleTick)>;
   using FreezeFn = std::function<void(const HsFreezeInfo&)>;
 
-  explicit TimingHandshakeAuthority(Config cfg);
-  ~TimingHandshakeAuthority();  // calls stop()
+  explicit cTimingHandshakeAuthority(Config cfg);
+  ~cTimingHandshakeAuthority();  // calls stop()
 
-  TimingHandshakeAuthority(const TimingHandshakeAuthority&) = delete;
-  TimingHandshakeAuthority& operator=(const TimingHandshakeAuthority&) = delete;
+  cTimingHandshakeAuthority(const cTimingHandshakeAuthority&) = delete;
+  cTimingHandshakeAuthority& operator=(const cTimingHandshakeAuthority&) = delete;
 
   /// Pre-start only; returns the assigned id (registration order), or
   /// UINT32_MAX when called after start(). Shard assignment is static

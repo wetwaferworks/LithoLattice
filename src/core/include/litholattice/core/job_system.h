@@ -8,7 +8,7 @@
 //
 // Relationship to the existing JobPool (threading.h): JobPool stays exactly as it
 // is, for simple uses (a correct, obviously-right mutex FIFO; the procgen self-test
-// and several fixtures use it). JobSystem is the high-performance substrate for the
+// and several fixtures use it). cJobSystem is the high-performance substrate for the
 // sim, render, audio-adjacent and I/O work. Deliberately NOT a wrapper: the two
 // have different fairness semantics (FIFO vs. work-stealing) and different costs.
 //
@@ -18,7 +18,7 @@
 // L1  overflowM_ / ioM_ / fence m_: leaf mutexes. Held only to push/drain a short
 //     queue or to flip a completion counter; NEVER held while running a job and
 //     never held while acquiring L2.
-// L2  JobSystem control mutex m_: only for the sleep/wake condition-variable
+// L2  cJobSystem control mutex m_: only for the sleep/wake condition-variable
 //     handshake and the shutdown sequence. Never held while running a job.
 // L3  debug-log mutex (thread_debug.cpp): absolute leaf. Taken to emit one log
 //     line, released immediately; no other lock may be acquired while holding it.
@@ -33,7 +33,7 @@
 // everyone, drains already-submitted work (workers AND I/O threads finish what is
 // queued), then joins every thread. Submitting during/after shutdown is a bug
 // (assert in debug builds). Because the destructor drains, jobs must not reference
-// objects that die before the JobSystem does.
+// objects that die before the cJobSystem does.
 //
 // ---- determinism ----------------------------------------------------------------
 // The system provides WHERE work runs; the cDeterministicScheduler (sim/det_sched.h)
@@ -43,7 +43,7 @@
 // job to another thread — within one stage the systems provably write disjoint
 // resources, so placement cannot change the result. Threaded runs hash
 // bit-identical to single-threaded runs (see the det-sched self-tests, 1/2/4/8
-// workers, JobPool vs JobSystem backends).
+// workers, JobPool vs cJobSystem backends).
 //
 // Naming: litholattice:: namespace; I-prefix only for real interfaces (none here —
 // the -OR suffix is for game-style components, not engine infrastructure, and is
@@ -167,7 +167,7 @@ class cNamedThread {
 };
 
 // ---- the job system ---------------------------------------------------------------
-class JobSystem {
+class cJobSystem {
  public:
   struct Config {
     unsigned workerThreads = 0;  ///< 0 = one per core (at least 1, at most kMaxJobThreads)
@@ -183,12 +183,12 @@ class JobSystem {
 
   // Note: no `= Config{}` default argument here — GCC rejects a nested struct with
   // default member initializers as a default argument inside the enclosing class.
-  JobSystem() { init(Config{}); }
-  explicit JobSystem(const Config& cfg) { init(cfg); }
-  ~JobSystem() { shutdown(); }
+  cJobSystem() { init(Config{}); }
+  explicit cJobSystem(const Config& cfg) { init(cfg); }
+  ~cJobSystem() { shutdown(); }
 
-  JobSystem(const JobSystem&) = delete;
-  JobSystem& operator=(const JobSystem&) = delete;
+  cJobSystem(const cJobSystem&) = delete;
+  cJobSystem& operator=(const cJobSystem&) = delete;
 
   /// Submit a non-blocking job to the worker pool (stealable, priority-ordered).
   /// Worker jobs must NEVER block: no I/O, no waiting on game locks, no waitIdle().
@@ -260,7 +260,7 @@ class JobSystem {
     (void)why;
   }
 
-  /// True when called on a worker or I/O thread of any JobSystem.
+  /// True when called on a worker or I/O thread of any cJobSystem.
   static bool onJobThread() { return t_onJobThread; }
 
   /// Affinity mask the engine's realtime-adjacent threads (audio callback helper,
@@ -544,16 +544,16 @@ class JobSystem {
   std::atomic<uint64_t> failed_{0};
 };
 
-inline thread_local bool JobSystem::t_onJobThread = false;
+inline thread_local bool cJobSystem::t_onJobThread = false;
 
-/// A group of jobs on a JobSystem that can be waited on by itself (other pool work
+/// A group of jobs on a cJobSystem that can be waited on by itself (other pool work
 /// keeps running) — the stage barrier for the deterministic scheduler. Each job's
 /// exception is caught here; wait() reports how many jobs of this fence failed.
 /// The destructor waits, so a fence must not outlive work it references... rather:
 /// jobs may reference the fence's owner, so never let the owner die first.
 class JobFence {
  public:
-  explicit JobFence(JobSystem& sys) : sys_(sys) {}
+  explicit JobFence(cJobSystem& sys) : sys_(sys) {}
   ~JobFence() { wait(); }  // jobs reference the caller: never let it die before they finish
   JobFence(const JobFence&) = delete;
   JobFence& operator=(const JobFence&) = delete;
@@ -585,7 +585,7 @@ class JobFence {
   /// Blocks until every job submitted to this fence has finished. Returns the
   /// number that threw. Must not be called from a job thread (assert).
   int wait() {
-    assert(!JobSystem::onJobThread() && "JobFence::wait() from a job thread would deadlock");
+    assert(!cJobSystem::onJobThread() && "JobFence::wait() from a job thread would deadlock");
     std::unique_lock<std::mutex> l(m_);  // L1 leaf
     if constexpr (kThreadDebug) {  // B8 watchdog (debug builds only): same wait, dump after 10 s
       if (!cv_.wait_for(l, std::chrono::seconds(10), [this] { return pending_ == 0; })) {
@@ -598,7 +598,7 @@ class JobFence {
   }
 
  private:
-  JobSystem& sys_;
+  cJobSystem& sys_;
   std::mutex m_;
   std::condition_variable cv_;
   int pending_ = 0, failed_ = 0;

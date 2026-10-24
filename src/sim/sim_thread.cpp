@@ -80,7 +80,7 @@ SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_
   if (handshakeMode_) {
     int masterHz = config.tickRate;
     for (const ClockDomain& d : domains_) masterHz = std::max(masterHz, d.hz);
-    TimingHandshakeAuthority::Config hc;
+    cTimingHandshakeAuthority::Config hc;
     hc.phasesPerCycle = config.handshakePhasesPerCycle;
     hc.workerThreads = config.handshakeWorkerThreads;
     hc.pureSpin = config.handshakePureSpin;  // review A-L9: D9's A/B flag was unreachable from SimConfig
@@ -100,7 +100,7 @@ SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_
     hc.phaseBudgetGroup2 = Ns(1'000'000'000LL / std::max(1, masterHz));
     hc.phaseBudget = hc.phaseBudgetGroup2;  // fallback for group 0 / other groups: the master-step window (hs-design §1.6)
     if (config.handshakeWatchdogMs > 0) hc.watchdogCeiling = std::chrono::milliseconds(config.handshakeWatchdogMs);
-    handshake_ = std::make_unique<TimingHandshakeAuthority>(std::move(hc));
+    handshake_ = std::make_unique<cTimingHandshakeAuthority>(std::move(hc));
     handshake_->setFreezeCallback([](const HsFreezeInfo& info) {
       // FREEZE is a recoverable stop-the-world, NOT corruption: report via
       // the fail-fast *formatting* path only — simFailFast must not run
@@ -150,7 +150,7 @@ SimThread::SimThread(ChunkMap& chunks, const BlockRegistry& blocks, std::unique_
 void SimThread::handleHandshakeFreeze() {
   if (!handshake_ || !handshake_->frozen()) {
     // A-M5: the latch was cleared elsewhere (a routine stop/start clears
-    // it in TimingHandshakeAuthority::start()) — the report-once flag
+    // it in cTimingHandshakeAuthority::start()) — the report-once flag
     // must clear with it, or a SECOND, distinct freeze is never reported.
     freezeReported_.store(false);
     return;
@@ -244,7 +244,7 @@ void SimThread::start() {
   if (running_.exchange(true)) return;  // already running: a second std::thread assignment would terminate
   if (handshake_) handshake_->start();  // pull workers first: phases may be published immediately
   // A-M5: a routine stop/start cleared the authority's freeze latch (see
-  // TimingHandshakeAuthority::start()); if no freeze is in effect now,
+  // cTimingHandshakeAuthority::start()); if no freeze is in effect now,
   // the report-once flags clear with it so the NEXT freeze reports too.
   if (handshake_ && !handshake_->frozen()) {
     freezeReported_.store(false);

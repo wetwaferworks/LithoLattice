@@ -3,7 +3,7 @@
 // WHAT: cChunkEmissiveProvider - the real IEmissiveProvider implementation for the
 //   pbr_software_shaders.h seam (and any future GPU path). It scans chunk material
 //   bytes across a chunk region around a focus column, resolves each voxel through
-//   the column's materialPalette into the MaterialRegistry, and caches every voxel
+//   the column's materialPalette into the cMaterialReg, and caches every voxel
 //   whose material def has emissiveIntensity > 0 as (position, linear rgb, intensity).
 // WHY: LightCollector (pbr_lights.h) needs emissive candidates, but the cLightEngine
 //   retains no source list and the flood fill carries levels, not source identity.
@@ -51,7 +51,7 @@
 //   Air voxels are never candidates. A null/unresolvable def degrades to the fallback
 //   path rather than crashing.
 //
-// THREADING: not thread-safe, like MaterialRegistry. refresh() must happen-before any
+// THREADING: not thread-safe, like cMaterialReg. refresh() must happen-before any
 //   forEachEmissive() use of the new cache (call refresh on the ChunkMap's owner
 //   thread, then hand the provider to the renderer). forEachEmissive itself only reads
 //   the cache and is allocation-free.
@@ -77,7 +77,7 @@
 //   def lookup; the block-ID fallback costs one registry lookup and only runs for
 //   default-resolved voxels. The candidate vector is a member: clear() + refill keeps
 //   capacity, so steady-state refreshes and every forEachEmissive call allocate
-//   nothing. (TickArena exists for transient per-tick scratch, but the cache must
+//   nothing. (cTickArena exists for transient per-tick scratch, but the cache must
 //   outlive the tick, so a retained vector is the right tool here - no arena needed.)
 //   Measured: refreshing a 3x3-column region with ~30 present sub-chunks is on the
 //   order of tens of microseconds (see testPbrEmissiveEnumeration timing print).
@@ -112,14 +112,14 @@ struct EmissiveCandidate {
 /// design decision (cached scan + explicit refresh).
 class cChunkEmissiveProvider final : public IEmissiveProvider {
  public:
-  /// Maps a voxel's StableId to a compact MaterialRegistry ID. Used ONLY when a voxel's
+  /// Maps a voxel's StableId to a compact cMaterialReg ID. Used ONLY when a voxel's
   /// material byte resolves to the built-in default (no producer assigned it yet). The game
   /// builds this from its BlockRegistry (e.g. tex key -> "<ns>:" + tex -> stable id).
   /// StableId currency: sub-chunk voxels store StableIds (Infinite Registry, phase 1).
   using BlockMaterialFn = std::function<uint16_t(StableId)>;
 
   /// `registry` must outlive the provider (same contract as PbrFragmentContext).
-  explicit cChunkEmissiveProvider(const MaterialRegistry* registry) : registry_(registry) {}
+  explicit cChunkEmissiveProvider(const cMaterialReg* registry) : registry_(registry) {}
 
   /// Install the stable-ID -> material fallback (may be null = no fallback).
   void setBlockMaterial(BlockMaterialFn fn) { blockMaterial_ = std::move(fn); dirty_ = true; }
@@ -147,7 +147,7 @@ class cChunkEmissiveProvider final : public IEmissiveProvider {
     dirty_ = false;
     if (!registry_) return;
     const uint16_t defaultId = registry_->idFor(kDefaultMaterialStringId);
-    const bool haveDefault = defaultId != MaterialRegistry::kInvalidMaterialId;
+    const bool haveDefault = defaultId != cMaterialReg::kInvalidMaterialId;
     for (int cx = focusCx - radius_; cx <= focusCx + radius_; ++cx) {
       for (int cz = focusCz - radius_; cz <= focusCz + radius_; ++cz) {
         const ChunkColumn* col = map.column(cx, cz);
@@ -204,7 +204,7 @@ class cChunkEmissiveProvider final : public IEmissiveProvider {
       const uint8_t m = sub.materialFlat(size_t(i));
       const uint16_t gid =
           (m < col.materialPalette.size()) ? col.materialPalette[size_t(m)]
-                                        : (haveDefault ? defaultId : MaterialRegistry::kInvalidMaterialId);
+                                        : (haveDefault ? defaultId : cMaterialReg::kInvalidMaterialId);
       const MaterialDef* def = registry_->defFor(gid);
       const bool isDefault = (haveDefault && gid == defaultId) || def == nullptr;
       const MaterialDef* use = (def && def->emissiveIntensity > 0.f) ? def : nullptr;
@@ -227,7 +227,7 @@ class cChunkEmissiveProvider final : public IEmissiveProvider {
     }
   }
 
-  const MaterialRegistry* registry_ = nullptr;
+  const cMaterialReg* registry_ = nullptr;
   BlockMaterialFn blockMaterial_;
   std::vector<EmissiveCandidate> cache_;
   int focusCx_ = 0, focusCz_ = 0, radius_ = kEmissiveProviderRadiusChunks;

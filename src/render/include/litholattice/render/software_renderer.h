@@ -74,10 +74,10 @@ struct SoftwareFramebuffer {
 // Cortana 2026-10-15 1505 (ENGINE, audit F-6): THREADING CONTRACT: setters (textures, ground FX,
 // mesh tables, sizes) are owning-thread only and only between frames; band threads read these members
 // during renderFrame/renderMesh. A second view (e.g. MCP vision) must use its own instance.
-class SoftwareRenderer : public IRenderer {
+class cSoftwareRenderer : public IRenderer {
  public:
-  SoftwareRenderer();
-  ~SoftwareRenderer() override;
+  cSoftwareRenderer();
+  ~cSoftwareRenderer() override;
 
   // --- IRenderer interface ---------------------------------------------------
   const char* name() const override { return "software"; }
@@ -104,7 +104,7 @@ class SoftwareRenderer : public IRenderer {
   bool enqueueChunkMesh(ChunkMesh&& mesh) override;
   bool enqueuePbrChunkMesh(PbrChunkMesh&& mesh) override;
   bool enqueueClearChunkMeshes() override;
-  void enqueuePbrMaterials(const MaterialRegistry& reg) override;
+  void enqueuePbrMaterials(const cMaterialReg& reg) override;
   bool meshUploadsQueued() const override { return uploadRingEnabled_; }
   /// App-facing ring switch (per instance, unlike the pool-wide detached
   /// mode): set by the app alongside setDetachedPoolMode when the software
@@ -131,7 +131,7 @@ class SoftwareRenderer : public IRenderer {
   bool supportsPbrPath() const override { return true; }
   /// Feeds the owned PbrFragmentContext's registry (the context the PBR
   /// fragment path resolves compact material IDs through).
-  void setPbrMaterials(const MaterialRegistry& reg) override;
+  void setPbrMaterials(const cMaterialReg& reg) override;
   /// Records the tier and selects the software PBR shading tier. The CPU
   /// path has no transparency-tier ladder (documented gap): PBR fragments
   /// shade opaque; logged once, not silent.
@@ -249,7 +249,7 @@ class SoftwareRenderer : public IRenderer {
 
   /// Get the framebuffer (for display or PNG export).
   /// Cortana 2026-10-15 1156: chunk-pass raster threads, shared by every
-  /// SoftwareRenderer (game view + MCP vision). 0 = default (4). Rounded
+  /// cSoftwareRenderer (game view + MCP vision). 0 = default (4). Rounded
   /// down to a power of two and clamped to hardware threads; applied on the
   /// next frame. Engine-level so mods/options can set it.
   static void setRenderThreads(unsigned n);
@@ -432,8 +432,8 @@ class SoftwareRenderer : public IRenderer {
   // detached mode is off); ringMaterialsEnqueued_ only by the producer.
   cSwUploadRing uploadRing_;
   bool uploadRingEnabled_ = false;
-  const MaterialRegistry* ringMaterialsEnqueued_ = nullptr;  ///< last table announced via enqueuePbrMaterials (producer)
-  std::atomic<const MaterialRegistry*> pendingPbrMaterials_{nullptr};  ///< announced table, applied at the next seal
+  const cMaterialReg* ringMaterialsEnqueued_ = nullptr;  ///< last table announced via enqueuePbrMaterials (producer)
+  std::atomic<const cMaterialReg*> pendingPbrMaterials_{nullptr};  ///< announced table, applied at the next seal
   std::vector<cSwUploadRing::Slot> drainBatch_;  ///< drained entries between the seal and the post-render retire
   uint64_t ringDrained_ = 0, ringApplied_ = 0, ringCoalesced_ = 0, ringClears_ = 0;  ///< consumer-side stats
   /// The frame seal (executor): apply the announced PBR material table,
@@ -449,7 +449,7 @@ class SoftwareRenderer : public IRenderer {
   CullProtoState cullProto_;      ///< culling-cache prototypes; all default off
   PbrTransparencyTier pbrTier_ = PbrTransparencyTier::ScreenDoor;  ///< recorded tier
   AmbientMode ambientMode_ = AmbientMode::Fraction;
-  const MaterialRegistry* pbrMaterials_ = nullptr;  ///< setPbrMaterials registry
+  const cMaterialReg* pbrMaterials_ = nullptr;  ///< setPbrMaterials registry
   PbrFragmentContext ownedPbrCtx_;  ///< context fed by setPbrMaterials/setAmbientMode
   /// FrameParams::pbrLights as an IEmissiveProvider for the owned context:
   /// the game already reduces its emissive scan into that array per frame.

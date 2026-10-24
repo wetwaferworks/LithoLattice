@@ -1,7 +1,7 @@
 // PBR material registry (phase 1): data-driven physical material parameters.
 //
 // WHAT: MaterialDef (albedo/roughness/metalness/emissive/IOR/transparency) plus
-//   MaterialRegistry (string ID <-> compact 16-bit global ID) and ChunkPalette
+//   cMaterialReg (string ID <-> compact 16-bit global ID) and ChunkPalette
 //   (per-chunk 8-bit voxel index -> 16-bit global ID). The mesher and shaders never
 //   know material properties: voxels carry only an 8-bit palette index
 //   (BinaryQuad::material is that index, passthrough); the chunk palette resolves it
@@ -19,7 +19,7 @@
 //   is texture bindings (texture-array layer + UV rect per block face, animations,
 //   palette rows); this registry is physical PBR parameters. A block may reference
 //   both: BlockMaterials says *what it looks like on the texture array*, the
-//   MaterialRegistry says *how light interacts with it*.
+//   cMaterialReg says *how light interacts with it*.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -56,7 +56,7 @@ struct MaterialDef {
 /// Data-driven registry: string ID <-> compact 16-bit global material ID.
 /// Not thread-safe; build during startup (engine loads the defaults data file,
 /// mods register from their data files) then share read-only.
-class MaterialRegistry {
+class cMaterialReg {
  public:
   static constexpr uint16_t kInvalidMaterialId = 0xFFFF;  ///< returned for unknown IDs / failed registration
   static constexpr size_t kMaxMaterials = kInvalidMaterialId;  ///< 0xFFFF is reserved as the invalid sentinel
@@ -112,7 +112,7 @@ MaterialDef defaultMaterialDef();
 /// and sets `err`, BUT the registry still holds the built-in default, so the caller logs and
 /// continues — the engine's init-error convention (degrade loudly, keep running; cf. audio's
 /// "no output device; continuing muted"). Tests and headless builds use exactly this path.
-bool initMaterialRegistry(MaterialRegistry& reg, const std::string& path, std::string* err = nullptr);
+bool initMaterialRegistry(cMaterialReg& reg, const std::string& path, std::string* err = nullptr);
 
 /// Per-chunk palette: the 8-bit voxel palette index stored per voxel (and passthrough in
 /// BinaryQuad::material) resolves to a 16-bit global registry ID through this table.
@@ -128,7 +128,7 @@ class ChunkPalette {
   /// Overflow is an error, never silent first-255-wins (locked 2026-10-10): the 8-bit voxel
   /// index addresses exactly 0..255, so the caller must shrink the chunk's material set or
   /// fail the mesh job rather than silently re-material the overflow voxels.
-  bool build(const MaterialRegistry& reg, const std::vector<std::string>& stringIds, std::string* err = nullptr);
+  bool build(const cMaterialReg& reg, const std::vector<std::string>& stringIds, std::string* err = nullptr);
 
   /// Global registry ID for an 8-bit voxel index (i.e. for BinaryQuad::material).
   uint16_t globalId(uint8_t voxelIndex) const { return entries_[voxelIndex]; }
@@ -139,7 +139,7 @@ class ChunkPalette {
 
   /// Round-trip helper: the string IDs in voxel-index order, for save files
   /// (saves persist string IDs per JD's locked rule, not compact IDs).
-  std::vector<std::string> stringIds(const MaterialRegistry& reg) const;
+  std::vector<std::string> stringIds(const cMaterialReg& reg) const;
 
  private:
   uint16_t entries_[kCapacity]{};

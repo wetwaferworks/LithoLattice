@@ -7,7 +7,7 @@
 //
 // Two-door registration contract:
 //   - Mods register via registerStructure() during mod init, before the game
-//     seals the registry at boot (same seal contract as ContentRegistry).
+//     seals the registry at boot (same seal contract as cContentReg).
 //   - JD's in-game build loop (structure block SAVE) uses registerInGame(),
 //     the intentional post-boot door. Worldgen resolves names at pipeline
 //     build time and copies variants, so a SAVE never mutates a live pipeline.

@@ -577,9 +577,9 @@ uint64_t meshChecksum(const ChunkMesh& m) {
 }
 
 // Cortana 2026-10-15 1340: the shipped pass reads the stable def copy
-// (ContentRegistry::StableDefScope) - no registry lock per voxel.
+// (cContentReg::StableDefScope) - no registry lock per voxel.
 static ChunkMesh meshSubChunkStable(const MeshInput& in, const MeshContext& ctx) {
-  ContentRegistry::StableDefScope stable(ctx.blocks.content());
+  cContentReg::StableDefScope stable(ctx.blocks.content());
   return meshSubChunkPass(in, ctx);
 }
 

@@ -1,4 +1,4 @@
-// cIoScheduler: async file I/O on the JobSystem's submitIo().
+// cIoScheduler: async file I/O on the cJobSystem's submitIo().
 // See async_io.h for the completion contract.
 #include "litholattice/storage/async_io.h"
 
@@ -74,7 +74,7 @@ void cIoScheduler::submit(std::function<void()> work, std::function<void()> done
       ok = false;
     }
     if (fence) fence->onOpDone(ok);
-    // A throwing raw op is a bug in the caller: count it on the JobSystem too.
+    // A throwing raw op is a bug in the caller: count it on the cJobSystem too.
     if (!ok) throw std::runtime_error("io scheduler: raw op threw");
   });
 }
@@ -116,7 +116,7 @@ void cIoScheduler::submitStrand(std::filesystem::path path, Op op, cIoFence* fen
 
 cIoScheduler::~cIoScheduler() {
   // Drain: an op's StrandGuard touches `this` on completion, so the scheduler
-  // must not die mid-flight. Ops run on the JobSystem's I/O threads (which must
+  // must not die mid-flight. Ops run on the cJobSystem's I/O threads (which must
   // outlive us), so waiting here cannot deadlock the pool.
   std::unique_lock<std::mutex> l(m_);
   drainCv_.wait(l, [this] { return inflight_ == 0; });
@@ -201,7 +201,7 @@ int cIoFence::wait() {
   // Runtime-checked, not just assert(): an NDEBUG build must not silently
   // deadlock the pool. Returns -1 when refused (never 0-vs-failed ambiguity:
   // a real wait returns the failed-op count, >= 0).
-  if (JobSystem::onJobThread()) {
+  if (cJobSystem::onJobThread()) {
     logError("storage: IoFence::wait() called from a job thread; refusing (would deadlock)");
     return -1;
   }

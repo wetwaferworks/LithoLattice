@@ -137,19 +137,19 @@ class cDeterministicScheduler {
   /// the caller must reset). The pool must be quiesced for the call and have
   /// at least one worker.
   void runTick(uint64_t tick, void* world, JobPool& pool);
-  /// One tick on a work-stealing JobSystem: each stage's systems are submitted as
+  /// One tick on a work-stealing cJobSystem: each stage's systems are submitted as
   /// Normal-priority jobs behind a JobFence, and the fence (not the pool) is the
   /// stage barrier — stage order, command-buffer drains, and failure semantics are
   /// identical to the JobPool path. Stealing only changes WHERE a job runs, never
   /// the stage order, so determinism is preserved (scheduler declares ORDER, the
   /// job system provides WHERE). The system must be quiesced for the call.
-  void runTick(uint64_t tick, void* world, JobSystem& jobs);
+  void runTick(uint64_t tick, void* world, cJobSystem& jobs);
   /// Convenience: runTick for [startTick, startTick + count).
   void runTicks(uint64_t startTick, uint64_t count, void* world, JobPool& pool) {
     for (uint64_t i = 0; i < count; ++i) runTick(startTick + i, world, pool);
   }
-  /// Convenience: runTick for [startTick, startTick + count) on a JobSystem.
-  void runTicks(uint64_t startTick, uint64_t count, void* world, JobSystem& jobs) {
+  /// Convenience: runTick for [startTick, startTick + count) on a cJobSystem.
+  void runTicks(uint64_t startTick, uint64_t count, void* world, cJobSystem& jobs) {
     for (uint64_t i = 0; i < count; ++i) runTick(startTick + i, world, jobs);
   }
 

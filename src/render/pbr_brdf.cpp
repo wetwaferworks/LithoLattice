@@ -14,29 +14,29 @@ constexpr float kMinAlpha = 1e-3f;  // roughness->alpha clamp: a perfect mirror 
 constexpr float kDenomEps = 1e-4f;  // specular denominator guard
 }  // namespace
 
-float CookTorrance::dot3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+float cCookTorrance::dot3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-std::array<float, 3> CookTorrance::add3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+std::array<float, 3> cCookTorrance::add3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
   return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
 }
 
-std::array<float, 3> CookTorrance::mul3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+std::array<float, 3> cCookTorrance::mul3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
   return {a[0] * b[0], a[1] * b[1], a[2] * b[2]};
 }
 
-std::array<float, 3> CookTorrance::scale3(const std::array<float, 3>& a, float s) {
+std::array<float, 3> cCookTorrance::scale3(const std::array<float, 3>& a, float s) {
   return {a[0] * s, a[1] * s, a[2] * s};
 }
 
-std::array<float, 3> CookTorrance::halfVec(const std::array<float, 3>& v, const std::array<float, 3>& l) {
+std::array<float, 3> cCookTorrance::halfVec(const std::array<float, 3>& v, const std::array<float, 3>& l) {
   std::array<float, 3> h = add3(v, l);
   const float len = std::sqrt(std::max(dot3(h, h), 1e-12f));
   return scale3(h, 1.0f / len);  // EXACT (bug-fix run): render selftest pins specular-lobe tightness + roughness monotonicity; approximation reverted
 }
 
-std::array<float, 3> CookTorrance::fresnelSchlick(const std::array<float, 3>& f0, float cosTheta) {
+std::array<float, 3> cCookTorrance::fresnelSchlick(const std::array<float, 3>& f0, float cosTheta) {
   const float c = std::clamp(cosTheta, 0.0f, 1.0f);
   const float t = 1.0f - c;
   const float t5 = t * t * t * t * t;
@@ -44,7 +44,7 @@ std::array<float, 3> CookTorrance::fresnelSchlick(const std::array<float, 3>& f0
   return add3(f0, scale3({one[0] - f0[0], one[1] - f0[1], one[2] - f0[2]}, t5));
 }
 
-float CookTorrance::distributionGgx(float nDotH, float roughness) {
+float cCookTorrance::distributionGgx(float nDotH, float roughness) {
   const float alpha = std::max(roughness * roughness, kMinAlpha);
   const float a2 = alpha * alpha;
   const float c = std::clamp(nDotH, 0.0f, 1.0f);
@@ -52,14 +52,14 @@ float CookTorrance::distributionGgx(float nDotH, float roughness) {
   return a2 / (kPi * denom * denom);
 }
 
-float CookTorrance::geometrySmith(float nDotV, float nDotL, float roughness) {
+float cCookTorrance::geometrySmith(float nDotV, float nDotL, float roughness) {
   const float k = (roughness + 1.0f) * (roughness + 1.0f) / 8.0f;  // Epic direct-lighting k
   const float g1v = nDotV / (nDotV * (1.0f - k) + k);
   const float g1l = nDotL / (nDotL * (1.0f - k) + k);
   return g1v * g1l;
 }
 
-std::array<float, 3> CookTorrance::shade(const std::array<float, 3>& albedo, float metalness,
+std::array<float, 3> cCookTorrance::shade(const std::array<float, 3>& albedo, float metalness,
                                          float roughness, const std::array<float, 3>& n,
                                          const std::array<float, 3>& v, const std::array<float, 3>& l,
                                          const std::array<float, 3>& lightColor) {
