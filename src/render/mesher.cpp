@@ -375,11 +375,11 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
                 writer.face(cell, f, box.min, box.max, fm, fl);
               }
             }
-            if (tilt && false) {  // 2026-10-24 (JD 6:12 PM): the shear twisted the LED into a ribbon; upright model, raised against the wall
+            if (tilt) {  // 2026-10-24 7:00 PM (JD): lean 45 degrees out from the wall (solid model, no cutout)  // 2026-10-24 (JD 6:12 PM): the shear twisted the LED into a ribbon; upright model, raised against the wall
               for (size_t i = tiltFrom; i < out.verts.size(); ++i) {
                 PackedVertex& v = out.verts[i];
                 const int ly = int(v.y) - y * 16;  // 3 (base) .. 13 (top)
-                const int off = (std::clamp(ly - 3, 0, 10) * 4 + 5) / 10;
+                const int off = std::clamp(ly - 3, 0, 10);  // 45 degrees: one out per one up
                 v.x = uint16_t(int(v.x) - off * wdx);
                 v.z = uint16_t(int(v.z) - off * wdz);
               }
