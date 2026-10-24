@@ -1,6 +1,6 @@
-// Basic controls: Panel, Label, Button, Image (icon), Checkbox / Toggle, cProgressBar, Slider,
-// NumberField (integer, e.g. signal 0..64), Slot (an inventory cell) and cDivider (separator line).
-// Events: Button "click"; Checkbox, Slider, NumberField "change"; Slot "click" / "rightclick".
+// Basic controls: Panel, Label, Button, Image (icon), cCheckbox / Toggle, cProgressBar, cSlider,
+// cNumberField (integer, e.g. signal 0..64), Slot (an inventory cell) and cDivider (separator line).
+// Events: Button "click"; cCheckbox, cSlider, cNumberField "change"; Slot "click" / "rightclick".
 #pragma once
 #include <string>
 #include "litholattice/ui/widget.h"
@@ -71,9 +71,9 @@ class Image : public Widget {
 };
 
 /// Check box with a label; `toggle` style draws a switch instead of a box.
-class Checkbox : public Widget {
+class cCheckbox : public Widget {
  public:
-  explicit Checkbox(std::string text = {}, bool checked = false, bool toggle = false);
+  explicit cCheckbox(std::string text = {}, bool checked = false, bool toggle = false);
   bool checked() const { return checked_; }
   /// Sets the state; emits "change" when it differs and `notify`.
   void setChecked(bool c, bool notify = false);
@@ -108,9 +108,9 @@ class cProgressBar : public Widget {
 };
 
 /// Horizontal slider over [min, max] with an optional step; drag, wheel or arrow keys.
-class Slider : public Widget {
+class cSlider : public Widget {
  public:
-  Slider(float min = 0, float max = 1, float value = 0, float step = 0);
+  cSlider(float min = 0, float max = 1, float value = 0, float step = 0);
   float value() const { return value_; }
   /// Clamps and snaps; emits "change" when it differs and `notify`.
   void setValue(float v, bool notify = false);
@@ -129,9 +129,9 @@ class Slider : public Widget {
 };
 
 /// Integer field with - / + buttons: typing digits, Up / Down, wheel, clamped to [min, max].
-class NumberField : public Widget {
+class cNumberField : public Widget {
  public:
-  NumberField(int min = 0, int max = 64, int value = 0);
+  cNumberField(int min = 0, int max = 64, int value = 0);
   int value() const { return value_; }
   /// Clamps; emits "change" when it differs and `notify`.
   void setValue(int v, bool notify = false);

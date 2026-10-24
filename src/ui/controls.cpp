@@ -93,39 +93,39 @@ void Image::paint(Painter& p) const {
   if (!image_.empty()) p.image(rect(), image_, tint_);
 }
 
-// ---- Checkbox
+// ---- cCheckbox
 
-Checkbox::Checkbox(std::string text, bool checked, bool toggle)
+cCheckbox::cCheckbox(std::string text, bool checked, bool toggle)
     : Widget("checkbox"), text_(std::move(text)), checked_(checked), toggle_(toggle) {
   setFocusable(true);
 }
 
-void Checkbox::setChecked(bool c, bool notify) {
+void cCheckbox::setChecked(bool c, bool notify) {
   if (c == checked_) return;
   checked_ = c;
   if (notify) emit("change");
 }
 
-Vec2 Checkbox::measure(const Theme& theme) const {
+Vec2 cCheckbox::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   const Vec2 g = theme.glyphSize(s.textScale);
   const float box = toggle_ ? g.y * 2 : g.y;
   return {box + g.x + float(text_.size()) * g.x + s.padding.horizontal(), g.y + s.padding.vertical()};
 }
 
-bool Checkbox::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left; }
+bool cCheckbox::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left; }
 
-void Checkbox::onPointerUp(const UiEvent& e) {
+void cCheckbox::onPointerUp(const UiEvent& e) {
   if (rect().contains(e.pos)) setChecked(!checked_, true);
 }
 
-bool Checkbox::onKey(const UiEvent& e) {
+bool cCheckbox::onKey(const UiEvent& e) {
   if (!isActivateKey(e)) return false;
   setChecked(!checked_, true);
   return true;
 }
 
-void Checkbox::paint(Painter& p) const {
+void cCheckbox::paint(Painter& p) const {
   const Style& s = style();
   const Rect c = contentRect();
   const Vec2 g = p.theme().glyphSize(s.textScale);
@@ -164,15 +164,15 @@ void cProgressBar::paint(Painter& p) const {
   p.textIn(rect(), text_, s.text, true, s.textScale);
 }
 
-// ---- Slider
+// ---- cSlider
 
-Slider::Slider(float min, float max, float value, float step)
+cSlider::cSlider(float min, float max, float value, float step)
     : Widget("slider"), min_(min), max_(std::max(min, max)), value_(min), step_(step) {
   setFocusable(true);
   setValue(value);
 }
 
-void Slider::setValue(float v, bool notify) {
+void cSlider::setValue(float v, bool notify) {
   v = std::clamp(v, min_, max_);
   if (step_ > 0) v = std::clamp(min_ + std::round((v - min_) / step_) * step_, min_, max_);
   if (v == value_) return;
@@ -180,34 +180,34 @@ void Slider::setValue(float v, bool notify) {
   if (notify) emit("change");
 }
 
-Vec2 Slider::measure(const Theme& theme) const {
+Vec2 cSlider::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   return {140, theme.glyphSize(s.textScale).y + s.padding.vertical()};
 }
 
-void Slider::setFromX(float x) {
+void cSlider::setFromX(float x) {
   const Rect c = contentRect();
   const float t = c.w > 0 ? std::clamp((x - c.x) / c.w, 0.f, 1.f) : 0.f;
   setValue(min_ + t * (max_ - min_), true);
 }
 
-bool Slider::onPointerDown(const UiEvent& e) {
+bool cSlider::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left) return false;
   setFromX(e.pos.x);
   return true;
 }
 
-void Slider::onPointerMove(const UiEvent& e) {
+void cSlider::onPointerMove(const UiEvent& e) {
   if (pressed()) setFromX(e.pos.x);
 }
 
-bool Slider::onWheel(const UiEvent& e) {
+bool cSlider::onWheel(const UiEvent& e) {
   const float unit = step_ > 0 ? step_ : (max_ - min_) / 20.f;
   setValue(value_ + (e.wheel > 0 ? unit : -unit), true);
   return true;
 }
 
-bool Slider::onKey(const UiEvent& e) {
+bool cSlider::onKey(const UiEvent& e) {
   const float unit = step_ > 0 ? step_ : (max_ - min_) / 20.f;
   if (e.key == Key::Left || e.key == Key::Down) setValue(value_ - unit, true);
   else if (e.key == Key::Right || e.key == Key::Up) setValue(value_ + unit, true);
@@ -217,7 +217,7 @@ bool Slider::onKey(const UiEvent& e) {
   return true;
 }
 
-void Slider::paint(Painter& p) const {
+void cSlider::paint(Painter& p) const {
   const Style& s = style();
   const Rect c = contentRect();
   const float t = max_ > min_ ? (value_ - min_) / (max_ - min_) : 0.f;
@@ -228,38 +228,38 @@ void Slider::paint(Painter& p) const {
   p.fill({c.x + t * c.w - knob * 0.25f, c.y, knob * 0.5f, knob}, pressed() || hovered() ? s.pressed : s.text);
 }
 
-// ---- NumberField
+// ---- cNumberField
 
-NumberField::NumberField(int min, int max, int value) : Widget("textbox"), min_(min), max_(std::max(min, max)), value_(min) {
+cNumberField::cNumberField(int min, int max, int value) : Widget("textbox"), min_(min), max_(std::max(min, max)), value_(min) {
   setFocusable(true);
   setValue(value);
 }
 
-void NumberField::setValue(int v, bool notify) {
+void cNumberField::setValue(int v, bool notify) {
   v = std::clamp(v, min_, max_);
   if (v == value_) return;
   value_ = v;
   if (notify) emit("change");
 }
 
-Vec2 NumberField::measure(const Theme& theme) const {
+Vec2 cNumberField::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   const Vec2 g = theme.glyphSize(s.textScale);
   const int digits = int(std::max(std::to_string(min_).size(), std::to_string(max_).size()));
   return {float(digits + 1) * g.x + 2 * (g.y + 4) + s.padding.horizontal(), g.y + s.padding.vertical()};
 }
 
-Rect NumberField::minusRect() const { return {rect().x, rect().y, rect().h, rect().h}; }
-Rect NumberField::plusRect() const { return {rect().right() - rect().h, rect().y, rect().h, rect().h}; }
+Rect cNumberField::minusRect() const { return {rect().x, rect().y, rect().h, rect().h}; }
+Rect cNumberField::plusRect() const { return {rect().right() - rect().h, rect().y, rect().h, rect().h}; }
 
-void NumberField::commitTyping() {
+void cNumberField::commitTyping() {
   if (typing_.empty()) return;
   const int v = std::stoi(typing_);
   typing_.clear();
   setValue(v, true);
 }
 
-bool NumberField::onPointerDown(const UiEvent& e) {
+bool cNumberField::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left) return false;
   commitTyping();
   if (minusRect().contains(e.pos)) setValue(value_ - 1, true);
@@ -267,13 +267,13 @@ bool NumberField::onPointerDown(const UiEvent& e) {
   return true;
 }
 
-bool NumberField::onWheel(const UiEvent& e) {
+bool cNumberField::onWheel(const UiEvent& e) {
   commitTyping();
   setValue(value_ + (e.wheel > 0 ? 1 : -1), true);
   return true;
 }
 
-bool NumberField::onKey(const UiEvent& e) {
+bool cNumberField::onKey(const UiEvent& e) {
   const int step = e.shift() ? 8 : 1;
   switch (e.key) {
     case Key::Up: commitTyping(); setValue(value_ + step, true); return true;
@@ -292,7 +292,7 @@ bool NumberField::onKey(const UiEvent& e) {
   }
 }
 
-bool NumberField::onText(char32_t c) {
+bool cNumberField::onText(char32_t c) {
   if (c == U'-' && typing_.empty() && min_ < 0) {
     typing_ = "-";
     return true;
@@ -303,11 +303,11 @@ bool NumberField::onText(char32_t c) {
   return true;
 }
 
-void NumberField::onFocusChanged(bool focused) {
+void cNumberField::onFocusChanged(bool focused) {
   if (!focused) commitTyping();
 }
 
-void NumberField::paint(Painter& p) const {
+void cNumberField::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), s.background);
   p.frame(rect(), focused() ? s.accent : s.border, s.borderWidth);

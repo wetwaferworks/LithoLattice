@@ -1,4 +1,4 @@
-// Layout containers and scrolling: StackPanel (vertical / horizontal), cGridPanel, ScrollBar,
+// Layout containers and scrolling: StackPanel (vertical / horizontal), cGridPanel, cScrollBar,
 // cScrollView, cSplitter, cTabView.
 #pragma once
 #include <memory>
@@ -49,9 +49,9 @@ class cGridPanel : public Widget {
 };
 
 /// Vertical or horizontal scroll bar over [0, contentSize - viewSize]; "change" on user input.
-class ScrollBar : public Widget {
+class cScrollBar : public Widget {
  public:
-  explicit ScrollBar(Orientation o = Orientation::Vertical);
+  explicit cScrollBar(Orientation o = Orientation::Vertical);
   void setRange(float contentSize, float viewSize);
   float offset() const { return offset_; }
   float maxOffset() const { return std::max(0.f, content_ - view_); }
@@ -101,7 +101,7 @@ class cScrollView : public Widget {
  private:
   Rect viewRect() const;
   Widget* content_ = nullptr;
-  ScrollBar* bar_ = nullptr;
+  cScrollBar* bar_ = nullptr;
 };
 
 /// Two panes with a draggable divider; ratio() is the first pane's share.

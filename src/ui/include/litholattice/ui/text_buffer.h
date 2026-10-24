@@ -1,4 +1,4 @@
-// TextBuffer: the editing model behind TextBox and TextEditor, independent of drawing. Lines of
+// cTextBuffer: the editing model behind cTextBox and cTextEditor, independent of drawing. Lines of
 // ASCII / UTF-8 bytes, a caret and a selection anchor, the text position API (line / column <->
 // offset), editing operations and undo / redo. Columns are byte indices (the UI font is ASCII).
 #pragma once
@@ -16,9 +16,9 @@ struct TextPos {
   friend auto operator<=>(const TextPos&, const TextPos&) = default;
 };
 
-class TextBuffer {
+class cTextBuffer {
  public:
-  explicit TextBuffer(bool multiLine = true);
+  explicit cTextBuffer(bool multiLine = true);
 
   // ---- content
   void setText(std::string_view text);  ///< resets caret, selection and history

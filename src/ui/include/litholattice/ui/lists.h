@@ -1,5 +1,5 @@
-// Item views: ListView, TreeView and Dropdown. Events: "select" when the selection changes,
-// "activate" on Enter or a click on the selected row; Dropdown "change".
+// Item views: cListView, cTreeView and cDropdown. Events: "select" when the selection changes,
+// "activate" on Enter or a click on the selected row; cDropdown "change".
 #pragma once
 #include <string>
 #include <vector>
@@ -8,9 +8,9 @@
 namespace litholattice::ui {
 
 /// Rows of text with one selected row; scrolls with the wheel and follows the keyboard.
-class ListView : public Widget {
+class cListView : public Widget {
  public:
-  ListView();
+  cListView();
   void setItems(std::vector<std::string> items);
   const std::vector<std::string>& items() const { return items_; }
   int selected() const { return selected_; }
@@ -43,9 +43,9 @@ struct TreeNode {
 
 /// Expandable hierarchy. Right / Left expand / collapse (or move to the parent); the selection
 /// is a path of child indices.
-class TreeView : public Widget {
+class cTreeView : public Widget {
  public:
-  TreeView();
+  cTreeView();
   std::vector<TreeNode>& roots() { return roots_; }
   void setRoots(std::vector<TreeNode> roots);
   /// Selected node (nullptr if none).
@@ -78,9 +78,9 @@ class TreeView : public Widget {
 };
 
 /// A button showing the current item; opens a popup list to choose another.
-class Dropdown : public Widget {
+class cDropdown : public Widget {
  public:
-  explicit Dropdown(std::vector<std::string> items = {}, int selected = 0);
+  explicit cDropdown(std::vector<std::string> items = {}, int selected = 0);
   void setItems(std::vector<std::string> items);
   const std::vector<std::string>& items() const { return items_; }
   int selected() const { return selected_; }

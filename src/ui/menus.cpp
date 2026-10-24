@@ -165,32 +165,32 @@ void Menu::paint(Painter& p) const {
   }
 }
 
-// ---- MenuBar
+// ---- cMenuBar
 
-MenuBar::MenuBar() : Widget("menu") { setFocusable(true); }
+cMenuBar::cMenuBar() : Widget("menu") { setFocusable(true); }
 
-int MenuBar::openIndex() const { return ui() && ui()->isPopupOpen(openMenu_) ? open_ : -1; }
+int cMenuBar::openIndex() const { return ui() && ui()->isPopupOpen(openMenu_) ? open_ : -1; }
 
-void MenuBar::addMenu(std::string title, std::vector<MenuItem> items) { menus_.emplace_back(std::move(title), std::move(items)); }
+void cMenuBar::addMenu(std::string title, std::vector<MenuItem> items) { menus_.emplace_back(std::move(title), std::move(items)); }
 
-Vec2 MenuBar::measure(const Theme& theme) const {
+Vec2 cMenuBar::measure(const Theme& theme) const {
   return {0, theme.glyphSize(theme.style(styleClass()).textScale).y + 8};
 }
 
-Rect MenuBar::titleRect(int i) const {
+Rect cMenuBar::titleRect(int i) const {
   const Theme& t = theme();
   float x = rect().x + 4;
   for (int k = 0; k < i; ++k) x += t.textWidth(menus_[size_t(k)].first, style().textScale) + 16;
   return {x, rect().y, t.textWidth(menus_[size_t(i)].first, style().textScale) + 16, rect().h};
 }
 
-int MenuBar::titleAt(Vec2 p) const {
+int cMenuBar::titleAt(Vec2 p) const {
   for (int i = 0; i < count(); ++i)
     if (titleRect(i).contains(p)) return i;
   return -1;
 }
 
-void MenuBar::openMenu(int index) {
+void cMenuBar::openMenu(int index) {
   closeMenu();
   if (index < 0 || index >= count() || !ui()) return;
   open_ = index;
@@ -200,12 +200,12 @@ void MenuBar::openMenu(int index) {
   openMenu_->onNavigate = [this](int dir) { openMenu((open_ + dir + count()) % count()); };
 }
 
-void MenuBar::closeMenu() {
+void cMenuBar::closeMenu() {
   if (openMenu_ && ui() && ui()->isPopupOpen(openMenu_)) ui()->closePopup(*openMenu_);
   openMenu_ = nullptr;
 }
 
-bool MenuBar::onPointerDown(const UiEvent& e) {
+bool cMenuBar::onPointerDown(const UiEvent& e) {
   const int i = titleAt(e.pos);
   if (i < 0) return false;
   if (openIndex() == i) closeMenu();
@@ -213,12 +213,12 @@ bool MenuBar::onPointerDown(const UiEvent& e) {
   return true;
 }
 
-void MenuBar::onPointerMove(const UiEvent& e) {
+void cMenuBar::onPointerMove(const UiEvent& e) {
   const int i = titleAt(e.pos);
   if (i >= 0 && openIndex() >= 0 && i != openIndex()) openMenu(i);
 }
 
-bool MenuBar::onKey(const UiEvent& e) {
+bool cMenuBar::onKey(const UiEvent& e) {
   if (count() == 0) return false;
   switch (e.key) {
     case Key::Left: open_ = (open_ + count() - 1) % count(); return true;
@@ -230,7 +230,7 @@ bool MenuBar::onKey(const UiEvent& e) {
   }
 }
 
-void MenuBar::paint(Painter& p) const {
+void cMenuBar::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), s.background);
   for (int i = 0; i < count(); ++i) {
@@ -241,26 +241,26 @@ void MenuBar::paint(Painter& p) const {
   }
 }
 
-// ---- Dropdown (a button + a Menu of its items)
+// ---- cDropdown (a button + a Menu of its items)
 
-Dropdown::Dropdown(std::vector<std::string> items, int selected) : Widget("button"), items_(std::move(items)) {
+cDropdown::cDropdown(std::vector<std::string> items, int selected) : Widget("button"), items_(std::move(items)) {
   setFocusable(true);
   setSelected(selected);
 }
 
-void Dropdown::setItems(std::vector<std::string> items) {
+void cDropdown::setItems(std::vector<std::string> items) {
   items_ = std::move(items);
   selected_ = std::clamp(selected_, 0, std::max(0, int(items_.size()) - 1));
 }
 
-void Dropdown::setSelected(int index, bool notify) {
+void cDropdown::setSelected(int index, bool notify) {
   index = std::clamp(index, 0, std::max(0, int(items_.size()) - 1));
   if (index == selected_) return;
   selected_ = index;
   if (notify) emit("change");
 }
 
-void Dropdown::open() {
+void cDropdown::open() {
   if (!ui() || items_.empty()) return;
   std::vector<MenuItem> list;
   for (int i = 0; i < int(items_.size()); ++i) {
@@ -275,7 +275,7 @@ void Dropdown::open() {
   popup_ = &m;
 }
 
-Vec2 Dropdown::measure(const Theme& theme) const {
+Vec2 cDropdown::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   size_t widest = 4;
   for (const auto& i : items_) widest = std::max(widest, i.size());
@@ -283,13 +283,13 @@ Vec2 Dropdown::measure(const Theme& theme) const {
   return {float(widest + 3) * g.x + s.padding.horizontal(), g.y + s.padding.vertical()};
 }
 
-bool Dropdown::onPointerDown(const UiEvent& e) {
+bool cDropdown::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left) return false;
   open();
   return false;  // no capture: the popup takes over
 }
 
-bool Dropdown::onKey(const UiEvent& e) {
+bool cDropdown::onKey(const UiEvent& e) {
   switch (e.key) {
     case Key::Enter:
     case Key::Space: open(); return true;
@@ -299,7 +299,7 @@ bool Dropdown::onKey(const UiEvent& e) {
   }
 }
 
-void Dropdown::paint(Painter& p) const {
+void cDropdown::paint(Painter& p) const {
   const Style& s = style();
   const bool open = ui() && ui()->isPopupOpen(popup_);
   p.fill(rect(), open ? s.pressed : stateBackground());

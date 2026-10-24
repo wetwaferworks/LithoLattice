@@ -1,12 +1,12 @@
 // cDebugConsole: the Half-Life-style dropdown console for lithoscript. Tilde
 // drops it from the top of the screen; it renders through the ui framework (a StackPanel holding
-// a read-only TextEditor log view over a TextBox command line — composition,
+// a read-only cTextEditor log view over a cTextBox command line — composition,
 // no new widgets).
 //
 // INPUT CONFINEMENT (hard rule): the tilde key never toggles the console open
 // while UiRoot::wantsKeyboard() (a text field has focus, a modal/popup is
 // open) — typing "~" in a field keeps working. While the console is open its
-// TextBox holds focus, so wantsKeyboard() is true and keystrokes typed here
+// cTextBox holds focus, so wantsKeyboard() is true and keystrokes typed here
 // never reach mods (cModInputRouter::shouldDeliverToMod), exactly like any
 // other text field. Tilde while open closes it (HL1 behavior).
 //
@@ -58,7 +58,7 @@ class cDebugConsole {
 
   /// Key pre-filter while open; call BEFORE ui.handleEvent. Tab performs
   /// HL1-style completion of the input line; typing filters the VS Code-style
-  /// autocomplete dropdown (a ListView above the input). While the dropdown
+  /// autocomplete dropdown (a cListView above the input). While the dropdown
   /// is visible Up/Down move its selection, Enter accepts it, Escape
   /// dismisses it (the console stays open); otherwise Up/Down walk command
   /// history, PageUp/PageDown scroll the log view, Escape closes.
@@ -101,9 +101,9 @@ class cDebugConsole {
   Completer completer_;
   ui::UiRoot* ui_ = nullptr;
   ui::Widget* panel_ = nullptr;
-  ui::TextEditor* logView_ = nullptr;
-  ui::ListView* completionView_ = nullptr;
-  ui::TextBox* input_ = nullptr;
+  ui::cTextEditor* logView_ = nullptr;
+  ui::cListView* completionView_ = nullptr;
+  ui::cTextBox* input_ = nullptr;
   std::vector<CompletionCandidate> completionRows_;
 
   bool open_ = false;

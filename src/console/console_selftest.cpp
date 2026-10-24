@@ -1096,7 +1096,7 @@ int runConsoleSelfTest() {
 
     // Tilde while a text field has focus: suppressed (typing "~" keeps working),
     // even right after a toggle — the confinement check runs before the debounce.
-    ui::TextBox field;
+    ui::cTextBox field;
     ui.setFocus(&field);
     ok = ok && ui.wantsKeyboard();
     ok = ok && !con.handleTildeKey(ui, tildeEvent()) && !con.isOpen();

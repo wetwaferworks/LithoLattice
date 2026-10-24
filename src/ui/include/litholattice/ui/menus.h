@@ -1,5 +1,5 @@
 // Menus: Menu (a popup list of MenuItems with shortcuts, checks, separators and submenus),
-// MenuBar (top-level titles that open menus) and ContextMenu (a menu at the pointer).
+// cMenuBar (top-level titles that open menus) and ContextMenu (a menu at the pointer).
 // Items run a C++ action and / or a script handler; the menu closes afterwards.
 #pragma once
 #include <functional>
@@ -22,7 +22,7 @@ struct MenuItem {
   static MenuItem separatorItem() { MenuItem m; m.separator = true; return m; }
 };
 
-/// A popup menu. Open it with Menu::open (or MenuBar / ContextMenu do it).
+/// A popup menu. Open it with Menu::open (or cMenuBar / ContextMenu do it).
 class Menu : public Widget {
  public:
   explicit Menu(std::vector<MenuItem> items);
@@ -59,9 +59,9 @@ class Menu : public Widget {
 
 /// Horizontal bar of menu titles. Click (or Enter / Down) opens a menu below its title; while a
 /// menu is open, hovering another title switches to it; Left / Right switch too.
-class MenuBar : public Widget {
+class cMenuBar : public Widget {
  public:
-  MenuBar();
+  cMenuBar();
   void addMenu(std::string title, std::vector<MenuItem> items);
   int count() const { return int(menus_.size()); }
   /// Index of the open menu, -1 if none.

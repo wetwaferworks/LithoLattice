@@ -62,7 +62,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
        {{"image", "size"}, [](const Json& j) { return std::make_unique<Image>(text(j, "image"), vec2(j.get("size"), {32, 32})); }, false}},
       {"checkbox",
        {{"text", "checked", "toggle"},
-        [](const Json& j) { return std::make_unique<Checkbox>(text(j, "text"), j.getBool("checked", false), j.getBool("toggle", false)); },
+        [](const Json& j) { return std::make_unique<cCheckbox>(text(j, "text"), j.getBool("checked", false), j.getBool("toggle", false)); },
         false}},
       {"progress", {{"value"}, [](const Json& j) {
                       auto p = std::make_unique<cProgressBar>();
@@ -72,14 +72,14 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
       {"slider",
        {{"min", "max", "value", "step"},
         [](const Json& j) {
-          return std::make_unique<Slider>(float(j.getNum("min", 0)), float(j.getNum("max", 1)), float(j.getNum("value", 0)),
+          return std::make_unique<cSlider>(float(j.getNum("min", 0)), float(j.getNum("max", 1)), float(j.getNum("value", 0)),
                                           float(j.getNum("step", 0)));
         },
         false}},
       {"number",
        {{"min", "max", "value"},
         [](const Json& j) {
-          return std::make_unique<NumberField>(int(j.getNum("min", 0)), int(j.getNum("max", 64)), int(j.getNum("value", 0)));
+          return std::make_unique<cNumberField>(int(j.getNum("min", 0)), int(j.getNum("max", 64)), int(j.getNum("value", 0)));
         },
         false}},
       {"slot", {{"size", "image"}, [](const Json& j) {
@@ -99,25 +99,25 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
           return std::make_unique<cGridPanel>(int(j.getNum("columns", 4)), vec2(j.get("cell"), {40, 40}), float(j.getNum("spacing", 4)));
         }}},
       {"textbox", {{"text", "placeholder"}, [](const Json& j) {
-                     auto t = std::make_unique<TextBox>(text(j, "text"));
+                     auto t = std::make_unique<cTextBox>(text(j, "text"));
                      t->setPlaceholder(text(j, "placeholder"));
                      return t;
                    }, false}},
       {"editor", {{"text", "line_numbers"}, [](const Json& j) {
-                    auto t = std::make_unique<TextEditor>();
+                    auto t = std::make_unique<cTextEditor>();
                     t->setText(text(j, "text"));
                     t->setLineNumbers(j.getBool("line_numbers", true));
                     return t;
                   }, false}},
       {"list", {{"items", "selected"}, [](const Json& j) {
-                  auto l = std::make_unique<ListView>();
+                  auto l = std::make_unique<cListView>();
                   l->setItems(strings(j.get("items")));
                   l->setSelected(int(j.getNum("selected", -1)));
                   return l;
                 }, false}},
       {"dropdown",
        {{"items", "selected"},
-        [](const Json& j) { return std::make_unique<Dropdown>(strings(j.get("items")), int(j.getNum("selected", 0))); },
+        [](const Json& j) { return std::make_unique<cDropdown>(strings(j.get("items")), int(j.getNum("selected", 0))); },
         false}},
   };
   return kTypes;

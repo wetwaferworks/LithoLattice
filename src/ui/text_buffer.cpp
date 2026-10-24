@@ -9,9 +9,9 @@ bool isWord(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c ==
 
 }  // namespace
 
-TextBuffer::TextBuffer(bool multiLine) : multiLine_(multiLine) {}
+cTextBuffer::cTextBuffer(bool multiLine) : multiLine_(multiLine) {}
 
-void TextBuffer::setText(std::string_view text) {
+void cTextBuffer::setText(std::string_view text) {
   lines_.assign(1, std::string());
   for (const char c : text) {
     if (c == '\r') continue;
@@ -26,7 +26,7 @@ void TextBuffer::setText(std::string_view text) {
   changed();
 }
 
-std::string TextBuffer::text() const {
+std::string cTextBuffer::text() const {
   std::string out;
   for (size_t i = 0; i < lines_.size(); ++i) {
     if (i) out += '\n';
@@ -35,20 +35,20 @@ std::string TextBuffer::text() const {
   return out;
 }
 
-TextPos TextBuffer::clamp(TextPos p) const {
+TextPos cTextBuffer::clamp(TextPos p) const {
   p.line = std::clamp(p.line, 0, lineCount() - 1);
   p.col = std::clamp(p.col, 0, int(lines_[size_t(p.line)].size()));
   return p;
 }
 
-size_t TextBuffer::offsetOf(TextPos p) const {
+size_t cTextBuffer::offsetOf(TextPos p) const {
   p = clamp(p);
   size_t off = 0;
   for (int i = 0; i < p.line; ++i) off += lines_[size_t(i)].size() + 1;
   return off + size_t(p.col);
 }
 
-TextPos TextBuffer::posAt(size_t offset) const {
+TextPos cTextBuffer::posAt(size_t offset) const {
   for (int i = 0; i < lineCount(); ++i) {
     const size_t len = lines_[size_t(i)].size();
     if (offset <= len) return {i, int(offset)};
@@ -57,32 +57,32 @@ TextPos TextBuffer::posAt(size_t offset) const {
   return endPos();
 }
 
-std::pair<TextPos, TextPos> TextBuffer::selection() const {
+std::pair<TextPos, TextPos> cTextBuffer::selection() const {
   return caret_ < anchor_ ? std::pair{caret_, anchor_} : std::pair{anchor_, caret_};
 }
 
-std::string TextBuffer::selectedText() const {
+std::string cTextBuffer::selectedText() const {
   const auto [a, b] = selection();
   const std::string all = text();
   return all.substr(offsetOf(a), offsetOf(b) - offsetOf(a));
 }
 
-void TextBuffer::setCaret(TextPos p, bool extend) {
+void cTextBuffer::setCaret(TextPos p, bool extend) {
   caret_ = clamp(p);
   if (!extend) anchor_ = caret_;
   preferredCol_ = -1;
   lastEdit_ = EditKind::Other;
 }
 
-void TextBuffer::select(TextPos from, TextPos to) {
+void cTextBuffer::select(TextPos from, TextPos to) {
   anchor_ = clamp(from);
   caret_ = clamp(to);
   preferredCol_ = -1;
 }
 
-void TextBuffer::selectAll() { select({0, 0}, endPos()); }
+void cTextBuffer::selectAll() { select({0, 0}, endPos()); }
 
-void TextBuffer::record(EditKind kind) {
+void cTextBuffer::record(EditKind kind) {
   // Consecutive typing (or deleting) is one undo step.
   if (kind == EditKind::Other || kind != lastEdit_) {
     undo_.push_back({lines_, caret_, anchor_});
@@ -92,9 +92,9 @@ void TextBuffer::record(EditKind kind) {
   lastEdit_ = kind;
 }
 
-void TextBuffer::changed() { ++revision_; }
+void cTextBuffer::changed() { ++revision_; }
 
-void TextBuffer::replaceRange(TextPos from, TextPos to, std::string_view s) {
+void cTextBuffer::replaceRange(TextPos from, TextPos to, std::string_view s) {
   const std::string head = lines_[size_t(from.line)].substr(0, size_t(from.col));
   const std::string tail = lines_[size_t(to.line)].substr(size_t(to.col));
   lines_.erase(lines_.begin() + from.line + 1, lines_.begin() + to.line + 1);
@@ -114,7 +114,7 @@ void TextBuffer::replaceRange(TextPos from, TextPos to, std::string_view s) {
   changed();
 }
 
-bool TextBuffer::eraseSelection() {
+bool cTextBuffer::eraseSelection() {
   if (!hasSelection()) return false;
   record(EditKind::Other);
   const auto [a, b] = selection();
@@ -122,7 +122,7 @@ bool TextBuffer::eraseSelection() {
   return true;
 }
 
-void TextBuffer::insert(std::string_view s) {
+void cTextBuffer::insert(std::string_view s) {
   const bool typing = s.size() == 1 && !hasSelection() && s[0] != '\n';
   record(typing ? EditKind::Typing : EditKind::Other);
   const auto [a, b] = selection();
@@ -130,7 +130,7 @@ void TextBuffer::insert(std::string_view s) {
   if (typing) lastEdit_ = EditKind::Typing;
 }
 
-void TextBuffer::newline() {
+void cTextBuffer::newline() {
   if (!multiLine_) return;
   // Keep the current line's indentation.
   const std::string& cur = lines_[size_t(caret_.line)];
@@ -139,7 +139,7 @@ void TextBuffer::newline() {
   insert("\n" + std::string(indent, ' '));
 }
 
-void TextBuffer::backspace() {
+void cTextBuffer::backspace() {
   if (hasSelection()) {
     eraseSelection();
     return;
@@ -152,7 +152,7 @@ void TextBuffer::backspace() {
   lastEdit_ = EditKind::Deleting;
 }
 
-void TextBuffer::deleteForward() {
+void cTextBuffer::deleteForward() {
   if (hasSelection()) {
     eraseSelection();
     return;
@@ -165,7 +165,7 @@ void TextBuffer::deleteForward() {
   lastEdit_ = EditKind::Deleting;
 }
 
-void TextBuffer::moveLeft(bool extend, bool word) {
+void cTextBuffer::moveLeft(bool extend, bool word) {
   if (hasSelection() && !extend) {
     setCaret(selection().first);
     return;
@@ -183,7 +183,7 @@ void TextBuffer::moveLeft(bool extend, bool word) {
   setCaret(p, extend);
 }
 
-void TextBuffer::moveRight(bool extend, bool word) {
+void cTextBuffer::moveRight(bool extend, bool word) {
   if (hasSelection() && !extend) {
     setCaret(selection().second);
     return;
@@ -201,30 +201,30 @@ void TextBuffer::moveRight(bool extend, bool word) {
   setCaret(p, extend);
 }
 
-void TextBuffer::moveUp(bool extend, int lines) {
+void cTextBuffer::moveUp(bool extend, int lines) {
   const int col = preferredCol_ >= 0 ? preferredCol_ : caret_.col;
   if (caret_.line == 0) setCaret({0, 0}, extend);
   else setCaret({std::max(0, caret_.line - lines), col}, extend);
   preferredCol_ = col;
 }
 
-void TextBuffer::moveDown(bool extend, int lines) {
+void cTextBuffer::moveDown(bool extend, int lines) {
   const int col = preferredCol_ >= 0 ? preferredCol_ : caret_.col;
   if (caret_.line == lineCount() - 1) setCaret(endPos(), extend);
   else setCaret({std::min(lineCount() - 1, caret_.line + lines), col}, extend);
   preferredCol_ = col;
 }
 
-void TextBuffer::moveHome(bool extend) {
+void cTextBuffer::moveHome(bool extend) {
   const std::string& l = lines_[size_t(caret_.line)];
   int first = 0;
   while (first < int(l.size()) && l[size_t(first)] == ' ') ++first;
   setCaret({caret_.line, caret_.col == first ? 0 : first}, extend);
 }
 
-void TextBuffer::moveEnd(bool extend) { setCaret({caret_.line, int(lines_[size_t(caret_.line)].size())}, extend); }
+void cTextBuffer::moveEnd(bool extend) { setCaret({caret_.line, int(lines_[size_t(caret_.line)].size())}, extend); }
 
-bool TextBuffer::undo() {
+bool cTextBuffer::undo() {
   if (undo_.empty()) return false;
   redo_.push_back({lines_, caret_, anchor_});
   Snapshot s = std::move(undo_.back());
@@ -237,7 +237,7 @@ bool TextBuffer::undo() {
   return true;
 }
 
-bool TextBuffer::redo() {
+bool cTextBuffer::redo() {
   if (redo_.empty()) return false;
   undo_.push_back({lines_, caret_, anchor_});
   Snapshot s = std::move(redo_.back());

@@ -97,7 +97,7 @@
 // cvars are read/written via findCVar/setCVar without any UI. A future
 // Fragment integration therefore needs no console changes: it constructs (or
 // shares) a cConsoleReg, installs its own sink (journal page instead of
-// the debug console's TextEditor), and feeds it lines typed on the typewriter
+// the debug console's cTextEditor), and feeds it lines typed on the typewriter
 // item or tapped on the keyboard item. If the Fragment wants its own command
 // namespace, it registers commands on its own registry instance. Suggested
 // follow-up: an IConsoleDriver { submitLine(string_view), setSink(...) }

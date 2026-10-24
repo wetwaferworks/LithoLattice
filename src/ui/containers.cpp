@@ -91,24 +91,24 @@ void cGridPanel::arrange(const Theme& theme) {
   }
 }
 
-// ---- ScrollBar
+// ---- cScrollBar
 
-ScrollBar::ScrollBar(Orientation o) : Widget("scrollbar"), orientation_(o) {}
+cScrollBar::cScrollBar(Orientation o) : Widget("scrollbar"), orientation_(o) {}
 
-void ScrollBar::setRange(float contentSize, float viewSize) {
+void cScrollBar::setRange(float contentSize, float viewSize) {
   content_ = std::max(0.f, contentSize);
   view_ = std::max(0.f, viewSize);
   setOffset(offset_);
 }
 
-void ScrollBar::setOffset(float o, bool notify) {
+void cScrollBar::setOffset(float o, bool notify) {
   o = std::clamp(o, 0.f, maxOffset());
   if (o == offset_) return;
   offset_ = o;
   if (notify) emit("change");
 }
 
-Rect ScrollBar::thumb() const {
+Rect cScrollBar::thumb() const {
   const Rect& r = rect();
   const bool v = orientation_ == Orientation::Vertical;
   const float track = v ? r.h : r.w;
@@ -117,7 +117,7 @@ Rect ScrollBar::thumb() const {
   return v ? Rect{r.x, r.y + pos, r.w, len} : Rect{r.x + pos, r.y, len, r.h};
 }
 
-bool ScrollBar::onPointerDown(const UiEvent& e) {
+bool cScrollBar::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left || !needed()) return false;
   const Rect t = thumb();
   if (t.contains(e.pos)) {
@@ -129,7 +129,7 @@ bool ScrollBar::onPointerDown(const UiEvent& e) {
   return true;
 }
 
-void ScrollBar::onPointerMove(const UiEvent& e) {
+void cScrollBar::onPointerMove(const UiEvent& e) {
   if (!pressed() || grab_ < 0) return;
   const bool v = orientation_ == Orientation::Vertical;
   const float track = v ? rect().h : rect().w, len = v ? thumb().h : thumb().w;
@@ -137,12 +137,12 @@ void ScrollBar::onPointerMove(const UiEvent& e) {
   if (track > len) setOffset(start / (track - len) * maxOffset(), true);
 }
 
-bool ScrollBar::onWheel(const UiEvent& e) {
+bool cScrollBar::onWheel(const UiEvent& e) {
   setOffset(offset_ - e.wheel * 48.f, true);
   return true;
 }
 
-void ScrollBar::paint(Painter& p) const {
+void cScrollBar::paint(Painter& p) const {
   if (!needed()) return;
   const Style& s = style();
   p.fill(rect(), s.background);
@@ -152,7 +152,7 @@ void ScrollBar::paint(Painter& p) const {
 // ---- cScrollView
 
 cScrollView::cScrollView() : Widget("scrollview") {
-  bar_ = &add<ScrollBar>(Orientation::Vertical);
+  bar_ = &add<cScrollBar>(Orientation::Vertical);
   bar_->on("change", [this](Widget&) { relayout(); });
 }
 
@@ -161,19 +161,19 @@ Widget& cScrollView::setContent(std::unique_ptr<Widget> content) {
   content_ = &addChild(std::move(content));
   // Keep the scroll bar on top (painted and hit-tested last).
   auto bar = removeChild(*bar_);
-  bar_ = static_cast<ScrollBar*>(&addChild(std::move(bar)));
+  bar_ = static_cast<cScrollBar*>(&addChild(std::move(bar)));
   return *content_;
 }
 
 Rect cScrollView::viewRect() const {
   const Rect c = contentRect();
-  return bar_->needed() ? Rect{c.x, c.y, std::max(0.f, c.w - ScrollBar::kThickness), c.h} : c;
+  return bar_->needed() ? Rect{c.x, c.y, std::max(0.f, c.w - cScrollBar::kThickness), c.h} : c;
 }
 
 Vec2 cScrollView::measure(const Theme& theme) const {
   const Edges& pad = theme.style(styleClass()).padding;
   const Vec2 s = content_ ? childSize(*content_, theme) : Vec2{};
-  return {s.x + ScrollBar::kThickness + pad.horizontal(), std::min(s.y, 240.f) + pad.vertical()};
+  return {s.x + cScrollBar::kThickness + pad.horizontal(), std::min(s.y, 240.f) + pad.vertical()};
 }
 
 void cScrollView::arrange(const Theme& theme) {
@@ -182,7 +182,7 @@ void cScrollView::arrange(const Theme& theme) {
   bar_->setRange(contentH, c.h);
   const Rect view = viewRect();
   if (content_) content_->place({view.x, view.y - bar_->offset(), view.w, std::max(contentH, view.h)}, theme);
-  bar_->place({c.right() - ScrollBar::kThickness, c.y, ScrollBar::kThickness, c.h}, theme);
+  bar_->place({c.right() - cScrollBar::kThickness, c.y, cScrollBar::kThickness, c.h}, theme);
 }
 
 void cScrollView::ensureVisible(const Rect& r) {

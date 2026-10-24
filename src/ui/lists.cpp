@@ -34,19 +34,19 @@ float clampScroll(float scroll, int rows, float rowH, float viewH) {
 
 }  // namespace
 
-// ---- ListView
+// ---- cListView
 
-ListView::ListView() : Widget("list") { setFocusable(true); }
+cListView::cListView() : Widget("list") { setFocusable(true); }
 
-void ListView::setItems(std::vector<std::string> items) {
+void cListView::setItems(std::vector<std::string> items) {
   items_ = std::move(items);
   if (selected_ >= int(items_.size())) selected_ = int(items_.size()) - 1;
   scroll_ = clampScroll(scroll_, int(items_.size()), rowHeight(), contentRect().h);
 }
 
-float ListView::rowHeight() const { return theme().glyphSize(style().textScale).y + 4; }
+float cListView::rowHeight() const { return theme().glyphSize(style().textScale).y + 4; }
 
-void ListView::setSelected(int index, bool notify) {
+void cListView::setSelected(int index, bool notify) {
   index = std::clamp(index, -1, int(items_.size()) - 1);
   if (index == selected_) return;
   selected_ = index;
@@ -54,13 +54,13 @@ void ListView::setSelected(int index, bool notify) {
   if (notify) emit("select");
 }
 
-const std::string* ListView::selectedItem() const { return selected_ >= 0 ? &items_[size_t(selected_)] : nullptr; }
+const std::string* cListView::selectedItem() const { return selected_ >= 0 ? &items_[size_t(selected_)] : nullptr; }
 
-void ListView::scrollTo(int row) {
+void cListView::scrollTo(int row) {
   scroll_ = clampScroll(scrollToRow(scroll_, row, rowHeight(), contentRect().h), int(items_.size()), rowHeight(), contentRect().h);
 }
 
-Vec2 ListView::measure(const Theme& theme) const {
+Vec2 cListView::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   size_t widest = 8;
   for (const auto& i : items_) widest = std::max(widest, i.size());
@@ -69,14 +69,14 @@ Vec2 ListView::measure(const Theme& theme) const {
           rh * float(std::clamp(int(items_.size()), 3, 10)) + s.padding.vertical()};
 }
 
-int ListView::rowAt(Vec2 p) const {
+int cListView::rowAt(Vec2 p) const {
   const Rect c = contentRect();
   if (!c.contains(p)) return -1;
   const int row = int(std::floor((p.y - c.y + scroll_) / rowHeight()));
   return row < int(items_.size()) ? row : -1;
 }
 
-bool ListView::onPointerDown(const UiEvent& e) {
+bool cListView::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left) return false;
   const int row = rowAt(e.pos);
   if (row < 0) return true;
@@ -85,12 +85,12 @@ bool ListView::onPointerDown(const UiEvent& e) {
   return true;
 }
 
-bool ListView::onWheel(const UiEvent& e) {
+bool cListView::onWheel(const UiEvent& e) {
   scroll_ = clampScroll(scroll_ - e.wheel * 3 * rowHeight(), int(items_.size()), rowHeight(), contentRect().h);
   return true;
 }
 
-bool ListView::onKey(const UiEvent& e) {
+bool cListView::onKey(const UiEvent& e) {
   const int page = std::max(1, int(contentRect().h / rowHeight()));
   const int last = int(items_.size()) - 1;
   switch (e.key) {
@@ -107,7 +107,7 @@ bool ListView::onKey(const UiEvent& e) {
   }
 }
 
-void ListView::paint(Painter& p) const {
+void cListView::paint(Painter& p) const {
   Widget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();
@@ -121,18 +121,18 @@ void ListView::paint(Painter& p) const {
   }
 }
 
-// ---- TreeView
+// ---- cTreeView
 
-TreeView::TreeView() : Widget("list") { setFocusable(true); }
+cTreeView::cTreeView() : Widget("list") { setFocusable(true); }
 
-void TreeView::setRoots(std::vector<TreeNode> roots) {
+void cTreeView::setRoots(std::vector<TreeNode> roots) {
   roots_ = std::move(roots);
   selectedPath_.clear();
 }
 
-float TreeView::rowHeight() const { return theme().glyphSize(style().textScale).y + 4; }
+float cTreeView::rowHeight() const { return theme().glyphSize(style().textScale).y + 4; }
 
-std::vector<TreeView::Row> TreeView::rows() const {
+std::vector<cTreeView::Row> cTreeView::rows() const {
   std::vector<Row> out;
   std::vector<int> path;
   const auto walk = [&](const auto& self, const std::vector<TreeNode>& nodes, int depth) -> void {
@@ -147,17 +147,17 @@ std::vector<TreeView::Row> TreeView::rows() const {
   return out;
 }
 
-TreeNode* TreeView::nodeAt(const std::vector<int>& path) { return findNode(roots_, path); }
+TreeNode* cTreeView::nodeAt(const std::vector<int>& path) { return findNode(roots_, path); }
 
-const TreeNode* TreeView::selected() const { return findNode(roots_, selectedPath_); }
+const TreeNode* cTreeView::selected() const { return findNode(roots_, selectedPath_); }
 
-int TreeView::selectedRow(const std::vector<Row>& rs) const {
+int cTreeView::selectedRow(const std::vector<Row>& rs) const {
   for (size_t i = 0; i < rs.size(); ++i)
     if (rs[i].path == selectedPath_) return int(i);
   return -1;
 }
 
-void TreeView::selectPath(std::vector<int> path, bool notify) {
+void cTreeView::selectPath(std::vector<int> path, bool notify) {
   if (path == selectedPath_ || (!path.empty() && !nodeAt(path))) return;
   selectedPath_ = std::move(path);
   const auto rs = rows();
@@ -166,12 +166,12 @@ void TreeView::selectPath(std::vector<int> path, bool notify) {
   if (notify) emit("select");
 }
 
-Vec2 TreeView::measure(const Theme& theme) const {
+Vec2 cTreeView::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   return {200 + s.padding.horizontal(), (theme.glyphSize(s.textScale).y + 4) * 10 + s.padding.vertical()};
 }
 
-bool TreeView::onPointerDown(const UiEvent& e) {
+bool cTreeView::onPointerDown(const UiEvent& e) {
   if (e.button != PointerButton::Left) return false;
   const Rect c = contentRect();
   const auto rs = rows();
@@ -190,12 +190,12 @@ bool TreeView::onPointerDown(const UiEvent& e) {
   return true;
 }
 
-bool TreeView::onWheel(const UiEvent& e) {
+bool cTreeView::onWheel(const UiEvent& e) {
   scroll_ = clampScroll(scroll_ - e.wheel * 3 * rowHeight(), visibleRowCount(), rowHeight(), contentRect().h);
   return true;
 }
 
-bool TreeView::onKey(const UiEvent& e) {
+bool cTreeView::onKey(const UiEvent& e) {
   const auto rs = rows();
   if (rs.empty()) return false;
   const int row = selectedRow(rs);
@@ -220,7 +220,7 @@ bool TreeView::onKey(const UiEvent& e) {
   }
 }
 
-void TreeView::paint(Painter& p) const {
+void cTreeView::paint(Painter& p) const {
   Widget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();

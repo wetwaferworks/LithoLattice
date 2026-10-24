@@ -43,7 +43,7 @@ void cDebugConsole::attach(ui::UiRoot& ui) {
   panel->setLayout(layout);
   auto& stack = *panel;
 
-  auto& logView = stack.add<ui::TextEditor>();
+  auto& logView = stack.add<ui::cTextEditor>();
   logView.setReadOnly(true);
   logView.setLineNumbers(false);
   ui::Layout logLayout = ui::Layout::sized({0, 0}, 1);  // flex: takes the leftover height
@@ -51,15 +51,15 @@ void cDebugConsole::attach(ui::UiRoot& ui) {
   logView_ = &logView;
 
   // VS Code-style autocomplete dropdown: lives ABOVE the input, hidden until
-  // there is something to show. A plain ui::ListView (composition, no new
+  // there is something to show. A plain ui::cListView (composition, no new
   // widgets); rows are formatted "kind  name  detail" strings.
-  auto& completion = stack.add<ui::ListView>();
+  auto& completion = stack.add<ui::cListView>();
   completion.setLayout(ui::Layout::sized({0, 0}));
   completion.setVisible(false);
   completion.on("activate", [this](ui::Widget&) { acceptCompletion(); });
   completionView_ = &completion;
 
-  auto& input = stack.add<ui::TextBox>();
+  auto& input = stack.add<ui::cTextBox>();
   input.setPlaceholder("type a lithoscript command (? for help)");
   input.setLayout(ui::Layout::sized({0, 28}));
   input.on("submit", [this](ui::Widget&) { onSubmit(); });
@@ -133,7 +133,7 @@ bool cDebugConsole::handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e) {
 bool cDebugConsole::handleKeyPreFilter(const ui::UiEvent& e) {
   if (!open_ || e.type != ui::UiEvent::Type::KeyDown) return false;
   if (e.mods & (ui::kModCtrl | ui::kModAlt)) return false;
-  // Tab: HL1-style completion (consumed before TextBox can insert spaces).
+  // Tab: HL1-style completion (consumed before cTextBox can insert spaces).
   if (e.key == ui::Key::Tab) {
     tabComplete();
     return true;
@@ -223,7 +223,7 @@ void cDebugConsole::onSubmit() {
 
 void cDebugConsole::appendLogLine(const std::string& line) {
   if (!logView_) return;
-  ui::TextBuffer& buf = logView_->buffer();
+  ui::cTextBuffer& buf = logView_->buffer();
   const bool atEnd = buf.caret() == buf.endPos();
   buf.moveDocEnd(false);
   if (buf.lineCount() > 1 || !buf.line(0).empty()) buf.insert("\n");
@@ -235,7 +235,7 @@ void cDebugConsole::appendLogLine(const std::string& line) {
 
 void cDebugConsole::trimLogView() {
   if (!logView_) return;
-  ui::TextBuffer& buf = logView_->buffer();
+  ui::cTextBuffer& buf = logView_->buffer();
   const int over = buf.lineCount() - int(kMaxViewLines);
   if (over > 0) {
     buf.select({0, 0}, {over, 0});

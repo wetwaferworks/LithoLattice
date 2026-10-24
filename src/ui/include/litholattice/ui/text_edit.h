@@ -1,7 +1,7 @@
-// Text input widgets over TextBuffer: TextBox (one line) and TextEditor (multi-line, line
+// Text input widgets over cTextBuffer: cTextBox (one line) and cTextEditor (multi-line, line
 // numbers, scrolling, Tab inserts spaces, Ctrl+S emits "save"). Shared keys: arrows (+Shift
 // selects, +Ctrl by word), Home / End, Backspace / Delete, Ctrl+A / C / X / V / Z / Y; mouse
-// click places the caret, drag selects. Events: "change" after edits, "submit" (TextBox Enter).
+// click places the caret, drag selects. Events: "change" after edits, "submit" (cTextBox Enter).
 #pragma once
 #include <string>
 #include "litholattice/ui/text_buffer.h"
@@ -9,11 +9,11 @@
 
 namespace litholattice::ui {
 
-/// Behaviour shared by TextBox and TextEditor; not used directly.
-class TextEditBase : public Widget {
+/// Behaviour shared by cTextBox and cTextEditor; not used directly.
+class cTextEditBase : public Widget {
  public:
-  TextBuffer& buffer() { return buffer_; }
-  const TextBuffer& buffer() const { return buffer_; }
+  cTextBuffer& buffer() { return buffer_; }
+  const cTextBuffer& buffer() const { return buffer_; }
   std::string text() const { return buffer_.text(); }
   void setText(std::string_view t);
   bool readOnly() const { return readOnly_; }
@@ -30,7 +30,7 @@ class TextEditBase : public Widget {
   bool onText(char32_t c) override;
 
  protected:
-  TextEditBase(std::string styleClass, bool multiLine);
+  cTextEditBase(std::string styleClass, bool multiLine);
   /// Top-left of the text (line 0, column 0) on screen, after scrolling.
   virtual Vec2 textOrigin() const = 0;
   /// Called after the caret moved or the text changed (scroll the caret into view).
@@ -42,14 +42,14 @@ class TextEditBase : public Widget {
   void edited();
 
  private:
-  TextBuffer buffer_;
+  cTextBuffer buffer_;
   bool readOnly_ = false;
 };
 
-class TextBox final : public TextEditBase {
+class cTextBox final : public cTextEditBase {
  public:
-  explicit TextBox(std::string text = {});
-  TextBox& setPlaceholder(std::string p) { placeholder_ = std::move(p); return *this; }
+  explicit cTextBox(std::string text = {});
+  cTextBox& setPlaceholder(std::string p) { placeholder_ = std::move(p); return *this; }
   Vec2 measure(const Theme& theme) const override;
 
  protected:
@@ -63,10 +63,10 @@ class TextBox final : public TextEditBase {
   float scrollX_ = 0;
 };
 
-class TextEditor final : public TextEditBase {
+class cTextEditor final : public cTextEditBase {
  public:
-  TextEditor();
-  TextEditor& setLineNumbers(bool on) { lineNumbers_ = on; return *this; }
+  cTextEditor();
+  cTextEditor& setLineNumbers(bool on) { lineNumbers_ = on; return *this; }
   /// Lines that fit in the view.
   int visibleLines() const;
   int firstVisibleLine() const { return int(scrollY_ / glyph().y); }

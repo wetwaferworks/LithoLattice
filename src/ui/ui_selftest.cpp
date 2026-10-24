@@ -196,7 +196,7 @@ void testNavigation(Checker& check) {
 }
 
 void testText(Checker& check) {
-  TextBuffer t;
+  cTextBuffer t;
   t.setText("hello\nworld");
   check(t.lineCount() == 2 && t.offsetOf({1, 2}) == 8 && t.posAt(8) == TextPos{1, 2} && t.posAt(99) == TextPos{1, 5},
         "text: line/column <-> offset");
@@ -230,7 +230,7 @@ void testText(Checker& check) {
   t.moveDown(false);
   t.moveDown(false);
   check(t.caret() == TextPos{2, 3}, "text: vertical moves keep the preferred column");
-  TextBuffer single(false);
+  cTextBuffer single(false);
   single.setText("a\nb");
   single.insert("c\nd");
   check(single.text() == "cdab", "text: single-line buffer drops newlines (" + single.text() + ")");
@@ -238,8 +238,8 @@ void testText(Checker& check) {
   UiRoot ui;
   cMemoryClipboard clip;
   ui.setClipboard(&clip);
-  auto& ed = ui.root().add<TextEditor>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {400, 160}));
-  auto& editor = static_cast<TextEditor&>(ed);
+  auto& ed = ui.root().add<cTextEditor>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {400, 160}));
+  auto& editor = static_cast<cTextEditor&>(ed);
   int changes = 0, saves = 0;
   editor.on("change", [&](Widget&) { ++changes; });
   editor.on("save", [&](Widget&) { ++saves; });
@@ -271,8 +271,8 @@ void testText(Checker& check) {
   ui.paint(r);
   check(r.drewText("1") && r.drewText("2") && r.depth == 0 && r.maxDepth >= 1, "editor: line numbers drawn, clip balanced");
 
-  auto& box = ui.root().add<TextBox>("").setLayout(Layout::at({0, 0}, {0, 0}, {0, 300}, {120, 24}));
-  auto& tb = static_cast<TextBox&>(box);
+  auto& box = ui.root().add<cTextBox>("").setLayout(Layout::at({0, 0}, {0, 0}, {0, 300}, {120, 24}));
+  auto& tb = static_cast<cTextBox&>(box);
   int submits = 0;
   tb.on("submit", [&](Widget&) { ++submits; });
   ui.layout({800, 600});
@@ -293,9 +293,9 @@ void testEvents(Checker& check) {
   int clicks = 0;
   btn.on("click", [&](Widget&) { ++clicks; });
   btn.onScript("click", "void onGo(const string &in)");
-  auto& cb = stack.add<Checkbox>("check");
-  auto& slider = stack.add<Slider>(0.f, 10.f, 0.f, 1.f);
-  auto& num = stack.add<NumberField>(0, 64, 5);
+  auto& cb = stack.add<cCheckbox>("check");
+  auto& slider = stack.add<cSlider>(0.f, 10.f, 0.f, 1.f);
+  auto& num = stack.add<cNumberField>(0, 64, 5);
   ui.layout({800, 600});
 
   click(ui, center(btn));
@@ -322,7 +322,7 @@ void testEvents(Checker& check) {
   ui.handleEvent(UiEvent::scroll(center(num), -1.f));
   check(clamped && num.value() == 62, "number field: typing clamps to 0..64, Down and wheel step");
 
-  ListView& list = ui.root().add<ListView>();
+  cListView& list = ui.root().add<cListView>();
   list.setLayout(Layout::at({0, 0}, {0, 0}, {300, 0}, {200, 100}));
   list.setItems({"a", "b", "c"});
   int selects = 0, activates = 0;
@@ -335,7 +335,7 @@ void testEvents(Checker& check) {
   key(ui, Key::Enter);
   check(list.selected() == 1 && selects == 2 && activates == 1, "list: keyboard selection and activate");
 
-  TreeView& tree = ui.root().add<TreeView>();
+  cTreeView& tree = ui.root().add<cTreeView>();
   tree.setLayout(Layout::at({0, 0}, {0, 0}, {300, 150}, {200, 200}));
   tree.setRoots({node("scripts", {node("a.as"), node("b.as")}), node("other")});
   ui.layout({800, 600});
@@ -348,7 +348,7 @@ void testEvents(Checker& check) {
   key(ui, Key::Left);
   check(tree.visibleRowCount() == 2 && tree.selected()->text == "scripts", "tree: Left goes to parent, collapses");
 
-  Dropdown& dd = ui.root().add<Dropdown>(std::vector<std::string>{"red", "green", "blue"});
+  cDropdown& dd = ui.root().add<cDropdown>(std::vector<std::string>{"red", "green", "blue"});
   dd.setLayout(Layout::at({0, 0}, {0, 0}, {550, 0}, {120, 24}));
   int ddChanges = 0;
   dd.on("change", [&](Widget&) { ++ddChanges; });
@@ -374,7 +374,7 @@ void testLayers(Checker& check) {
   int underClicks = 0;
   under.on("click", [&](Widget&) { ++underClicks; });
   bool saved = false, opened = false;
-  MenuBar& bar = ui.root().add<MenuBar>();
+  cMenuBar& bar = ui.root().add<cMenuBar>();
   bar.setLayout(Layout::at({0, 0}, {0, 0}, {0, 100}, {400, 24}));
   MenuItem save = item("Save", [&] { saved = true; });
   save.shortcut = "Ctrl+S";
@@ -449,8 +449,8 @@ void testFactory(Checker& check) {
         {"type": "tabs", "titles": ["A", "B"], "children": [{"type": "panel"}, {"type": "list", "items": ["x"]}]},
         {"type": "splitter", "ratio": 0.5, "children": [{"type": "editor"}, {"type": "textbox"}]}]})json"),
                        err);
-  const bool built = w && w->find("play") && w->findAs<NumberField>("n") && w->findAs<NumberField>("n")->value() == 64 &&
-                     w->findAs<Checkbox>("t") && w->findAs<Checkbox>("t")->checked() && w->find("play")->hasHandler("click");
+  const bool built = w && w->find("play") && w->findAs<cNumberField>("n") && w->findAs<cNumberField>("n")->value() == 64 &&
+                     w->findAs<cCheckbox>("t") && w->findAs<cCheckbox>("t")->checked() && w->find("play")->hasHandler("click");
   check(built, "factory: JSON tree with properties and script handlers " + err);
   const bool unknownType = !buildWidget(std::string(R"({"type": "panle"})"), err) && err.find("panle") != std::string::npos;
   check(unknownType, "factory: unknown type rejected (" + err + ")");
