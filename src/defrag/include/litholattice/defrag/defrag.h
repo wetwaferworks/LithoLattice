@@ -7,7 +7,7 @@
 // any paged record store can register.
 //
 // LAYOUT ASSUMPTION (for the builder): the Fragment's persistence is assumed
-// to be a RecordStore below — slotted 4 KiB pages, tombstoned deletes,
+// to be a cRecordStore below — slotted 4 KiB pages, tombstoned deletes,
 // generation counter. If the real Fragment persistence evolves, it must either
 // adopt this layout or provide its own defrag target behind the same
 // cDefragService session protocol (begin/pump/cancel + reindex hook).
@@ -38,9 +38,9 @@ class cTextIndexer;  // engine text indexer (the reindex target)
 namespace litholattice::defrag {
 
 // ---------------------------------------------------------------------------
-// RecordStore: a paged, slotted record store with tombstones.
+// cRecordStore: a paged, slotted record store with tombstones.
 // ---------------------------------------------------------------------------
-class RecordStore {
+class cRecordStore {
  public:
   // Powers of two throughout (project motif). A record must fit one page
   // with its slot: fail-closed on oversize puts.
@@ -49,7 +49,7 @@ class RecordStore {
   static constexpr size_t kSlotSize = 24;
   static constexpr size_t kMaxRecordSize = kPageSize - kPageHeaderSize - kSlotSize;
 
-  RecordStore() = default;
+  cRecordStore() = default;
 
   // Insert or replace. Replace tombstones the old record (dead space grows;
   // that is what defrag reclaims). False + no mutation when oversize.
@@ -76,7 +76,7 @@ class RecordStore {
 
   // Crash-safe persistence (storage::writeFileAtomic: temp -> fsync -> rename).
   bool save(const std::filesystem::path& path, std::string* err) const;
-  static std::optional<RecordStore> load(const std::filesystem::path& path,
+  static std::optional<cRecordStore> load(const std::filesystem::path& path,
                                          std::string* err);
 
   // Chunkable live-record iteration for the defrag scan phase.
@@ -96,7 +96,7 @@ class RecordStore {
 
   // Defrag commit: replace this store's pages with the compacted image.
   // Content-identical; the generation is preserved (no spurious restart).
-  void replaceWith(RecordStore&& compacted);
+  void replaceWith(cRecordStore&& compacted);
 
   // The defrag service serializes the compacted image for the atomic commit.
   friend class cDefragService;
@@ -121,7 +121,7 @@ class RecordStore {
 
   void rebuildIndex();
   std::vector<uint8_t> serialize() const;
-  static std::optional<RecordStore> deserialize(const uint8_t* data, size_t n,
+  static std::optional<cRecordStore> deserialize(const uint8_t* data, size_t n,
                                                 std::string* err);
 };
 
@@ -172,7 +172,7 @@ class cDefragService {
   // boot with its save path (the seam the real Fragment persistence fills).
   // The service never owns the store or the reindexer: they must outlive it.
   // False when the name is already registered.
-  bool registerStore(const std::string& name, RecordStore& store,
+  bool registerStore(const std::string& name, cRecordStore& store,
                      const std::filesystem::path& filePath,
                      IReindexer* reindexerOrNull = nullptr);
   bool unregisterStore(const std::string& name);
@@ -207,7 +207,7 @@ class cDefragService {
 
  private:
   struct Entry {
-    RecordStore* store = nullptr;
+    cRecordStore* store = nullptr;
     std::filesystem::path filePath;
     IReindexer* reindexer = nullptr;
   };
@@ -225,7 +225,7 @@ class cDefragService {
   size_t copyIdx_ = 0;
   size_t reindexIdx_ = 0;
   bool reindexBegun_ = false;
-  RecordStore compacted_;
+  cRecordStore compacted_;
   std::string lastError_;
   // Cross-session: set when a cancel/fail lands mid-reindex with a stale
   // snapshot. Survives resetSession(); cleared when a reindex completes.

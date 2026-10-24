@@ -50,7 +50,7 @@ class cSoftwarePresenterImpl final : public ISoftwarePresenter {
 
   bool init() {
     std::string log;
-    std::optional<gl33::GlProgram> prog = gl33::GlProgram::build(kPresentVert, kPresentFrag, &log);
+    std::optional<gl33::cGlProgram> prog = gl33::cGlProgram::build(kPresentVert, kPresentFrag, &log);
     if (!prog) {
       logError("software present: blit program failed: %s", log.c_str());
       return false;
@@ -100,7 +100,7 @@ class cSoftwarePresenterImpl final : public ISoftwarePresenter {
   }
 
  private:
-  gl33::GlProgram prog_;
+  gl33::cGlProgram prog_;
   GLint texLoc_ = -1;
   GLuint tex_ = 0, vao_ = 0;
   int texW_ = 0, texH_ = 0;

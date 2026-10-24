@@ -9,7 +9,7 @@
 // This is a deliberate, JD-named EXCEPTION to the game's 64-scale
 // conventions, so there is more variance in the texturing and look of
 // blocks: the luminance -> level quantization runs at 256-step resolution
-// (level feeds the ramp-glyph selection AND the tint), and the Systerian
+// (level feeds the ramp-glyph selection AND the tint), and the cSysterian
 // mapping feeds that full-range level (0..255) straight into the codec's
 // composedGlyph — values are the script's native encoding, so a cell's
 // glyph now carries units/tens/hundreds strokes instead of only the
@@ -78,12 +78,12 @@ inline int asciiRampIndex(int level, int span) {
 /// Glyph set for the grid (JD 2026-10-13): plain ASCII ramp characters,
 /// or SYSTERIAN — the engine's certificate-signing script, drawn from
 /// the codec's generative stroke geometry (composedGlyph) — no glyph
-/// assets. AMENDED (JD ruling 2026-10-13): the Systerian value is the
+/// assets. AMENDED (JD ruling 2026-10-13): the cSysterian value is the
 /// cell's full-range level (0..span, default 0..255), NOT the ramp
 /// character's code point via the ASCII layer (the experiment build's
 /// 32..64 subset). The ASCII layer in isysterian.h remains the codec's
 /// certificate-text mapping; this renderer maps luminance -> value.
-enum class AsciiGlyphSet : int { Ascii = 0, Systerian = 1 };
+enum class AsciiGlyphSet : int { Ascii = 0, cSysterian = 1 };
 
 /// Stable cvar spellings for render.ascii_set ("ascii" | "systerian").
 const char* asciiGlyphSetName(AsciiGlyphSet set);
@@ -91,10 +91,10 @@ bool asciiGlyphSetFromName(const char* name, AsciiGlyphSet& out);
 
 /// Summarize `fb` into a text glyph grid with `cols` columns (clamped to
 /// [8, fb.width]); rows follow the terminal character aspect (~1:2).
-/// Returns the grid (one '\n' per row, including the last). In Systerian
+/// Returns the grid (one '\n' per row, including the last). In cSysterian
 /// mode the "text" grid is the glyph-VALUE grid: each cell is the
 /// THREE-digit value of its full-range level (000..span, zero-padded,
-/// fixed width), since Systerian has no Unicode block — the faithful
+/// fixed width), since cSysterian has no Unicode block — the faithful
 /// machine-readable form of the script, whose values are its native
 /// encoding. (Amended 2026-10-13: the experiment build emitted the
 /// two-digit code points of the 10 ramp characters, a 32..64 subset;
@@ -111,8 +111,8 @@ std::string framebufferToAsciiText(const SoftwareFramebuffer& fb, int cols,
 
 /// Replace `fb`'s pixels with the glyph visualization of its own grid
 /// (average-colour glyphs on black) at `cols` columns: 5x7 bitmap glyphs
-/// for Ascii, real Systerian stroke geometry for Systerian — drawn from
-/// composedGlyph(level) with the cell's full-range level, so Systerian
+/// for Ascii, real cSysterian stroke geometry for cSysterian — drawn from
+/// composedGlyph(level) with the cell's full-range level, so cSysterian
 /// cells show units/tens/hundreds strokes across the 0..span range.
 /// The text grid itself is returned through `textOut` when non-null.
 void framebufferToAsciiImage(SoftwareFramebuffer& fb, int cols,

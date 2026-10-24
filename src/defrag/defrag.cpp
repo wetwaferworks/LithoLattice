@@ -1,4 +1,4 @@
-// Engine defrag/restructure service: RecordStore + cDefragService.
+// Engine defrag/restructure service: cRecordStore + cDefragService.
 #include "litholattice/defrag/defrag.h"
 
 #include <cstring>
@@ -76,13 +76,13 @@ bool storeImageIntact(const std::filesystem::path& p, std::string* err) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// RecordStore
+// cRecordStore
 // ---------------------------------------------------------------------------
-size_t RecordStore::pageUsed(const Page& p) {
+size_t cRecordStore::pageUsed(const Page& p) {
   return kPageHeaderSize + p.slots.size() * kSlotSize + p.data.size();
 }
 
-bool RecordStore::put(uint64_t id, const uint8_t* data, size_t n) {
+bool cRecordStore::put(uint64_t id, const uint8_t* data, size_t n) {
   // H-DEF-1: nullptr data is refused at ANY n — the old guard let n==0 through,
   // and the insert below then formed `data + n` on a null pointer (UB, benign
   // in practice). An empty record is put(id, <any valid pointer>, 0).
@@ -119,7 +119,7 @@ bool RecordStore::put(uint64_t id, const uint8_t* data, size_t n) {
   return true;
 }
 
-std::optional<std::vector<uint8_t>> RecordStore::get(uint64_t id) const {
+std::optional<std::vector<uint8_t>> cRecordStore::get(uint64_t id) const {
   auto it = index_.find(id);
   if (it == index_.end()) return std::nullopt;
   const Page& pg = pages_[it->second.first];
@@ -130,7 +130,7 @@ std::optional<std::vector<uint8_t>> RecordStore::get(uint64_t id) const {
                               pg.data.begin() + s.offset + s.length);
 }
 
-bool RecordStore::erase(uint64_t id) {
+bool cRecordStore::erase(uint64_t id) {
   auto it = index_.find(id);
   if (it == index_.end()) return false;
   Page& pg = pages_[it->second.first];
@@ -145,9 +145,9 @@ bool RecordStore::erase(uint64_t id) {
   return true;
 }
 
-size_t RecordStore::recordCount() const { return index_.size(); }
+size_t cRecordStore::recordCount() const { return index_.size(); }
 
-size_t RecordStore::liveBytes() const {
+size_t cRecordStore::liveBytes() const {
   size_t n = 0;
   for (const auto& pg : pages_)
     for (const auto& s : pg.slots)
@@ -155,7 +155,7 @@ size_t RecordStore::liveBytes() const {
   return n;
 }
 
-size_t RecordStore::deadBytes() const {
+size_t cRecordStore::deadBytes() const {
   size_t n = 0;
   for (const auto& pg : pages_)
     for (const auto& s : pg.slots)
@@ -163,14 +163,14 @@ size_t RecordStore::deadBytes() const {
   return n;
 }
 
-void RecordStore::replaceWith(RecordStore&& compacted) {
+void cRecordStore::replaceWith(cRecordStore&& compacted) {
   pages_ = std::move(compacted.pages_);
   rebuildIndex();
   // Generation preserved: the content is identical, only the layout changed,
   // so no defrag restart is warranted.
 }
 
-void RecordStore::rebuildIndex() {
+void cRecordStore::rebuildIndex() {
   index_.clear();
   for (size_t pi = 0; pi < pages_.size(); ++pi) {
     const Page& pg = pages_[pi];
@@ -181,7 +181,7 @@ void RecordStore::rebuildIndex() {
   }
 }
 
-std::vector<uint8_t> RecordStore::serialize() const {
+std::vector<uint8_t> cRecordStore::serialize() const {
   std::vector<uint8_t> out;
   putU32(out, kMagic);
   putU16(out, kFormatVersion);
@@ -200,11 +200,11 @@ std::vector<uint8_t> RecordStore::serialize() const {
   return out;
 }
 
-std::optional<RecordStore> RecordStore::deserialize(const uint8_t* data, size_t n,
+std::optional<cRecordStore> cRecordStore::deserialize(const uint8_t* data, size_t n,
                                                     std::string* err) {
   const uint8_t* p = data;
   const uint8_t* end = data + n;
-  auto fail = [&](const char* why) -> std::optional<RecordStore> {
+  auto fail = [&](const char* why) -> std::optional<cRecordStore> {
     if (err) *err = why;
     return std::nullopt;
   };
@@ -215,7 +215,7 @@ std::optional<RecordStore> RecordStore::deserialize(const uint8_t* data, size_t 
   if (!getU16(p, end, ver) || ver != kFormatVersion) return fail("unsupported version");
   if (!getU32(p, end, pageCount)) return fail("truncated header");
   if (pageCount > 1'000'000) return fail("absurd page count");  // fail-closed
-  RecordStore store;
+  cRecordStore store;
   for (uint32_t pi = 0; pi < pageCount; ++pi) {
     uint32_t slotCount = 0;
     if (!getU32(p, end, slotCount)) return fail("truncated page");
@@ -251,7 +251,7 @@ std::optional<RecordStore> RecordStore::deserialize(const uint8_t* data, size_t 
   return store;
 }
 
-bool RecordStore::save(const std::filesystem::path& path, std::string* err) const {
+bool cRecordStore::save(const std::filesystem::path& path, std::string* err) const {
   const std::vector<uint8_t> bytes = serialize();
   // Crash-safe per the file contract: temp -> fsync -> atomic rename, with
   // the default backup rotation (depth 8). Never defrags in place.
@@ -259,9 +259,9 @@ bool RecordStore::save(const std::filesystem::path& path, std::string* err) cons
                                   storage::FileWriteOptions{});
 }
 
-std::optional<RecordStore> RecordStore::load(const std::filesystem::path& path,
+std::optional<cRecordStore> cRecordStore::load(const std::filesystem::path& path,
                                              std::string* err) {
-  // Crash-window recovery (WORLD PERMANENCE): RecordStore::save uses
+  // Crash-window recovery (WORLD PERMANENCE): cRecordStore::save uses
   // writeFileAtomic with backup rotation, so the same rotation/commit crash
   // window applies — the target can be absent with the previous generation in
   // .bak.1. Promote the newest intact generation BEFORE reading.
@@ -299,7 +299,7 @@ void cTextIndexerReindexer::reindexEnd() {}
 // ---------------------------------------------------------------------------
 // cDefragService
 // ---------------------------------------------------------------------------
-bool cDefragService::registerStore(const std::string& name, RecordStore& store,
+bool cDefragService::registerStore(const std::string& name, cRecordStore& store,
                                   const std::filesystem::path& filePath,
                                   IReindexer* reindexerOrNull) {
   if (name.empty() || stores_.count(name)) return false;
@@ -389,7 +389,7 @@ void cDefragService::resetSession() {
   copyIdx_ = 0;
   reindexIdx_ = 0;
   reindexBegun_ = false;
-  compacted_ = RecordStore();
+  compacted_ = cRecordStore();
 }
 
 void cDefragService::fail(const std::string& why) {
@@ -435,12 +435,12 @@ void cDefragService::pump() {
 }
 
 void cDefragService::pumpScan() {
-  RecordStore* store = sessionEntry_.store;
+  cRecordStore* store = sessionEntry_.store;
   for (size_t i = 0; i < kScanPagesPerTick; ++i) {
     if (scanPage_ >= store->pageCount()) {
       phase_ = Phase::Copy;
       copyIdx_ = 0;
-      compacted_ = RecordStore();
+      compacted_ = cRecordStore();
       return;
     }
     store->forEachLiveInPage(scanPage_, [this](uint64_t id, std::span<const uint8_t> b) {
@@ -473,13 +473,13 @@ void cDefragService::restartScan() {
   copyIdx_ = 0;
   reindexIdx_ = 0;
   reindexBegun_ = false;
-  compacted_ = RecordStore();
+  compacted_ = cRecordStore();
   startGeneration_ = sessionEntry_.store->generation();
   phase_ = Phase::Scan;
 }
 
 void cDefragService::pumpCommit() {
-  RecordStore* store = sessionEntry_.store;
+  cRecordStore* store = sessionEntry_.store;
   // The store mutated mid-defrag: restart the scan, bounded. Past the bound
   // the session fails closed ("store too busy") instead of livelocking.
   if (store->generation() != startGeneration_) {
@@ -501,7 +501,7 @@ void cDefragService::pumpCommit() {
     return;
   }
   store->replaceWith(std::move(compacted_));
-  compacted_ = RecordStore();
+  compacted_ = cRecordStore();
   reindexIdx_ = 0;
   reindexBegun_ = false;
   phase_ = sessionEntry_.reindexer ? Phase::Reindex : Phase::Done;

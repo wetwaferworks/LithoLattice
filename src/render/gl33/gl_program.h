@@ -6,24 +6,24 @@
 
 namespace litholattice::gl33 {
 
-class GlProgram {
+class cGlProgram {
  public:
-  GlProgram() = default;
-  ~GlProgram();
-  GlProgram(GlProgram&& o) noexcept : id_(o.id_) { o.id_ = 0; }
-  GlProgram& operator=(GlProgram&& o) noexcept;
-  GlProgram(const GlProgram&) = delete;
-  GlProgram& operator=(const GlProgram&) = delete;
+  cGlProgram() = default;
+  ~cGlProgram();
+  cGlProgram(cGlProgram&& o) noexcept : id_(o.id_) { o.id_ = 0; }
+  cGlProgram& operator=(cGlProgram&& o) noexcept;
+  cGlProgram(const cGlProgram&) = delete;
+  cGlProgram& operator=(const cGlProgram&) = delete;
 
   /// Compiles and links; nullopt with the driver's log in `log` on failure.
-  static std::optional<GlProgram> build(const std::string& vertex, const std::string& fragment, std::string* log);
+  static std::optional<cGlProgram> build(const std::string& vertex, const std::string& fragment, std::string* log);
 
   GLuint id() const { return id_; }
   GLint uniform(const char* name) const { return glGetUniformLocation(id_, name); }
   void use() const { glUseProgram(id_); }
 
  private:
-  explicit GlProgram(GLuint id) : id_(id) {}
+  explicit cGlProgram(GLuint id) : id_(id) {}
   GLuint id_ = 0;
 };
 

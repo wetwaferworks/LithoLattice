@@ -16,10 +16,10 @@ std::optional<Image> uploadImage2D(const cVulkanDevice& dev, VkCommandPool pool,
 /// Nearest-filter, clamp-to-edge sampler (palettes, font).
 UniqueSampler createNearestSampler(const cVulkanDevice& dev);
 
-class VkTextureArray final : public ITextureArray {
+class cVkTextureArray final : public ITextureArray {
  public:
   /// `onReplaced` runs after every successful upload (device idle): rebind the new image views.
-  VkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced);
+  cVkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced);
 
   /// Waits for the device to go idle, then replaces both images. Keeps the old ones on failure.
   bool upload(const TextureRegistry& textures) override;

@@ -382,10 +382,10 @@ class IRenderer {
     (void)cols;
   }
   /// Glyph set for the ASCII pipeline (JD 2026-10-13): "ascii" or
-  /// "systerian" (render.ascii_set) — the Systerian set renders the
+  /// "systerian" (render.ascii_set) — the cSysterian set renders the
   /// engine's certificate-signing script through its ASCII layer.
   virtual void setAsciiGlyphSet(const char* setName) { (void)setName; }
-  /// Value span for the ASCII/Systerian stage (JD-RULED AMENDMENT
+  /// Value span for the ASCII/cSysterian stage (JD-RULED AMENDMENT
   /// 2026-10-13): the luminance -> level mapping spans the FULL 0-255
   /// range by default (render.ascii_value_span = 255) — a deliberate
   /// exception to the game's 64-scale conventions. No-op elsewhere.

@@ -183,7 +183,7 @@ int main() {
   {
     cSpriteReg reg;
     const uint32_t dot = reg.registerImage(baseDef("test:dot"), solid(2, 2, 255, 255, 255, 255));
-    SpriteSystem sys(reg);
+    cSpriteSystem sys(reg);
     sys.setGravity({0.f, 0.f, 0.f});
 
     SpriteSpawn s;
@@ -224,7 +224,7 @@ int main() {
     cSpriteReg reg;
     const uint32_t dot = reg.registerImage(baseDef("test:dot"), solid(2, 2, 255, 255, 255, 255));
 
-    SpriteSystem grav(reg);
+    cSpriteSystem grav(reg);
     grav.setGravity({0.f, -2.f, 0.f});
     SpriteSpawn s;
     s.velocity = {1.f, 0.f, 0.f};
@@ -238,13 +238,13 @@ int main() {
 
     SpriteSpawn half = s;
     half.gravityScale = 0.5f;
-    SpriteSystem grav2(reg);
+    cSpriteSystem grav2(reg);
     grav2.setGravity({0.f, -2.f, 0.f});
     grav2.spawn(dot, half);
     grav2.tick(1);
     check(nearv(grav2.instances()[0].velocity, {1.f, -1.f, 0.f}), "gravity: scale multiplies g");
 
-    SpriteSystem drag(reg);
+    cSpriteSystem drag(reg);
     drag.setGravity({0.f, 0.f, 0.f});
     SpriteSpawn ds;
     ds.velocity = {2.f, 0.f, 0.f};
@@ -258,7 +258,7 @@ int main() {
     check(nearv(drag.instances()[0].position, {1.5f, 0.f, 0.f}), "drag: compounds per tick");
 
     // Chunking invariance: tick(4) == 4 x tick(1), bit-for-bit.
-    SpriteSystem one(reg), four(reg);
+    cSpriteSystem one(reg), four(reg);
     one.setGravity({0.f, -2.f, 0.f});
     four.setGravity({0.f, -2.f, 0.f});
     one.spawn(dot, s);
@@ -284,7 +284,7 @@ int main() {
     ed.speedMax = 0.3f;
     ed.coneAngleRad = 3.14159265f;
 
-    SpriteSystem s1(reg), s2(reg), s3(reg);
+    cSpriteSystem s1(reg), s2(reg), s3(reg);
     s1.setGravity({0.f, 0.f, 0.f});
     s2.setGravity({0.f, 0.f, 0.f});
     s3.setGravity({0.f, 0.f, 0.f});
@@ -321,7 +321,7 @@ int main() {
     rate.spriteDef = dot;
     rate.ratePerTick = 2.5f;
     rate.lifetimeMinTicks = rate.lifetimeMaxTicks = 1000;
-    SpriteSystem rs(reg);
+    cSpriteSystem rs(reg);
     const uint64_t eh = rs.addEmitter(rate, {0.f, 0.f, 0.f}, 7);
     rs.tick(2);
     check(rs.instanceCount() == 5, "emitter: fractional rate accumulates (2 + 3 over 2 ticks)");
@@ -362,7 +362,7 @@ int main() {
     sph.heightBlocks = 4.f;
     const uint32_t sphId = reg.registerImage(sph, solid(2, 2, 255, 255, 255, 255));
 
-    SpriteSystem sys(reg);
+    cSpriteSystem sys(reg);
     sys.setGravity({0.f, 0.f, 0.f});
     SpriteSpawn at;
     at.position = {0.f, 0.f, 0.f};
@@ -388,7 +388,7 @@ int main() {
     }
 
     // Cylindrical: top edge stays level whatever the camera height.
-    SpriteSystem csys(reg);
+    cSpriteSystem csys(reg);
     csys.setGravity({0.f, 0.f, 0.f});
     csys.spawn(cylId, at);
     const Vec3 cPos{4.f, 3.f, 0.f};
@@ -399,7 +399,7 @@ int main() {
           "emit: cylindrical top and bottom edges stay level");
 
     // Flat: the plane is the facing plane (yaw 0 -> normal +X, plane x = 0).
-    SpriteSystem fsys(reg);
+    cSpriteSystem fsys(reg);
     fsys.setGravity({0.f, 0.f, 0.f});
     fsys.spawn(flatId, at);
     auto fq = fsys.emitQuads(camPos, camFwd, camUp);
@@ -411,7 +411,7 @@ int main() {
     check(fq.size() == 1 && fq[0].tint == flat.tint, "emit: def tint lands on the quad");
 
     // Tint override beats the def tint.
-    SpriteSystem tsys(reg);
+    cSpriteSystem tsys(reg);
     tsys.setGravity({0.f, 0.f, 0.f});
     SpriteSpawn tinted = at;
     tinted.tintOverride = SpriteTint{0.5f, 0.25f, 1.f, 1.f};
@@ -421,7 +421,7 @@ int main() {
           "emit: spawn tint override lands on the quad");
 
     // Sorting: cutout group first (any depth), then far-to-near.
-    SpriteSystem ssys(reg);
+    cSpriteSystem ssys(reg);
     ssys.setGravity({0.f, 0.f, 0.f});
     SpriteSpawn farS, nearS, cutS;
     farS.position = {0.f, 0.f, -10.f};
@@ -436,7 +436,7 @@ int main() {
           "emit: cutout first, then transparent back-to-front");
 
     // Animation: the emitted UV rect is the frame for the instance's age.
-    SpriteSystem asys(reg);
+    cSpriteSystem asys(reg);
     asys.setGravity({0.f, 0.f, 0.f});
     asys.spawn(animId, at);
     reg.ensureAtlas();

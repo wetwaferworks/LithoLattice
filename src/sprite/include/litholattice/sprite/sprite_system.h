@@ -1,4 +1,4 @@
-// SpriteSystem: live sprite instances, particle emitters, and per-frame
+// cSpriteSystem: live sprite instances, particle emitters, and per-frame
 // quad emission. The system borrows a registry (defs + atlas) and owns the
 // instances; it never touches the registry's defs.
 //
@@ -30,9 +30,9 @@
 
 namespace litholattice::sprite {
 
-class SpriteSystem {
+class cSpriteSystem {
  public:
-  explicit SpriteSystem(ISpriteReg& registry) : registry_(registry) {}
+  explicit cSpriteSystem(ISpriteReg& registry) : registry_(registry) {}
 
   /// Spawn an instance of a registered sprite def. Returns the instance
   /// handle (never 0), or 0 when the def id is unknown. The instance's

@@ -1,6 +1,6 @@
-// Systerian: the engine's certificate-signing script standard.
+// cSysterian: the engine's certificate-signing script standard.
 //
-// Systerian is LithoKraft's signing script — the glyph language the
+// cSysterian is LithoKraft's signing script — the glyph language the
 // certificate table renders. (The name is in-fiction; the historical system
 // it adapts is the 13th-century Cistercian monastic numeral cipher,
 // vertical-stave form.) A value 0..9999 is ONE glyph: a vertical stave plus
@@ -164,7 +164,7 @@ class ISysterian {
 
 /// The concrete ISysterian: a pure codec over the free geometry functions
 /// above. Holds no state.
-class Systerian final : public ISysterian {
+class cSysterian final : public ISysterian {
  public:
   uint32_t valueForChar(char c) const override { return valueForAscii(c); }
   SysterianGlyph glyphForValue(uint32_t value) const override { return composedGlyph(value); }

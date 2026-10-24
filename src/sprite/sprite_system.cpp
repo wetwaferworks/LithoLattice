@@ -1,4 +1,4 @@
-// SpriteSystem implementation. See sprite_system.h for the simulation and
+// cSpriteSystem implementation. See sprite_system.h for the simulation and
 // emission ordering rules, and sprite.h for the determinism doctrine.
 //
 // EMITTER RNG: splitmix64, seeded at addEmitter. Each emitted particle
@@ -46,7 +46,7 @@ uint32_t frameIndexFor(const SpriteDef& def, uint32_t ageTicks) {
 
 }  // namespace
 
-uint64_t SpriteSystem::spawn(uint32_t defId, const SpriteSpawn& params) {
+uint64_t cSpriteSystem::spawn(uint32_t defId, const SpriteSpawn& params) {
   const SpriteDef* def = registry_.spriteDef(defId);
   if (!def) return 0;
   SpriteInstance inst;
@@ -65,7 +65,7 @@ uint64_t SpriteSystem::spawn(uint32_t defId, const SpriteSpawn& params) {
   return inst.id;
 }
 
-bool SpriteSystem::despawn(uint64_t instanceId) {
+bool cSpriteSystem::despawn(uint64_t instanceId) {
   for (auto it = instances_.begin(); it != instances_.end(); ++it) {
     if (it->id == instanceId) {
       instances_.erase(it);  // vector erase is order-stable
@@ -75,7 +75,7 @@ bool SpriteSystem::despawn(uint64_t instanceId) {
   return false;
 }
 
-uint64_t SpriteSystem::addEmitter(const ParticleEmitterDef& def, Vec3 origin, uint64_t seed) {
+uint64_t cSpriteSystem::addEmitter(const ParticleEmitterDef& def, Vec3 origin, uint64_t seed) {
   const SpriteDef* sdef = registry_.spriteDef(def.spriteDef);
   if (!sdef) return 0;
   Emitter e;
@@ -95,7 +95,7 @@ uint64_t SpriteSystem::addEmitter(const ParticleEmitterDef& def, Vec3 origin, ui
   return e.handle;
 }
 
-bool SpriteSystem::removeEmitter(uint64_t emitterHandle) {
+bool cSpriteSystem::removeEmitter(uint64_t emitterHandle) {
   for (auto it = emitters_.begin(); it != emitters_.end(); ++it) {
     if (it->handle == emitterHandle) {
       emitters_.erase(it);
@@ -105,7 +105,7 @@ bool SpriteSystem::removeEmitter(uint64_t emitterHandle) {
   return false;
 }
 
-void SpriteSystem::emitFromEmitter(Emitter& e, uint32_t count) {
+void cSpriteSystem::emitFromEmitter(Emitter& e, uint32_t count) {
   const SpriteDef* sdef = registry_.spriteDef(e.def.spriteDef);
   if (!sdef) return;
   const uint32_t lifeLo = std::min(e.def.lifetimeMinTicks, e.def.lifetimeMaxTicks);
@@ -153,7 +153,7 @@ void SpriteSystem::emitFromEmitter(Emitter& e, uint32_t count) {
   }
 }
 
-void SpriteSystem::tick(uint32_t dtTicks) {
+void cSpriteSystem::tick(uint32_t dtTicks) {
   for (uint32_t step = 0; step < dtTicks; ++step) {
     // (a) Instances, in spawn order: integrate, then age. The tick that
     // brings a finite-lifetime instance's age to its lifetime is its
@@ -189,7 +189,7 @@ void SpriteSystem::tick(uint32_t dtTicks) {
   }
 }
 
-void SpriteSystem::appendQuad(const SpriteInstance& inst, Vec3 cameraPos, Vec3 cameraForward,
+void cSpriteSystem::appendQuad(const SpriteInstance& inst, Vec3 cameraPos, Vec3 cameraForward,
                               Vec3 camRight, Vec3 camTrueUp) {
   const SpriteDef* def = registry_.spriteDef(inst.defId);
   if (!def) return;
@@ -254,7 +254,7 @@ void SpriteSystem::appendQuad(const SpriteInstance& inst, Vec3 cameraPos, Vec3 c
   quadBuffer_.push_back(q);
 }
 
-std::span<const SpriteQuad> SpriteSystem::emitQuads(Vec3 cameraPos, Vec3 cameraForward,
+std::span<const SpriteQuad> cSpriteSystem::emitQuads(Vec3 cameraPos, Vec3 cameraForward,
                                                     Vec3 cameraUp) {
   registry_.ensureAtlas();
   quadBuffer_.clear();

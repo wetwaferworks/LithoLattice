@@ -3,7 +3,7 @@
 //
 // Sprites are how the engine draws things that are not voxels: vegetation
 // billboards, decals, item icons in the world, agent markers — and, via the
-// emitter half of SpriteSystem, particles (sparks, smoke, glow motes). A
+// emitter half of cSpriteSystem, particles (sparks, smoke, glow motes). A
 // sprite TYPE is content: a SpriteDef registered by name with an image
 // source (PNG bytes / PNG file / SVG text / a decoded Image handed in by
 // another engine system). Games and mods register their own sprite types
@@ -12,11 +12,11 @@
 //
 // SOURCES ARE PRODUCER-AGNOSTIC: the core depends on assets (Image decode)
 // and core (math) only. Procedural producers — the 2D Litho Formula's SVG
-// shapes, the Systerian glyph SVGs, a mod's hand-written SVG — compose at
+// shapes, the cSysterian glyph SVGs, a mod's hand-written SVG — compose at
 // THEIR layer by passing an SVG string or a decoded Image into the matching
 // register* call. The sprite core never links procgen or systerian.
 //
-// RENDER CONTRACT: SpriteSystem::emitQuads turns live instances into
+// RENDER CONTRACT: cSpriteSystem::emitQuads turns live instances into
 // world-space quads (billboarded per def) carrying atlas UVs, a tint, an
 // atlas page index and a shade. The shade is the sprite-local SpriteShade;
 // sprite_shade_mode.h maps it to the render module's ShadeMode
@@ -175,7 +175,7 @@ class ISpriteReg {
 };
 
 /// One drawable quad for one live instance, produced by
-/// SpriteSystem::emitQuads. Corners are world-space, ordered
+/// cSpriteSystem::emitQuads. Corners are world-space, ordered
 /// counter-clockwise seen from the front: [0] bottom-left, [1] bottom-right,
 /// [2] top-right, [3] top-left; uvs[i] pairs with corners[i].
 struct SpriteQuad {
@@ -189,7 +189,7 @@ struct SpriteQuad {
   uint32_t defId = 0;
 };
 
-/// Parameters for one spawned instance (SpriteSystem::spawn).
+/// Parameters for one spawned instance (cSpriteSystem::spawn).
 struct SpriteSpawn {
   Vec3 position{};
   Vec3 velocity{};             ///< blocks per tick
@@ -204,7 +204,7 @@ struct SpriteSpawn {
   float drag = 0.f;          ///< per-tick velocity fraction removed, clamped [0,1]
 };
 
-/// A live instance's full state (SpriteSystem owns these; consumers read).
+/// A live instance's full state (cSpriteSystem owns these; consumers read).
 struct SpriteInstance {
   uint64_t id = 0;  ///< spawn handle; monotonic, never reused; 0 = none
   uint32_t defId = 0;
@@ -221,7 +221,7 @@ struct SpriteInstance {
 };
 
 /// A particle emitter type: the particle system's seed. An emitter sits at
-/// an origin and produces SpriteSystem instances of one sprite def —
+/// an origin and produces cSpriteSystem instances of one sprite def —
 /// `burstCount` immediately when added, then `ratePerTick` continuously.
 /// Per-particle values are drawn from the seeded RNG in a fixed order (see
 /// sprite_system.cpp), so a seed fully determines the field.

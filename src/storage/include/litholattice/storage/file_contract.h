@@ -8,7 +8,7 @@
 //      enabled, a crash between the rotation and the commit rename leaves the
 //      target ABSENT, the previous generation safe in "<path>.bak.1". That
 //      window self-heals: recoverCrashedWrite() (called by RegionFile::open and
-//      RecordStore::load) promotes the newest intact generation on the next
+//      cRecordStore::load) promotes the newest intact generation on the next
 //      open. The target is never touched until the replacement is fully on disk.
 //   2. Per-record CRC32: framed records (see frameRecord) are checksum-verified on
 //      load; corruption is detected, never misread.
@@ -48,7 +48,7 @@ inline constexpr const char* kAtomicTmpSuffix = ".tmp";
 inline constexpr const char* kBackupSuffix = ".bak";
 
 /// Default cap for whole-file reads (64 MiB). readFileAll(), cSandboxedFile::readAll()
-/// and RecordStore::load() refuse larger inputs (fail closed) instead of OOMing on
+/// and cRecordStore::load() refuse larger inputs (fail closed) instead of OOMing on
 /// hostile multi-GB files. The size is pre-checked (file_size/fstat) before a byte
 /// is read, with a running cap while streaming for non-regular files. Callers with
 /// legitimately larger files pass an explicit cap.
@@ -99,7 +99,7 @@ struct FileWriteOptions {
 void syncDirContaining(const std::filesystem::path& path);
 
 /// Crash-recovery for writeFileAtomic's backup-rotation window. Called by
-/// RegionFile::open and RecordStore::load before they read the target.
+/// RegionFile::open and cRecordStore::load before they read the target.
 ///
 /// RECOVERY ORDER (do not reorder without updating the callers):
 ///   1. `path` exists and validate(path) passes: nothing to do, return true.

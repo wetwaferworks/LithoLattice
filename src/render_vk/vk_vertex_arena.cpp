@@ -18,7 +18,7 @@ static_assert(kAlignment16 % 16 == 0 && kAlignment12 % 12 == 0 && kAlignment12 %
 VkDeviceSize alignUp(VkDeviceSize v, VkDeviceSize a) { return (v + a - 1) / a * a; }
 }  // namespace
 
-const char* VertexArena::kindName(Kind k) {
+const char* cVertexArena::kindName(Kind k) {
   switch (k) {
     case Kind::Host: return "host";
     case Kind::Device: return "device";
@@ -27,13 +27,13 @@ const char* VertexArena::kindName(Kind k) {
   return "host";
 }
 
-bool VertexArena::parseKind(const std::string& s, Kind& out) {
+bool cVertexArena::parseKind(const std::string& s, Kind& out) {
   for (Kind k : {Kind::Host, Kind::Device, Kind::ReBar})
     if (s == kindName(k)) { out = k; return true; }
   return false;
 }
 
-VertexArena::VertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize, VkDeviceSize alignment)
+cVertexArena::cVertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize, VkDeviceSize alignment)
     : dev_(dev), kind_(kind), blockSize_(blockSize) {
   // 0.0.1.59 [P59-1]: only the two supported granularities; anything else falls back to the 16-byte one.
   alignment_ = (alignment == kAlignment12) ? kAlignment12 : kAlignment16;
@@ -53,7 +53,7 @@ VertexArena::VertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize block
           (unsigned long long)(deviceBudget_ >> 20), (unsigned long long)(heap >> 20));
 }
 
-bool VertexArena::addBlock(VkDeviceSize size) {
+bool cVertexArena::addBlock(VkDeviceSize size) {
   constexpr auto kHost = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   const VkBufferUsageFlags usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   if (count_.load() >= kMaxBlocks) return false;  // [C53-2]
@@ -89,7 +89,7 @@ bool VertexArena::addBlock(VkDeviceSize size) {
   return true;
 }
 
-std::optional<VertexArena::Slice> VertexArena::allocate(VkDeviceSize bytes) {
+std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes) {
   const VkDeviceSize size = alignUp(std::max<VkDeviceSize>(bytes, 1), alignment_);
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   for (int attempt = 0; attempt < 2; ++attempt) {
@@ -110,7 +110,7 @@ std::optional<VertexArena::Slice> VertexArena::allocate(VkDeviceSize bytes) {
   return std::nullopt;
 }
 
-void VertexArena::free(const Slice& s) {
+void cVertexArena::free(const Slice& s) {
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   auto& ranges = blocks_[s.block].freeRanges;
   usedBytes_ -= s.size;  // 0.0.1.59 [P59-1]
@@ -128,7 +128,7 @@ void VertexArena::free(const Slice& s) {
   }
 }
 
-void VertexArena::clear() {
+void cVertexArena::clear() {
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   for (uint32_t i = 0, n = count_.load(); i < n; ++i) blocks_[i] = Block{};
   count_ = 0;

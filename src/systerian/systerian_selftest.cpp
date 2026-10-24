@@ -1,4 +1,4 @@
-// Systerian codec self-tests (ctest: engine_systerian). Exit code = failure
+// cSysterian codec self-tests (ctest: engine_systerian). Exit code = failure
 // count. The core test parses JD's reference generator masters (the SVG
 // files generate.py produced) and compares their stroke endpoints and
 // rivet centers against this codec's computed geometry, glyph by glyph —
@@ -169,7 +169,7 @@ size_t countOccurrences(const std::string& hay, const char* needle) {
 }  // namespace
 
 int main() {
-  const Systerian codec;
+  const cSysterian codec;
   const ISysterian& api = codec;
   const SysterianStyle dark = SysterianStyle::violetOnDark();
 

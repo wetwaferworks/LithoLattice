@@ -1,6 +1,6 @@
 // Vulkan backend for IRenderer: one graphics queue, kFramesInFlight frames in flight (fence +
 // acquire semaphore per frame, render-done semaphore per swapchain image), swapchain rebuilt on
-// resize / out-of-date. Chunk vertices live in a VertexArena; replaced meshes are freed once no
+// resize / out-of-date. Chunk vertices live in a cVertexArena; replaced meshes are freed once no
 // frame in flight can still read them. Main/render thread only.
 #include "litholattice/core/tick_profile.h"  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
 #include <algorithm>
@@ -94,8 +94,8 @@ class cVulkanRenderer final : public IRenderer {
     surface_ = *surface;
     pipelines_ = RenderPipelines::create(*dev_, surface_.color.format, surface_.depth, error, packed12_);
     if (!pipelines_) return false;
-    VertexArena::Kind kind = VertexArena::Kind::Device;
-    if (!VertexArena::parseKind(desc.vertexArena, kind)) logError("vulkan: unknown vertex arena '%s'; using device", desc.vertexArena.c_str());
+    cVertexArena::Kind kind = cVertexArena::Kind::Device;
+    if (!cVertexArena::parseKind(desc.vertexArena, kind)) logError("vulkan: unknown vertex arena '%s'; using device", desc.vertexArena.c_str());
     {  // 0.0.1.52 [A52-4] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): auto-ReBAR. A DEVICE_LOCAL|HOST_VISIBLE heap
       // larger than the classic 256 MB BAR window means Resizable BAR / SAM: vertex blocks are then
       // written in place (no staging, no copy). Exactly 256 MB is the legacy window and stays unused.
@@ -108,20 +108,20 @@ class cVulkanRenderer final : public IRenderer {
         if ((mp.memoryTypes[i].propertyFlags & kBar) == kBar) bar = std::max(bar, mp.memoryHeaps[mp.memoryTypes[i].heapIndex].size);
       const bool rebar = bar > (VkDeviceSize(256) << 20);
       logInfo("vulkan: DEVICE_LOCAL|HOST_VISIBLE heap %llu MB -> Resizable BAR %s", (unsigned long long)(bar >> 20), rebar ? "yes" : "no");
-      if (rebar && kind == VertexArena::Kind::Device && std::getenv("LL_VK_NO_REBAR") == nullptr) {
-        kind = VertexArena::Kind::ReBar;
+      if (rebar && kind == cVertexArena::Kind::Device && std::getenv("LL_VK_NO_REBAR") == nullptr) {
+        kind = cVertexArena::Kind::ReBar;
         logInfo("vulkan: vertex arena auto-upgraded to rebar");
       }
     }
-    arena_ = std::make_unique<VertexArena>(*dev_, kind, VkDeviceSize(32) << 20, packed12_ ? VkDeviceSize(192) : VkDeviceSize(64));
+    arena_ = std::make_unique<cVertexArena>(*dev_, kind, VkDeviceSize(32) << 20, packed12_ ? VkDeviceSize(192) : VkDeviceSize(64));
     // 0.0.1.59 [P59-1] Packed12 (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the
     // Bitmaster and the Bitmasker; layout correction and build by Cortana).
     logInfo("vulkan: chunk vertex format %s (%u bytes, arena alignment %llu; LL_VK_PACKED12=%d to switch)",
             packed12_ ? "packed12" : "packed16", unsigned(vertexStride_), (unsigned long long)arena_->alignment(), packed12_ ? 0 : 1);
     timestampPeriodNs_ = dev_->properties().limits.timestampPeriod;  // 0.0.1.52 [A52-3]
-    logInfo("vulkan: vertex arena %s, quad index buffer %s", VertexArena::kindName(kind), kind == VertexArena::Kind::Host ? "host-visible" : "device-local");
+    logInfo("vulkan: vertex arena %s, quad index buffer %s", cVertexArena::kindName(kind), kind == cVertexArena::Kind::Host ? "host-visible" : "device-local");
     if (!createStaticBuffers() || !createFrames() || !createDescriptors()) return fail(error, "frame resources");
-    textures_ = std::make_unique<VkTextureArray>(*dev_, pool_.get(), [this] { writeDescriptors(); });
+    textures_ = std::make_unique<cVkTextureArray>(*dev_, pool_.get(), [this] { writeDescriptors(); });
     if (!textures_->upload(TextureRegistry{})) return fail(error, "initial texture upload");
     logInfo("vulkan: using %s", dev_->description().c_str());
     return true;
@@ -259,7 +259,7 @@ class cVulkanRenderer final : public IRenderer {
   void publishChunkMesh(const PreparedChunkMesh& p) override {
     if (!p.ready) return;
     if (p.epoch != meshEpoch_.load(std::memory_order_acquire)) {  // F56-2: prepared before a clear
-      arena_->free(VertexArena::Slice{p.block, p.offset, p.size});  // never drawn: free now
+      arena_->free(cVertexArena::Slice{p.block, p.offset, p.size});  // never drawn: free now
       if (staleDropped_++ == 0) logInfo("vulkan: dropped a worker-prepared chunk mesh from before clearChunkMeshes (slot freed)");
       return;
     }
@@ -269,14 +269,14 @@ class cVulkanRenderer final : public IRenderer {
       retire(it->second.slice);
       meshes_.erase(it);
     }
-    Mesh gm{VertexArena::Slice{p.block, p.offset, p.size}, p.indexCount, p.cx, p.sy, p.cz};
+    Mesh gm{cVertexArena::Slice{p.block, p.offset, p.size}, p.indexCount, p.cx, p.sy, p.cz};
     gm.blend = p.blend;
     for (int i = 0; i < 4; ++i) { gm.pulseP0[i] = p.pulseP0[i]; gm.pulseP1[i] = p.pulseP1[i]; gm.traceP0[i] = p.traceP0[i]; gm.traceP1[i] = p.traceP1[i]; }
     meshes_[key] = gm;
     perf_.published += 1;
   }
   void discardChunkMesh(const PreparedChunkMesh& p) override {
-    if (p.ready) arena_->free(VertexArena::Slice{p.block, p.offset, p.size});  // never drawn: free now
+    if (p.ready) arena_->free(cVertexArena::Slice{p.block, p.offset, p.size});  // never drawn: free now
   }
 
   // PBR (BinaryQuad) path: Vulkan has no chunk_pbr pipeline. Loud once, not
@@ -455,7 +455,7 @@ class cVulkanRenderer final : public IRenderer {
     VkDescriptorSet set = VK_NULL_HANDLE;  // freed with the descriptor pool
   };
   struct Mesh {
-    VertexArena::Slice slice;
+    cVertexArena::Slice slice;
     uint32_t indexCount = 0;
     int cx = 0, sy = 0, cz = 0;
     float pulseP0[4]{};  ///< wafer ground-pulse blended params (from ChunkMesh)
@@ -466,7 +466,7 @@ class cVulkanRenderer final : public IRenderer {
   };
   struct Retired {
     uint64_t retiredAt = 0;  ///< frameNumber_ when replaced: frames before it may still read it
-    VertexArena::Slice slice;
+    cVertexArena::Slice slice;
   };
 
   static bool fail(std::string* error, const char* what) {
@@ -489,7 +489,7 @@ class cVulkanRenderer final : public IRenderer {
       const uint16_t quad[6] = {uint16_t(b), uint16_t(b + 1), uint16_t(b + 2), uint16_t(b), uint16_t(b + 2), uint16_t(b + 3)};
       std::memcpy(idx + q * 6, quad, sizeof quad);
     }
-    if (arena_->kind() == VertexArena::Kind::Host) {
+    if (arena_->kind() == cVertexArena::Kind::Host) {
       quadIndices_ = std::move(host);
     } else {  // device-local: one copy at init
       quadIndices_ = Buffer::create(*dev_, idxBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -541,7 +541,7 @@ class cVulkanRenderer final : public IRenderer {
       f.uniforms = Buffer::create(*dev_, sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisible);
       f.overlay = Buffer::create(*dev_, kOverlayBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible);
       if (!f.uniforms || !f.overlay) return false;
-      if (arena_->kind() != VertexArena::Kind::Host) {
+      if (arena_->kind() != cVertexArena::Kind::Host) {
         f.staging = Buffer::create(*dev_, kStagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostVisible);
         if (!f.staging) return false;
       }
@@ -656,7 +656,7 @@ class cVulkanRenderer final : public IRenderer {
     return true;
   }
 
-  void retire(const VertexArena::Slice& s) { retired_.push_back({frameNumber_, s}); }
+  void retire(const cVertexArena::Slice& s) { retired_.push_back({frameNumber_, s}); }
   // F56-1 (Cortana 2026-10-17): VK_ERROR_DEVICE_LOST (driver reset / TDR / GPU fault) is not recoverable here:
   // stop rendering, say so once, and let the game close through its normal shutdown path.
   void noteFatal(VkResult r, const char* what) {
@@ -900,7 +900,7 @@ class cVulkanRenderer final : public IRenderer {
       logInfo("vulkan upload split: %.1f meshes/frame %.2f MB/frame: arena alloc %.3f ms/frame, copy %.3f ms/frame (%s), blocks %zu; "
               "worker-direct published %.1f/frame (prepared total %llu)",
               double(perf_.uploads) / n, double(perf_.uploadBytes) / n / 1048576.0, perf_.allocMs / n, perf_.copyMs / n,
-              VertexArena::kindName(arena_->kind()), arena_->blockCount(), double(perf_.published) / n,
+              cVertexArena::kindName(arena_->kind()), arena_->blockCount(), double(perf_.published) / n,
               (unsigned long long)directPrepared_.load());  // [C53-1] [C53-2]
       perf_ = Perf{};
     }
@@ -1290,7 +1290,7 @@ class cVulkanRenderer final : public IRenderer {
   UniqueCommandPool pool_;
   SurfaceConfig surface_;
   std::unique_ptr<RenderPipelines> pipelines_;
-  std::unique_ptr<VertexArena> arena_;
+  std::unique_ptr<cVertexArena> arena_;
   std::optional<Buffer> quadIndices_;
   std::optional<vk::Image> font_;
   UniqueSampler fontSampler_;
@@ -1304,7 +1304,7 @@ class cVulkanRenderer final : public IRenderer {
   std::vector<vk_sprite::SpriteVertex> spriteVerts_;
   std::array<FrameSlot, kFramesInFlight> frames_;
   UniqueDescriptorPool descriptorPool_;
-  std::unique_ptr<VkTextureArray> textures_;
+  std::unique_ptr<cVkTextureArray> textures_;
   std::unique_ptr<cSwapchain> swapchain_;
   std::vector<UniqueSemaphore> renderDone_;  // per swapchain image
   VkExtent2D requested_{};    // window size the swapchain was built for

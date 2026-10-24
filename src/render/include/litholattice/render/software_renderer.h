@@ -339,7 +339,7 @@ class SoftwareRenderer : public IRenderer {
   // ASCII state (JD 2026-10-13); see setAsciiMode / setAsciiValueSpan.
   bool asciiEnabled_ = false;
   int asciiCols_ = 160;
-  int asciiSet_ = 0;  ///< AsciiGlyphSet (0 = Ascii, 1 = Systerian) as int
+  int asciiSet_ = 0;  ///< AsciiGlyphSet (0 = Ascii, 1 = cSysterian) as int
   int asciiSpan_ = 255;  ///< value span (JD amendment: full 0-255 default)
   std::string asciiText_;  ///< last ASCII stage's raw text grid
   bool perPixel_ = false;  ///< per-pixel shading (slower, better quality)

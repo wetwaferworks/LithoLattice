@@ -20,11 +20,11 @@ GLuint compile(GLenum type, const std::string& src, std::string* log) {
 
 }  // namespace
 
-GlProgram::~GlProgram() {
+cGlProgram::~cGlProgram() {
   if (id_) glDeleteProgram(id_);
 }
 
-GlProgram& GlProgram::operator=(GlProgram&& o) noexcept {
+cGlProgram& cGlProgram::operator=(cGlProgram&& o) noexcept {
   if (this != &o) {
     if (id_) glDeleteProgram(id_);
     id_ = o.id_;
@@ -33,7 +33,7 @@ GlProgram& GlProgram::operator=(GlProgram&& o) noexcept {
   return *this;
 }
 
-std::optional<GlProgram> GlProgram::build(const std::string& vertex, const std::string& fragment, std::string* log) {
+std::optional<cGlProgram> cGlProgram::build(const std::string& vertex, const std::string& fragment, std::string* log) {
   const GLuint vs = compile(GL_VERTEX_SHADER, vertex, log);
   const GLuint fs = compile(GL_FRAGMENT_SHADER, fragment, log);
   if (!vs || !fs) {
@@ -41,7 +41,7 @@ std::optional<GlProgram> GlProgram::build(const std::string& vertex, const std::
     if (fs) glDeleteShader(fs);
     return std::nullopt;
   }
-  GlProgram p(glCreateProgram());
+  cGlProgram p(glCreateProgram());
   glAttachShader(p.id_, vs);
   glAttachShader(p.id_, fs);
   glLinkProgram(p.id_);

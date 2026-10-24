@@ -1,4 +1,4 @@
-// Systerian codec implementation. The geometry and SVG rendering are a
+// cSysterian codec implementation. The geometry and SVG rendering are a
 // port of JD's reference generator (generate.py, the parametric model in
 // ~/workspace/user/files/cistercian/): 9 unit strokes + mirror/flip place
 // transforms, rivets at every stroke-graph vertex, halo pass beneath the
@@ -255,17 +255,17 @@ SysterianStyle SysterianStyle::whiteOnLight() {
           SysterianColor::fromHex(0x2F7CF6), 6.0, 5.4, 2.0};
 }
 
-// --- Systerian (concrete ISysterian) ----------------------------------------
+// --- cSysterian (concrete ISysterian) ----------------------------------------
 
-std::string Systerian::svgForValue(uint32_t value, const SysterianStyle& style) const {
+std::string cSysterian::svgForValue(uint32_t value, const SysterianStyle& style) const {
   return svgDocument(kGridWidth, kGridHeight, glyphBody(composedGlyph(value), style, 0.0));
 }
 
-std::string Systerian::svgForChar(char c, const SysterianStyle& style) const {
+std::string cSysterian::svgForChar(char c, const SysterianStyle& style) const {
   return svgForValue(valueForAscii(c), style);
 }
 
-std::string Systerian::svgForText(std::string_view text, const SysterianStyle& style) const {
+std::string cSysterian::svgForText(std::string_view text, const SysterianStyle& style) const {
   if (text.empty()) return svgDocument(kGridWidth, kGridHeight, "");
   const double width =
       static_cast<double>(text.size()) * kGridWidth + static_cast<double>(text.size() - 1) * kTextGap;
@@ -276,17 +276,17 @@ std::string Systerian::svgForText(std::string_view text, const SysterianStyle& s
   return svgDocument(width, kGridHeight, body);
 }
 
-std::optional<Image> Systerian::pngForValue(uint32_t value, const SysterianStyle& style, int width,
+std::optional<Image> cSysterian::pngForValue(uint32_t value, const SysterianStyle& style, int width,
                                             int height, std::string* err) const {
   return rasterize(svgForValue(value, style), width, height, err);
 }
 
-std::optional<Image> Systerian::pngForChar(char c, const SysterianStyle& style, int width,
+std::optional<Image> cSysterian::pngForChar(char c, const SysterianStyle& style, int width,
                                            int height, std::string* err) const {
   return rasterize(svgForChar(c, style), width, height, err);
 }
 
-std::optional<Image> Systerian::pngForText(std::string_view text, const SysterianStyle& style,
+std::optional<Image> cSysterian::pngForText(std::string_view text, const SysterianStyle& style,
                                            int width, int height, std::string* err) const {
   return rasterize(svgForText(text, style), width, height, err);
 }

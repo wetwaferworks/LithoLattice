@@ -1,4 +1,4 @@
-// VertexArena: chunk vertex data sub-allocated from a few large buffers, so the number of Vulkan
+// cVertexArena: chunk vertex data sub-allocated from a few large buffers, so the number of Vulkan
 // allocations stays tiny (drivers cap it, e.g. 4096) however many sub-chunks are loaded.
 // First-fit free lists with coalescing. Private to render_vk.
 // Kinds: Host (host-visible, written in place, the GPU reads over PCIe), Device (DEVICE_LOCAL,
@@ -16,7 +16,7 @@
 
 namespace litholattice::vk {
 
-class VertexArena {
+class cVertexArena {
  public:
   /// A range of one block; `size` is the rounded-up allocation size.
   struct Slice {
@@ -31,7 +31,7 @@ class VertexArena {
 
   /// `alignment` (0.0.1.59 [P59-1]): slice offset/size granularity; must be a whole number of vertices
   /// (64 for the 16-byte PackedVertex, 192 = lcm(12, 64) for Packed12) so baseVertex = offset / stride.
-  VertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize = VkDeviceSize(32) << 20, VkDeviceSize alignment = 64);
+  cVertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blockSize = VkDeviceSize(32) << 20, VkDeviceSize alignment = 64);
   // 0.0.1.53 [C53-2] (Proposed by JD, Built by Cortana): thread-safe. allocate/free/clear lock a mutex;
   // blocks live in a fixed table (never reallocated), so buffer()/data() of a slice the caller
   // owns need no lock. Mesh worker threads allocate + write ReBAR slices directly.

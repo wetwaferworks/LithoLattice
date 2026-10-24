@@ -1305,7 +1305,7 @@ int runConsoleSelfTest() {
     r.executeLine("debug.defrag");
     check(cap.contains("idle"), "defrag: status idle with no session");
 
-    defrag::RecordStore store;
+    defrag::cRecordStore store;
     const std::string payload(128, 'q');
     for (uint64_t i = 1; i <= 40; ++i)
       store.put(i, reinterpret_cast<const uint8_t*>(payload.data()), payload.size());

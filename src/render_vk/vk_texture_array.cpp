@@ -66,7 +66,7 @@ UniqueSampler createNearestSampler(const cVulkanDevice& dev) {
   return UniqueSampler(dev.device(), s);
 }
 
-VkTextureArray::VkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced)
+cVkTextureArray::cVkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std::function<void()> onReplaced)
     : dev_(dev), pool_(pool), onReplaced_(std::move(onReplaced)), paletteSampler_(createNearestSampler(dev)) {
   // Same filtering as the OpenGL backend: crisp texels up close, trilinear in the distance.
   auto si = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
@@ -95,7 +95,7 @@ VkTextureArray::VkTextureArray(const cVulkanDevice& dev, VkCommandPool pool, std
   arraySampler_ = UniqueSampler(dev.device(), s);
 }
 
-std::optional<Image> VkTextureArray::uploadArray(const TextureRegistry& textures, uint32_t mipLevels) const {
+std::optional<Image> cVkTextureArray::uploadArray(const TextureRegistry& textures, uint32_t mipLevels) const {
   const uint32_t tile = uint32_t(textures.tileSize()), layers = uint32_t(textures.textures().size());
   const VkDeviceSize layerBytes = VkDeviceSize(tile) * tile * 4;
   auto staging = stagingBuffer(dev_, layerBytes * layers);
@@ -193,7 +193,7 @@ std::optional<Image> VkTextureArray::uploadArray(const TextureRegistry& textures
   return image;
 }
 
-bool VkTextureArray::upload(const TextureRegistry& textures) {
+bool cVkTextureArray::upload(const TextureRegistry& textures) {
   vkDeviceWaitIdle(dev_.device());  // the old images may still be in use by frames in flight
   const uint32_t tile = uint32_t(std::max(1, textures.tileSize()));
   const uint32_t mips = uint32_t(std::bit_width(tile));  // down to 1x1, like glGenerateMipmap
@@ -220,11 +220,11 @@ bool VkTextureArray::upload(const TextureRegistry& textures) {
   return true;
 }
 
-VkDescriptorImageInfo VkTextureArray::arrayDescriptor() const {
+VkDescriptorImageInfo cVkTextureArray::arrayDescriptor() const {
   return {arraySampler_.get(), array_ ? array_->view() : VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 }
 
-VkDescriptorImageInfo VkTextureArray::paletteDescriptor() const {
+VkDescriptorImageInfo cVkTextureArray::paletteDescriptor() const {
   return {paletteSampler_.get(), palette_ ? palette_->view() : VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 }
 

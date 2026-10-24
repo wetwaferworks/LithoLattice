@@ -282,7 +282,7 @@ int testSoftwareRenderer() {
   }
   std::printf("ASCII checks: grid geometry + ramp mapping + image output OK\n");
 
-  // --- Systerian glyph set (JD 2026-10-13; AMENDED by JD ruling 2026-10-13
+  // --- cSysterian glyph set (JD 2026-10-13; AMENDED by JD ruling 2026-10-13
   // 15:52 EDT: full 0-255 value span) --------------------------------------
   // The experiment build mapped a cell through the ASCII layer: ramp char
   // -> code point (' ' 32 .. '@' 64), so its pin read "mid-gray -> 58,
@@ -292,7 +292,7 @@ int testSoftwareRenderer() {
   // 0xFF808080 (luma 128/255) -> level 128, white -> level 255 — both
   // beyond anything a 64-step mapping can produce (its ceiling is 64).
   {
-    if (std::string(asciiGlyphSetName(AsciiGlyphSet::Systerian)) != "systerian") {
+    if (std::string(asciiGlyphSetName(AsciiGlyphSet::cSysterian)) != "systerian") {
       std::printf("FAIL: systerian set name\n");
       return 1;
     }
@@ -313,7 +313,7 @@ int testSoftwareRenderer() {
         f.pixels[size_t(y) * 64 + size_t(x)] = x < 32 ? 0xFF808080u : 0xFFFFFFFFu;
     AsciiGridInfo info;
     const std::string text =
-        framebufferToAsciiText(f, 32, AsciiGlyphSet::Systerian, &info);
+        framebufferToAsciiText(f, 32, AsciiGlyphSet::cSysterian, &info);
     if (info.textBytes != text.size() || text.size() != size_t(info.rows) * (32 * 3 + 1)) {
       std::printf("FAIL: systerian value grid size (%zu bytes)\n", text.size());
       return 1;
@@ -328,7 +328,7 @@ int testSoftwareRenderer() {
     }
     SoftwareFramebuffer fa = f, fs = f;
     framebufferToAsciiImage(fa, 32, AsciiGlyphSet::Ascii);
-    framebufferToAsciiImage(fs, 32, AsciiGlyphSet::Systerian);
+    framebufferToAsciiImage(fs, 32, AsciiGlyphSet::cSysterian);
     if (fa.pixels == fs.pixels) {
       std::printf("FAIL: systerian image identical to ascii image\n");
       return 1;

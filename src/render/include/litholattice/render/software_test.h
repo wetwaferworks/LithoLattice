@@ -1,6 +1,6 @@
 // Standalone software-renderer smoke test (renders a real quad through
 // renderMesh and asserts on the pixels; home of the model-dither, AA
-// ladder, ASCII and Systerian checks, JD 2026-10-13). Defined in
+// ladder, ASCII and cSysterian checks, JD 2026-10-13). Defined in
 // render/software_test.cpp; wired into litholattice_tests (ctest
 // engine_render) — before 2026-10-13 the TU was compiled nowhere and
 // its checks silently never ran.

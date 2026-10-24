@@ -35,7 +35,7 @@ extern "C" int lk_mega_draw(int mode, const void* counts, const void* offsets, i
 namespace litholattice {
 namespace {
 
-using gl33::GlProgram;
+using gl33::cGlProgram;
 using gl33::cGlTextureArray;
 
 /// Programs the backend draws with; names match assets/shaders/<name>.vert/.frag.
@@ -368,7 +368,7 @@ class cGL33Renderer final : public IRenderer {
     // Build every program first and swap them in only if all succeeded, so a failure never leaves
     // a mix of old and new programs bound.
     int fromPacks = 0;
-    std::array<std::optional<GlProgram>, std::size(kProgramNames)> built;
+    std::array<std::optional<cGlProgram>, std::size(kProgramNames)> built;
     for (size_t i = 0; i < std::size(kProgramNames); ++i) {
       const std::string_view name = kProgramNames[i];
       const bool pbr = (i == kChunkPbrProgram);
@@ -378,9 +378,9 @@ class cGL33Renderer final : public IRenderer {
       if (pbr) { logInfo("gl33: chunk_pbr not available on WebGL2 (no samplerBuffer in GLSL ES 3.00); classic path only"); continue; }
 #endif
       std::string log;
-      std::optional<GlProgram>& prog = built[i];
+      std::optional<cGlProgram>& prog = built[i];
       if (const ShaderSource* src = lib.find(name)) {
-        prog = GlProgram::build(src->vertex, src->fragment, &log);
+        prog = cGlProgram::build(src->vertex, src->fragment, &log);
         if (prog) ++fromPacks;
         else logError("shader '%.*s' from %s failed, using the built-in copy:\n%s", int(name.size()), name.data(), src->origin.c_str(), log.c_str());
       } else if (lib.size() > 0) {
@@ -389,7 +389,7 @@ class cGL33Renderer final : public IRenderer {
       if (!prog) {
         const std::string file(name);
         const std::string vs = builtinSource(file + ".vert", &log), fs = builtinSource(file + ".frag", &log);
-        if (!vs.empty() && !fs.empty()) prog = GlProgram::build(vs, fs, &log);
+        if (!vs.empty() && !fs.empty()) prog = cGlProgram::build(vs, fs, &log);
         if (!prog) {
           logError("built-in shader '%s' failed:\n%s", file.c_str(), log.c_str());
           if (pbr || i == kSpriteProgram) continue;  // optional path unsupported; the rest still inits
@@ -404,13 +404,13 @@ class cGL33Renderer final : public IRenderer {
     }
     // PBR program: swap in on success, clear on failure (supportsPbrPath() reads id()).
     if (built[kChunkPbrProgram]) pbrProg_ = std::move(*built[kChunkPbrProgram]);
-    else pbrProg_ = GlProgram();
+    else pbrProg_ = cGlProgram();
 #if !defined(__EMSCRIPTEN__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
     if (!supportsPbrPath()) logError("gl33: chunk_pbr unavailable - PBR/BinaryQuad path disabled, classic path only");
 #endif
     // Sprite program: same optional-path treatment (drawSprites() reads id()).
     if (built[kSpriteProgram]) spriteProg_ = std::move(*built[kSpriteProgram]);
-    else spriteProg_ = GlProgram();
+    else spriteProg_ = cGlProgram();
     if (!spriteProg_.id()) logError("gl33: sprite shader unavailable - sprite pass disabled");
     else {
       uSpriteVP_ = spriteProg_.uniform("uVP");
@@ -434,7 +434,7 @@ class cGL33Renderer final : public IRenderer {
     // uniforms. Built from whichever source prog_ came from (pack library
     // first, built-in copy otherwise). Any failure leaves megaOk_ false and
     // the renderer behaves exactly as before Phase 2.
-    progMega_ = GlProgram();
+    progMega_ = cGlProgram();
     megaOk_ = false;
     {
       std::string mlog;
@@ -447,7 +447,7 @@ class cGL33Renderer final : public IRenderer {
         return s;
       };
       if (!vs.empty() && !fs.empty()) {
-        if (auto mp = GlProgram::build(inject(vs), inject(fs), &mlog)) {
+        if (auto mp = cGlProgram::build(inject(vs), inject(fs), &mlog)) {
           progMega_ = std::move(*mp);
           uMegaVP_ = progMega_.uniform("uVP"); uMegaCam_ = progMega_.uniform("uCam");
           uMegaSky_ = progMega_.uniform("uSky"); uMegaFogEnd_ = progMega_.uniform("uFogEnd");
@@ -874,7 +874,7 @@ class cGL33Renderer final : public IRenderer {
   void applyMaterialUniforms() { applyMaterialUniformsTo(prog_); }
   // Same material set for another chunk program (the Phase 2 mega variant
   // shares every material uniform with the classic program).
-  void applyMaterialUniformsTo(GlProgram& p) {
+  void applyMaterialUniformsTo(cGlProgram& p) {
     p.use();
     auto u1 = [&](const std::string& n, int v) { glUniform1i(p.uniform(n.c_str()), v); };
     auto arr = [&](const char* n, size_t i) { return std::string(n) + "[" + std::to_string(i) + "]"; };
@@ -1107,7 +1107,7 @@ class cGL33Renderer final : public IRenderer {
   GLuint arenaEbo_ = 0, instVbo_ = 0;
   size_t arenaIndices_ = 0;
   std::map<size_t, size_t> arenaIndexFree_;  // first index -> count
-  GlProgram progMega_;
+  cGlProgram progMega_;
   bool megaOk_ = false;
   GLint uMegaVP_ = -1, uMegaCam_ = -1, uMegaSky_ = -1, uMegaFogEnd_ = -1, uMegaTime_ = -1,
         uMegaTwinkle_ = -1, uMegaDebug_ = -1, uMegaModelDither_ = -1, uMegaModelDitherBand_ = -1,
@@ -1119,7 +1119,7 @@ class cGL33Renderer final : public IRenderer {
   GLuint entityVao_ = 0, entityVbo_ = 0;
   GLsizei entityVertCount_ = 0;
   float entityOrigin_[3] = {0.f, 0.f, 0.f};  // GAME-H1 entity batch origin
-  GlProgram prog_, lineProg_, hudProg_;
+  cGlProgram prog_, lineProg_, hudProg_;
   GLuint ebo_ = 0, lineVao_ = 0, lineVbo_ = 0;
   cGlTextureArray textures_;
   MaterialBindings bindings_;
@@ -1132,7 +1132,7 @@ class cGL33Renderer final : public IRenderer {
   GLint uModelDither_ = -1, uModelDitherBand_ = -1;  // near-camera fade (JD 2026-10-13)
   bool ditherEnabled_ = false; float ditherNear_ = 2.f, ditherFar_ = 8.f;  // setting (default on) enables it
   // PBR (BinaryQuad) path state (phase 2, Worker 3).
-  GlProgram pbrProg_;
+  cGlProgram pbrProg_;
   std::unordered_map<int64_t, PbrGpu> pbrMeshes_;
   GLuint pbrMatBuf_ = 0, pbrMatTex_ = 0;  // material table: buffer texture (GL 3.1+)
   uint64_t pbrMatGeneration_ = UINT64_MAX;  // registry generation of the uploaded table
@@ -1159,7 +1159,7 @@ class cGL33Renderer final : public IRenderer {
   // Sprite pass state (2026-10-12): program + streamed VBO + atlas page
   // textures; spriteAtlasUploaded_ is the registry version on the GPU
   // (UINT64_MAX = nothing uploaded yet).
-  GlProgram spriteProg_;
+  cGlProgram spriteProg_;
   GLuint spriteVao_ = 0, spriteVbo_ = 0;
   std::vector<GLuint> spriteTex_;
   uint64_t spriteAtlasUploaded_ = UINT64_MAX;

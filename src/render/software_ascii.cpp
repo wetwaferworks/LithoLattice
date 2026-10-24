@@ -12,14 +12,14 @@
 namespace litholattice {
 
 const char* asciiGlyphSetName(AsciiGlyphSet set) {
-  return set == AsciiGlyphSet::Systerian ? "systerian" : "ascii";
+  return set == AsciiGlyphSet::cSysterian ? "systerian" : "ascii";
 }
 
 bool asciiGlyphSetFromName(const char* name, AsciiGlyphSet& out) {
   if (!name) return false;
   const std::string_view v(name);
   if (v == "ascii") { out = AsciiGlyphSet::Ascii; return true; }
-  if (v == "systerian") { out = AsciiGlyphSet::Systerian; return true; }
+  if (v == "systerian") { out = AsciiGlyphSet::cSysterian; return true; }
   return false;
 }
 
@@ -111,7 +111,7 @@ std::vector<CellAvg> summarize(const SoftwareFramebuffer& fb, int cols, int span
       // JD-RULED AMENDMENT (2026-10-13): level at FULL span resolution
       // (default span 255 = 256 steps) — a deliberate exception to the
       // game's 64-scale conventions. The level selects the ramp glyph
-      // AND is the Systerian glyph value; the tint beside it is the
+      // AND is the cSysterian glyph value; the tint beside it is the
       // cell's average framebuffer colour (the rendered, SVG-textured
       // variance), never a flat per-block colour.
       c.level = asciiValueLevel(c.luma, span);
@@ -140,7 +140,7 @@ std::string framebufferToAsciiText(const SoftwareFramebuffer& fb, int cols,
   const auto cells = summarize(fb, cols, span, gc, gr);
   std::string out;
   if (cells.empty()) return out;
-  if (set == AsciiGlyphSet::Systerian) {
+  if (set == AsciiGlyphSet::cSysterian) {
     // Glyph-value grid (JD amendment 2026-10-13): each cell is its
     // full-range LEVEL (0..span, default 0..255) — the value fed to
     // composedGlyph, i.e. the script's native encoding — as three
@@ -193,10 +193,10 @@ void framebufferToAsciiImage(SoftwareFramebuffer& fb, int cols, AsciiGlyphSet se
   } else if (info) {
     info->cols = gc;
     info->rows = gr;
-    info->textBytes = (set == AsciiGlyphSet::Systerian ? size_t(gc * 3 + 1) : size_t(gc + 1)) *
+    info->textBytes = (set == AsciiGlyphSet::cSysterian ? size_t(gc * 3 + 1) : size_t(gc + 1)) *
                        size_t(gr);
   }
-  if (set == AsciiGlyphSet::Systerian) {
+  if (set == AsciiGlyphSet::cSysterian) {
     // Draw the real glyphs: the codec's generative stroke geometry
     // (100x140 grid) scaled into each cell, tinted by the cell's average
     // colour; rivet dots at every graph vertex (JD's rivet rule).

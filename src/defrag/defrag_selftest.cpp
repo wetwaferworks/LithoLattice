@@ -30,8 +30,8 @@ std::vector<uint8_t> bytesOf(const std::string& s) {
 
 // Builds a fragmented store: N records, every other one erased, a quarter
 // replaced (tombstoning the originals).
-RecordStore makeFragmented(size_t n, size_t recSize) {
-  RecordStore s;
+cRecordStore makeFragmented(size_t n, size_t recSize) {
+  cRecordStore s;
   for (size_t i = 0; i < n; ++i) {
     std::string payload = "record-" + std::to_string(i) + "-";
     payload += std::string(recSize > payload.size() ? recSize - payload.size() : 0, 'x');
@@ -63,7 +63,7 @@ int runDefragSelfTest() {
 
   // 1. Store basics: put/get/erase round-trip.
   {
-    RecordStore s;
+    cRecordStore s;
     check(s.put(1, bytesOf("hello")), "store: put ok");
     auto g = s.get(1);
     check(g && *g == bytesOf("hello"), "store: get round-trips");
@@ -71,14 +71,14 @@ int runDefragSelfTest() {
     check(s.erase(1), "store: erase ok");
     check(!s.get(1).has_value(), "store: erased id -> nullopt");
     check(!s.erase(1), "store: double erase refused");
-    std::string big(RecordStore::kMaxRecordSize + 1, 'z');
+    std::string big(cRecordStore::kMaxRecordSize + 1, 'z');
     check(!s.put(2, bytesOf(big)), "store: oversize put refused fail-closed");
     check(!s.get(2).has_value(), "store: refused put left nothing behind");
   }
 
   // 2. Fragmentation accounting.
   {
-    RecordStore s = makeFragmented(100, 64);
+    cRecordStore s = makeFragmented(100, 64);
     check(s.deadBytes() > 0, "store: dead bytes accumulate after erase/replace");
     check(s.recordCount() == 50, "store: live record count is 50 (100 - 50 erased; 25 replaced stay live)");
     auto g = s.get(2);  // id 2 = i=1, replaced
@@ -87,7 +87,7 @@ int runDefragSelfTest() {
 
   // 3. Defrag happy path: byte-integrity, dead space reclaimed, fewer pages.
   {
-    RecordStore store = makeFragmented(400, 128);
+    cRecordStore store = makeFragmented(400, 128);
     const size_t pagesBefore = store.pageCount();
     const size_t deadBefore = store.deadBytes();
     // Snapshot expected live content.
@@ -121,7 +121,7 @@ int runDefragSelfTest() {
     check(store.pageCount() <= pagesBefore, "defrag: page count never grows");
     // The committed file loads back identically.
     std::string err;
-    auto loaded = RecordStore::load(path, &err);
+    auto loaded = cRecordStore::load(path, &err);
     check(loaded.has_value(), "defrag: committed file loads (" + err + ")");
     bool fileIntact = loaded && loaded->recordCount() == expected.size();
     if (loaded) {
@@ -140,7 +140,7 @@ int runDefragSelfTest() {
 
   // 4. Reindex through the text indexer: index consistent after defrag.
   {
-    RecordStore store;
+    cRecordStore store;
     index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 50; ++i) {
       std::string text = "page about dragons number " + std::to_string(i);
@@ -165,11 +165,11 @@ int runDefragSelfTest() {
 
   // 5. Crash-safety: the live file is untouched until the atomic commit.
   {
-    RecordStore store = makeFragmented(120, 64);
+    cRecordStore store = makeFragmented(120, 64);
     const auto path = scratchPath("crashsafe");
     std::string err;
     check(store.save(path, &err), "defrag: save ok (" + err + ")");
-    auto before = RecordStore::load(path, &err);
+    auto before = cRecordStore::load(path, &err);
     check(before.has_value(), "defrag: pre-defrag file loads");
 
     cDefragService svc;
@@ -178,7 +178,7 @@ int runDefragSelfTest() {
     // Pump only through Scan (never reaching Commit).
     for (int i = 0; i < 1000 && svc.phase() == cDefragService::Phase::Scan; ++i)
       svc.pump();
-    auto during = RecordStore::load(path, &err);
+    auto during = cRecordStore::load(path, &err);
     bool untouched = during && during->recordCount() == before->recordCount() &&
                      during->deadBytes() == before->deadBytes();
     check(untouched, "defrag: live file untouched before commit");
@@ -190,7 +190,7 @@ int runDefragSelfTest() {
 
   // 6. Mutation mid-defrag: bounded restart, data stays intact.
   {
-    RecordStore store = makeFragmented(300, 64);
+    cRecordStore store = makeFragmented(300, 64);
     cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("restart")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
@@ -205,7 +205,7 @@ int runDefragSelfTest() {
 
   // 7. Pathological churn: mutate on every pump -> bounded failure, no livelock.
   {
-    RecordStore store = makeFragmented(200, 64);
+    cRecordStore store = makeFragmented(200, 64);
     cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("busy")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
@@ -225,7 +225,7 @@ int runDefragSelfTest() {
 
   // 8. Per-tick boundedness: one pump never finishes a large defrag.
   {
-    RecordStore store = makeFragmented(5000, 128);
+    cRecordStore store = makeFragmented(5000, 128);
     cDefragService svc;
     check(svc.registerStore("frag", store, scratchPath("bounded")), "defrag: register ok");
     check(svc.beginDefrag("frag"), "defrag: begin ok");
@@ -242,7 +242,7 @@ int runDefragSelfTest() {
 
   // 9. Unknown store / unregister rules.
   {
-    RecordStore store;
+    cRecordStore store;
     cDefragService svc;
     check(!svc.beginDefrag("nope"), "defrag: unknown store refused");
     check(svc.registerStore("a", store, scratchPath("a")), "defrag: register ok");
@@ -257,7 +257,7 @@ int runDefragSelfTest() {
 
   // 10. Empty store defrags cleanly.
   {
-    RecordStore store;
+    cRecordStore store;
     cDefragService svc;
     check(svc.registerStore("empty", store, scratchPath("empty")), "defrag: register ok");
     check(svc.beginDefrag("empty"), "defrag: begin on empty ok");
@@ -270,7 +270,7 @@ int runDefragSelfTest() {
   // 11. Cancel mid-reindex: the index is completed synchronously (not left
   // cleared-but-partial), and no dirty flag is set for a fresh snapshot.
   {
-    RecordStore store;
+    cRecordStore store;
     index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 600; ++i)
       store.put(i, bytesOf("cancelreindex doc number " + std::to_string(i)));
@@ -296,7 +296,7 @@ int runDefragSelfTest() {
   // 12. Cancel mid-reindex with a stale snapshot: the index is marked dirty
   // (never fed stale bytes), and the next session's reindex heals it.
   {
-    RecordStore store;
+    cRecordStore store;
     index::cTextIndexer indexer;
     for (uint64_t i = 1; i <= 600; ++i)
       store.put(i, bytesOf("stalereindex doc number " + std::to_string(i)));
