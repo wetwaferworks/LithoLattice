@@ -35,8 +35,8 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
   - `randomTick(world, area, tickIndex, dirty)`: **stub**, default no-op
   - `activeCount()`, `takeEvents()`
 - **[EXISTS]** `SimThread`: fixed-step loop and `ClockDomain`s. A clock domain is a game-named rate (power of two, up to 512 Hz) with a `step` callback. It also handles edits from the main thread, remesh snapshots, and `takeChangedColumns()` for partial saves.
-- **[EXISTS, game side]** LithoKraft's `BlockBehavior` / `ComponentBehavior` (`tick(inputs, state, mem) -> ComponentStep`, `emitToward`, `use`, `describe`) and `BehaviorCatalog` (name -> behaviour, bound through `BlockDef::behavior`). These live in `lithokraft::`, so the engine has no notion of "component".
-- **[PROPOSED]** Promote a generic `IBlockBehavior` / `BehaviorRegistry` into the SDK (`sdk/sim/behavior.h`) so that script and native mods can add components without patching LithoKraft's catalog. LithoKraft's `ComponentBehavior` becomes one *kind* of behavior registered by mod #1.
+- **[EXISTS, game side]** LithoKraft's `cBlockBehavior` / `cCompBehavior` (`tick(inputs, state, mem) -> ComponentStep`, `emitToward`, `use`, `describe`) and `BehaviorCatalog` (name -> behaviour, bound through `BlockDef::behavior`). These live in `lithokraft::`, so the engine has no notion of "component".
+- **[PROPOSED]** Promote a generic `IBlockBehavior` / `BehaviorRegistry` into the SDK (`sdk/sim/behavior.h`) so that script and native mods can add components without patching LithoKraft's catalog. LithoKraft's `cCompBehavior` becomes one *kind* of behavior registered by mod #1.
 - **[EXISTS] Random ticks** (`sim/random_ticks.h`): every world tick the engine picks **8 random cells per non-empty 16x16x16 section** (`kDefaultRandomTicksPerSection`) in the tick square around the player. The rate is per dimension (`Dimension::randomTicksPerSection`, passed as `SimConfig::randomTicksPerSection`, 0 = off). It runs at the world TPS only, not in clock domains (so beacons do not scale it), and the picks are deterministic per (tick, section). Blocks opt in with `kRandomTicks`. Each pick of an opted-in block goes to `IWorldSimulation::onRandomTick(world, x, y, z, block, rnd, dirty)`, a stub by default. Cells changed through `dirty` are marked for saves. Measured worst case (every block opted in, 32x32 wafer): 0.13 ms per tick at radius 8 and 0.27 ms at radius 12. The whole-area `randomTick` hook stays as a low-level escape hatch. LithoKraft has no block opted in yet, so gameplay is unchanged.
 
 ### 2.3 Dimensions, procgen generators and noise nodes (`world`, `procgen`)
@@ -312,7 +312,7 @@ Today (**[EXISTS]** path, inside mod #1's source tree): this is how LithoKraft a
 2. **Texture**: add `blink_lamp.png` to each pack under `LithoKraft/assets/packs/<pack>/` and a `"block": "blink_lamp"` entry in its `manifest.json` (update `file_count`).
 3. **Component**: in `LithoKraft/src/content/components/logic_components.cpp`:
 ```cpp
-class BlinkLamp final : public ComponentBehavior {
+class BlinkLamp final : public cCompBehavior {
  public:
   ComponentStep tick(const ComponentInputs& in, CellState s, ComponentMemory& mem) const override {
     if (++mem.timer >= 16) mem.timer = 0;          // toggles every 16 world ticks
@@ -338,7 +338,7 @@ mods/blinklamp/scripts/blink.as
 ```
 ```angelscript
 // sim-thread script behaviour (proposed binding)
-class Blink : ll::ComponentBehavior {
+class Blink : ll::cCompBehavior {
   void tick(const ll::Inputs &in, ll::Cell &cell, ll::Memory &mem) {
     mem.timer = (mem.timer + 1) % 16;
     cell.on = in.anyPowered && mem.timer < 8;

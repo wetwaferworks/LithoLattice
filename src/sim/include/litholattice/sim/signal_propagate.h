@@ -15,7 +15,7 @@
 // classes the game must #ifdef. The engine therefore owns the *policy* — the
 // enum, the config field, the partition contract, and the deterministic
 // ordering rules — while the game owns the *solver*: it implements
-// SignalPropagationPolicy::partitionsForTick() against its own world data
+// cSignalPropPolicy::partitionsForTick() against its own world data
 // and reads granularity() to decide which slicing to emit. The seam is
 // deliberately thin: the engine cannot know what a "network" is (that is
 // game-side connectivity), but it CAN enforce that whatever slicing the game
@@ -143,7 +143,7 @@
 //
 // WHAT THE BUILDER OWNS FROM HERE
 // -------------------------------
-// - The game-side SignalPropagationPolicy subclass: chunk enumeration from
+// - The game-side cSignalPropPolicy subclass: chunk enumeration from
 //   the ticking set (PerChunk), connected-component discovery with
 //   canonical ids (PerNetwork), or the single token (WholeWorld).
 // - Boundary semantics for PerChunk cross-chunk wires (document the chosen
@@ -169,7 +169,7 @@
 namespace litholattice {
 
 /// Tick-slicing grain for signal propagation. Runtime-selectable via
-/// SignalPropagationPolicy::setGranularity() — never #ifdef'd.
+/// cSignalPropPolicy::setGranularity() — never #ifdef'd.
 enum class PropagationGranularity : uint8_t {
   PerChunk,    ///< one partition per ticking chunk; cost ~ O(ticking chunks)
   PerNetwork,  ///< one partition per active signal network; cost ~ O(active networks + discovery)
@@ -253,9 +253,9 @@ inline ResourceAccess partitionAccess(const SignalPartition& p, uint32_t base = 
 /// granularity(), and yields them in canonical order. The solver (game-side)
 /// then propagates partition by partition in the emitted order. For
 /// scheduler integration see the design block (Pattern A vs Pattern B).
-class SignalPropagationPolicy {
+class cSignalPropPolicy {
  public:
-  virtual ~SignalPropagationPolicy() = default;
+  virtual ~cSignalPropPolicy() = default;
 
   /// Runtime selection of the propagation grain. Legal to call between
   /// ticks; the next partitionsForTick() call picks it up. (For Pattern B
@@ -284,7 +284,7 @@ class SignalPropagationPolicy {
 /// caller-supplied chunk keys / network ids, sorted into canonical order
 /// regardless of input order. Shows the intended subclass shape; the real
 /// game implementation fills these from the world instead of vectors.
-class VectorPropagationPolicy : public SignalPropagationPolicy {
+class cVectorPropPolicy : public cSignalPropPolicy {
  public:
   /// Chunk keys as produced by chunkPartitionId() (any order; sorted on emit).
   void setChunks(std::vector<uint64_t> keys) { chunks_ = std::move(keys); }

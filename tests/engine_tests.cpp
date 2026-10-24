@@ -4578,7 +4578,7 @@ void testSignalPropagate() {
 
   // --- default granularity ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     const bool ok = pol.granularity() == PropagationGranularity::PerChunk &&
                     kDefaultPropagationGranularity == PropagationGranularity::PerChunk;
     check(ok, "signal-propagate: default granularity is PerChunk");
@@ -4593,7 +4593,7 @@ void testSignalPropagate() {
 
   // --- PerChunk: sorted chunk keys, deterministic across repeated calls and ticks ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     pol.setGranularity(PropagationGranularity::PerChunk);
     // Scrambled input (plus a duplicate key): canonical order must come out anyway.
     const std::vector<uint64_t> keys = {chunkPartitionId(3, -2), chunkPartitionId(-9, 7),
@@ -4622,7 +4622,7 @@ void testSignalPropagate() {
 
   // --- PerChunk with an empty chunk set yields no partitions (valid: a quiet tick) ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     pol.setGranularity(PropagationGranularity::PerChunk);
     pol.setChunks({});
     std::vector<SignalPartition> a;
@@ -4633,7 +4633,7 @@ void testSignalPropagate() {
 
   // --- PerNetwork: canonical (sorted) network order, deterministic across calls ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     pol.setGranularity(PropagationGranularity::PerNetwork);
     pol.setNetworks({91, 5, 40, 7});
     std::vector<SignalPartition> a, b;
@@ -4648,7 +4648,7 @@ void testSignalPropagate() {
 
   // --- WholeWorld: exactly one partition carrying the whole-world token ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     pol.setChunks({chunkPartitionId(1, 2)});  // irrelevant under WholeWorld
     pol.setNetworks({8, 9});
     pol.setGranularity(PropagationGranularity::WholeWorld);
@@ -4661,7 +4661,7 @@ void testSignalPropagate() {
 
   // --- runtime switching takes effect on the next call ---
   {
-    VectorPropagationPolicy pol;
+    cVectorPropPolicy pol;
     pol.setChunks({chunkPartitionId(2, 0), chunkPartitionId(0, 1)});
     pol.setNetworks({11, 3});
     std::vector<SignalPartition> p;
