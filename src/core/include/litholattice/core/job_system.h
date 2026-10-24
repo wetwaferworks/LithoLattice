@@ -324,7 +324,7 @@ class cJobSystem {
         LITHO_THREAD_LOG("thread", "io thread %u offline", i);
       });
     }
-    LITHO_THREAD_LOG("thread", "JobSystem up: %u workers + %u io threads", workers, ios);
+    LITHO_THREAD_LOG("thread", "cJobSystem up: %u workers + %u io threads", workers, ios);
   }
 
   static uint64_t defaultWorkerMask(unsigned workers) {

@@ -225,7 +225,7 @@ class cSimThread {
     std::thread::id expect{};
     const std::thread::id me = std::this_thread::get_id();
     if (!statsReader_.compare_exchange_strong(expect, me, std::memory_order_relaxed))
-      assert(expect == me && "SimThread::stats(): single reader thread only (F-2)");
+      assert(expect == me && "cSimThread::stats(): single reader thread only (F-2)");
 #endif
     return stats_.read();
   }  // render thread only

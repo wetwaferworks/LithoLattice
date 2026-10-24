@@ -125,7 +125,7 @@ class cRegionFile {
   std::optional<Bytes> read(int lx, int lz, std::string* err) const;  ///< nullopt: absent or corrupt (err set)
   void put(int lx, int lz, Bytes record) {
     if (lx < 0 || lx >= kSpan || lz < 0 || lz >= kSpan) {
-      assert(false && "RegionFile::put: chunk coordinates out of range");
+      assert(false && "cRegionFile::put: chunk coordinates out of range");
       return;  // fail closed: never index the vectors out of bounds
     }
     pending_[slot(lx, lz)] = std::move(record);

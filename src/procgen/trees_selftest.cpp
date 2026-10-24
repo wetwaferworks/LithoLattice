@@ -182,7 +182,7 @@ void familyChecks(Checker& check) {
   const cSparseOctree* got = store.getBlockOctree(3, 9, 5);
   check(got != nullptr && !got->empty() &&
             leafStreamsEqual(*got, generateTree(traceForestTree(11ull))),
-        "trees: generateTree output round-trips through SubdivStore::setBlockOctree");
+        "trees: generateTree output round-trips through cSubdivStore::setBlockOctree");
 }
 
 }  // namespace

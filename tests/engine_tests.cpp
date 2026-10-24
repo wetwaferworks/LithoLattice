@@ -851,7 +851,7 @@ void testInfiniteRegistryPhase2() {
   cBlockReg blocks(cr);
   cItemReg items(cr);
   check(&blocks.content() == &cr && &items.content() == &cr,
-        "registry: typed views share one ContentRegistry");
+        "registry: typed views share one cContentReg");
 
   // Duplicate rejection is per (kind, id): the same name lives as both kinds.
   const BlockId thingB = blocks.add({"Thing", kSolid, Shape::Cube, "thing", {}, 0, 0, 0, 0.8f, false, 0, "m:thing"});
@@ -1034,7 +1034,7 @@ void testInfiniteRegistryPhase2() {
     cBlockReg ro;
     const BlockId a = ro.add({"A", kSolid, Shape::Cube, "a", {}, 0, 0, 0, 0.8f, false, 0, "t:a"});
     check(a == 1 && ro.size() == 2 && ro.kindOf(ro.stableIdOf(a)) == EntryKind::Block,
-          "registry: owning BlockRegistry facade behaves as before");
+          "registry: owning cBlockReg facade behaves as before");
     // The unified stableIdOf hook.
     check(ro.content().stableIdOf(EntryKind::Block, "t:a") == ro.stableIdOf(a) &&
               !ro.content().stableIdOf(EntryKind::Item, "t:a"),
@@ -1526,7 +1526,7 @@ void testMicroMesher() {
     subdiv::cSubdivStore store;
     std::vector<MicroQuad> q;
     check(micro::appendChunkMicroGeometry(store, 0, 0, 0, 0.0f, 0.0f, 0.0f, q) == 0 && q.empty(),
-          "micro mesher: empty SubdivStore -> no output (plain chunks untouched)");
+          "micro mesher: empty cSubdivStore -> no output (plain chunks untouched)");
 
     cSparseOctree solid;
     for (int z = 0; z < 2; ++z)
@@ -2150,7 +2150,7 @@ void testPbrSoftware() {
         cCookTorrance::shade(iron.albedo, iron.metalness, iron.roughness, n, v, l,
                             attenuatedRadiance(al));
     check(chanClose(pbrFragmentShader(fin), packLinear(lo), 2),
-          "pbr-software: fragment == CookTorrance::shade on identical inputs (epsilon)");
+          "pbr-software: fragment == cCookTorrance::shade on identical inputs (epsilon)");
   }
 
   // Chain: material-ID -> registry -> pixel. The torch fragment must match a direct
@@ -2883,7 +2883,7 @@ void testPbrChunkMaterials() {
 // IEmissiveProvider for the phase-1 seam). Cached scan + explicit refresh; the block-ID
 // fallback keeps light-emitting blocks visible while no producer writes material bytes.
 void testPbrEmissiveEnumeration() {
-  std::printf("render: world-side emissive enumeration (ChunkEmissiveProvider)\n");
+  std::printf("render: world-side emissive enumeration (cChunkEmissiveProvider)\n");
   cMaterialReg reg;
   std::string err;
   check(initMaterialRegistry(reg, LITHOKRAFT_MATERIALS_PATH, &err), "pbr-emissive: registry loads");
@@ -4004,12 +4004,12 @@ void testChangedColumns() {
   st.stop();
   const auto changed = st.takeChangedColumns();
   const std::unordered_set<uint64_t> want{ChunkKey::make(0, 0), ChunkKey::make(1, 0), ChunkKey::make(2, 0), ChunkKey::make(0, 2)};
-  check(changed == want, "SimThread: player edit, sim tick, random tick and command each mark their column changed (and only those)");
-  check(st.takeChangedColumns().empty(), "SimThread: taking the changed columns (a save) clears them");
+  check(changed == want, "cSimThread: player edit, sim tick, random tick and command each mark their column changed (and only those)");
+  check(st.takeChangedColumns().empty(), "cSimThread: taking the changed columns (a save) clears them");
   st.start();
   st.waitLoops(4);
   st.stop();
-  check(st.takeChangedColumns().empty(), "SimThread: ticks that change nothing mark nothing");
+  check(st.takeChangedColumns().empty(), "cSimThread: ticks that change nothing mark nothing");
 }
 
 // Random ticks: a full section of an opted-in block; every pick reaches onRandomTick.
@@ -4453,7 +4453,7 @@ void testDetSched() {
     const uint64_t h1 = runWorldJs(1, ticks), h2 = runWorldJs(2, ticks);
     const uint64_t h4 = runWorldJs(4, ticks), h8 = runWorldJs(8, ticks);
     const bool okJs = ref == h1 && h1 == h2 && h2 == h4 && h4 == h8 && ref != 0;
-    check(okJs, "det-sched: JobSystem backend hashes bit-identical to JobPool on 1, 2, 4, 8 workers");
+    check(okJs, "det-sched: cJobSystem backend hashes bit-identical to JobPool on 1, 2, 4, 8 workers");
   }
 }
 
@@ -4488,7 +4488,7 @@ class FakeJit : public ITraceJit {
 };
 
 void testTraceJitCompose() {
-  std::printf("sim: TraceJitSystem composition seam (JIT graph wrapped as a scheduler system)\n");
+  std::printf("sim: cTraceJitSystem composition seam (JIT graph wrapped as a scheduler system)\n");
 
   // --- access() declares Write on the signal-network resource ---
   {
@@ -4878,7 +4878,7 @@ void testAreaShape() {
 }
 
 void testSim() {
-  std::printf("sim: SimThread with a fixture IWorldSimulation\n");
+  std::printf("sim: cSimThread with a fixture IWorldSim\n");
   ChunkMap w = worldWithColumns(1, &fixtureBlocks());
   w.set(8, 10, 8, kRock);
   std::atomic<int> scans{0}, ticks{0}, changes{0}, commands{0}, meshes{0};
@@ -4911,10 +4911,10 @@ void testSim() {
   bool placeEv = false, cmdEv = false;
   for (const SimEvent& e : ev) { placeEv = placeEv || (e.kind == 1 && e.y == 11); cmdEv = cmdEv || (e.kind == 2 && e.value == 99); }
   check(scans == 1 && ticks > 20 && changes == 1 && commands == 1 && w.get(8, 11, 8) == kRock && w.get(8, 12, 8) == kAir,
-        "SimThread: scan once, ticks, ray-targeted place, canPlace veto, game command routed");
-  check(placeEv && cmdEv && meshes > 0, "SimThread: simulation events reach the game thread, remesh snapshots carry the epoch");
+        "cSimThread: scan once, ticks, ray-targeted place, canPlace veto, game command routed");
+  check(placeEv && cmdEv && meshes > 0, "cSimThread: simulation events reach the game thread, remesh snapshots carry the epoch");
   check(stats.active == 42 && stats.domainCount == 1 && !stats.domains[0].enabled && stats.domains[0].hz == 128,
-        "SimThread: stats report the simulation and the game's clock domain (toggled off)");
+        "cSimThread: stats report the simulation and the game's clock domain (toggled off)");
 }
 
 void testAnvilRegion() {
@@ -5276,7 +5276,7 @@ void testBackupDepth() {
 
 void testAsyncIo() {
   namespace st = litholattice::storage;
-  std::printf("storage: async I/O on the JobSystem (completion contract, strands, fences)\n");
+  std::printf("storage: async I/O on the cJobSystem (completion contract, strands, fences)\n");
   const auto dir = std::filesystem::temp_directory_path() / "litholattice_asyncio_test";
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
@@ -5367,7 +5367,7 @@ void testAsyncIo() {
       st::cWorldStore store(wdir, reg, &jobs);
       for (int i = 0; i < 10; ++i) store.saveAsync(*mkcol(i, -i));
       store.flush();
-      check(store.quarantinedCount() == 0, "async io: JobSystem-backed store saves with no quarantines");
+      check(store.quarantinedCount() == 0, "async io: cJobSystem-backed store saves with no quarantines");
     }
     {
       st::cWorldStore store(wdir, reg, &jobs);
@@ -5377,7 +5377,7 @@ void testAsyncIo() {
         const auto c = store.load(i, -i, &err);
         all = all && c && c->cx == i && c->cz == -i && c->subs[1] && c->subs[1]->nonAir == kSubChunkVolume;
       }
-      check(all, "async io: JobSystem-backed store round-trips 10 columns through submitIo()");
+      check(all, "async io: cJobSystem-backed store round-trips 10 columns through submitIo()");
       std::ofstream f(st::cWorldStore::regionPath(wdir, 9, 9), std::ios::binary | std::ios::trunc);
       f << "garbage";
       f.close();
@@ -6722,7 +6722,7 @@ void testNet() {
     ok = ok && pm.allocate(2000) == g;  // deterministic
     const auto g4 = pm.allocate(0);
     ok = ok && g4[0].bytes == 0 && g4[1].bytes == 0 && g4[2].bytes == 0;
-    check(ok, "net: PrioManager: guaranteed floors, priority-ordered leftover, deterministic");
+    check(ok, "net: cPrioMgr: guaranteed floors, priority-ordered leftover, deterministic");
   }
   testInfiniteRegistryNet();
 }
@@ -7111,7 +7111,7 @@ void testNetChannels() {
     ok = ok && mux.send(PayloadType::ChunkBatch, payloadFor(4).data(), 36, 0, d);
     quantize::ByteReader r3(d.data(), d.size());
     ok = ok && decodeHeader(r3, h) && (h.flags & kFlagReliable);
-    check(ok, "net: mux frames per ChannelMap; snapshots pass through (SnapshotClient owns their framing)");
+    check(ok, "net: mux frames per ChannelMap; snapshots pass through (cSnapshotClient owns their framing)");
   }
 }
 
@@ -7610,7 +7610,7 @@ void testScriptSandbox() {
 // ---- mods: cModLoader scan + SDK version enforcement ----
 
 void testModLoader() {
-  std::printf("mods: ModLoader scan + SDK enforcement (refuse major, warn minor)\n");
+  std::printf("mods: cModLoader scan + SDK enforcement (refuse major, warn minor)\n");
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "ll_modloader_test";
   std::error_code ec;
@@ -8065,7 +8065,7 @@ void testNetHandshake() {
     SnapshotReceiver strict;  // default: v2 only
     ok = ok && strict.receive(pkt.data(), pkt.size()) == SnapshotReceiver::Result::Dropped &&
          strict.lastReject().versionMismatch && strict.lastReject().got == 1;
-    check(ok, "net: SnapshotClient stamps the negotiated version; receiver validates it");
+    check(ok, "net: cSnapshotClient stamps the negotiated version; receiver validates it");
   }
 }
 
@@ -8096,7 +8096,7 @@ void testNetEncryption() {
     const auto or_ = nc.open(plain, sizeof plain, nonce, out, sizeof out);
     ok = ok && or_.error == CryptoError::NotImplemented && or_.bytes == 0;
     ok = ok && out[0] == 0xAA;
-    check(ok, "net: NullCipher seal/open return NotImplemented and touch nothing (never silently plaintext)");
+    check(ok, "net: cNullCipher seal/open return NotImplemented and touch nothing (never silently plaintext)");
   }
 
   // --- cCryptoSession: arming, requireEncryption, deriveKeys stub ------------------
@@ -8120,7 +8120,7 @@ void testNetEncryption() {
     ok = ok && hard.armCipher(std::make_unique<cNullCipher>()).error == CryptoError::NotImplemented;
     ok = ok && hard.isPlaintext() && hard.state() == CryptoSessionState::Plaintext;
     ok = ok && hard.armCipher(nullptr).error == CryptoError::BadKey;  // null backend refused
-    check(ok, "net: CryptoSession arms NullCipher as deliberate plaintext; requireEncryption refuses it");
+    check(ok, "net: cCryptoSession arms cNullCipher as deliberate plaintext; requireEncryption refuses it");
   }
 
   // --- makeNonce: deterministic, distinct, LE layout --------------------------------
@@ -8159,7 +8159,7 @@ void testNetEncryption() {
     ok = ok && !w.accept(199);  // duplicate
     ok = ok && !w.accept(136);  // exactly 64 behind: outside
     ok = ok && !w.accept(137 + 63);  // == 200 again: duplicate of highest, rejected
-    check(ok, "net: ReplayWindow accepts fresh/reordered, rejects duplicates and too-old counters");
+    check(ok, "net: cReplayWindow accepts fresh/reordered, rejects duplicates and too-old counters");
   }
 
   // --- openPacket: replay window commits ONLY after successful auth (review F-L1) -----

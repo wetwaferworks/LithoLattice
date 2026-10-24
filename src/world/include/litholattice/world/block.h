@@ -353,7 +353,7 @@ class cContentReg {
       return;
     }
     assert(expected == self &&
-           "ContentRegistry: mutators must run on one thread (single-threaded mod-init window)");
+           "cContentReg: mutators must run on one thread (single-threaded mod-init window)");
 #endif
   }
   mutable std::atomic<std::thread::id> mutatorThread_{};
@@ -483,7 +483,7 @@ inline bool cContentReg::insertEntry(EntryKind kind, const std::string& stringId
 
 inline BlockId cContentReg::addBlock(const BlockDef& d) {
   noteMutatorThread();
-  if (sealed_) throw std::runtime_error("ContentRegistry::addBlock: registry is sealed");
+  if (sealed_) throw std::runtime_error("cContentReg::addBlock: registry is sealed");
   const std::string sid = blockStringIdOf(d);
   if (const auto existing = findBlock(sid)) return *existing;  // first-wins
   const StableId derived = stableIdFor(kindName(EntryKind::Block), sid);
@@ -659,7 +659,7 @@ inline size_t cContentReg::refreshStaged() {
 
 inline ItemId cContentReg::addItem(const ItemDef& d) {
   noteMutatorThread();
-  if (sealed_) throw std::runtime_error("ContentRegistry::addItem: registry is sealed");
+  if (sealed_) throw std::runtime_error("cContentReg::addItem: registry is sealed");
   const std::string sid = itemStringIdOf(d);
   if (const auto existing = findItem(sid)) return *existing;  // first-wins
   const StableId derived = stableIdFor(kindName(EntryKind::Item), sid);

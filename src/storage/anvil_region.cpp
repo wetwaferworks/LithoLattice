@@ -220,7 +220,7 @@ bool cAnvilRegion::readHeader(std::string* err) {
     gens_[i] = getU32LE(tim + 4 * i);
   }
   if (quarantinedEntries_ > 0)
-    logError("storage: AnvilRegion '%s': quarantined %zu malformed index entr%s on open "
+    logError("storage: cAnvilRegion '%s': quarantined %zu malformed index entr%s on open "
              "(normalised to absent; their records are orphaned on disk, not trusted)",
              path_.string().c_str(), quarantinedEntries_, quarantinedEntries_ == 1 ? "y" : "ies");
   return true;

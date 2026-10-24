@@ -137,7 +137,7 @@ class cChunkEmissiveProvider final : public IEmissiveProvider {
       ownerThreadSet_ = true;
     } else {
       assert(std::this_thread::get_id() == ownerThread_ &&
-             "ChunkEmissiveProvider::refresh called off the ChunkMap owner thread");
+             "cChunkEmissiveProvider::refresh called off the ChunkMap owner thread");
     }
 #endif
     cache_.clear();

@@ -1572,7 +1572,7 @@ void structureLoaderChecks(Checker& check) {
                             (err.empty() ? std::string() : " (" + err + ")"));
   if (!gen) return;
   const cStructureFeature* hut = findStructure(*gen, "hut");
-  check(hut != nullptr, "structures: feature visits as a StructureFeature");
+  check(hut != nullptr, "structures: feature visits as a cStructureFeature");
   if (hut) {
     check(hut->reach() == 1, "structures: reach = blueprint extent (1)");
     check(hut->blueprint().size() == 4, "structures: blueprint kept 4 cells");

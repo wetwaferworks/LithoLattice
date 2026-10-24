@@ -34,7 +34,7 @@ void* bump(void* data, size_t size, size_t& used, size_t reqSize, size_t align) 
 }  // namespace
 
 void* cTickArena::allocBlock(size_t size) {
-  assert(size <= 0xFFFFFFFFu && "TickArena: blocks are limited to 4 GiB (32-bit handle offsets)");
+  assert(size <= 0xFFFFFFFFu && "cTickArena: blocks are limited to 4 GiB (32-bit handle offsets)");
   return ::operator new(size, std::align_val_t(kDefaultAlign));
 }
 
@@ -116,8 +116,8 @@ void cTickArena::reset() {
 }
 
 void cTickArena::rewind(Marker m) {
-  assert(m.block <= cur_ && "TickArena::rewind: marker is newer than the current position");
-  assert(m.used <= blocks_[m.block].used && "TickArena::rewind: marker is inside live memory");
+  assert(m.block <= cur_ && "cTickArena::rewind: marker is newer than the current position");
+  assert(m.used <= blocks_[m.block].used && "cTickArena::rewind: marker is inside live memory");
   for (size_t i = m.block + 1; i <= cur_; ++i) blocks_[i].used = 0;
   cur_ = m.block;
   blocks_[cur_].used = m.used;
@@ -130,7 +130,7 @@ uint32_t cTickArena::offsetOf(const void* p) const {
     if (addr >= base && addr < base + b.size)
       return static_cast<uint32_t>(addr - base);
   }
-  assert(false && "TickArena::offsetOf: pointer is not inside this arena");
+  assert(false && "cTickArena::offsetOf: pointer is not inside this arena");
   return 0;
 }
 
@@ -141,7 +141,7 @@ cTickArena::Handle cTickArena::toHandle(const void* p) const {
     if (addr >= base && addr < base + blocks_[i].size)
       return (static_cast<Handle>(i) << 32) | static_cast<uint32_t>(addr - base);
   }
-  assert(false && "TickArena::toHandle: pointer is not inside this arena");
+  assert(false && "cTickArena::toHandle: pointer is not inside this arena");
   return 0;
 }
 

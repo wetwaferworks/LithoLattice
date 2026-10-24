@@ -480,7 +480,7 @@ void testDivider(Checker& check) {
 void testModUiConfinement(Checker& check) {
   // cModPanel is final: no subclass (and no mod) can override the badge paint.
   static_assert(std::is_final_v<cModPanel>,
-                "ModPanel must be final so the badge cannot be overridden");
+                "cModPanel must be final so the badge cannot be overridden");
 
   // Reserved style classes are rejected in mod JSON: a mod cannot take the
   // system dialog or tooltip look, nor the engine-applied mod classes.

@@ -167,8 +167,8 @@ cSimThread::~cSimThread() {
     // dereferences (its WorkFn captures reach this cSimThread and the
     // world). Deliberately leak it — process-lifetime, logged, and safe —
     // rather than use-after-free in teardown.
-    logError("sim_thread: destroying a SimThread with a handshake worker still outstanding — "
-             "deliberately leaking the TimingHandshakeAuthority (poisoned stop)");
+    logError("sim_thread: destroying a cSimThread with a handshake worker still outstanding — "
+             "deliberately leaking the cTimingHandshakeAuthority (poisoned stop)");
     handshake_.release();
   }
 }
