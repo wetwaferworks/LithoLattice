@@ -60,9 +60,9 @@ std::unique_ptr<ITerrainStage> loadTerrain(Loader& l, const Json& j) {
       l.fail("terrain", "'biome_heightmap' needs a non-empty 'biomes' array of {output, material}");
       return nullptr;
     }
-    std::vector<BiomeHeightmapTerrain::Entry> entries;
+    std::vector<cBiomeHeightmapTerrain::Entry> entries;
     for (const Json& e : list->arr) {
-      BiomeHeightmapTerrain::Entry en;
+      cBiomeHeightmapTerrain::Entry en;
       if (!l.material(e, "material", en.material, "terrain") || !l.output(e, "output", en.output, "terrain"))
         return nullptr;
       // Optional mountain uplift: {"uplift": "<graph output>", "uplift_amplitude": <blocks>}.
@@ -82,7 +82,7 @@ std::unique_ptr<ITerrainStage> loadTerrain(Loader& l, const Json& j) {
       }
       entries.push_back(en);
     }
-    return std::make_unique<BiomeHeightmapTerrain>(l.graph, std::move(entries), int(j.getNum("depth", 0)));
+    return std::make_unique<cBiomeHeightmapTerrain>(l.graph, std::move(entries), int(j.getNum("depth", 0)));
   }
   MaterialId m{};
   int out = -1;
@@ -191,7 +191,7 @@ std::unique_ptr<ICarver> loadRuinsCarver(Loader& l, const Json& j, const std::ve
   s.openMaxSize = int(j.getNum("open_max_size", s.openMaxSize));
   s.openHeight = int(j.getNum("open_height", s.openHeight));
   s.rubbleChance = float(j.getNum("rubble_chance", s.rubbleChance));
-  return std::make_unique<RuinsCarver>(std::move(s));
+  return std::make_unique<cRuinsCarver>(std::move(s));
 }
 
 std::unique_ptr<ICarver> loadCheeseCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
@@ -202,7 +202,7 @@ std::unique_ptr<ICarver> loadCheeseCarver(Loader& l, const Json& j, const std::v
   s.minY = int(j.getNum("min_y", s.minY));
   s.surfaceMargin = int(j.getNum("surface_margin", s.surfaceMargin));
   if (!loadCarverDensity(l, j, biomeNames, section, s.density)) return nullptr;
-  return std::make_unique<CheeseCarver>(s);
+  return std::make_unique<cCheeseCarver>(s);
 }
 
 template <typename CarverT>
@@ -459,7 +459,7 @@ std::unique_ptr<IFeature> loadLithoStampFeature(Loader& l, const Json& j,
   }
   if (cells.empty())
     return l.fail(section, "model '" + modelName + "' produced no stampable cells"), nullptr;
-  return std::make_unique<LithoStampFeature>(s, std::move(cells));
+  return std::make_unique<cLithoStampFeature>(s, std::move(cells));
 }
 
 std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
@@ -627,7 +627,7 @@ std::unique_ptr<IFeature> loadRockFormationFeature(Loader& l, const Json& j,
   s.wobble = std::clamp(float(j.getNum("wobble", s.wobble)), 0.f, 0.95f);
   s.density = std::clamp(float(j.getNum("density", s.density)), 0.f, 1.f);
   if (!loadBiomeDensity(l, j, biomeNames, section, s.biomes.density)) return nullptr;
-  return std::make_unique<RockFormationFeature>(std::move(s));
+  return std::make_unique<cRockFormationFeature>(std::move(s));
 }
 
 std::unique_ptr<IFeature> loadWorleyOreFeature(Loader& l, const Json& j,
@@ -651,7 +651,7 @@ std::unique_ptr<IFeature> loadWorleyOreFeature(Loader& l, const Json& j,
     return nullptr;
   }
   s.clusterThreshold = std::clamp(float(j.getNum("cluster_threshold", s.clusterThreshold)), -1.f, 1.f);
-  return std::make_unique<WorleyOreVeinFeature>(std::move(s));
+  return std::make_unique<cWorleyOreVeinFeature>(std::move(s));
 }
 
 /// Parses "biome_transitions": [{"a": name, "b": name, "result": name, "width": n}].
@@ -675,7 +675,7 @@ bool loadBiomeTransitions(Loader& l, const Json& json, const std::vector<std::st
     rule.width = std::clamp(int(t.getNum("width", rule.width)), 1, 8);
     rules.push_back(rule);
   }
-  if (!rules.empty()) b.biomePost(std::make_unique<BiomeTransitionStage>(std::move(rules)));
+  if (!rules.empty()) b.biomePost(std::make_unique<cBiomeTransitionStage>(std::move(rules)));
   return true;
 }
 
@@ -730,7 +730,7 @@ bool loadSnowCap(Loader& l, const Json& json, GeneratorPipeline::Builder& b) {
   if (!(s.noiseFreq > 0.f) || !std::isfinite(s.noiseFreq))
     return l.fail(section, "'noise_freq' must be a positive finite number");
   s.minHeight = int(sc->getNum("min_height", s.minHeight));
-  b.surface(std::make_unique<SnowCapRule>(std::move(s)));
+  b.surface(std::make_unique<cSnowCapRule>(std::move(s)));
   return true;
 }
 
@@ -750,7 +750,7 @@ bool loadSandDrifts(Loader& l, const Json& json, const std::vector<std::string>&
   s.threshold = std::clamp(float(sd->getNum("threshold", s.threshold)), -1.f, 1.f);
   s.depth = std::max(1, int(sd->getNum("depth", s.depth)));
   if (!loadBiomeDensity(l, *sd, biomeNames, section, s.biomes.density)) return false;
-  b.surface(std::make_unique<SandDriftRule>(std::move(s)));
+  b.surface(std::make_unique<cSandDriftRule>(std::move(s)));
   return true;
 }
 
@@ -778,7 +778,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
     s.maxBranchLen = std::max(s.minBranchLen, int(j.getNum("max_branch_len", s.maxBranchLen)));
     s.redTipChance = std::clamp(float(j.getNum("red_tip_chance", s.redTipChance)), 0.f, 1.f);
     if (!loadBiomeDensity(l, j, biomeNames, section, s.biomes.density)) return nullptr;
-    return std::make_unique<TraceTreeFeature>(s);
+    return std::make_unique<cTraceTreeFeature>(s);
   }
   if (type == "capacitor_cans") {
     CapacitorCanSettings s;
@@ -789,7 +789,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
     s.minCanH = std::max(1, int(j.getNum("min_height", s.minCanH)));
     s.maxCanH = std::max(s.minCanH, int(j.getNum("max_height", s.maxCanH)));
     if (!loadBiomeDensity(l, j, biomeNames, section, s.biomes.density)) return nullptr;
-    return std::make_unique<CapacitorCanFeature>(s);
+    return std::make_unique<cCapacitorCanFeature>(s);
   }
   if (type == "resonator_spire") {
     ResonatorSpireSettings s;
@@ -798,7 +798,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
     s.minH = std::max(1, int(j.getNum("min_height", s.minH)));
     s.maxH = std::max(s.minH, int(j.getNum("max_height", s.maxH)));
     if (!loadBiomeDensity(l, j, biomeNames, section, s.biomes.density)) return nullptr;
-    return std::make_unique<ResonatorSpireFeature>(s);
+    return std::make_unique<cResonatorSpireFeature>(s);
   }
   if (type == "silicon_cities") {  // Argon's Silicon Cities (Cortana 2026-10-16)
     SiliconCitySettings s;
@@ -816,7 +816,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
     s.baseY = std::clamp(int(j.getNum("base_y", s.baseY)), 8, 4000) & ~3;
     s.skirt = std::clamp(int(j.getNum("skirt", s.skirt)), 1, 32);
     s.clearAbove = std::clamp(int(j.getNum("clear_above", s.clearAbove)), 0, 64);
-    return std::make_unique<SiliconCitiesFeature>(s);
+    return std::make_unique<cSiliconCitiesFeature>(s);
   }
   if (type == "structure") return loadStructureFeature(l, j, biomeNames);  if (type == "lithoform_stamp") return loadLithoStampFeature(l, j, biomeNames);
   if (type == "groundcover") return loadGroundCoverFeature(l, j, biomeNames);
@@ -832,7 +832,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
   s.size = int(j.getNum("size", s.size));
   s.minY = int(j.getNum("min_y", s.minY));
   s.maxY = int(j.getNum("max_y", s.maxY));
-  return std::make_unique<OreVeinFeature>(s);
+  return std::make_unique<cOreVeinFeature>(s);
 }
 
 /// Resolves the "water" material: an explicit "water" key, else the registry's "water".
@@ -972,7 +972,7 @@ std::unique_ptr<const GeneratorPipeline> loadGenerator(const Json& json, uint64_
   GeneratorPipeline::Builder b(l.graph);
   auto terrain = loadTerrain(l, *terrainJson);
   if (!terrain) return nullptr;
-  const auto* biomeTerrain = dynamic_cast<const BiomeHeightmapTerrain*>(terrain.get());
+  const auto* biomeTerrain = dynamic_cast<const cBiomeHeightmapTerrain*>(terrain.get());
   b.terrain(std::move(terrain));
   if (const Json* c = json.get("climate")) {
     auto climate = loadClimate(l, *c);

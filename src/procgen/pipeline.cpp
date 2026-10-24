@@ -8,28 +8,28 @@ bool ColumnBuffer::layerEmpty(int y) const {
   return std::all_of(begin, begin + size_ * size_, [](MaterialId m) { return m == kAirMaterial; });
 }
 
-bool FeatureRegistry::add(std::string name, std::unique_ptr<IFeature> feature) {
+bool cFeatureReg::add(std::string name, std::unique_ptr<IFeature> feature) {
   if (contains(name)) return false;
   features_.push_back({std::move(name), std::move(feature)});
   return true;
 }
 
-bool FeatureRegistry::contains(std::string_view name) const {
+bool cFeatureReg::contains(std::string_view name) const {
   return std::any_of(features_.begin(), features_.end(), [&](const Entry& e) { return e.name == name; });
 }
 
-void FeatureRegistry::placeAll(StageContext& ctx) const {
+void cFeatureReg::placeAll(StageContext& ctx) const {
   for (const Entry& e : features_) {
     Rng rng(deriveSeed(ctx.chunk.chunkSeed, nameHash(e.name)));
     e.feature->place(ctx, rng);
   }
 }
 
-void FeatureRegistry::forEach(const std::function<void(std::string_view, IFeature&)>& fn) {
+void cFeatureReg::forEach(const std::function<void(std::string_view, IFeature&)>& fn) {
   for (Entry& e : features_) fn(e.name, *e.feature);
 }
 
-void FeatureRegistry::forEach(const std::function<void(std::string_view, const IFeature&)>& fn) const {
+void cFeatureReg::forEach(const std::function<void(std::string_view, const IFeature&)>& fn) const {
   for (const Entry& e : features_) fn(e.name, *e.feature);
 }
 

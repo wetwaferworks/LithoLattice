@@ -94,7 +94,7 @@ void cGroundCoverFeature::place(StageContext& ctx, Rng&) const {
 
 // ---- 2. rock formations ------------------------------------------------------------
 
-void RockFormationFeature::place(StageContext& ctx, Rng&) const {
+void cRockFormationFeature::place(StageContext& ctx, Rng&) const {
   const uint64_t featSeed = featSeedFor(ctx.chunk.dimensionSeed, s_.seedName, "rock_formation");
   const uint64_t noiseSeed = deriveSeed(featSeed, nameHash("wobble"));
   const int n = ctx.chunk.size, top = ctx.blocks.height();
@@ -136,13 +136,13 @@ void RockFormationFeature::place(StageContext& ctx, Rng&) const {
 
 // ---- 3. biome transition bands -----------------------------------------------------
 
-void BiomeTransitionStage::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cBiomeTransitionStage::onPipelineBuilt(const GeneratorPipeline* pipeline) {
   // The un-transitioned dominant biome at any world column. The pipeline's biomeAt uses
   // only the selector, so this cannot recurse into process().
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void BiomeTransitionStage::process(StageContext& ctx) const {
+void cBiomeTransitionStage::process(StageContext& ctx) const {
   if (rules_.empty() || ctx.maps.biome.empty()) return;
   const int n = ctx.chunk.size;
   const int x0 = ctx.chunk.worldX(0), z0 = ctx.chunk.worldZ(0);
@@ -190,7 +190,7 @@ void BiomeTransitionStage::process(StageContext& ctx) const {
 
 // ---- 4. Worley ore veins -----------------------------------------------------------
 
-float WorleyOreVeinFeature::worleyF1(uint64_t seed, float x, float y, float z) {
+float cWorleyOreVeinFeature::worleyF1(uint64_t seed, float x, float y, float z) {
   const int xi = int(std::floor(x)), yi = int(std::floor(y)), zi = int(std::floor(z));
   float best = 8.f;
   for (int dz = -1; dz <= 1; ++dz)
@@ -210,7 +210,7 @@ float WorleyOreVeinFeature::worleyF1(uint64_t seed, float x, float y, float z) {
   return std::sqrt(best);  // ~[0, 1.74]; normalized below by the caller if needed
 }
 
-void WorleyOreVeinFeature::place(StageContext& ctx, Rng&) const {
+void cWorleyOreVeinFeature::place(StageContext& ctx, Rng&) const {
   const int n = ctx.chunk.size, height = ctx.blocks.height();
   const int lo = std::max(0, s_.minY), hi = std::min(height - 1, s_.maxY);
   if (lo > hi || s_.material == kAirMaterial || s_.replace == kAirMaterial) return;
@@ -238,7 +238,7 @@ void WorleyOreVeinFeature::place(StageContext& ctx, Rng&) const {
 
 // ---- 7. weather-shaped generation --------------------------------------------------
 
-void SnowCapRule::apply(StageContext& ctx) const {
+void cSnowCapRule::apply(StageContext& ctx) const {
   if (s_.snow == kAirMaterial) return;
   const uint64_t seed = featSeedFor(ctx.chunk.dimensionSeed, s_.seedName, "snowcap");
   const int n = ctx.chunk.size;
@@ -258,7 +258,7 @@ void SnowCapRule::apply(StageContext& ctx) const {
     }
 }
 
-void SandDriftRule::apply(StageContext& ctx) const {
+void cSandDriftRule::apply(StageContext& ctx) const {
   if (s_.sand == kAirMaterial) return;
   const uint64_t seed = featSeedFor(ctx.chunk.dimensionSeed, s_.seedName, "sand_drift");
   const int n = ctx.chunk.size;

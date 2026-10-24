@@ -1014,11 +1014,11 @@ std::unique_ptr<const GeneratorPipeline> makeTreePipeline(uint64_t dimSeed, Trac
   if (!graph) return nullptr;
   GeneratorPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
-  if (!b.feature("trees", std::make_unique<TraceTreeFeature>(std::move(ts)))) return nullptr;
+  if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
   return b.build();
 }
 
-/// Independent replica of TraceTreeFeature::place for one base: the expected blocks keyed by
+/// Independent replica of cTraceTreeFeature::place for one base: the expected blocks keyed by
 /// chunk-local (x, y, z). Mirrors the implementation's seeded stream consumption exactly, so
 /// any divergence (chunk-rng use, wrong reach, out-of-chunk writes) fails the comparison.
 void replicaTree(uint64_t featSeed, const TraceTreeSettings& st, int32_t wx, int32_t wz, int bx, int bz, int surfY,
@@ -1460,7 +1460,7 @@ std::unique_ptr<const GeneratorPipeline> makeBlendPipeline(uint64_t dimSeed, flo
   GeneratorPipeline::Builder b(graph);
   b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   b.biomes(std::make_unique<FixedBlendSelector>(w0));
-  if (!b.feature("trees", std::make_unique<TraceTreeFeature>(std::move(ts)))) return nullptr;
+  if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
   return b.build();
 }
 
@@ -2380,7 +2380,7 @@ void noiseFieldCarverChecks(Checker& check) {
   {
     const uint64_t dimSeed = dimensionSeed(777, "cheese");
     std::vector<std::unique_ptr<ICarver>> cv;
-    cv.push_back(std::make_unique<CheeseCarver>(CheeseSettings{}));
+    cv.push_back(std::make_unique<cCheeseCarver>(CheeseSettings{}));
     const auto gen = makeCarverPipeline(dimSeed, std::move(cv));
     check(gen != nullptr, "cheese: pipeline builds");
     if (gen) {
@@ -2403,7 +2403,7 @@ void noiseFieldCarverChecks(Checker& check) {
       check(h1 == hashBuffer(gen->generate(treeChunk(5, -7, dimSeed))),
             "cheese: same chunk regenerates identically");
       std::vector<std::unique_ptr<ICarver>> cv2;
-      cv2.push_back(std::make_unique<CheeseCarver>(CheeseSettings{}));
+      cv2.push_back(std::make_unique<cCheeseCarver>(CheeseSettings{}));
       const auto genOther = makeCarverPipeline(dimensionSeed(778, "cheese"), std::move(cv2));
       check(genOther && h1 != hashBuffer(genOther->generate(treeChunk(5, -7, dimensionSeed(778, "cheese")))),
             "cheese: different seed -> different field");
@@ -2518,7 +2518,7 @@ void ruinsOpenChecks(Checker& check) {
   };
   const auto build = [&](bool open) {
     std::vector<std::unique_ptr<ICarver>> cv;
-    cv.push_back(std::make_unique<RuinsCarver>(settings(open)));
+    cv.push_back(std::make_unique<cRuinsCarver>(settings(open)));
     return makeCarverPipeline(dimSeed, std::move(cv));
   };
   const auto genDefault = build(false);

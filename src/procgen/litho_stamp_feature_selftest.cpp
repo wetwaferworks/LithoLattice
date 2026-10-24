@@ -1,4 +1,4 @@
-// Self-test for LithoStampFeature and the "lithoform_stamp" generator JSON type:
+// Self-test for cLithoStampFeature and the "lithoform_stamp" generator JSON type:
 // baked .lthm models scattered as world structures via an in-memory ModelResolver.
 #include <iterator>
 #include <cstdlib>

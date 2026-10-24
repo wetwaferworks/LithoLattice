@@ -58,9 +58,9 @@ struct RockFormationSettings {
 /// Boulders, arches and spires: noise-wobbled ellipsoid blobs grown upward from the surface.
 /// Position-keyed with margin replay (reach = maxR), writes into air only, never overwrites
 /// terrain. One feature covers the whole boulder->spire spectrum via the radius/height ratio.
-class RockFormationFeature final : public IFeature {
+class cRockFormationFeature final : public IFeature {
  public:
-  explicit RockFormationFeature(RockFormationSettings s) : s_(std::move(s)) {
+  explicit cRockFormationFeature(RockFormationSettings s) : s_(std::move(s)) {
     s_.minR = std::max(1, s_.minR); s_.maxR = std::max(s_.minR, s_.maxR);
     s_.minH = std::max(1, s_.minH); s_.maxH = std::max(s_.minH, s_.maxH);
     s_.wobble = std::clamp(s_.wobble, 0.f, 0.95f);
@@ -91,10 +91,10 @@ struct BiomeTransition {
 /// terrain. In-chunk neighbours read ColumnMaps::biome directly; out-of-chunk neighbours
 /// use the pipeline's biomeAt probe (bound by onPipelineBuilt) -- the probe returns the
 /// un-transitioned dominant biome, so there is no recursion and every chunk agrees.
-class BiomeTransitionStage final : public IBiomePostStage {
+class cBiomeTransitionStage final : public IBiomePostStage {
  public:
   using Probe = BiomeProbe;  ///< dominant un-transitioned biome at a world column
-  explicit BiomeTransitionStage(std::vector<BiomeTransition> rules) : rules_(std::move(rules)) {}
+  explicit cBiomeTransitionStage(std::vector<BiomeTransition> rules) : rules_(std::move(rules)) {}
   void process(StageContext& ctx) const override;
   void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
   void setProbe(Probe probe) { probe_ = std::move(probe); }
@@ -122,9 +122,9 @@ struct WorleyOreVeinSettings {
 /// inside the y band, `replace` becomes ore. The field is a pure function of position, so
 /// the veins are chunk-pure with no neighbour replay at all. An optional low-frequency
 /// value-noise mask clusters veins into deposits instead of a uniform sprinkle.
-class WorleyOreVeinFeature final : public IFeature {
+class cWorleyOreVeinFeature final : public IFeature {
  public:
-  explicit WorleyOreVeinFeature(WorleyOreVeinSettings s) : s_(std::move(s)) {}
+  explicit cWorleyOreVeinFeature(WorleyOreVeinSettings s) : s_(std::move(s)) {}
   void place(StageContext& ctx, Rng& rng) const override;
   const WorleyOreVeinSettings& settings() const { return s_; }
   /// Normalized Worley F1 at a world position: exposed for tests. Pure function of
@@ -156,9 +156,9 @@ struct SnowCapSettings {
 
 /// Static baking of snowfall: columns at/above the latitude-adjusted snow line get a snow
 /// top. Runs as a surface rule after LayeredSurface so it caps the biome's own top block.
-class SnowCapRule final : public ISurfaceRule {
+class cSnowCapRule final : public ISurfaceRule {
  public:
-  explicit SnowCapRule(SnowCapSettings s) : s_(std::move(s)) {}
+  explicit cSnowCapRule(SnowCapSettings s) : s_(std::move(s)) {}
   void apply(StageContext& ctx) const override;
   const SnowCapSettings& settings() const { return s_; }
 
@@ -177,9 +177,9 @@ struct SandDriftSettings {
 
 /// Static baking of wind: where the drift noise runs high, the top of the column becomes
 /// sand (dunes read as sand patches over the biome's own surface). A surface rule.
-class SandDriftRule final : public ISurfaceRule {
+class cSandDriftRule final : public ISurfaceRule {
  public:
-  explicit SandDriftRule(SandDriftSettings s) : s_(std::move(s)) {
+  explicit cSandDriftRule(SandDriftSettings s) : s_(std::move(s)) {
     s_.depth = std::max(1, s_.depth);
   }
   void apply(StageContext& ctx) const override;

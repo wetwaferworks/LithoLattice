@@ -117,7 +117,7 @@ class DensityTerrain final : public ITerrainStage {
 /// *before* biome blending. The uplift therefore rides the existing weight-averaged height
 /// path: biome borders stay smooth gradients (no cliffs) unless the biome weights are one-hot
 /// there. Omit `uplift` (the default) for flat biomes.
-class BiomeHeightmapTerrain final : public ITerrainStage {
+class cBiomeHeightmapTerrain final : public ITerrainStage {
  public:
   struct Entry {
     int output;                 ///< graph output index for this biome's height
@@ -125,7 +125,7 @@ class BiomeHeightmapTerrain final : public ITerrainStage {
     int upliftOutput = -1;      ///< optional extra graph output added to the height; -1 = none
     float upliftAmplitude = 1.f;  ///< scales the uplift output (blocks)
   };
-  BiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome, int depth = 0);
+  cBiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome, int depth = 0);
   void generate(StageContext& ctx) const override;
   size_t biomeCount() const { return perBiome_.size(); }
 
@@ -273,10 +273,10 @@ struct CheeseSettings {
   std::vector<float> density;    ///< per-biome carve gate multiplier; missing entries = 1
 };
 
-class CheeseCarver final : public ICarver {
+class cCheeseCarver final : public ICarver {
  public:
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  explicit CheeseCarver(CheeseSettings s);
+  explicit cCheeseCarver(CheeseSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const GeneratorPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
@@ -377,9 +377,9 @@ struct RuinsSettings {
   float rubbleChance = 0.35f;        ///< per-floor-cell rubble scatter probability
 };
 
-class RuinsCarver final : public ICarver {
+class cRuinsCarver final : public ICarver {
  public:
-  explicit RuinsCarver(RuinsSettings s);
+  explicit cRuinsCarver(RuinsSettings s);
   void carve(StageContext& ctx) const override;
 
  private:
@@ -445,7 +445,7 @@ struct RiverSettings {
 /// carver instance, so each dimension's generator JSON tunes its own rivers.
 ///
 /// Caveat: the routing height is a single graph output, while the real terrain may blend
-/// several (BiomeHeightmapTerrain). The generator JSON should expose a representative
+/// several (cBiomeHeightmapTerrain). The generator JSON should expose a representative
 /// routing output (usually the same "height" the terrain uses, or a smoothed variant);
 /// where the routing height and the terrain disagree, the carve takes min(actual, channel)
 /// so rivers never raise terrain or float water in the air.
@@ -487,9 +487,9 @@ struct OreVeinSettings {
 };
 
 /// Blob-shaped veins of `material` inside `replace`, kept within the chunk.
-class OreVeinFeature final : public IFeature {
+class cOreVeinFeature final : public IFeature {
  public:
-  explicit OreVeinFeature(OreVeinSettings s) : s_(s) {}
+  explicit cOreVeinFeature(OreVeinSettings s) : s_(s) {}
   void place(StageContext& ctx, Rng& rng) const override;
 
  private:
@@ -532,7 +532,7 @@ float blendedDensity(const BiomeDensity& densities, const ColumnMaps& maps, size
 /// DETERMINISM (world permanence): the canopy for a tree is a pure function of
 /// (feature seed, tree anchor world position). traceTreeCanopyFor derives its
 /// own position-keyed Rng via posSeed(featSeed ^ canopy salt, wx, wz) — the
-/// same discipline TraceTreeFeature uses for trunk/branches — so canopies are
+/// same discipline cTraceTreeFeature uses for trunk/branches — so canopies are
 /// identical regardless of chunk generation order, and the canopy stream never
 /// perturbs the trunk/branch stream. No rand(), no time, no unordered iteration.
 inline constexpr int kTraceTreeCanopyRadiusHMax = 3;  ///< max horizontal canopy radius (blocks)
@@ -594,9 +594,9 @@ struct TraceTreeSettings {
 /// world block position (seeded hash per position keyed by the feature type), so neighbouring
 /// chunks agree on trees that cross the border without reading each other: each chunk replays
 /// the margin of its neighbours and only ever writes its own columns.
-class TraceTreeFeature final : public IFeature {
+class cTraceTreeFeature final : public IFeature {
  public:
-  explicit TraceTreeFeature(TraceTreeSettings s) : s_(std::move(s)) {}
+  explicit cTraceTreeFeature(TraceTreeSettings s) : s_(std::move(s)) {}
   void place(StageContext& ctx, Rng& rng) const override;
   /// Horizontal blocks a tree can reach past its base: the margin replayed from neighbours.
   /// Canopy radius participates: a border tree's canopy must replay identically
@@ -617,10 +617,10 @@ struct CapacitorCanSettings {
 };
 
 /// Cluster of squat capacitor-can "trees" (3-7 cans, 2-3 tall, in a tight radius-2 cluster).
-/// Same position-keyed deterministic placement as TraceTreeFeature.
-class CapacitorCanFeature final : public IFeature {
+/// Same position-keyed deterministic placement as cTraceTreeFeature.
+class cCapacitorCanFeature final : public IFeature {
  public:
-  explicit CapacitorCanFeature(CapacitorCanSettings s) : s_(std::move(s)) {}
+  explicit cCapacitorCanFeature(CapacitorCanSettings s) : s_(std::move(s)) {}
   void place(StageContext& ctx, Rng& rng) const override;
   int reach() const { return 2; }
   const CapacitorCanSettings& settings() const { return s_; }
@@ -637,10 +637,10 @@ struct ResonatorSpireSettings {
 };
 
 /// Tall thin crystal spike (8-16 tall, 1 wide, 2x2 for the first 3 blocks half the time).
-/// Same position-keyed deterministic placement as TraceTreeFeature.
-class ResonatorSpireFeature final : public IFeature {
+/// Same position-keyed deterministic placement as cTraceTreeFeature.
+class cResonatorSpireFeature final : public IFeature {
  public:
-  explicit ResonatorSpireFeature(ResonatorSpireSettings s) : s_(std::move(s)) {}
+  explicit cResonatorSpireFeature(ResonatorSpireSettings s) : s_(std::move(s)) {}
   void place(StageContext& ctx, Rng& rng) const override;
   int reach() const { return 1; }
   const ResonatorSpireSettings& settings() const { return s_; }
@@ -793,11 +793,11 @@ struct LithoStampSettings {
 /// the world on a coarse cell lattice: at most one base per cell, density-gated, biome-gated,
 /// rotated in 90-degree steps. Like StructureFeature but driven by model cells instead of
 /// a JSON blueprint. Cells write into air only, never overwriting terrain.
-class LithoStampFeature final : public IFeature {
+class cLithoStampFeature final : public IFeature {
  public:
   /// Dominant biome-table index at a world column; bound to the pipeline by onPipelineBuilt.
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  LithoStampFeature(LithoStampSettings s, std::vector<LithoStampVoxel> cells,
+  cLithoStampFeature(LithoStampSettings s, std::vector<LithoStampVoxel> cells,
                     BiomeProbe probe = nullptr);
   void place(StageContext& ctx, Rng& rng) const override;
   void onPipelineBuilt(const GeneratorPipeline* pipeline) override;

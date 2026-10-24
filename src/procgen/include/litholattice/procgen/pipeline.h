@@ -179,7 +179,7 @@ class IFeature {
 
 /// Named features in placement order. Each feature's RNG seed is
 /// deriveSeed(chunkSeed, nameHash(name)), so adding a feature does not shift the others.
-class FeatureRegistry {
+class cFeatureReg {
  public:
   /// Appends a feature; returns false if the name is already taken.
   bool add(std::string name, std::unique_ptr<IFeature> feature);
@@ -240,7 +240,7 @@ class GeneratorPipeline {
   std::vector<std::unique_ptr<IBiomePostStage>> biomePost_;
   std::vector<std::unique_ptr<ISurfaceRule>> surface_;
   std::vector<std::unique_ptr<ICarver>> carvers_;
-  FeatureRegistry features_;
+  cFeatureReg features_;
   std::vector<std::vector<FaunaEntry>> fauna_;  ///< per-biome spawn tables; empty = none
 };
 

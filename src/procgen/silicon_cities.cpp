@@ -215,7 +215,7 @@ std::vector<Link> linksFor(uint64_t seed, int32_t sx, int32_t sz) {
 }
 }  // namespace
 
-void SiliconCitiesFeature::place(StageContext& ctx, Rng& rng) const {
+void cSiliconCitiesFeature::place(StageContext& ctx, Rng& rng) const {
   (void)rng;  // pure function of (dimension seed, x, z)
   const int n = ctx.chunk.size;
   const uint64_t seed = citySeed(ctx.chunk.dimensionSeed);

@@ -156,11 +156,11 @@ void DensityTerrain::generate(StageContext& ctx) const {
   }
 }
 
-BiomeHeightmapTerrain::BiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome,
+cBiomeHeightmapTerrain::cBiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome,
                                                int depth)
     : graph_(std::move(graph)), perBiome_(std::move(perBiome)), depth_(depth) {}
 
-void BiomeHeightmapTerrain::generate(StageContext& ctx) const {
+void cBiomeHeightmapTerrain::generate(StageContext& ctx) const {
   if (perBiome_.empty()) return;
   const size_t columns = ctx.columns.size();
   // Evaluate each distinct height/uplift output once; several biomes may share one.
@@ -646,18 +646,18 @@ void carveNoiseTubes(StageContext& ctx, const TubeCaveSettings& s, const char* s
 
 }  // namespace
 
-CheeseCarver::CheeseCarver(CheeseSettings s) : s_(std::move(s)) {
+cCheeseCarver::cCheeseCarver(CheeseSettings s) : s_(std::move(s)) {
   s_.threshold = std::clamp(s_.threshold, -0.95f, 0.95f);
   if (!(s_.frequency > 0.f) || !std::isfinite(s_.frequency)) s_.frequency = 1.f / 24.f;
   s_.minY = std::max(1, s_.minY);
   s_.surfaceMargin = std::max(2, s_.surfaceMargin);
 }
 
-void CheeseCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cCheeseCarver::onPipelineBuilt(const GeneratorPipeline* pipeline) {
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void CheeseCarver::carve(StageContext& ctx) const {
+void cCheeseCarver::carve(StageContext& ctx) const {
   const ChunkInfo& c = ctx.chunk;
   const int n = c.size, height = ctx.blocks.height();
   const auto field = makeFieldNoise(c.dimensionSeed, "cheese", true);
@@ -712,7 +712,7 @@ void NoodleCarver::carve(StageContext& ctx) const {
 
 // ---- underground ruins
 
-RuinsCarver::RuinsCarver(RuinsSettings s) : s_(std::move(s)) {
+cRuinsCarver::cRuinsCarver(RuinsSettings s) : s_(std::move(s)) {
   s_.depthMin = std::max(1, s_.depthMin);
   s_.depthMax = std::max(s_.depthMin, s_.depthMax);
   s_.surfaceMargin = std::max(2, s_.surfaceMargin);
@@ -734,7 +734,7 @@ RuinsCarver::RuinsCarver(RuinsSettings s) : s_(std::move(s)) {
   s_.rubbleChance = std::clamp(s_.rubbleChance, 0.f, 1.f);
 }
 
-void RuinsCarver::carve(StageContext& ctx) const {
+void cRuinsCarver::carve(StageContext& ctx) const {
   if (s_.trace == kAirMaterial || s_.crust.empty()) return;
   const ChunkInfo& c = ctx.chunk;
   const int n = c.size, height = ctx.blocks.height();
@@ -922,7 +922,7 @@ void RuinsCarver::carve(StageContext& ctx) const {
 
 // ---- features
 
-void OreVeinFeature::place(StageContext& ctx, Rng& rng) const {
+void cOreVeinFeature::place(StageContext& ctx, Rng& rng) const {
   const int n = ctx.chunk.size;
   const int lo = std::max(0, s_.minY), hi = std::min(ctx.blocks.height() - 1, s_.maxY);
   if (lo > hi) return;
@@ -1146,7 +1146,7 @@ std::vector<TraceTreeCanopyCell> traceTreeCanopyCells(const TraceTreeCanopySpec&
   return out;
 }
 
-void TraceTreeFeature::place(StageContext& ctx, Rng&) const {
+void cTraceTreeFeature::place(StageContext& ctx, Rng&) const {
   // The per-chunk rng is intentionally unused: every decision below is a pure function of the
   // world block position, so all chunks and all --seed runs agree exactly.
   const uint64_t featSeed = deriveSeed(ctx.chunk.dimensionSeed, nameHash("trace_tree"));
@@ -1197,7 +1197,7 @@ void TraceTreeFeature::place(StageContext& ctx, Rng&) const {
             });
 }
 
-void CapacitorCanFeature::place(StageContext& ctx, Rng&) const {
+void cCapacitorCanFeature::place(StageContext& ctx, Rng&) const {
   const uint64_t featSeed = deriveSeed(ctx.chunk.dimensionSeed, nameHash("capacitor_cans"));
   const int top = ctx.blocks.height();
   const int n = ctx.chunk.size;
@@ -1221,7 +1221,7 @@ void CapacitorCanFeature::place(StageContext& ctx, Rng&) const {
             });
 }
 
-void ResonatorSpireFeature::place(StageContext& ctx, Rng&) const {
+void cResonatorSpireFeature::place(StageContext& ctx, Rng&) const {
   const uint64_t featSeed = deriveSeed(ctx.chunk.dimensionSeed, nameHash("resonator_spire"));
   const int top = ctx.blocks.height();
   const int n = ctx.chunk.size;
@@ -1717,13 +1717,13 @@ void RiverCarver::carve(StageContext& ctx) const {
 
 // ---- lithoform stamping (baked .lthm models scattered as world structures) ----
 
-struct LithoStampFeature::Base {
+struct cLithoStampFeature::Base {
   int32_t bx = 0, bz = 0;  ///< world base position
   int rot = 0;             ///< model rotation (0..3 quarter-turns)
   float gateRoll = 0.f;    ///< [0,1) roll for the biome gate
 };
 
-LithoStampFeature::LithoStampFeature(LithoStampSettings s, std::vector<LithoStampVoxel> cells,
+cLithoStampFeature::cLithoStampFeature(LithoStampSettings s, std::vector<LithoStampVoxel> cells,
                                      BiomeProbe probe)
     : s_(std::move(s)), cells_(std::move(cells)), probe_(std::move(probe)) {
   s_.cellSize = std::max(16, s_.cellSize);
@@ -1736,11 +1736,11 @@ LithoStampFeature::LithoStampFeature(LithoStampSettings s, std::vector<LithoStam
   }
 }
 
-uint64_t LithoStampFeature::featSeed(uint64_t dimensionSeed) const {
+uint64_t cLithoStampFeature::featSeed(uint64_t dimensionSeed) const {
   return deriveSeed(dimensionSeed, nameHash(s_.seedName));
 }
 
-std::optional<LithoStampFeature::Base> LithoStampFeature::baseForCell(uint64_t featSeed, int32_t ccx,
+std::optional<cLithoStampFeature::Base> cLithoStampFeature::baseForCell(uint64_t featSeed, int32_t ccx,
                                                                      int32_t ccz) const {
   Rng r(cellSeed(featSeed, ccx, ccz));
   if (r.uniform() >= s_.density) return std::nullopt;
@@ -1752,12 +1752,12 @@ std::optional<LithoStampFeature::Base> LithoStampFeature::baseForCell(uint64_t f
   return b;
 }
 
-void LithoStampFeature::onPipelineBuilt(const GeneratorPipeline* pipeline) {
+void cLithoStampFeature::onPipelineBuilt(const GeneratorPipeline* pipeline) {
   // Same discipline as StructureFeature: the pipeline outlives its features.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void LithoStampFeature::place(StageContext& ctx, Rng&) const {
+void cLithoStampFeature::place(StageContext& ctx, Rng&) const {
   // The per-chunk rng is intentionally unused: every decision is a pure function of the
   // world position (cell-keyed seeds), so all chunks and all --seed runs agree exactly.
   if (cells_.empty() || s_.density <= 0.f) return;

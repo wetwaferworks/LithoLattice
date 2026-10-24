@@ -213,16 +213,16 @@ void transitionChecks(Checker& check) {
 
 void worleyOreChecks(Checker& check) {
   // worleyF1 unit properties.
-  const float a = WorleyOreVeinFeature::worleyF1(12345, 1.5f, 2.5f, 3.5f);
-  const float b = WorleyOreVeinFeature::worleyF1(12345, 1.5f, 2.5f, 3.5f);
+  const float a = cWorleyOreVeinFeature::worleyF1(12345, 1.5f, 2.5f, 3.5f);
+  const float b = cWorleyOreVeinFeature::worleyF1(12345, 1.5f, 2.5f, 3.5f);
   check(a == b, "worley: F1 deterministic for identical inputs");
   check(std::isfinite(a) && a >= 0.f && a < 2.f, "worley: F1 finite and in range");
-  const float c = WorleyOreVeinFeature::worleyF1(999, 1.5f, 2.5f, 3.5f);
+  const float c = cWorleyOreVeinFeature::worleyF1(999, 1.5f, 2.5f, 3.5f);
   check(c != a, "worley: F1 varies with seed");
   bool varied = false;
   float lo = 2.f, hi = 0.f;
   for (int i = 0; i < 200; ++i) {
-    const float v = WorleyOreVeinFeature::worleyF1(77, float(i) * 0.37f, 20.f, float(i) * 0.61f);
+    const float v = cWorleyOreVeinFeature::worleyF1(77, float(i) * 0.37f, 20.f, float(i) * 0.61f);
     lo = std::min(lo, v);
     hi = std::max(hi, v);
     if (v < 0.32f) varied = true;

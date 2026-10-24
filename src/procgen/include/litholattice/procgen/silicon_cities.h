@@ -59,9 +59,9 @@ CityHub cityHubAt(uint64_t citySeed, int32_t sx, int32_t sz);
 /// Bus link from sector (sx, sz) to its east (eastWest) or south neighbour; false = unconnected.
 bool cityLinkConnected(uint64_t citySeed, int32_t sx, int32_t sz, bool eastWest);
 
-class SiliconCitiesFeature final : public IFeature {
+class cSiliconCitiesFeature final : public IFeature {
  public:
-  explicit SiliconCitiesFeature(SiliconCitySettings s) : s_(s) {}
+  explicit cSiliconCitiesFeature(SiliconCitySettings s) : s_(s) {}
   void place(StageContext& ctx, Rng& rng) const override;
   const SiliconCitySettings& settings() const { return s_; }
 
