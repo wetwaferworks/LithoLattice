@@ -92,6 +92,8 @@ class cVulkanRenderer final : public IRenderer {
     const auto surface = chooseSurfaceConfig(*dev_, desc.vsync, desc.presentMode);
     if (!surface) return fail(error, "no usable surface format / depth format");
     surface_ = *surface;
+    surface_.wantImages = uint32_t(std::clamp(desc.swapImages, 0, 8));
+    logInfo("vulkan: buffering requested %d swapchain images (0 = auto)", desc.swapImages);
     pipelines_ = RenderPipelines::create(*dev_, surface_.color.format, surface_.depth, error, packed12_);
     if (!pipelines_) return false;
     cVertexArena::Kind kind = cVertexArena::Kind::Device;

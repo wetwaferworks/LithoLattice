@@ -13,6 +13,7 @@ struct SurfaceConfig {
   VkSurfaceFormatKHR color{};
   VkFormat depth = VK_FORMAT_UNDEFINED;
   VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  uint32_t wantImages = 0;  ///< 2026-10-24 (JD): 2/3 buffering; 0 = min + 1
 };
 
 /// Picks B8G8R8A8/R8G8B8A8 UNORM (matching the OpenGL backend's non-sRGB output), a depth format

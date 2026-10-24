@@ -24,6 +24,8 @@ struct VulkanSurfaceSource {
 struct VulkanRendererDesc {
   VulkanSurfaceSource surface;
   bool vsync = false;
+  /// Swapchain images requested (2 = double, 3 = triple buffering; 0 = driver min + 1). Clamped to the surface limits.
+  int swapImages = 0;
   /// Forces a present mode: "fifo", "mailbox" or "immediate" (falls back to FIFO when the
   /// surface lacks it). Empty: vsync -> FIFO, else IMMEDIATE, then MAILBOX, then FIFO.
   std::string presentMode;

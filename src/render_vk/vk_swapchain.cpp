@@ -69,7 +69,7 @@ std::unique_ptr<cSwapchain> cSwapchain::create(const cVulkanDevice& dev, const S
     extent.height = std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
   }
   if (extent.width == 0 || extent.height == 0) return nullptr;  // minimized
-  uint32_t images = caps.minImageCount + 1;
+  uint32_t images = cfg.wantImages ? std::max(cfg.wantImages, caps.minImageCount) : caps.minImageCount + 1;  // 2026-10-24 (JD): buffering setting, falls back to what the surface allows
   if (caps.maxImageCount) images = std::min(images, caps.maxImageCount);
 
   auto sc = std::make_unique<cSwapchain>(Passkey{});
