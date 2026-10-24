@@ -70,9 +70,9 @@ void main() {
 // EXT_texture_format_BGRA8888 when that extension is enabled).
 constexpr GLenum kFormatBGRA = 0x80E1;
 
-class SoftwarePresenterWebGL final : public ISoftwarePresenter {
+class cSoftwarePresenterWebGL final : public ISoftwarePresenter {
  public:
-  ~SoftwarePresenterWebGL() override {
+  ~cSoftwarePresenterWebGL() override {
     if (tex_) litholattice_glDeleteTextures(1, &tex_);
     if (vao_) litholattice_glDeleteVertexArrays(1, &vao_);
   }
@@ -215,7 +215,7 @@ class SoftwarePresenterWebGL final : public ISoftwarePresenter {
 
 std::unique_ptr<ISoftwarePresenter> createSoftwarePresenter(GLProcLoader loader) {
   if (!vcLoadGL(loader)) return nullptr;
-  auto p = std::make_unique<SoftwarePresenterWebGL>();
+  auto p = std::make_unique<cSoftwarePresenterWebGL>();
   if (!p->init()) return nullptr;
   return p;
 }

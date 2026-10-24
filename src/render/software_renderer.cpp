@@ -266,9 +266,9 @@ unsigned swResolveThreads(unsigned req) {
   while (b * 2 <= want && b * 2 <= hw) b *= 2;
   return b;
 }
-class SwBandPool {
+class cSwBandPool {
  public:
-  static SwBandPool& get() { static SwBandPool p; return p; }
+  static cSwBandPool& get() { static cSwBandPool p; return p; }
   unsigned bands() const { return bands_; }
   void run(const std::function<void(unsigned)>& fn) {
     // Cortana 2026-10-15 1415 (Elfie §1.4): nested run() from a band
@@ -292,7 +292,7 @@ class SwBandPool {
       { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); frameActive_ = true; }
     }
     struct FrameSlot {
-      SwBandPool& p;
+      cSwBandPool& p;
       bool held;
       ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
     } frameSlot{*this, !tlDetachedBody_};
@@ -375,9 +375,9 @@ class SwBandPool {
     runLock.unlock();
     cv_.notify_all();
   }
-  ~SwBandPool() { stopAll(); }
+  ~cSwBandPool() { stopAll(); }
  private:
-  SwBandPool() {
+  cSwBandPool() {
     std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());  // Cortana 2026-10-15 1455
     start(swResolveThreads(g_swRequestedThreads.load()));
   }
@@ -500,7 +500,7 @@ struct PairHash {
 // trap 3), even when the render throws.
 void SoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drainTarget,
                                            const std::function<void(std::exception_ptr)>& onDone) {
-  SwBandPool::get().runDetached(
+  cSwBandPool::get().runDetached(
       [this, fp, drainTarget] {
         std::exception_ptr err;
         try {
@@ -636,7 +636,7 @@ void SoftwareRenderer::drainUploadRing(uint64_t target) {
   ringApplied_ += appliedNow;
   ringCoalesced_ += n - appliedNow;  // pre-clear wipe + superseded: drained but never applied
 }
-void SoftwareRenderer::setDetachedPoolMode(bool on) { SwBandPool::get().setDetachedMode(on); }
+void SoftwareRenderer::setDetachedPoolMode(bool on) { cSwBandPool::get().setDetachedMode(on); }
 
 void SoftwareRenderer::clear(uint32_t color) {
   // Cortana 2026-10-15 1455: runtime-dispatched fill (AVX2 or baseline; identical bytes).
@@ -2458,7 +2458,7 @@ void SoftwareRenderer::renderFrame(const FrameParams& p) {
   };
   if (!p2par) for (size_t di = 0; di < drawOrder_.size(); ++di) meshRowSpan(di);  // else: in phase 1
   g_swProf.mark(0);
-  SwBandPool& bandPool = SwBandPool::get();
+  cSwBandPool& bandPool = cSwBandPool::get();
   // Cortana 2026-10-15 1112: transform every drawn mesh's verts ONCE (split
   // across the band threads by mesh), instead of once per band. Same
   // transformVertex math, so the screen positions are bit-identical.

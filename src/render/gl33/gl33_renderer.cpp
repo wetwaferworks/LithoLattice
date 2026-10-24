@@ -64,11 +64,11 @@ std::string builtinSource(std::string_view file, std::string* error) {
 
 constexpr uint32_t kMaxQuads = kMaxQuadsPerMesh;  // shared quad index buffer size (renderer.h)
 
-class GL33Renderer final : public IRenderer {
+class cGL33Renderer final : public IRenderer {
  public:
   // Ginny 2026-10-16 (perf list): greedy-merged chunk faces; chunk_shading.glsl repeats the tile.
   bool prefersGreedyMeshes() const override { return true; }
-  explicit GL33Renderer(bool arena) : useArena_(arena) {}
+  explicit cGL33Renderer(bool arena) : useArena_(arena) {}
   bool init() {
     logInfo("gl33: chunk meshes in %s", useArena_ ? "one arena VBO + VAO (rebased-index draws)" : "one VBO + VAO per sub-chunk");
     if (loadShaders(ShaderLibrary{}) < 0) return false;  // built-ins until the app loads pack shaders
@@ -226,7 +226,7 @@ class GL33Renderer final : public IRenderer {
     ++stats_.drawn;
   }
 
-  ~GL33Renderer() override {
+  ~cGL33Renderer() override {
     clearChunkMeshes();
     glDeleteTextures(1, &fontTex_);
     if (pbrMatTex_) glDeleteTextures(1, &pbrMatTex_);
@@ -1176,7 +1176,7 @@ class GL33Renderer final : public IRenderer {
 
 std::unique_ptr<IRenderer> createGL33Renderer(GLProcLoader loader, bool arena) {
   if (!vcLoadGL(loader)) return nullptr;
-  auto r = std::make_unique<GL33Renderer>(arena);
+  auto r = std::make_unique<cGL33Renderer>(arena);
   if (!r->init()) return nullptr;
   return r;
 }

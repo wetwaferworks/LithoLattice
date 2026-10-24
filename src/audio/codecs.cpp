@@ -65,7 +65,7 @@ bool firstOggPacket(const uint8_t* d, size_t n, size_t& pktOff, size_t& pktLen) 
 }
 
 // ---- WAV ----
-class WavDecoder : public IAudioDecoder {
+class cWavDecoder : public IAudioDecoder {
  public:
   AudioCodec codec() const override { return AudioCodec::kWav; }
   bool implemented() const override { return true; }
@@ -203,7 +203,7 @@ class WavDecoder : public IAudioDecoder {
 };
 
 // ---- FLAC (container parse only; frame decode is the builder's job) ----
-class FlacDecoder : public IAudioDecoder {
+class cFlacDecoder : public IAudioDecoder {
  public:
   AudioCodec codec() const override { return AudioCodec::kFlac; }
   bool implemented() const override { return false; }
@@ -279,7 +279,7 @@ class FlacDecoder : public IAudioDecoder {
 };
 
 // ---- Opus in Ogg (header parse only) ----
-class OpusDecoder : public IAudioDecoder {
+class cOpusDecoder : public IAudioDecoder {
  public:
   AudioCodec codec() const override { return AudioCodec::kOpus; }
   bool implemented() const override { return false; }
@@ -328,7 +328,7 @@ class OpusDecoder : public IAudioDecoder {
 };
 
 // ---- Vorbis in Ogg (header parse only) ----
-class VorbisDecoder : public IAudioDecoder {
+class cVorbisDecoder : public IAudioDecoder {
  public:
   AudioCodec codec() const override { return AudioCodec::kVorbis; }
   bool implemented() const override { return false; }
@@ -397,10 +397,10 @@ std::unique_ptr<IAudioDecoder> makeAudioDecoder(const uint8_t* data, size_t size
                                                 std::string& err) {
   std::unique_ptr<IAudioDecoder> dec;
   switch (sniffAudioCodec(data, size)) {
-    case AudioCodec::kWav: dec = std::make_unique<WavDecoder>(); break;
-    case AudioCodec::kFlac: dec = std::make_unique<FlacDecoder>(); break;
-    case AudioCodec::kOpus: dec = std::make_unique<OpusDecoder>(); break;
-    case AudioCodec::kVorbis: dec = std::make_unique<VorbisDecoder>(); break;
+    case AudioCodec::kWav: dec = std::make_unique<cWavDecoder>(); break;
+    case AudioCodec::kFlac: dec = std::make_unique<cFlacDecoder>(); break;
+    case AudioCodec::kOpus: dec = std::make_unique<cOpusDecoder>(); break;
+    case AudioCodec::kVorbis: dec = std::make_unique<cVorbisDecoder>(); break;
     case AudioCodec::kUnknown: break;
   }
   if (!dec) {

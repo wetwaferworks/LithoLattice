@@ -12,7 +12,7 @@ namespace {
 
 // Basic JIT: sorts nodes topologically, stores the order.
 // Execute() runs them in order without per-node overhead.
-class BasicTraceJit : public ITraceJit {
+class cBasicTraceJit : public ITraceJit {
  public:
   CompiledGraph compile(ISignalNode** nodes, uint32_t count) override {
     CompiledGraph g;
@@ -50,6 +50,6 @@ class BasicTraceJit : public ITraceJit {
 }  // namespace
 
 // Factory (for future use).
-// ITraceJit* createBasicTraceJit() { return new BasicTraceJit(); }
+// ITraceJit* createBasicTraceJit() { return new cBasicTraceJit(); }
 
 }  // namespace litholattice

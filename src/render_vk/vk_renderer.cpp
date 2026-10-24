@@ -69,11 +69,11 @@ int64_t meshKey(int cx, int sy, int cz) {
   return int64_t((uint64_t(uint32_t(cx)) << 40) ^ (uint64_t(uint32_t(sy)) << 32) ^ uint64_t(uint32_t(cz)));
 }
 
-class VulkanRenderer final : public IRenderer {
+class cVulkanRenderer final : public IRenderer {
  public:
   // Ginny 2026-10-16 (perf list): greedy-merged chunk faces; chunk_shading.glsl repeats the tile.
   bool prefersGreedyMeshes() const override { return true; }
-  ~VulkanRenderer() override {
+  ~cVulkanRenderer() override {
     if (dev_) vkDeviceWaitIdle(dev_->device());
     if (dev_) for (FrameSlot& f : frames_) if (f.timer) vkDestroyQueryPool(dev_->device(), f.timer, nullptr);  // [A52-3]
   }
@@ -1348,7 +1348,7 @@ class VulkanRenderer final : public IRenderer {
 }  // namespace
 
 std::unique_ptr<IRenderer> createVulkanRenderer(const VulkanRendererDesc& desc, std::string* error) {
-  auto r = std::make_unique<VulkanRenderer>();
+  auto r = std::make_unique<cVulkanRenderer>();
   std::string err;
   if (!r->init(desc, &err)) {
     if (error) *error = err;

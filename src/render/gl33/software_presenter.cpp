@@ -41,9 +41,9 @@ void main() {
 }
 )";
 
-class SoftwarePresenterImpl final : public ISoftwarePresenter {
+class cSoftwarePresenterImpl final : public ISoftwarePresenter {
  public:
-  ~SoftwarePresenterImpl() override {
+  ~cSoftwarePresenterImpl() override {
     if (tex_) litholattice_glDeleteTextures(1, &tex_);
     if (vao_) litholattice_glDeleteVertexArrays(1, &vao_);
   }
@@ -110,7 +110,7 @@ class SoftwarePresenterImpl final : public ISoftwarePresenter {
 
 std::unique_ptr<ISoftwarePresenter> createSoftwarePresenter(GLProcLoader loader) {
   if (!vcLoadGL(loader)) return nullptr;
-  auto p = std::make_unique<SoftwarePresenterImpl>();
+  auto p = std::make_unique<cSoftwarePresenterImpl>();
   if (!p->init()) return nullptr;
   return p;
 }

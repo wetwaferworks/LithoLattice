@@ -8,12 +8,12 @@
 namespace litholattice {
 namespace {
 
-class MiniaudioOutput final : public IAudioOutput {
+class cMiniaudioOutput final : public IAudioOutput {
  public:
-  explicit MiniaudioOutput(AudioEngine& engine) : engine_(engine) {}
-  MiniaudioOutput(const MiniaudioOutput&) = delete;
-  MiniaudioOutput& operator=(const MiniaudioOutput&) = delete;
-  ~MiniaudioOutput() override {
+  explicit cMiniaudioOutput(AudioEngine& engine) : engine_(engine) {}
+  cMiniaudioOutput(const cMiniaudioOutput&) = delete;
+  cMiniaudioOutput& operator=(const cMiniaudioOutput&) = delete;
+  ~cMiniaudioOutput() override {
     if (open_) ma_device_uninit(&device_);
   }
 
@@ -22,7 +22,7 @@ class MiniaudioOutput final : public IAudioOutput {
     cfg.playback.format = ma_format_f32;
     cfg.playback.channels = 2;
     cfg.sampleRate = ma_uint32(engine_.sampleRate());
-    cfg.dataCallback = &MiniaudioOutput::callback;
+    cfg.dataCallback = &cMiniaudioOutput::callback;
     cfg.pUserData = &engine_;
     if (ma_result r = ma_device_init(nullptr, &cfg, &device_); r != MA_SUCCESS) return fail(err, r);
     open_ = true;
@@ -52,7 +52,7 @@ class MiniaudioOutput final : public IAudioOutput {
 }  // namespace
 
 std::unique_ptr<IAudioOutput> openAudioOutput(AudioEngine& engine, std::string* err) {
-  auto out = std::make_unique<MiniaudioOutput>(engine);
+  auto out = std::make_unique<cMiniaudioOutput>(engine);
   if (!out->open(err)) return nullptr;
   return out;
 }
