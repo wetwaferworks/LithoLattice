@@ -658,6 +658,10 @@ void cSimThread::run() {
 
       if (paused) {
         acc_ = Ns(0);
+        // 2026-10-24 (JD: HUD "TPS 0"): a paused window counted no ticks and published 0, and the
+        // first window after resume averaged the pause in. Hold the last live reading instead.
+        windowStart_ = Clock::now(); windowWorldTicks_ = 0; windowWorldNs_ = windowAllNs_ = 0;
+        for (auto& d : domains_) d.windowTicks = 0;
         // Stamps assigned at the PRE phase are the current tick, so paused
         // application by stamp == the old apply-at-once behavior for live
         // input — and a replayed event stamped in the future now correctly
