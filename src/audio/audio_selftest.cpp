@@ -867,7 +867,7 @@ int runAudioSelfTest() {
       flac.push_back(static_cast<uint8_t>(rate >> 12));
       flac.push_back(static_cast<uint8_t>((rate >> 4) & 0xFF));
       flac.push_back(static_cast<uint8_t>(((rate & 15) << 4) | ((2 - 1) << 1) | ((16 - 1) >> 4)));
-      flac.push_back(static_cast<uint8_t>((((16 - 1) & 15) << 4) | ((total >> 32) & 15)));
+      flac.push_back(static_cast<uint8_t>((((16 - 1) & 15) << 4) | ((uint64_t(total) >> 32) & 15)));
       put32be(flac, total);
       flac.insert(flac.end(), 16, 0);  // MD5 (stub does not verify)
       auto dec = makeAudioDecoder(flac.data(), flac.size(), err);

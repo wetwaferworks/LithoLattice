@@ -281,10 +281,10 @@ bool point_decompress(Point& p, const uint8_t in[32]) {
   }
   if (((x.w[0] & 1) != 0) != x_odd) {
     // negate x
-    Fe p;
-    std::memcpy(p.w, kP, sizeof kP);
+    Fe pm;
+    std::memcpy(pm.w, kP, sizeof kP);
     Fe nx;
-    fe_sub(nx, p, x);
+    fe_sub(nx, pm, x);
     std::memcpy(x.w, nx.w, sizeof x.w);
   }
   std::memcpy(p.x.w, x.w, sizeof p.x.w);
