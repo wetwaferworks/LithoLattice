@@ -40,7 +40,7 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[EXISTS] Random ticks** (`sim/random_ticks.h`): every world tick the engine picks **8 random cells per non-empty 16x16x16 section** (`kDefaultRandomTicksPerSection`) in the tick square around the player. The rate is per dimension (`Dimension::randomTicksPerSection`, passed as `SimConfig::randomTicksPerSection`, 0 = off). It runs at the world TPS only, not in clock domains (so beacons do not scale it), and the picks are deterministic per (tick, section). Blocks opt in with `kRandomTicks`. Each pick of an opted-in block goes to `IWorldSimulation::onRandomTick(world, x, y, z, block, rnd, dirty)`, a stub by default. Cells changed through `dirty` are marked for saves. Measured worst case (every block opted in, 32x32 wafer): 0.13 ms per tick at radius 8 and 0.27 ms at radius 12. The whole-area `randomTick` hook stays as a low-level escape hatch. LithoKraft has no block opted in yet, so gameplay is unchanged.
 
 ### 2.3 Dimensions, procgen generators and noise nodes (`world`, `procgen`)
-- **[EXISTS]** `Dimension` (id, name, biomes, `ColumnGenerator`, `SetupFn` for structures and spawn, `belowWorldFill`) and `DimensionRegistry` (`add`, `addAlias`, `find`).
+- **[EXISTS]** `Dimension` (id, name, biomes, `ColumnGenerator`, `SetupFn` for structures and spawn, `belowWorldFill`) and `cDimensionReg` (`add`, `addAlias`, `find`).
 - **[EXISTS]** `ColumnGenerator::create(json, worldSeed, dimensionId, blocks, err)`: generators are data (JSON graphs) and thread-safe.
 - **[EXISTS]** Pipeline stage interfaces (`procgen/pipeline.h`): `IClimateStage`, `IBiomeSel`, `ITerrainStage`, `ISurfaceRule`, `ICarver`, and `IFeature::place(ctx, rng)`, with built-in implementations in `stages.h` (`cHeightmapTerrain`, `cDensityTerrain`, `cLayeredSurface`, `cWormCaveCarver`, `cRavineCarver`, `cMultiNoiseBiomeSel`, ...).
 - **[EXISTS]** Noise: `INoise` (`sample2/3/4`, `sampleBatch`), `NoiseType`, `NoiseSettings`, and the JSON node graph (`cNoiseGraph`, `NodeDesc`, `GraphDesc`, `GraphContext`).
@@ -63,15 +63,15 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[PROPOSED]** A pack stack with priority: base game, then mods in load order, then user resource packs. A later pack overrides keys. The existing hot-reload diff (`hot reload diff` selftest) extends to the stack.
 
 ### 2.6 Input: actions and contexts (`input`)
-- **[EXISTS]** `ActionSet` (named actions, `ActionKind {Button, Axis2D}`), `ActionMap` / `Binding` (keys, mouse, pad, rebinding), `InputContext` and `ContextRules` (which actions a context blocks or passes; raw UI and text channels), `InputSystem`, `DeviceState`, and `IInputBackend`.
+- **[EXISTS]** `ActionSet` (named actions, `ActionKind {cButton, Axis2D}`), `ActionMap` / `Binding` (keys, mouse, pad, rebinding), `InputContext` and `ContextRules` (which actions a context blocks or passes; raw UI and text channels), `InputSystem`, `cDeviceState`, and `IInputBackend`.
 - **[PROPOSED]** Mods register an `ActionSet` fragment with namespaced names and default bindings. The engine detects and reports binding conflicts (including the reserved Alt+Enter) in the controls panel.
 
 ### 2.7 Audio: synth voices (`audio`)
-- **[EXISTS]** `AudioEngine` (lock-free command queue to the audio thread), `Synth`, `Voice` (`Waveform {Pulse, Triangle, Saw, Noise, Wave}`, `Duty`, `Adsr`/`Envelope`, `Lfsr`), `NoteSpec`, `VoiceAllocator`, and `IAudioOutput` (miniaudio). Game SFX and music definitions live in LithoKraft (`sfx.h`, `music.h`).
+- **[EXISTS]** `cAudioEngine` (lock-free command queue to the audio thread), `cSynth`, `Voice` (`Waveform {Pulse, Triangle, Saw, Noise, Wave}`, `Duty`, `Adsr`/`Envelope`, `Lfsr`), `NoteSpec`, `cVoiceAllocator`, and `IAudioOutput` (miniaudio). Game SFX and music definitions live in LithoKraft (`sfx.h`, `music.h`).
 - **[PROPOSED]** `SfxRegistry` (name -> notes, loadable from JSON) and a sample-playback voice for packs (`Waveform::Wave` exists as the seed).
 
 ### 2.8 UI: widgets and themes (`ui`)
-- **[EXISTS]** Retained tree: `Widget` (virtual `measure`, `arrange`, `hitTest`, `onPointer*`, `onKey`, `onText`, `onFocusChanged`) plus containers, controls, lists, menus, `TextEdit`, `Dialog`, `UiRoot`, `Theme` (per-class styles from JSON), `WidgetFactory` (JSON layouts), and the injected `IUiRenderer` / `IClipboard`.
+- **[EXISTS]** Retained tree: `cWidget` (virtual `measure`, `arrange`, `hitTest`, `onPointer*`, `onKey`, `onText`, `onFocusChanged`) plus containers, controls, lists, menus, `TextEdit`, `cDialog`, `cUiRoot`, `Theme` (per-class styles from JSON), `WidgetFactory` (JSON layouts), and the injected `IUiRenderer` / `IClipboard`.
 - **[PROPOSED]** `WidgetFactory::registerType("mymod:gauge", factory)` for native widget types. Script mods compose existing widgets from JSON and bind events to AngelScript handlers.
 
 ### 2.9 Storage: payload serializers and migrations (`storage`)
@@ -193,7 +193,7 @@ flowchart TB
   subgraph SDK["Public SDK: include/litholattice/sdk"]
     MODAPI["IMod / IModContext / version.h"]
     REG["Registries: blocks, behaviours, dimensions, stages, nodes, actions, sfx, widgets, payloads"]
-    IFC["Interfaces: IWorldSimulation, IBlockAppearance, INoise, I*Stage, Widget, PayloadType, IAgent*"]
+    IFC["Interfaces: IWorldSimulation, IBlockAppearance, INoise, I*Stage, cWidget, PayloadType, IAgent*"]
   end
   subgraph Core["Closed core: litholattice"]
     WORLD[world] --- SIM[sim]
@@ -221,7 +221,7 @@ flowchart TB
 ```mermaid
 sequenceDiagram
   participant App
-  participant cLoader as ModLoader (proposed)
+  participant cLoader as cModLoader (proposed)
   participant Mod
   participant Reg as Registries
   participant Store as Storage
@@ -285,7 +285,7 @@ classDiagram
     +load(bytes,col) bool
     +migrate[v]
   }
-  class Widget {
+  class cWidget {
     +measure(theme)
     +arrange(theme)
     +onPointerDown(e) bool

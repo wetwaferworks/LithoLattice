@@ -36,7 +36,7 @@ float clampScroll(float scroll, int rows, float rowH, float viewH) {
 
 // ---- cListView
 
-cListView::cListView() : Widget("list") { setFocusable(true); }
+cListView::cListView() : cWidget("list") { setFocusable(true); }
 
 void cListView::setItems(std::vector<std::string> items) {
   items_ = std::move(items);
@@ -108,7 +108,7 @@ bool cListView::onKey(const UiEvent& e) {
 }
 
 void cListView::paint(Painter& p) const {
-  Widget::paint(p);
+  cWidget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();
   const float rh = rowHeight();
@@ -123,7 +123,7 @@ void cListView::paint(Painter& p) const {
 
 // ---- cTreeView
 
-cTreeView::cTreeView() : Widget("list") { setFocusable(true); }
+cTreeView::cTreeView() : cWidget("list") { setFocusable(true); }
 
 void cTreeView::setRoots(std::vector<TreeNode> roots) {
   roots_ = std::move(roots);
@@ -221,7 +221,7 @@ bool cTreeView::onKey(const UiEvent& e) {
 }
 
 void cTreeView::paint(Painter& p) const {
-  Widget::paint(p);
+  cWidget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();
   const float rh = rowHeight(), g = p.theme().glyphSize(s.textScale).x;

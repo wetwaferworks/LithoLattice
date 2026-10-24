@@ -1,4 +1,4 @@
-// Widget: the node of the retained UI tree. Owns its children, has a style class (theme), a
+// cWidget: the node of the retained UI tree. Owns its children, has a style class (theme), a
 // layout description (anchors in its parent, or stack / grid slot parameters), and virtual
 // hooks for measuring, arranging, painting and input. Containers override arrange().
 #pragma once
@@ -14,7 +14,7 @@
 
 namespace litholattice::ui {
 
-class UiRoot;
+class cUiRoot;
 
 /// How a widget is placed in its parent.
 ///  - Anchors (default parent): per axis, anchorMin == anchorMax places a box of `size` (or the
@@ -48,14 +48,14 @@ struct Layout {
 /// Where a widget with layout `l` and preferred size `size` goes inside `parent`.
 Rect anchoredRect(const Layout& l, const Rect& parent, Vec2 size);
 
-class Widget {
+class cWidget {
  public:
-  using Handler = std::function<void(Widget&)>;
+  using Handler = std::function<void(cWidget&)>;
 
-  explicit Widget(std::string styleClass = "none");
-  virtual ~Widget();
-  Widget(const Widget&) = delete;
-  Widget& operator=(const Widget&) = delete;
+  explicit cWidget(std::string styleClass = "none");
+  virtual ~cWidget();
+  cWidget(const cWidget&) = delete;
+  cWidget& operator=(const cWidget&) = delete;
 
   // ---- tree
   /// Constructs a child of type T in place; returns it.
@@ -66,44 +66,44 @@ class Widget {
     addChild(std::move(w));
     return ref;
   }
-  Widget& addChild(std::unique_ptr<Widget> child);
+  cWidget& addChild(std::unique_ptr<cWidget> child);
   /// Detaches `child` and returns ownership (nullptr if not a child).
-  std::unique_ptr<Widget> removeChild(const Widget& child);
+  std::unique_ptr<cWidget> removeChild(const cWidget& child);
   void clearChildren();
-  Widget* parent() const { return parent_; }
-  std::span<const std::unique_ptr<Widget>> children() const { return children_; }
+  cWidget* parent() const { return parent_; }
+  std::span<const std::unique_ptr<cWidget>> children() const { return children_; }
   /// Depth-first search of this subtree by id.
-  Widget* find(std::string_view id);
+  cWidget* find(std::string_view id);
   template <typename T>
   T* findAs(std::string_view id) { return dynamic_cast<T*>(find(id)); }
-  UiRoot* ui() const { return ui_; }
+  cUiRoot* ui() const { return ui_; }
 
   // ---- properties
   const std::string& id() const { return id_; }
-  Widget& setId(std::string id) { id_ = std::move(id); return *this; }
+  cWidget& setId(std::string id) { id_ = std::move(id); return *this; }
   const std::string& styleClass() const { return styleClass_; }
-  Widget& setStyleClass(std::string c) { styleClass_ = std::move(c); return *this; }
+  cWidget& setStyleClass(std::string c) { styleClass_ = std::move(c); return *this; }
   bool visible() const { return visible_; }
-  Widget& setVisible(bool v);
+  cWidget& setVisible(bool v);
   bool enabled() const { return enabled_; }
-  Widget& setEnabled(bool e) { enabled_ = e; return *this; }
+  cWidget& setEnabled(bool e) { enabled_ = e; return *this; }
   /// Visible and enabled up to the root.
   bool interactive() const;
   bool focusable() const { return focusable_; }
   const std::string& tooltip() const { return tooltip_; }
-  Widget& setTooltip(std::string t) { tooltip_ = std::move(t); return *this; }
+  cWidget& setTooltip(std::string t) { tooltip_ = std::move(t); return *this; }
   Layout& layout() { return layout_; }
   const Layout& layout() const { return layout_; }
-  Widget& setLayout(const Layout& l) { layout_ = l; return *this; }
+  cWidget& setLayout(const Layout& l) { layout_ = l; return *this; }
   /// Rectangle assigned by the last layout pass (screen pixels).
   const Rect& rect() const { return rect_; }
   const Style& style() const;
-  /// The attached UiRoot's theme (the built-in theme while detached).
+  /// The attached cUiRoot's theme (the built-in theme while detached).
   const Theme& theme() const;
   /// rect() minus the style padding.
   Rect contentRect() const { return rect_.inset(style().padding); }
 
-  // ---- state shortcuts (owned by UiRoot)
+  // ---- state shortcuts (owned by cUiRoot)
   bool hovered() const;
   bool pressed() const;   ///< has pointer capture
   bool focused() const;
@@ -111,19 +111,19 @@ class Widget {
 
   // ---- events
   /// Adds a C++ handler for `event` ("click", "change", "submit", "select", ...).
-  Widget& on(std::string event, Handler h);
+  cWidget& on(std::string event, Handler h);
   /// Names a script function (e.g. "void onSave(const string &in)") to call on `event`; it
-  /// receives this widget's id. Runs through UiRoot's IScriptHost.
-  Widget& onScript(std::string event, std::string functionDecl);
+  /// receives this widget's id. Runs through cUiRoot's IScriptHost.
+  cWidget& onScript(std::string event, std::string functionDecl);
   /// Runs the handlers of `event` (C++ first, then the script handler).
   void emit(std::string_view event);
   bool hasHandler(std::string_view event) const;
 
-  // ---- layout (called by UiRoot / parents)
+  // ---- layout (called by cUiRoot / parents)
   /// Preferred outer size (content + padding). Default: the anchored children's extent or 0.
   virtual Vec2 measure(const Theme& theme) const;
   /// The preferred size a widget gets from its parent, honouring layout().size and minSize.
-  static Vec2 childSize(const Widget& child, const Theme& theme);
+  static Vec2 childSize(const cWidget& child, const Theme& theme);
   /// Places this widget at `r` and arranges its children.
   void place(const Rect& r, const Theme& theme);
 
@@ -140,7 +140,7 @@ class Widget {
   virtual bool onText(char32_t) { return false; }
   virtual void onFocusChanged(bool /*focused*/) {}
   /// Deepest interactive widget under `p` in this subtree (children last-painted first).
-  virtual Widget* hitTest(Vec2 p);
+  virtual cWidget* hitTest(Vec2 p);
 
  protected:
   /// Positions children inside contentRect(); default: anchors.
@@ -156,16 +156,16 @@ class Widget {
   Color stateBackground() const;
 
  private:
-  friend class UiRoot;
-  void attach(UiRoot* ui);
+  friend class cUiRoot;
+  void attach(cUiRoot* ui);
 
   std::string id_, styleClass_, tooltip_;
   bool visible_ = true, enabled_ = true, focusable_ = false;
   Layout layout_;
   Rect rect_;
-  Widget* parent_ = nullptr;
-  UiRoot* ui_ = nullptr;
-  std::vector<std::unique_ptr<Widget>> children_;
+  cWidget* parent_ = nullptr;
+  cUiRoot* ui_ = nullptr;
+  std::vector<std::unique_ptr<cWidget>> children_;
   std::vector<std::pair<std::string, Handler>> handlers_;
   std::vector<std::pair<std::string, std::string>> scriptHandlers_;
 };

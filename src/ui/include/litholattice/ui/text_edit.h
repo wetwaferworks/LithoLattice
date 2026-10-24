@@ -10,7 +10,7 @@
 namespace litholattice::ui {
 
 /// Behaviour shared by cTextBox and cTextEditor; not used directly.
-class cTextEditBase : public Widget {
+class cTextEditBase : public cWidget {
  public:
   cTextBuffer& buffer() { return buffer_; }
   const cTextBuffer& buffer() const { return buffer_; }

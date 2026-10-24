@@ -13,11 +13,11 @@ namespace litholattice {
 
 using ActionId = uint16_t;
 
-enum class ActionKind : uint8_t { Button, Axis2D };
+enum class ActionKind : uint8_t { cButton, Axis2D };
 
 struct ActionInfo {
   std::string_view name;  ///< stable name used in the bindings file
-  ActionKind kind = ActionKind::Button;
+  ActionKind kind = ActionKind::cButton;
 };
 
 /// Anything that converts to an action / context id: the game's enum or a raw id.
@@ -34,7 +34,7 @@ class ActionSet {
       : actions_(std::move(actions)), mayShare_(std::move(mayShare)) {}
   size_t size() const { return actions_.size(); }
   std::string_view name(ActionId a) const { return a < actions_.size() ? actions_[a].name : std::string_view{}; }
-  ActionKind kind(ActionId a) const { return a < actions_.size() ? actions_[a].kind : ActionKind::Button; }
+  ActionKind kind(ActionId a) const { return a < actions_.size() ? actions_[a].kind : ActionKind::cButton; }
   std::optional<ActionId> find(std::string_view name) const {
     for (size_t i = 0; i < actions_.size(); ++i)
       if (actions_[i].name == name) return ActionId(i);

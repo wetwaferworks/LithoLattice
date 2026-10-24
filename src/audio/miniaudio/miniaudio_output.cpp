@@ -10,7 +10,7 @@ namespace {
 
 class cMiniaudioOutput final : public IAudioOutput {
  public:
-  explicit cMiniaudioOutput(AudioEngine& engine) : engine_(engine) {}
+  explicit cMiniaudioOutput(cAudioEngine& engine) : engine_(engine) {}
   cMiniaudioOutput(const cMiniaudioOutput&) = delete;
   cMiniaudioOutput& operator=(const cMiniaudioOutput&) = delete;
   ~cMiniaudioOutput() override {
@@ -41,17 +41,17 @@ class cMiniaudioOutput final : public IAudioOutput {
     return false;
   }
   static void callback(ma_device* dev, void* out, const void*, ma_uint32 frames) {
-    static_cast<AudioEngine*>(dev->pUserData)->render(static_cast<float*>(out), frames, int(dev->playback.channels));
+    static_cast<cAudioEngine*>(dev->pUserData)->render(static_cast<float*>(out), frames, int(dev->playback.channels));
   }
 
-  AudioEngine& engine_;
+  cAudioEngine& engine_;
   ma_device device_{};
   bool open_ = false;
 };
 
 }  // namespace
 
-std::unique_ptr<IAudioOutput> openAudioOutput(AudioEngine& engine, std::string* err) {
+std::unique_ptr<IAudioOutput> openAudioOutput(cAudioEngine& engine, std::string* err) {
   auto out = std::make_unique<cMiniaudioOutput>(engine);
   if (!out->open(err)) return nullptr;
   return out;

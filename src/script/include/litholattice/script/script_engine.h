@@ -127,7 +127,7 @@ class ScriptEngine {
   /// suspension-policy record (consecutive count, cooldown, probation).
   void resume();
   /// Identifies the mod in suspension-policy log lines ("modsys: ..."). The
-  /// ModLoader sets this when it creates the engine; empty renders as
+  /// cModLoader sets this when it creates the engine; empty renders as
   /// "<unknown>".
   void setModId(const std::string& id) { modId_ = id; suspensionPolicy_.setModId(id); }
   const std::string& modId() const { return modId_; }

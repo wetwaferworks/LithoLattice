@@ -5,12 +5,12 @@
 //
 //   1. No raw draw calls: the mod API surface (LithoLatticeModApi in
 //      litholattice/mods/mod_interface.h) hands mods no Painter, no
-//      IUiRenderer, no Widget*, and no paint hook. The only UI entry point
+//      IUiRenderer, no cWidget*, and no paint hook. The only UI entry point
 //      is registerUiPanel(mod, id, title) — strings in, void out — which the
 //      engine binds to ModUiFactory::createPanel after checking kPermUI.
 //      Mod-supplied layout is JSON text, built by the widget factory's closed
-//      type table (no dialog/modal/popup types exist there at all). Widget
-//      event handlers from mod JSON are script functions only (Widget::on,
+//      type table (no dialog/modal/popup types exist there at all). cWidget
+//      event handlers from mod JSON are script functions only (cWidget::on,
 //      the C++-callable overload, is never wired by the factory). Audited in
 //      mods_selftest.cpp (testModApiUiInputAudit).
 //   2. Badging: every mod panel root is a cModPanel (final). Its badge strip —
@@ -23,7 +23,7 @@
 //   3. No spoofing the system look: the confined factory rejects the reserved
 //      style classes "dialog" (system modal look), "tooltip" (system hint
 //      look), and the engine-applied "mod_panel"/"mod_badge". Mod panels are
-//      attached to the UiRoot main layer only — never as modals or popups —
+//      attached to the cUiRoot main layer only — never as modals or popups —
 //      so a mod cannot block the screen with a fake system prompt.
 //   4. DoS guards: mod JSON is pre-scanned (iterative, no recursion) for
 //      nesting depth and node count before the recursive factory runs; the
@@ -54,7 +54,7 @@
 
 namespace litholattice::ui {
 
-class UiRoot;
+class cUiRoot;
 
 /// Style class the engine applies to every mod panel root: the distinct
 /// frame treatment for mod content (amber-tinted border in the built-in
@@ -138,10 +138,10 @@ class ModUiFactory {
   /// Validates a mod/panel id: [a-z0-9_]{1,64}.
   static bool isValidModId(std::string_view id);
 
-  /// Attaches a built panel to the UiRoot MAIN layer (never as a modal or
+  /// Attaches a built panel to the cUiRoot MAIN layer (never as a modal or
   /// popup: mods cannot open modals/popups, so a fake system prompt can
   /// never seize the screen). Returns the attached panel.
-  static cModPanel& attachToRoot(UiRoot& ui, std::unique_ptr<cModPanel> panel);
+  static cModPanel& attachToRoot(cUiRoot& ui, std::unique_ptr<cModPanel> panel);
 };
 
 }  // namespace litholattice::ui

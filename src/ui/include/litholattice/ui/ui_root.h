@@ -1,4 +1,4 @@
-// UiRoot: owns the widget tree plus the popup and modal layers, and routes input: hover, pointer
+// cUiRoot: owns the widget tree plus the popup and modal layers, and routes input: hover, pointer
 // capture, focus, keyboard navigation (Tab / Shift+Tab, arrows between focusable widgets),
 // popups that close on an outside click, modal dialogs that block everything below, tooltips.
 #pragma once
@@ -20,15 +20,15 @@ class IScriptHost {
   virtual bool callHandler(std::string_view functionDecl, std::string_view widgetId) = 0;
 };
 
-class UiRoot {
+class cUiRoot {
  public:
-  explicit UiRoot(Theme theme = Theme::defaults());
-  ~UiRoot();
-  UiRoot(const UiRoot&) = delete;
-  UiRoot& operator=(const UiRoot&) = delete;
+  explicit cUiRoot(Theme theme = Theme::defaults());
+  ~cUiRoot();
+  cUiRoot(const cUiRoot&) = delete;
+  cUiRoot& operator=(const cUiRoot&) = delete;
 
   /// The main layer: add screens / HUD panels here.
-  Widget& root() { return *root_; }
+  cWidget& root() { return *root_; }
   const Theme& theme() const { return theme_; }
   void setTheme(Theme t) { theme_ = std::move(t); }
   void setScriptHost(IScriptHost* host) { scripts_ = host; }
@@ -51,15 +51,15 @@ class UiRoot {
   bool wantsPointer(Vec2 p) const;
 
   /// Destroys `w` once no widget code is running (use when a handler removes its own widget).
-  void destroyLater(std::unique_ptr<Widget> w);
+  void destroyLater(std::unique_ptr<cWidget> w);
   /// Modifier keys of the event being handled (e.g. shift-click in a "click" handler).
   uint8_t modifiers() const { return mods_; }
 
   // ---- focus / state
-  Widget* focus() const { return focus_; }
-  void setFocus(Widget* w);
-  Widget* hover() const { return hover_; }
-  Widget* capture() const { return capture_; }
+  cWidget* focus() const { return focus_; }
+  void setFocus(cWidget* w);
+  cWidget* hover() const { return hover_; }
+  cWidget* capture() const { return capture_; }
   /// Moves focus to the next (or previous) focusable widget in the active layer.
   void focusNext(bool backwards);
   /// Moves focus to the nearest focusable widget in a direction (dx, dy in -1..1).
@@ -68,33 +68,33 @@ class UiRoot {
   // ---- layers
   /// Opens a popup (menu, dropdown list) positioned by its own layout; closed by an outside
   /// click, Escape or closePopup(). Stacks: a submenu opens above its menu.
-  Widget& openPopup(std::unique_ptr<Widget> popup);
-  void closePopup(const Widget& popup);
+  cWidget& openPopup(std::unique_ptr<cWidget> popup);
+  void closePopup(const cWidget& popup);
   void closeAllPopups();
   bool popupOpen() const { return !popups_.empty(); }
   /// True while `popup` is open (popups are closed by the root, so owners check this).
-  bool isPopupOpen(const Widget* popup) const;
+  bool isPopupOpen(const cWidget* popup) const;
   /// Shows a modal (dialog): input below it is blocked; Escape is offered to it first.
-  Widget& pushModal(std::unique_ptr<Widget> modal);
+  cWidget& pushModal(std::unique_ptr<cWidget> modal);
   /// Closes `modal` (and any modal above it).
-  void closeModal(const Widget& modal);
+  void closeModal(const cWidget& modal);
   bool modalOpen() const { return !modals_.empty(); }
-  Widget* topModal() const { return modals_.empty() ? nullptr : modals_.back().get(); }
+  cWidget* topModal() const { return modals_.empty() ? nullptr : modals_.back().get(); }
 
  private:
-  friend class Widget;
-  void forget(const Widget* w);   // a widget is being destroyed
+  friend class cWidget;
+  void forget(const cWidget* w);   // a widget is being destroyed
   /// The layer receiving input: top popup, else top modal, else the root.
-  Widget& activeLayer() const;
-  Widget* hitTestLayers(Vec2 p) const;
-  void collectFocusable(Widget& w, std::vector<Widget*>& out) const;
+  cWidget& activeLayer() const;
+  cWidget* hitTestLayers(Vec2 p) const;
+  void collectFocusable(cWidget& w, std::vector<cWidget*>& out) const;
   void deliverKey(const UiEvent& e);
 
   Theme theme_;
-  std::unique_ptr<Widget> root_;
-  std::vector<std::unique_ptr<Widget>> modals_, popups_;
-  std::vector<std::unique_ptr<Widget>> closing_;  // destroyed at the end of handleEvent
-  Widget *focus_ = nullptr, *hover_ = nullptr, *capture_ = nullptr;
+  std::unique_ptr<cWidget> root_;
+  std::vector<std::unique_ptr<cWidget>> modals_, popups_;
+  std::vector<std::unique_ptr<cWidget>> closing_;  // destroyed at the end of handleEvent
+  cWidget *focus_ = nullptr, *hover_ = nullptr, *capture_ = nullptr;
   IScriptHost* scripts_ = nullptr;
   IClipboard* clipboard_ = nullptr;
   cMemoryClipboard fallbackClipboard_;

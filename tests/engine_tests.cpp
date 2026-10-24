@@ -7607,7 +7607,7 @@ void testScriptSandbox() {
   }
 }
 
-// ---- mods: ModLoader scan + SDK version enforcement ----
+// ---- mods: cModLoader scan + SDK version enforcement ----
 
 void testModLoader() {
   std::printf("mods: ModLoader scan + SDK enforcement (refuse major, warn minor)\n");
@@ -7636,7 +7636,7 @@ void testModLoader() {
   mkmod("hugesdk", R"({"id":"hugesdk","version":"1.0.0","sdk":1e30,"type":"content"})");
   mkmod("negsdk", R"({"id":"negsdk","version":"1.0.0","sdk":-2,"type":"content"})");
 
-  ModLoader loader;
+  cModLoader loader;
   const std::vector<ModInfo> scanned = loader.scan(dir.string());
   auto find = [](const std::vector<ModInfo>& v, const char* id) -> const ModInfo* {
     for (const auto& m : v)

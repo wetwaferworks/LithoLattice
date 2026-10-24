@@ -4,7 +4,7 @@
 // no new widgets).
 //
 // INPUT CONFINEMENT (hard rule): the tilde key never toggles the console open
-// while UiRoot::wantsKeyboard() (a text field has focus, a modal/popup is
+// while cUiRoot::wantsKeyboard() (a text field has focus, a modal/popup is
 // open) — typing "~" in a field keeps working. While the console is open its
 // cTextBox holds focus, so wantsKeyboard() is true and keystrokes typed here
 // never reach mods (cModInputRouter::shouldDeliverToMod), exactly like any
@@ -39,8 +39,8 @@ class cDebugConsole {
   cDebugConsole& operator=(const cDebugConsole&) = delete;
 
   /// Builds the panel (hidden) and adds it on top of ui.root(). Call once,
-  /// after the UiRoot exists. Available in ALL builds, not just debug.
-  void attach(ui::UiRoot& ui);
+  /// after the cUiRoot exists. Available in ALL builds, not just debug.
+  void attach(ui::cUiRoot& ui);
 
   bool isOpen() const { return open_; }
   void open();
@@ -54,7 +54,7 @@ class cDebugConsole {
   /// typing "~" in a field always keeps working. Debounced: a held tilde key
   /// (text repeat) toggles at most once per 200 ms. Returns true when the
   /// event was consumed.
-  bool handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e);
+  bool handleTildeKey(ui::cUiRoot& ui, const ui::UiEvent& e);
 
   /// Key pre-filter while open; call BEFORE ui.handleEvent. Tab performs
   /// HL1-style completion of the input line; typing filters the VS Code-style
@@ -99,8 +99,8 @@ class cDebugConsole {
   cConsoleReg& registry_;
   cRegCompletionSource completionSource_;  ///< injected candidate source (the Fragment seam)
   Completer completer_;
-  ui::UiRoot* ui_ = nullptr;
-  ui::Widget* panel_ = nullptr;
+  ui::cUiRoot* ui_ = nullptr;
+  ui::cWidget* panel_ = nullptr;
   ui::cTextEditor* logView_ = nullptr;
   ui::cListView* completionView_ = nullptr;
   ui::cTextBox* input_ = nullptr;

@@ -64,7 +64,7 @@ class cSuspensionPolicy {
   static uint32_t backoffTicksFor(uint32_t consecutive);
 
   /// Owning mod's id, used in the modsys: log lines. Empty renders as
-  /// "<unknown>" (the ModLoader sets the real id when it creates the engine).
+  /// "<unknown>" (the cModLoader sets the real id when it creates the engine).
   void setModId(const std::string& id) { modId_ = id; }
   const char* displayId() const { return modId_.empty() ? "<unknown>" : modId_.c_str(); }
 

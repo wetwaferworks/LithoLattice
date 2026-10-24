@@ -54,7 +54,7 @@ void InputSystem::processFrame(std::span<const InputEvent> events) {
   if (recording_) recorded_.insert(recorded_.end(), events.begin(), events.end());
   for (size_t i = 0; i < out_.size(); ++i) {
     const ActionId a = ActionId(i);
-    if (map_.actions().kind(a) != ActionKind::Button) continue;
+    if (map_.actions().kind(a) != ActionKind::cButton) continue;
     bool raw = false;
     ActionState s = resolveButton(a, raw);
     rawHeld_[i] = raw;
@@ -97,7 +97,7 @@ float InputSystem::bindingValue(const Binding& b) const {
       const float sign = b.source == S::PadAxisPositive ? 1.f : -1.f;
       float v = 0.f;
       for (int p = 0; p < kMaxGamepads; ++p) {
-        const DeviceState::Pad& pad = devices_.pad(p);
+        const cDeviceState::Pad& pad = devices_.pad(p);
         if (!pad.connected) continue;
         float a;
         if (axis == GamepadAxis::LeftTrigger || axis == GamepadAxis::RightTrigger) {
@@ -164,7 +164,7 @@ AxisValue InputSystem::axisOf(ActionId a, float dt) const {
     } else if (b.source == Binding::Source::PadStick) {
       const size_t ix = Stick(b.code) == Stick::Left ? size_t(GamepadAxis::LeftX) : size_t(GamepadAxis::RightX);
       for (int p = 0; p < kMaxGamepads; ++p) {
-        const DeviceState::Pad& pad = devices_.pad(p);
+        const cDeviceState::Pad& pad = devices_.pad(p);
         if (!pad.connected) continue;
         const AxisValue st = applyRadialDeadzone({pad.axes[ix], pad.axes[ix + 1]}, s.stickDeadzone, s.stickCurve);
         v.x += st.x * s.stickLookSpeed * dt;

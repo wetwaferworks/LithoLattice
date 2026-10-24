@@ -15,7 +15,7 @@
 namespace litholattice::ui {
 
 /// nullptr + `err` (with the JSON path) on error.
-std::unique_ptr<Widget> buildWidget(const Json& json, std::string& err);
-std::unique_ptr<Widget> buildWidget(const std::string& text, std::string& err);
+std::unique_ptr<cWidget> buildWidget(const Json& json, std::string& err);
+std::unique_ptr<cWidget> buildWidget(const std::string& text, std::string& err);
 
 }  // namespace litholattice::ui

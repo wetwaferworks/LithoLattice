@@ -3,7 +3,7 @@
 
 namespace litholattice {
 
-size_t VoiceAllocator::acquire(uint64_t key) {
+size_t cVoiceAllocator::acquire(uint64_t key) {
   for (size_t i = 0; i < slots_.size(); ++i)
     if (slots_[i].key == key) return i;
   auto it = std::find_if(slots_.begin(), slots_.end(), [](const Slot& s) { return !s.key; });
@@ -24,21 +24,21 @@ size_t VoiceAllocator::acquire(uint64_t key) {
   return size_t(it - slots_.begin());
 }
 
-void VoiceAllocator::setVirtualized(size_t voice, bool v) {
+void cVoiceAllocator::setVirtualized(size_t voice, bool v) {
   if (voice < slots_.size()) slots_[voice].virtualized = v;
 }
 
-bool VoiceAllocator::virtualized(size_t voice) const {
+bool cVoiceAllocator::virtualized(size_t voice) const {
   return voice < slots_.size() && slots_[voice].virtualized;
 }
 
-std::optional<size_t> VoiceAllocator::release(uint64_t key) {
+std::optional<size_t> cVoiceAllocator::release(uint64_t key) {
   for (size_t i = 0; i < slots_.size(); ++i)
     if (slots_[i].key == key) { slots_[i].key.reset(); return i; }
   return std::nullopt;
 }
 
-void VoiceAllocator::clear() {
+void cVoiceAllocator::clear() {
   for (Slot& s : slots_) {
     s.key.reset();
     s.virtualized = false;

@@ -39,11 +39,11 @@ struct AudioCommand {
   }
 };
 
-class AudioEngine {
+class cAudioEngine {
  public:
   static constexpr float kDefaultSampleRate = 48000.f;
 
-  explicit AudioEngine(float sampleRate = kDefaultSampleRate);
+  explicit cAudioEngine(float sampleRate = kDefaultSampleRate);
 
   /// Game thread (single producer). Returns false if output is disabled, if the
   /// queue is full, or (for non-critical commands) if only the critical reserve
@@ -69,10 +69,10 @@ class AudioEngine {
   size_t effectsVoiceCount() const { return effects_.voiceCount(); }
   /// Direct access for offline rendering in TESTS ONLY (not thread-safe against
   /// render()). F-4: no game caller remains; kept public for audio_selftest.
-  const Synth& music() const { return music_; }
-  const Synth& effects() const { return effects_; }
-  Synth& music() { return music_; }
-  Synth& effects() { return effects_; }
+  const cSynth& music() const { return music_; }
+  const cSynth& effects() const { return effects_; }
+  cSynth& music() { return music_; }
+  cSynth& effects() { return effects_; }
 
   /// Effect insert on the effects bus (see effects.h). Bypassed by default,
   /// which reproduces the old dry behavior exactly. The game thread clears
@@ -120,11 +120,11 @@ class AudioEngine {
   /// shedVirtualized_ and auto-cleared on step-down; game-virtualized flags
   /// are never touched (apply() drops them from the mask).
   void applyShedActions();
-  Synth& bus(Bus b) { return b == Bus::Music ? music_ : effects_; }
+  cSynth& bus(Bus b) { return b == Bus::Music ? music_ : effects_; }
 
   static constexpr size_t kBlock = 512;
   float sampleRate_;
-  Synth music_, effects_;
+  cSynth music_, effects_;
   static constexpr size_t kCommandQueueDepth = 1024;  // power of two (cSpscQueue)
   static constexpr size_t kCriticalReserve = 64;      // slots reserved for NoteOff/SetMasterGain
   cSpscQueue<AudioCommand, kCommandQueueDepth> queue_;
@@ -147,7 +147,7 @@ class AudioEngine {
   // Tap ring: audio thread writes tapHead_, drainTap() reads tapTail_.
   // Single writer / single reader; overflow drops the oldest.
   // Cortana 2026-10-15 1450 (audio audit): heap, not inline. The 384 KB
-  // inline ring made sizeof(AudioEngine) ~400 KB, so every stack instance
+  // inline ring made sizeof(cAudioEngine) ~400 KB, so every stack instance
   // (main(), selftests) risked overflowing a 1 MB Windows stack; Release
   // inlining stacked several in one frame (the 05:11 engine_audio SegFault).
   // Allocated once at construction, zeroed; render() never allocates.

@@ -48,16 +48,16 @@ Orientation orientation(const Json& j, Orientation def) {
 
 struct TypeInfo {
   std::set<std::string, std::less<>> keys;  // type-specific keys
-  std::function<std::unique_ptr<Widget>(const Json&)> make;
+  std::function<std::unique_ptr<cWidget>(const Json&)> make;
   bool takesChildren = true;
 };
 
 const std::map<std::string, TypeInfo, std::less<>>& types() {
   static const std::map<std::string, TypeInfo, std::less<>> kTypes = {
-      {"widget", {{}, [](const Json&) { return std::make_unique<Widget>(); }}},
+      {"widget", {{}, [](const Json&) { return std::make_unique<cWidget>(); }}},
       {"panel", {{}, [](const Json&) { return std::make_unique<cPanel>(); }}},
       {"label", {{"text"}, [](const Json& j) { return std::make_unique<cLabel>(text(j, "text")); }, false}},
-      {"button", {{"text"}, [](const Json& j) { return std::make_unique<Button>(text(j, "text")); }, false}},
+      {"button", {{"text"}, [](const Json& j) { return std::make_unique<cButton>(text(j, "text")); }, false}},
       {"image",
        {{"image", "size"}, [](const Json& j) { return std::make_unique<Image>(text(j, "image"), vec2(j.get("size"), {32, 32})); }, false}},
       {"checkbox",
@@ -123,7 +123,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
   return kTypes;
 }
 
-std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::string& err) {
+std::unique_ptr<cWidget> build(const Json& j, const std::string& path, std::string& err) {
   if (j.type != Json::Type::Object) {
     err = path + ": widget must be an object";
     return nullptr;
@@ -146,7 +146,7 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
     }
 
   // Children first (so scroll / splitter / tabs can adopt them).
-  std::vector<std::unique_ptr<Widget>> kids;
+  std::vector<std::unique_ptr<cWidget>> kids;
   if (const Json* c = j.get("children")) {
     if (it != table.end() && !it->second.takesChildren) {
       err = path + ": '" + type + "' takes no children";
@@ -159,7 +159,7 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
     }
   }
 
-  std::unique_ptr<Widget> w;
+  std::unique_ptr<cWidget> w;
   if (scroll) {
     if (kids.size() != 1) {
       err = path + ": 'scroll' needs exactly one child";
@@ -215,9 +215,9 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
 
 }  // namespace
 
-std::unique_ptr<Widget> buildWidget(const Json& json, std::string& err) { return build(json, "ui", err); }
+std::unique_ptr<cWidget> buildWidget(const Json& json, std::string& err) { return build(json, "ui", err); }
 
-std::unique_ptr<Widget> buildWidget(const std::string& text, std::string& err) {
+std::unique_ptr<cWidget> buildWidget(const std::string& text, std::string& err) {
   Json j;
   if (!Json::parse(text, j, &err)) return nullptr;
   return buildWidget(j, err);

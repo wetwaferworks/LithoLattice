@@ -17,22 +17,22 @@ SynthPreset SynthPreset::dmg() {
            {"noise", waveformBit(Waveform::Noise)}}};
 }
 
-Synth::Synth(SynthPreset preset, float sampleRate)
+cSynth::cSynth(SynthPreset preset, float sampleRate)
     : preset_(std::move(preset)),
       voices_(preset_.voices.size(), Voice(sampleRate)),
       virtual_(preset_.voices.size(), 0) {}
 
-void Synth::setVirtualized(size_t voice, bool v) {
+void cSynth::setVirtualized(size_t voice, bool v) {
   if (voice < virtual_.size()) virtual_[voice] = v ? 1 : 0;
 }
 
-size_t Synth::virtualizedCount() const {
+size_t cSynth::virtualizedCount() const {
   size_t n = 0;
   for (char v : virtual_) n += size_t(v != 0);
   return n;
 }
 
-void Synth::noteOn(size_t voice, NoteSpec note) {
+void cSynth::noteOn(size_t voice, NoteSpec note) {
   if (voice >= voices_.size()) return;
   const uint8_t allowed = preset_.voices[voice].waveforms;
   if (!(allowed & waveformBit(note.waveform))) note.waveform = Waveform(std::countr_zero(allowed));
@@ -40,11 +40,11 @@ void Synth::noteOn(size_t voice, NoteSpec note) {
   virtual_[voice] = 0;  // a fresh note starts audible; re-virtualize explicitly if still inaudible
 }
 
-void Synth::noteOff(size_t voice) {
+void cSynth::noteOff(size_t voice) {
   if (voice < voices_.size()) voices_[voice].noteOff();
 }
 
-void Synth::mixInto(std::span<float> out) {
+void cSynth::mixInto(std::span<float> out) {
   const size_t n = out.size();
   if (scratch_.size() < n) scratch_.resize(n);
   for (size_t vi = 0; vi < voices_.size(); ++vi) {

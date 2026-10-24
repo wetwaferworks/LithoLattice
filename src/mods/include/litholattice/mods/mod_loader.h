@@ -1,7 +1,7 @@
 // IMod loader (v1 initial): finds mod.json, validates, loads.
 //
 // STATUS — STAGED / UNWIRED (F-L12, review 2026-10-13): no game code loads
-// mods through this ModLoader; it is exercised by selftests only. The
+// mods through this cModLoader; it is exercised by selftests only. The
 // CANONICAL mod-manifest system is engine/src/assets/mod_manifest.*
 // (schema-1 JSON, permissions as {api, reason}, signature/trust model) —
 // the one the game actually uses for content packs and the boot seal /
@@ -81,7 +81,7 @@ struct ModInfo {
   std::vector<ModExtensionDecl> extensions;  // "extensions": declared child slots
 };
 
-class ModLoader {
+class cModLoader {
  public:
   /// Scans dir for mods (each in its own folder with mod.json).
   /// Returns the valid mods; invalid ones are logged and skipped.

@@ -10,10 +10,10 @@
 // signature/trust model in mod_signature.h) -- is the canonical mod-manifest
 // system: it is the one the game actually uses (content packs, boot seal /
 // hot-swap decisions in main.cpp). The OTHER system, engine/src/mods'
-// ModLoader (different schema: "sdk" + permission NAMES -> kPerm bits), is
+// cModLoader (different schema: "sdk" + permission NAMES -> kPerm bits), is
 // STAGED/UNWIRED -- no game code loads mods through it; it exists for the
 // future script/native loading work and is exercised by selftests only.
-// Do not wire new features to the ModLoader schema; if script/native
+// Do not wire new features to the cModLoader schema; if script/native
 // loading is ever wired, it migrates onto THIS manifest first.
 #pragma once
 #include <cstdint>

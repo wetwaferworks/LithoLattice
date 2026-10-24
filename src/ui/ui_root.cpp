@@ -9,7 +9,7 @@ namespace {
 
 constexpr float kTooltipDelay = 0.6f;
 
-bool isInside(const Widget* w, const Widget* ancestor) {
+bool isInside(const cWidget* w, const cWidget* ancestor) {
   for (; w; w = w->parent())
     if (w == ancestor) return true;
   return false;
@@ -17,13 +17,13 @@ bool isInside(const Widget* w, const Widget* ancestor) {
 
 }  // namespace
 
-UiRoot::UiRoot(Theme theme)
-    : theme_(std::move(theme)), root_(std::make_unique<Widget>("root")), tooltip_(std::make_unique<cTooltip>()) {
+cUiRoot::cUiRoot(Theme theme)
+    : theme_(std::move(theme)), root_(std::make_unique<cWidget>("root")), tooltip_(std::make_unique<cTooltip>()) {
   root_->attach(this);
   tooltip_->attach(this);
 }
 
-UiRoot::~UiRoot() {
+cUiRoot::~cUiRoot() {
   // Destroy layers before the pointers they would report to.
   popups_.clear();
   modals_.clear();
@@ -32,27 +32,27 @@ UiRoot::~UiRoot() {
   tooltip_.reset();
 }
 
-void UiRoot::forget(const Widget* w) {
+void cUiRoot::forget(const cWidget* w) {
   if (isInside(focus_, w)) focus_ = nullptr;
   if (isInside(hover_, w)) hover_ = nullptr;
   if (isInside(capture_, w)) capture_ = nullptr;
 }
 
-void UiRoot::layout(Vec2 viewport) {
+void cUiRoot::layout(Vec2 viewport) {
   viewport_ = viewport;
   const Rect screen{0, 0, viewport.x, viewport.y};
   root_->place(screen, theme_);
   // Layers are anchored to the screen like children of the root, then kept on screen.
   for (auto* list : {&modals_, &popups_})
     for (auto& w : *list) {
-      Rect r = anchoredRect(w->layout(), screen, Widget::childSize(*w, theme_));
+      Rect r = anchoredRect(w->layout(), screen, cWidget::childSize(*w, theme_));
       r.x = std::clamp(r.x, 0.f, std::max(0.f, viewport.x - r.w));
       r.y = std::clamp(r.y, 0.f, std::max(0.f, viewport.y - r.h));
       w->place(r, theme_);
     }
 }
 
-void UiRoot::paint(IUiRenderer& renderer) const {
+void cUiRoot::paint(IUiRenderer& renderer) const {
   Painter p(renderer, theme_);
   root_->paintTree(p);
   for (const auto& m : modals_) {
@@ -70,48 +70,48 @@ void UiRoot::paint(IUiRenderer& renderer) const {
   }
 }
 
-void UiRoot::update(float dt) {
+void cUiRoot::update(float dt) {
   closing_.clear();  // layers closed outside event handling
   time_ += dt;
   hoverTime_ += dt;
 }
 
-Widget& UiRoot::activeLayer() const {
+cWidget& cUiRoot::activeLayer() const {
   if (!modals_.empty()) return *modals_.back();
   return *root_;
 }
 
-Widget* UiRoot::hitTestLayers(Vec2 p) const {
+cWidget* cUiRoot::hitTestLayers(Vec2 p) const {
   for (auto it = popups_.rbegin(); it != popups_.rend(); ++it)
-    if (Widget* w = (*it)->hitTest(p)) return w;
+    if (cWidget* w = (*it)->hitTest(p)) return w;
   if (!modals_.empty()) return modals_.back()->hitTest(p);
-  Widget* w = root_->hitTest(p);
+  cWidget* w = root_->hitTest(p);
   return w == root_.get() ? nullptr : w;  // the bare root is not a target
 }
 
-bool UiRoot::wantsKeyboard() const {
+bool cUiRoot::wantsKeyboard() const {
   if (!modals_.empty() || !popups_.empty()) return true;
   return focus_ != nullptr;
 }
 
-bool UiRoot::wantsPointer(Vec2 p) const { return !modals_.empty() || hitTestLayers(p) != nullptr; }
+bool cUiRoot::wantsPointer(Vec2 p) const { return !modals_.empty() || hitTestLayers(p) != nullptr; }
 
-void UiRoot::setFocus(Widget* w) {
+void cUiRoot::setFocus(cWidget* w) {
   if (w == focus_) return;
-  Widget* old = focus_;
+  cWidget* old = focus_;
   focus_ = w;
   if (old) old->onFocusChanged(false);
   if (w) w->onFocusChanged(true);
 }
 
-void UiRoot::collectFocusable(Widget& w, std::vector<Widget*>& out) const {
+void cUiRoot::collectFocusable(cWidget& w, std::vector<cWidget*>& out) const {
   if (!w.visible()) return;
   if (w.focusable() && w.interactive()) out.push_back(&w);
   for (const auto& c : w.children()) collectFocusable(*c, out);
 }
 
-void UiRoot::focusNext(bool backwards) {
-  std::vector<Widget*> list;
+void cUiRoot::focusNext(bool backwards) {
+  std::vector<cWidget*> list;
   collectFocusable(popups_.empty() ? activeLayer() : *popups_.back(), list);
   if (list.empty()) return;
   const auto it = std::find(list.begin(), list.end(), focus_);
@@ -124,8 +124,8 @@ void UiRoot::focusNext(bool backwards) {
   setFocus(list[i]);
 }
 
-bool UiRoot::focusDirection(float dx, float dy) {
-  std::vector<Widget*> list;
+bool cUiRoot::focusDirection(float dx, float dy) {
+  std::vector<cWidget*> list;
   collectFocusable(popups_.empty() ? activeLayer() : *popups_.back(), list);
   if (!focus_) {
     if (list.empty()) return false;
@@ -134,9 +134,9 @@ bool UiRoot::focusDirection(float dx, float dy) {
   }
   const Rect& f = focus_->rect();
   const Vec2 c{f.x + f.w * 0.5f, f.y + f.h * 0.5f};
-  Widget* best = nullptr;
+  cWidget* best = nullptr;
   float bestScore = std::numeric_limits<float>::max();
-  for (Widget* w : list) {
+  for (cWidget* w : list) {
     if (w == focus_) continue;
     const Rect& r = w->rect();
     const float vx = r.x + r.w * 0.5f - c.x, vy = r.y + r.h * 0.5f - c.y;
@@ -153,14 +153,14 @@ bool UiRoot::focusDirection(float dx, float dy) {
   return best != nullptr;
 }
 
-Widget& UiRoot::openPopup(std::unique_ptr<Widget> popup) {
+cWidget& cUiRoot::openPopup(std::unique_ptr<cWidget> popup) {
   popup->attach(this);
   popups_.push_back(std::move(popup));
   layout(viewport_);
   return *popups_.back();
 }
 
-void UiRoot::closePopup(const Widget& popup) {
+void cUiRoot::closePopup(const cWidget& popup) {
   const auto it = std::find_if(popups_.begin(), popups_.end(), [&](const auto& p) { return p.get() == &popup; });
   if (it == popups_.end()) return;
   // Close it and everything opened above it (submenus).
@@ -171,15 +171,15 @@ void UiRoot::closePopup(const Widget& popup) {
   popups_.erase(it, popups_.end());
 }
 
-bool UiRoot::isPopupOpen(const Widget* popup) const {
+bool cUiRoot::isPopupOpen(const cWidget* popup) const {
   return popup && std::any_of(popups_.begin(), popups_.end(), [&](const auto& p) { return p.get() == popup; });
 }
 
-void UiRoot::closeAllPopups() {
+void cUiRoot::closeAllPopups() {
   if (!popups_.empty()) closePopup(*popups_.front());
 }
 
-Widget& UiRoot::pushModal(std::unique_ptr<Widget> modal) {
+cWidget& cUiRoot::pushModal(std::unique_ptr<cWidget> modal) {
   closeAllPopups();
   modal->attach(this);
   modals_.push_back(std::move(modal));
@@ -189,7 +189,7 @@ Widget& UiRoot::pushModal(std::unique_ptr<Widget> modal) {
   return *modals_.back();
 }
 
-void UiRoot::closeModal(const Widget& modal) {
+void cUiRoot::closeModal(const cWidget& modal) {
   const auto it = std::find_if(modals_.begin(), modals_.end(), [&](const auto& m) { return m.get() == &modal; });
   if (it == modals_.end()) return;
   closeAllPopups();
@@ -200,8 +200,8 @@ void UiRoot::closeModal(const Widget& modal) {
   modals_.erase(it, modals_.end());
 }
 
-void UiRoot::deliverKey(const UiEvent& e) {
-  for (Widget* w = focus_; w; w = w->parent())
+void cUiRoot::deliverKey(const UiEvent& e) {
+  for (cWidget* w = focus_; w; w = w->parent())
     if (w->interactive() && w->onKey(e)) return;
   // Unhandled: navigation and layer keys.
   if (e.key == Key::Tab) {
@@ -210,7 +210,7 @@ void UiRoot::deliverKey(const UiEvent& e) {
     if (!popups_.empty()) {
       closePopup(*popups_.back());
     } else {
-      Widget* m = topModal();
+      cWidget* m = topModal();
       const bool modalHandled = m && m->onKey(e);  // e.g. a dialog closes itself
       if (!modalHandled) setFocus(nullptr);
     }
@@ -221,19 +221,19 @@ void UiRoot::deliverKey(const UiEvent& e) {
   }
 }
 
-void UiRoot::destroyLater(std::unique_ptr<Widget> w) {
+void cUiRoot::destroyLater(std::unique_ptr<cWidget> w) {
   if (!w) return;
   forget(w.get());
   closing_.push_back(std::move(w));
 }
 
-bool UiRoot::handleEvent(const UiEvent& e) {
+bool cUiRoot::handleEvent(const UiEvent& e) {
   bool consumed = false;
   mods_ = e.mods;
   switch (e.type) {
     case UiEvent::Type::PointerMove: {
       pointer_ = e.pos;
-      Widget* over = hitTestLayers(e.pos);
+      cWidget* over = hitTestLayers(e.pos);
       if (over != hover_) {
         hover_ = over;
         hoverTime_ = 0;
@@ -246,7 +246,7 @@ bool UiRoot::handleEvent(const UiEvent& e) {
     case UiEvent::Type::PointerDown: {
       pointer_ = e.pos;
       hoverTime_ = 0;
-      Widget* target = hitTestLayers(e.pos);
+      cWidget* target = hitTestLayers(e.pos);
       // A click outside every popup closes them (and is not passed on).
       if (!popups_.empty() && !std::any_of(popups_.begin(), popups_.end(), [&](const auto& p) { return isInside(target, p.get()); })) {
         closeAllPopups();
@@ -254,12 +254,12 @@ bool UiRoot::handleEvent(const UiEvent& e) {
         if (!target) break;
       }
       setFocus(nullptr);
-      for (Widget* w = target; w; w = w->parent())
+      for (cWidget* w = target; w; w = w->parent())
         if (w->focusable() && w->interactive()) {
           setFocus(w);
           break;
         }
-      for (Widget* w = target; w; w = w->parent())
+      for (cWidget* w = target; w; w = w->parent())
         if (w->interactive() && w->onPointerDown(e)) {
           capture_ = w;
           break;
@@ -269,7 +269,7 @@ bool UiRoot::handleEvent(const UiEvent& e) {
     }
     case UiEvent::Type::PointerUp: {
       pointer_ = e.pos;
-      if (Widget* c = capture_) {
+      if (cWidget* c = capture_) {
         capture_ = nullptr;
         c->onPointerUp(e);
         consumed = true;
@@ -279,7 +279,7 @@ bool UiRoot::handleEvent(const UiEvent& e) {
       break;
     }
     case UiEvent::Type::Wheel: {
-      for (Widget* w = hitTestLayers(e.pos); w; w = w->parent())
+      for (cWidget* w = hitTestLayers(e.pos); w; w = w->parent())
         if (w->interactive() && w->onWheel(e)) {
           consumed = true;
           break;

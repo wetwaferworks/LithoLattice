@@ -1,4 +1,4 @@
-// ModLoader: mod.json discovery, validation, and SDK-version enforcement.
+// cModLoader: mod.json discovery, validation, and SDK-version enforcement.
 // The load path (load()) refuses mods on SDK major-version mismatch and
 // warns-and-continues on minor mismatch (JD's call, 2026-10-11).
 #include "litholattice/mods/mod_loader.h"
@@ -71,7 +71,7 @@ std::string trim(const std::string& s) {
 
 }  // namespace
 
-bool ModLoader::parseSdk(const std::string& sdk, ModInfo& out) const {
+bool cModLoader::parseSdk(const std::string& sdk, ModInfo& out) const {
   const std::string s = trim(sdk);
   if (s.empty()) return false;
   if (s.find_first_not_of("0123456789") == std::string::npos) {
@@ -108,7 +108,7 @@ bool ModLoader::parseSdk(const std::string& sdk, ModInfo& out) const {
   return false;
 }
 
-uint32_t ModLoader::parsePermissions(const std::string& permList) {
+uint32_t cModLoader::parsePermissions(const std::string& permList) {
   uint32_t bits = 0;
   std::stringstream ss(permList);
   std::string tok;
@@ -125,7 +125,7 @@ uint32_t ModLoader::parsePermissions(const std::string& permList) {
   return bits;
 }
 
-ModInfo ModLoader::parseModJson(const std::string& path) {
+ModInfo cModLoader::parseModJson(const std::string& path) {
   ModInfo info;
   std::ifstream in(path, std::ios::binary);
   if (!in) { logError("mod.json: cannot open %s", path.c_str()); return info; }
@@ -242,7 +242,7 @@ ModInfo ModLoader::parseModJson(const std::string& path) {
   return info;
 }
 
-std::vector<ModInfo> ModLoader::scan(const std::string& dir) {
+std::vector<ModInfo> cModLoader::scan(const std::string& dir) {
   namespace fs = std::filesystem;
   std::vector<ModInfo> mods;
   std::error_code ec;
@@ -263,7 +263,7 @@ std::vector<ModInfo> ModLoader::scan(const std::string& dir) {
   return mods;
 }
 
-bool ModLoader::checkCompatibility(const ModInfo& mod, std::string& reason) const {
+bool cModLoader::checkCompatibility(const ModInfo& mod, std::string& reason) const {
   const Semver engine{kEngineSdkMajor, kEngineSdkMinor, kEngineSdkPatch};
   // Range form ("sdk": ">=1.0.0 <2.0.0"): enforce both bounds.
   if (!mod.sdkRange.empty()) {
@@ -330,7 +330,7 @@ bool ModLoader::checkCompatibility(const ModInfo& mod, std::string& reason) cons
   return true;
 }
 
-std::vector<ModInfo> ModLoader::load(const std::string& dir) {
+std::vector<ModInfo> cModLoader::load(const std::string& dir) {
   // Headless-safe default: deny-all prompt, grants stored next to the mods
   // dir. The game passes its own store/prompt/gate via the overload below.
   mods::cPermissionStore store(dir + "/permission_grants.json");
@@ -338,7 +338,7 @@ std::vector<ModInfo> ModLoader::load(const std::string& dir) {
   return load(dir, store, gate, mods::denyAllPermissions);
 }
 
-std::vector<ModInfo> ModLoader::load(const std::string& dir, mods::cPermissionStore& store,
+std::vector<ModInfo> cModLoader::load(const std::string& dir, mods::cPermissionStore& store,
                                      mods::cModPermissionGate& gate,
                                      mods::PermissionPromptFn prompt) {
   std::vector<ModInfo> loaded;

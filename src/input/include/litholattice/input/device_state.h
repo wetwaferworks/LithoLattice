@@ -15,7 +15,7 @@ struct TextInput {
   bool empty() const { return chars.empty() && enter == 0 && backspace == 0; }
 };
 
-class DeviceState {
+class cDeviceState {
  public:
   struct Pad {
     bool connected = false;

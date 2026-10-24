@@ -3,14 +3,14 @@
 namespace litholattice {
 
 template <size_t N>
-void DeviceState::Buttons<N>::set(size_t i, bool on) {
+void cDeviceState::Buttons<N>::set(size_t i, bool on) {
   if (i >= N) return;
   if (on && !down[i]) pressed.set(i);
   if (!on && down[i]) released.set(i);
   down.set(i, on);
 }
 
-void DeviceState::beginFrame() {
+void cDeviceState::beginFrame() {
   keys_.pressed.reset(); keys_.released.reset();
   mouse_.pressed.reset(); mouse_.released.reset();
   for (Pad& p : pads_) { p.pressed.reset(); p.released.reset(); }
@@ -18,19 +18,19 @@ void DeviceState::beginFrame() {
   text_ = {};
 }
 
-void DeviceState::releaseAll() {
+void cDeviceState::releaseAll() {
   keys_.releaseAll();
   mouse_.releaseAll();
   for (Pad& p : pads_) { p.released |= p.down; p.down.reset(); p.axes.fill(0.f); }
 }
 
-int DeviceState::connectedPads() const {
+int cDeviceState::connectedPads() const {
   int n = 0;
   for (const Pad& p : pads_) n += p.connected;
   return n;
 }
 
-void DeviceState::apply(const InputEvent& e) {
+void cDeviceState::apply(const InputEvent& e) {
   using T = InputEvent::Type;
   Pad* pad = e.device < kMaxGamepads ? &pads_[e.device] : nullptr;
   switch (e.type) {

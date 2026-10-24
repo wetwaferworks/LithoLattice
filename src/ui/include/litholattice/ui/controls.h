@@ -1,6 +1,6 @@
-// Basic controls: cPanel, cLabel, Button, Image (icon), cCheckbox / Toggle, cProgressBar, cSlider,
+// Basic controls: cPanel, cLabel, cButton, Image (icon), cCheckbox / Toggle, cProgressBar, cSlider,
 // cNumberField (integer, e.g. signal 0..64), cSlot (an inventory cell) and cDivider (separator line).
-// Events: Button "click"; cCheckbox, cSlider, cNumberField "change"; cSlot "click" / "rightclick".
+// Events: cButton "click"; cCheckbox, cSlider, cNumberField "change"; cSlot "click" / "rightclick".
 #pragma once
 #include <string>
 #include "litholattice/ui/widget.h"
@@ -9,13 +9,13 @@
 namespace litholattice::ui {
 
 /// Background + border container (style "panel"); children by anchors.
-class cPanel : public Widget {
+class cPanel : public cWidget {
  public:
-  explicit cPanel(std::string styleClass = "panel") : Widget(std::move(styleClass)) {}
+  explicit cPanel(std::string styleClass = "panel") : cWidget(std::move(styleClass)) {}
 };
 
 /// Single- or multi-line text ('\n' breaks lines). Not interactive.
-class cLabel : public Widget {
+class cLabel : public cWidget {
  public:
   explicit cLabel(std::string text = {}, std::string styleClass = "label");
   const std::string& text() const { return text_; }
@@ -23,7 +23,7 @@ class cLabel : public Widget {
   cLabel& setColor(Color c) { color_ = c; hasColor_ = true; return *this; }
   cLabel& setCentered(bool c) { centered_ = c; return *this; }
   Vec2 measure(const Theme& theme) const override;
-  Widget* hitTest(Vec2 p) override;  ///< only when it has a tooltip
+  cWidget* hitTest(Vec2 p) override;  ///< only when it has a tooltip
 
  protected:
   void paint(Painter& p) const override;
@@ -35,11 +35,11 @@ class cLabel : public Widget {
 };
 
 /// Clickable text button: "click" on release inside, or Enter / Space while focused.
-class Button : public Widget {
+class cButton : public cWidget {
  public:
-  explicit Button(std::string text = {}, std::string styleClass = "button");
+  explicit cButton(std::string text = {}, std::string styleClass = "button");
   const std::string& text() const { return text_; }
-  Button& setText(std::string t) { text_ = std::move(t); return *this; }
+  cButton& setText(std::string t) { text_ = std::move(t); return *this; }
   Vec2 measure(const Theme& theme) const override;
   bool onPointerDown(const UiEvent& e) override;
   void onPointerUp(const UiEvent& e) override;
@@ -53,7 +53,7 @@ class Button : public Widget {
 };
 
 /// A named image (block icon, texture) drawn through IUiRenderer::drawImage.
-class Image : public Widget {
+class Image : public cWidget {
  public:
   explicit Image(std::string image = {}, Vec2 size = {32, 32});
   const std::string& image() const { return image_; }
@@ -71,7 +71,7 @@ class Image : public Widget {
 };
 
 /// Check box with a label; `toggle` style draws a switch instead of a box.
-class cCheckbox : public Widget {
+class cCheckbox : public cWidget {
  public:
   explicit cCheckbox(std::string text = {}, bool checked = false, bool toggle = false);
   bool checked() const { return checked_; }
@@ -91,9 +91,9 @@ class cCheckbox : public Widget {
 };
 
 /// Horizontal bar filled to value() in [0, 1], with optional centred text.
-class cProgressBar : public Widget {
+class cProgressBar : public cWidget {
  public:
-  cProgressBar() : Widget("progress") {}
+  cProgressBar() : cWidget("progress") {}
   float value() const { return value_; }
   cProgressBar& setValue(float v);
   cProgressBar& setText(std::string t) { text_ = std::move(t); return *this; }
@@ -108,7 +108,7 @@ class cProgressBar : public Widget {
 };
 
 /// Horizontal slider over [min, max] with an optional step; drag, wheel or arrow keys.
-class cSlider : public Widget {
+class cSlider : public cWidget {
  public:
   cSlider(float min = 0, float max = 1, float value = 0, float step = 0);
   float value() const { return value_; }
@@ -129,7 +129,7 @@ class cSlider : public Widget {
 };
 
 /// Integer field with - / + buttons: typing digits, Up / Down, wheel, clamped to [min, max].
-class cNumberField : public Widget {
+class cNumberField : public cWidget {
  public:
   cNumberField(int min = 0, int max = 64, int value = 0);
   int value() const { return value_; }
@@ -157,7 +157,7 @@ class cNumberField : public Widget {
 
 /// Inventory / hotbar cell: an icon, an optional count or caption, selection highlight.
 /// Left click emits "click", right click "rightclick".
-class cSlot : public Widget {
+class cSlot : public cWidget {
  public:
   explicit cSlot(Vec2 size = {40, 40});
   cSlot& setIcon(std::string image, Color tint = {}) { icon_ = std::move(image); tint_ = tint; return *this; }
@@ -185,14 +185,14 @@ class cSlot : public Widget {
 
 /// Thin separator line (horizontal or vertical) drawn in the style's accent color.
 /// Non-interactive; visually groups menu sections. Style class "divider".
-class cDivider : public Widget {
+class cDivider : public cWidget {
  public:
   explicit cDivider(Orientation o = Orientation::Horizontal, float thickness = 1.f);
   Orientation orientation() const { return orientation_; }
   cDivider& setThickness(float t) { thickness_ = t < 1.f ? 1.f : t; return *this; }
   float thickness() const { return thickness_; }
   Vec2 measure(const Theme& theme) const override;
-  Widget* hitTest(Vec2) override { return nullptr; }
+  cWidget* hitTest(Vec2) override { return nullptr; }
 
  protected:
   void paint(Painter& p) const override;

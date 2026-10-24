@@ -34,7 +34,7 @@ inline bool effectBypassed(bool virtualized, float distanceBlocks) {
 /// Small Schroeder-style reverb: two feedback combs in parallel, one allpass
 /// in series. All delay lines are allocated in the constructor; process()
 /// never allocates and never locks, so it is safe on the audio thread.
-/// Enable/bypass are driven by the AudioEngine's atomics (game thread writes,
+/// Enable/bypass are driven by the cAudioEngine's atomics (game thread writes,
 /// audio thread reads); every other method is audio-thread only.
 class EffectChain {
  public:

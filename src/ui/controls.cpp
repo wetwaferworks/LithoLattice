@@ -26,7 +26,7 @@ Vec2 textBlock(std::string_view text) {
 
 // ---- cLabel
 
-cLabel::cLabel(std::string text, std::string styleClass) : Widget(std::move(styleClass)), text_(std::move(text)) {}
+cLabel::cLabel(std::string text, std::string styleClass) : cWidget(std::move(styleClass)), text_(std::move(text)) {}
 
 Vec2 cLabel::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
@@ -34,10 +34,10 @@ Vec2 cLabel::measure(const Theme& theme) const {
   return {b.x * g.x + s.padding.horizontal(), b.y * g.y + s.padding.vertical()};
 }
 
-Widget* cLabel::hitTest(Vec2 p) { return tooltip().empty() ? nullptr : Widget::hitTest(p); }
+cWidget* cLabel::hitTest(Vec2 p) { return tooltip().empty() ? nullptr : cWidget::hitTest(p); }
 
 void cLabel::paint(Painter& p) const {
-  Widget::paint(p);
+  cWidget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();
   const Vec2 g = p.theme().glyphSize(s.textScale);
@@ -54,31 +54,31 @@ void cLabel::paint(Painter& p) const {
   }
 }
 
-// ---- Button
+// ---- cButton
 
-Button::Button(std::string text, std::string styleClass) : Widget(std::move(styleClass)), text_(std::move(text)) {
+cButton::cButton(std::string text, std::string styleClass) : cWidget(std::move(styleClass)), text_(std::move(text)) {
   setFocusable(true);
 }
 
-Vec2 Button::measure(const Theme& theme) const {
+Vec2 cButton::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   const Vec2 g = theme.glyphSize(s.textScale);
   return {float(text_.size()) * g.x + s.padding.horizontal() + 8, g.y + s.padding.vertical()};
 }
 
-bool Button::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left; }
+bool cButton::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left; }
 
-void Button::onPointerUp(const UiEvent& e) {
+void cButton::onPointerUp(const UiEvent& e) {
   if (rect().contains(e.pos)) emit("click");
 }
 
-bool Button::onKey(const UiEvent& e) {
+bool cButton::onKey(const UiEvent& e) {
   if (!isActivateKey(e)) return false;
   emit("click");
   return true;
 }
 
-void Button::paint(Painter& p) const {
+void cButton::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), stateBackground());
   p.frame(rect(), s.border, s.borderWidth);
@@ -87,7 +87,7 @@ void Button::paint(Painter& p) const {
 
 // ---- Image
 
-Image::Image(std::string image, Vec2 size) : Widget("image"), image_(std::move(image)), size_(size) {}
+Image::Image(std::string image, Vec2 size) : cWidget("image"), image_(std::move(image)), size_(size) {}
 
 void Image::paint(Painter& p) const {
   if (!image_.empty()) p.image(rect(), image_, tint_);
@@ -96,7 +96,7 @@ void Image::paint(Painter& p) const {
 // ---- cCheckbox
 
 cCheckbox::cCheckbox(std::string text, bool checked, bool toggle)
-    : Widget("checkbox"), text_(std::move(text)), checked_(checked), toggle_(toggle) {
+    : cWidget("checkbox"), text_(std::move(text)), checked_(checked), toggle_(toggle) {
   setFocusable(true);
 }
 
@@ -167,7 +167,7 @@ void cProgressBar::paint(Painter& p) const {
 // ---- cSlider
 
 cSlider::cSlider(float min, float max, float value, float step)
-    : Widget("slider"), min_(min), max_(std::max(min, max)), value_(min), step_(step) {
+    : cWidget("slider"), min_(min), max_(std::max(min, max)), value_(min), step_(step) {
   setFocusable(true);
   setValue(value);
 }
@@ -230,7 +230,7 @@ void cSlider::paint(Painter& p) const {
 
 // ---- cNumberField
 
-cNumberField::cNumberField(int min, int max, int value) : Widget("textbox"), min_(min), max_(std::max(min, max)), value_(min) {
+cNumberField::cNumberField(int min, int max, int value) : cWidget("textbox"), min_(min), max_(std::max(min, max)), value_(min) {
   setFocusable(true);
   setValue(value);
 }
@@ -322,7 +322,7 @@ void cNumberField::paint(Painter& p) const {
 
 // ---- cSlot
 
-cSlot::cSlot(Vec2 size) : Widget("slot"), size_(size) { setFocusable(true); }
+cSlot::cSlot(Vec2 size) : cWidget("slot"), size_(size) { setFocusable(true); }
 
 bool cSlot::onPointerDown(const UiEvent& e) {
   if (e.button == PointerButton::Left) emit("click");
@@ -346,7 +346,7 @@ void cSlot::paint(Painter& p) const {
   if (!caption_.empty()) p.text({rect().x + 2, rect().y + 1}, caption_, s.text, s.textScale);
 }
 
-cDivider::cDivider(Orientation o, float thickness) : Widget("divider"), orientation_(o), thickness_(std::max(1.f, thickness)) {}
+cDivider::cDivider(Orientation o, float thickness) : cWidget("divider"), orientation_(o), thickness_(std::max(1.f, thickness)) {}
 
 Vec2 cDivider::measure(const Theme& theme) const {
   (void)theme;

@@ -711,7 +711,7 @@ int runConsoleSelfTest() {
     ok = ok && r.setKeyBind("F6", "bhi; echo seq2", &err);
     ok = ok && r.setKeyBind("F7", "echo w1; wait 2; echo w2", &err);
 
-    DeviceState ds;
+    cDeviceState ds;
     using T = InputEvent::Type;
     uint64_t seq = 0;
     auto press = [&](Key k) {
@@ -810,7 +810,7 @@ int runConsoleSelfTest() {
 
   // ---- end-to-end: the debug console input path drives lithoscript ----
   {
-    ui::UiRoot ui;
+    ui::cUiRoot ui;
     cConsoleReg r;
     r.registerBuiltins(false);
     std::string err;
@@ -868,7 +868,7 @@ int runConsoleSelfTest() {
         [](cConsoleReg& rr, const ConsoleArgs&) { rr.print("CHEAT_FIRED"); },
         CommandFlags{true}, &err);
     r.setCheatsAllowed(true);  // the player context allows cheats...
-    DeviceState ds;
+    cDeviceState ds;
     auto press = [&](Key k, uint64_t seq) {
       ds.beginFrame();
       ds.apply(InputEvent::key(InputEvent::Type::KeyDown, k, seq));
@@ -1072,7 +1072,7 @@ int runConsoleSelfTest() {
 
   // ---- cDebugConsole widget: toggle, tilde, confinement, history ----
   {
-    ui::UiRoot ui;
+    ui::cUiRoot ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);
@@ -1118,7 +1118,7 @@ int runConsoleSelfTest() {
   // ---- console displays engine-log tap records ----
   {
     engineLogTap().clear();
-    ui::UiRoot ui;
+    ui::cUiRoot ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);
@@ -1454,9 +1454,9 @@ int runConsoleSelfTest() {
     check(ok, "completer: splitCompletionLine + isContextCommand");
   }
 
-  // ---- cDebugConsole autocomplete dropdown (headless UiRoot) ----
+  // ---- cDebugConsole autocomplete dropdown (headless cUiRoot) ----
   {
-    ui::UiRoot ui;
+    ui::cUiRoot ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);  // registers builtins: echo, exec, ...

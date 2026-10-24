@@ -38,7 +38,7 @@ struct DegradationPolicy {
 
 /// Tracks callback load vs budget and reports the current shed level (0..3).
 /// Deterministic and allocation-free: safe to drive from the audio thread, a
-/// test, or the game thread. The AudioEngine owns one and applies the actions.
+/// test, or the game thread. The cAudioEngine owns one and applies the actions.
 class LoadShedder {
  public:
   explicit LoadShedder(DegradationPolicy policy = {}) : policy_(policy) {}

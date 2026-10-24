@@ -1,5 +1,5 @@
 // InputSystem: the one place the game asks about input. Each frame (main thread):
-//   backend.poll() -> InputEvent queue -> DeviceState -> bindings -> actions -> context gating
+//   backend.poll() -> InputEvent queue -> cDeviceState -> bindings -> actions -> context gating
 // Context pushes / pops take effect at the next frame, so the key that opens a mode is never
 // seen again by the mode it opened.
 #pragma once
@@ -48,7 +48,7 @@ class InputSystem {
   bool held(A a) const { return state(actionId(a)).held; }
   template <InputId A>
   bool released(A a) const { return state(actionId(a)).released; }
-  /// Button actions: 0..1 (analog sources keep their deflection). 0 when gated.
+  /// cButton actions: 0..1 (analog sources keep their deflection). 0 when gated.
   template <InputId A>
   float value(A a) const { return state(actionId(a)).value; }
   /// Axis actions: radians to turn this frame (mouse motion + stick speed x `dt`).
@@ -60,7 +60,7 @@ class InputSystem {
   /// Cursor in framebuffer pixels (for UI clicks).
   float cursorX() const { return devices_.cursorX(); }
   float cursorY() const { return devices_.cursorY(); }
-  const DeviceState& devices() const { return devices_; }
+  const cDeviceState& devices() const { return devices_; }
   /// This frame's raw events in order (the UI translates them into its own events).
   std::span<const InputEvent> frameEvents() const { return lastFrame_; }
 
@@ -85,7 +85,7 @@ class InputSystem {
   static const TextInput kNoText;
   static const ActionState kNoAction;
   ActionMap map_;
-  DeviceState devices_;
+  cDeviceState devices_;
   std::vector<ContextRules> contexts_;
   std::vector<uint8_t> active_, pending_;    // per context
   std::vector<uint8_t> enabled_, rawHeld_;   // per action

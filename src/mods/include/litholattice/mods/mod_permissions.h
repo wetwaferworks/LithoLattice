@@ -44,7 +44,7 @@
 //
 // HEADLESS-SAFE DEFAULT: DENY unless approved. Unapproved permissions are
 // stripped (logged) and the mod loads reduced, UNLESS the mod declared them
-// load-critical, in which case the load is refused. ModLoader::load() runs
+// load-critical, in which case the load is refused. cModLoader::load() runs
 // the check before the mod's onLoad: an unapproved mod never gets lifecycle
 // callbacks with ungranted permissions — ModInfo::grantedPermissions carries
 // the effective mask and the (builder-side) API binder must gate each

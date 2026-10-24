@@ -13,7 +13,7 @@ float cross(Vec2 v, Orientation o) { return o == Orientation::Vertical ? v.x : v
 // ---- cStackPanel
 
 cStackPanel::cStackPanel(Orientation o, float spacing, std::string styleClass)
-    : Widget(std::move(styleClass)), orientation_(o), spacing_(spacing) {}
+    : cWidget(std::move(styleClass)), orientation_(o), spacing_(spacing) {}
 
 Vec2 cStackPanel::measure(const Theme& theme) const {
   float along = 0, across = 0;
@@ -70,7 +70,7 @@ void cStackPanel::arrange(const Theme& theme) {
 // ---- cGridPanel
 
 cGridPanel::cGridPanel(int columns, Vec2 cell, float spacing, std::string styleClass)
-    : Widget(std::move(styleClass)), columns_(std::max(1, columns)), cell_(cell), spacing_(spacing) {}
+    : cWidget(std::move(styleClass)), columns_(std::max(1, columns)), cell_(cell), spacing_(spacing) {}
 
 Vec2 cGridPanel::measure(const Theme& theme) const {
   const int n = int(std::count_if(children().begin(), children().end(), [](const auto& c) { return c->visible(); }));
@@ -93,7 +93,7 @@ void cGridPanel::arrange(const Theme& theme) {
 
 // ---- cScrollBar
 
-cScrollBar::cScrollBar(Orientation o) : Widget("scrollbar"), orientation_(o) {}
+cScrollBar::cScrollBar(Orientation o) : cWidget("scrollbar"), orientation_(o) {}
 
 void cScrollBar::setRange(float contentSize, float viewSize) {
   content_ = std::max(0.f, contentSize);
@@ -151,12 +151,12 @@ void cScrollBar::paint(Painter& p) const {
 
 // ---- cScrollView
 
-cScrollView::cScrollView() : Widget("scrollview") {
+cScrollView::cScrollView() : cWidget("scrollview") {
   bar_ = &add<cScrollBar>(Orientation::Vertical);
-  bar_->on("change", [this](Widget&) { relayout(); });
+  bar_->on("change", [this](cWidget&) { relayout(); });
 }
 
-Widget& cScrollView::setContent(std::unique_ptr<Widget> content) {
+cWidget& cScrollView::setContent(std::unique_ptr<cWidget> content) {
   if (content_) removeChild(*content_);
   content_ = &addChild(std::move(content));
   // Keep the scroll bar on top (painted and hit-tested last).
@@ -198,12 +198,12 @@ bool cScrollView::onWheel(const UiEvent& e) {
   return true;
 }
 
-Widget* cScrollView::hitTest(Vec2 p) {
+cWidget* cScrollView::hitTest(Vec2 p) {
   if (!visible() || !rect().contains(p)) return nullptr;
   if (bar_->needed())
-    if (Widget* w = bar_->hitTest(p)) return w;
+    if (cWidget* w = bar_->hitTest(p)) return w;
   if (content_ && viewRect().contains(p))
-    if (Widget* w = content_->hitTest(p)) return w;
+    if (cWidget* w = content_->hitTest(p)) return w;
   return enabled() ? this : nullptr;
 }
 
@@ -217,9 +217,9 @@ void cScrollView::paintChildren(Painter& p) const {
 
 // ---- cSplitter
 
-cSplitter::cSplitter(Orientation o, float ratio) : Widget("splitter"), orientation_(o), ratio_(std::clamp(ratio, 0.05f, 0.95f)) {}
+cSplitter::cSplitter(Orientation o, float ratio) : cWidget("splitter"), orientation_(o), ratio_(std::clamp(ratio, 0.05f, 0.95f)) {}
 
-Widget& cSplitter::setPane(int index, std::unique_ptr<Widget> pane) {
+cWidget& cSplitter::setPane(int index, std::unique_ptr<cWidget> pane) {
   const size_t i = index ? 1 : 0;
   if (panes_[i]) removeChild(*panes_[i]);
   panes_[i] = &addChild(std::move(pane));
@@ -244,9 +244,9 @@ void cSplitter::arrange(const Theme& theme) {
   if (panes_[1]) panes_[1]->place(b, theme);
 }
 
-Widget* cSplitter::hitTest(Vec2 p) {
+cWidget* cSplitter::hitTest(Vec2 p) {
   if (visible() && enabled() && handleRect().contains(p)) return this;
-  return Widget::hitTest(p);
+  return cWidget::hitTest(p);
 }
 
 bool cSplitter::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left && handleRect().contains(e.pos); }
@@ -267,9 +267,9 @@ void cSplitter::paint(Painter& p) const {
 
 // ---- cTabView
 
-cTabView::cTabView() : Widget("tabs") { setFocusable(true); }
+cTabView::cTabView() : cWidget("tabs") { setFocusable(true); }
 
-Widget& cTabView::addTab(std::string title, std::unique_ptr<Widget> page) {
+cWidget& cTabView::addTab(std::string title, std::unique_ptr<cWidget> page) {
   titles_.push_back(std::move(title));
   pages_.push_back(&addChild(std::move(page)));
   if (current_ < 0) setCurrent(0);
@@ -298,7 +298,7 @@ Rect cTabView::tabRect(int i) const {
 
 Vec2 cTabView::measure(const Theme& theme) const {
   Vec2 s;
-  for (const Widget* p : pages_) {
+  for (const cWidget* p : pages_) {
     const Vec2 c = childSize(*p, theme);
     s = {std::max(s.x, c.x), std::max(s.y, c.y)};
   }
@@ -307,7 +307,7 @@ Vec2 cTabView::measure(const Theme& theme) const {
 
 void cTabView::arrange(const Theme& theme) {
   const Rect body{rect().x, rect().y + headerHeight(), rect().w, std::max(0.f, rect().h - headerHeight())};
-  for (Widget* p : pages_)
+  for (cWidget* p : pages_)
     if (p->visible()) p->place(body, theme);
 }
 

@@ -13,7 +13,7 @@ enum class Orientation { Vertical, Horizontal };
 /// Children one after another with `spacing`; along the axis each child gets its size (or
 /// layout().size) plus a share of the leftover space by layout().flex; across the axis it
 /// stretches (or keeps its size when `stretch` is false). Child margins are honoured.
-class cStackPanel : public Widget {
+class cStackPanel : public cWidget {
  public:
   explicit cStackPanel(Orientation o = Orientation::Vertical, float spacing = 4, std::string styleClass = "stack");
   Orientation orientation() const { return orientation_; }
@@ -31,7 +31,7 @@ class cStackPanel : public Widget {
 };
 
 /// Fixed-size cells in `columns` columns (row-major), `spacing` between cells.
-class cGridPanel : public Widget {
+class cGridPanel : public cWidget {
  public:
   cGridPanel(int columns, Vec2 cell, float spacing = 4, std::string styleClass = "stack");
   int columns() const { return columns_; }
@@ -49,7 +49,7 @@ class cGridPanel : public Widget {
 };
 
 /// Vertical or horizontal scroll bar over [0, contentSize - viewSize]; "change" on user input.
-class cScrollBar : public Widget {
+class cScrollBar : public cWidget {
  public:
   explicit cScrollBar(Orientation o = Orientation::Vertical);
   void setRange(float contentSize, float viewSize);
@@ -76,23 +76,23 @@ class cScrollBar : public Widget {
 
 /// Scrolls one content widget vertically (wheel, scroll bar, ensureVisible()). The content
 /// keeps the view's width and its own preferred height.
-class cScrollView : public Widget {
+class cScrollView : public cWidget {
  public:
   cScrollView();
   /// Replaces the content; returns it.
-  Widget& setContent(std::unique_ptr<Widget> content);
+  cWidget& setContent(std::unique_ptr<cWidget> content);
   template <typename T, typename... Args>
   T& emplaceContent(Args&&... args) {
     return static_cast<T&>(setContent(std::make_unique<T>(std::forward<Args>(args)...)));
   }
-  Widget* content() const { return content_; }
+  cWidget* content() const { return content_; }
   float scroll() const { return bar_->offset(); }
   void setScroll(float y) { bar_->setOffset(y); }
   /// Scrolls the minimum needed so `r` (screen coordinates at the current scroll) is visible.
   void ensureVisible(const Rect& r);
   Vec2 measure(const Theme& theme) const override;
   bool onWheel(const UiEvent& e) override;
-  Widget* hitTest(Vec2 p) override;
+  cWidget* hitTest(Vec2 p) override;
 
  protected:
   void arrange(const Theme& theme) override;
@@ -100,21 +100,21 @@ class cScrollView : public Widget {
 
  private:
   Rect viewRect() const;
-  Widget* content_ = nullptr;
+  cWidget* content_ = nullptr;
   cScrollBar* bar_ = nullptr;
 };
 
 /// Two panes with a draggable divider; ratio() is the first pane's share.
-class cSplitter : public Widget {
+class cSplitter : public cWidget {
  public:
   explicit cSplitter(Orientation o = Orientation::Horizontal, float ratio = 0.3f);
   /// Sets pane 0 or 1 (replacing any previous one); returns it.
-  Widget& setPane(int index, std::unique_ptr<Widget> pane);
+  cWidget& setPane(int index, std::unique_ptr<cWidget> pane);
   float ratio() const { return ratio_; }
   void setRatio(float r);
   bool onPointerDown(const UiEvent& e) override;
   void onPointerMove(const UiEvent& e) override;
-  Widget* hitTest(Vec2 p) override;
+  cWidget* hitTest(Vec2 p) override;
 
   static constexpr float kHandle = 6;
 
@@ -126,15 +126,15 @@ class cSplitter : public Widget {
   Rect handleRect() const;
   Orientation orientation_;
   float ratio_;
-  Widget* panes_[2] = {nullptr, nullptr};
+  cWidget* panes_[2] = {nullptr, nullptr};
 };
 
 /// Pages with a tab header; one page visible. "change" when the user switches tabs.
-class cTabView : public Widget {
+class cTabView : public cWidget {
  public:
   cTabView();
   /// Adds a page; returns it.
-  Widget& addTab(std::string title, std::unique_ptr<Widget> page);
+  cWidget& addTab(std::string title, std::unique_ptr<cWidget> page);
   int current() const { return current_; }
   void setCurrent(int index, bool notify = false);
   int count() const { return int(titles_.size()); }
@@ -150,7 +150,7 @@ class cTabView : public Widget {
   float headerHeight() const;
   Rect tabRect(int i) const;
   std::vector<std::string> titles_;
-  std::vector<Widget*> pages_;
+  std::vector<cWidget*> pages_;
   int current_ = -1;
 };
 

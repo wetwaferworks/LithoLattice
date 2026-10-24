@@ -5,18 +5,18 @@
 //
 //   1. No raw device handles: the mod API surface (LithoLatticeModApi in
 //      litholattice/mods/mod_interface.h) exposes no InputSystem*, no
-//      IInputBackend*, no DeviceState*, no key/mouse/gamepad state query at
+//      IInputBackend*, no cDeviceState*, no key/mouse/gamepad state query at
 //      all. The only input-related entry points are registerInputAction
 //      (strings in, void out) and the engine->mod onInputEvent hook.
 //      Audited in mods_selftest.cpp (testModApiUiInputAudit).
 //   2. One-directional flow: this router is the engine-side record of mod
 //      input actions and the delivery-policy check. It holds no cInputPump*,
-//      no InputSystem*, no IInputBackend*, no DeviceState* — there is no
+//      no InputSystem*, no IInputBackend*, no cDeviceState* — there is no
 //      method here that can place an event into the engine's input pipeline,
 //      by construction. Engine -> mod is a call the GAME makes; mod -> engine
 //      input does not exist.
 //   3. Delivery policy: a key event reaches a mod's onInputEvent only when
-//      the UI does NOT want the keyboard (UiRoot::wantsKeyboard: no modal
+//      the UI does NOT want the keyboard (cUiRoot::wantsKeyboard: no modal
 //      open, no popup open, no text field focused). Keystrokes typed into a
 //      system dialog — passwords included — never reach mods.
 //   4. No text exfiltration by construction: the onInputEvent hook signature
@@ -78,7 +78,7 @@ class cModInputRouter {
 
   /// Delivery policy: the game calls this before forwarding a key event to a
   /// mod's onInputEvent hook. False when the event must NOT reach the mod —
-  /// i.e. when `uiWantsKeyboard` (UiRoot::wantsKeyboard(): a system modal is
+  /// i.e. when `uiWantsKeyboard` (cUiRoot::wantsKeyboard(): a system modal is
   /// open, a popup is open, or a text field has focus). Keystrokes typed into
   /// system dialogs never reach mods.
   static bool shouldDeliverToMod(bool uiWantsKeyboard) { return !uiWantsKeyboard; }
@@ -87,7 +87,7 @@ class cModInputRouter {
   // this class. The only engine->mod input path is the game's explicit call
   // of the mod's onInputEvent hook; this router keeps the books and the
   // policy, and it cannot place events into the engine pipeline — it holds
-  // no cInputPump*, InputSystem*, IInputBackend*, or DeviceState*.
+  // no cInputPump*, InputSystem*, IInputBackend*, or cDeviceState*.
 
  private:
   static bool isValidId(std::string_view id);

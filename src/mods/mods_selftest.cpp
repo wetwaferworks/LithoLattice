@@ -281,7 +281,7 @@ void testModApiNetAudit(Checker& c) {
 // mod_interface.h and is reviewed here. Manual review (this is the audit;
 // the token scan is the automated pin): registerUiPanel(mod, id, title) and
 // registerInputAction(mod, id, displayName) are strings-in/void-out — they
-// hand out no Painter*, no IUiRenderer*, no Widget*, no paint hook; the
+// hand out no Painter*, no IUiRenderer*, no cWidget*, no paint hook; the
 // onInputEvent(mod, key, down) hook carries no Text codepoints and no device
 // id. Enforcement lives in ui/mod_ui.h (ModUiFactory/cModPanel) and
 // input/mod_input.h (cModInputRouter).
@@ -866,7 +866,7 @@ void testModJsonExtensible(Checker& c) {
     std::ofstream out(dir / "plain" / "mod.json", std::ios::binary);
     out << R"({"id":"plain","version":"1.0.0","sdk":"1"})";
   }
-  ModLoader ml;
+  cModLoader ml;
   const std::vector<ModInfo> mods = ml.scan(dir.string());
   const ModInfo* wedit = nullptr;
   const ModInfo* plain = nullptr;
@@ -922,7 +922,7 @@ void testModJsonHugeNumbers(Checker& c) {
     std::ofstream out(dir / "good" / "mod.json", std::ios::binary);
     out << R"({"id":"good","version":"1.2.3","sdk":"1","type":"script"})";
   }
-  ModLoader ml;
+  cModLoader ml;
   // Must not throw: this is the regression (the old code crashed here).
   std::vector<ModInfo> mods;
   bool threw = false;
@@ -1164,7 +1164,7 @@ void testPermissionNetRegression(Checker& c) {
     out << R"({"id":"netmod","version":"1.0.0","sdk":"1","type":"script",)"
            R"("permissions":["blocks","net","bogus_perm"]})";
   }
-  ModLoader ml;
+  cModLoader ml;
   const std::vector<ModInfo> mods = ml.scan(dir.string());
   const ModInfo* m = mods.empty() ? nullptr : &mods[0];
   c(mods.size() == 1, "perm: netmod scans");
@@ -1196,7 +1196,7 @@ void testPermissionPilotSensesRegression(Checker& c) {
     out << R"({"id":"sensemod","version":"1.0.0","sdk":"1","type":"script",)"
            R"("permissions":["pilot_senses"]})";
   }
-  ModLoader ml;
+  cModLoader ml;
   const std::vector<ModInfo> mods = ml.scan(dir.string());
   const ModInfo* m = mods.empty() ? nullptr : &mods[0];
   c(m && m->permissions == uint32_t(kPermPilotSenses),
@@ -1218,7 +1218,7 @@ void testPermissionManifestParse(Checker& c) {
            R"("criticalPermissions":["world_write","tick"],)"
            R"("firstParty":true})";
   }
-  ModLoader ml;
+  cModLoader ml;
   const std::vector<ModInfo> mods = ml.scan(dir.string());
   const ModInfo* m = mods.empty() ? nullptr : &mods[0];
   c(m && m->permissionSetVersion == 1, "perm: permissionSet parses");
@@ -1470,7 +1470,7 @@ void testPermissionStoreRoundTrip(Checker& c) {
   fs::remove_all(dir, ec);
 }
 
-// ModLoader::load() runs the approval flow BEFORE the mod's onLoad: the
+// cModLoader::load() runs the approval flow BEFORE the mod's onLoad: the
 // effective mask rides on ModInfo, and refused mods never reach the binder.
 void testPermissionLoadWiring(Checker& c) {
   const fs::path dir = freshTempDir("ll_perm_load");
@@ -1490,7 +1490,7 @@ void testPermissionLoadWiring(Checker& c) {
         R"("permissions":["blocks"]})");
   cPermissionStore store;  // in-memory: no file written
   cModPermissionGate gate;
-  ModLoader ml;
+  cModLoader ml;
   const std::vector<ModInfo> loaded =
       ml.load(dir.string(), store, gate, denyAllPermissions);
   const ModInfo* stripped = nullptr;

@@ -28,7 +28,7 @@
 // The engine merges these declarations with the facet below: mod.json is the
 // load-time (DLL era) source of truth; the facet is the run-time source. For
 // v1 static linking the facet alone is authoritative.
-// (Worker 2: ModLoader::parseModJson parses "extensible"/"extensions" into
+// (Worker 2: cModLoader::parseModJson parses "extensible"/"extensions" into
 // ModInfo so the data is available; the recursive loader still keys off the
 // facet for v1.)
 #pragma once

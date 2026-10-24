@@ -64,11 +64,11 @@ bool scanJson(const Json& root, std::string& err) {
 
 // Walks a built widget tree (iterative): counts widgets and rejects reserved
 // style classes anywhere in the subtree, including on the content root.
-bool validateTree(const Widget& root, std::string& err) {
-  std::vector<const Widget*> stack{&root};
+bool validateTree(const cWidget& root, std::string& err) {
+  std::vector<const cWidget*> stack{&root};
   size_t count = 0;
   while (!stack.empty()) {
-    const Widget* w = stack.back();
+    const cWidget* w = stack.back();
     stack.pop_back();
     if (++count > kModUiMaxWidgets) {
       err = "mod UI: panel exceeds the widget budget";
@@ -107,7 +107,7 @@ void cModPanel::arrange(const Theme& theme) {
 }
 
 void cModPanel::paint(Painter& p) const {
-  Widget::paint(p);   // background + border of the "mod_panel" frame treatment
+  cWidget::paint(p);   // background + border of the "mod_panel" frame treatment
   paintChildren(p);   // the mod's content, confined below the badge strip
   paintBadge(p);      // LAST: nothing the mod owns can cover or remove it
 }
@@ -169,7 +169,7 @@ std::unique_ptr<cModPanel> ModUiFactory::createPanel(const std::string& modId,
     }
     if (!scanJson(json, err)) return nullptr;  // depth / node DoS guard
     std::string buildErr;
-    std::unique_ptr<Widget> content = buildWidget(json, buildErr);
+    std::unique_ptr<cWidget> content = buildWidget(json, buildErr);
     if (!content) {
       err = "mod UI: " + buildErr;
       return nullptr;
@@ -183,10 +183,10 @@ std::unique_ptr<cModPanel> ModUiFactory::createPanel(const std::string& modId,
   return panel;
 }
 
-cModPanel& ModUiFactory::attachToRoot(UiRoot& ui, std::unique_ptr<cModPanel> panel) {
+cModPanel& ModUiFactory::attachToRoot(cUiRoot& ui, std::unique_ptr<cModPanel> panel) {
   // Main layer only. Modals and popups stay engine-exclusive: a mod can never
   // seize the screen with a fake system prompt.
-  Widget& w = ui.root().addChild(std::move(panel));
+  cWidget& w = ui.root().addChild(std::move(panel));
   return static_cast<cModPanel&>(w);
 }
 

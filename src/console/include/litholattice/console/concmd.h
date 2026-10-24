@@ -7,7 +7,7 @@
 //   1. ENGINE: registerCommand / registerCVar / unregister* — the clean C++
 //      registration API. The engine owns the cConsoleReg; mods register
 //      through it only when granted kPermConsole (namespaced "modid:...";
-//      the ModLoader wiring is builder follow-up).
+//      the cModLoader wiring is builder follow-up).
 //   2. USER: typed in the debug console, plus .lth lithoscript files players
 //      write in the config dir (exec is sandboxed there; saveArchived writes
 //      there too; .cfg files still execute as a legacy alias).
@@ -384,7 +384,7 @@ class cConsoleReg {
   /// never fire then. Aliases, `;` sequences and `wait` inside bound
   /// commands behave exactly as typed (`wait` suspends cooperatively under
   /// the usual budgets).
-  void dispatchKeyBinds(const DeviceState& devices, bool textCapture);
+  void dispatchKeyBinds(const cDeviceState& devices, bool textCapture);
 
   // ---- execution ----
   /// Tokenizes, `;`-splits, alias-expands (recursion-capped) and dispatches

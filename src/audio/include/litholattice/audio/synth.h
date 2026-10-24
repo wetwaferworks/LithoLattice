@@ -26,9 +26,9 @@ struct SynthPreset {
 };
 
 /// Owns the voices of one preset and mixes them.
-class Synth {
+class cSynth {
  public:
-  Synth(SynthPreset preset, float sampleRate);
+  cSynth(SynthPreset preset, float sampleRate);
 
   /// Starts a note on `voice`; a waveform the slot cannot play falls back to its first supported one.
   void noteOn(size_t voice, NoteSpec note);

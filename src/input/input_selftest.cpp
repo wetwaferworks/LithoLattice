@@ -153,7 +153,7 @@ void testModInputConfinement(const auto& check) {
         "mod input: key events withheld while a system modal/text field has focus");
 
   // No raw device access: the router works with no InputSystem,
-  // IInputBackend, or DeviceState anywhere near it  -  a mod holding only the
+  // IInputBackend, or cDeviceState anywhere near it  -  a mod holding only the
   // router (or the C API) cannot observe device state. The API-surface half
   // of this is audit-pinned in mods_selftest (no device/input-injection
   // tokens in any LithoLatticeModApi/LithoLatticeMod field name).
@@ -191,7 +191,7 @@ int runInputSelfTest() {
   };
   {  // Focus: nothing held survives losing or regaining the window (stale keys / buttons reset).
     using T = InputEvent::Type;
-    DeviceState d;
+    cDeviceState d;
     d.apply(InputEvent::key(T::KeyDown, Key::W, 0)); d.apply(InputEvent::mouse(T::MouseDown, MouseButton::Left, 0));
     const bool held = d.keyDown(Key::W) && d.mouseDown(MouseButton::Left);
     d.apply(InputEvent::focusLost(1));

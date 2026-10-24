@@ -126,7 +126,7 @@ int runAudioSelfTest() {
     check(ones > 30000 && ones < 40000 && period == 127, "LFSR noise: 15-bit is balanced, 7-bit short mode repeats every 127");
   }
   {
-    Synth sid(SynthPreset::sid3(), kRate), dmg(SynthPreset::dmg(), kRate);
+    cSynth sid(SynthPreset::sid3(), kRate), dmg(SynthPreset::dmg(), kRate);
     dmg.noteOn(2, {220.0, Waveform::Pulse});
     dmg.noteOn(3, {220.0, Waveform::Saw});
     sid.noteOn(1, {220.0, Waveform::Noise});
@@ -145,7 +145,7 @@ int runAudioSelfTest() {
     check(ordered && !q.tryPop(), "SPSC command queue: 200k items across threads, in order, no locks");
   }
   {
-    AudioEngine eng(kRate);
+    cAudioEngine eng(kRate);
     NoteSpec tone{noteFrequency(69), Waveform::Pulse, Duty::Quarter, {0.005f, 0.05f, 0.6f, 0.05f}, 0.5f};
     eng.post(AudioCommand::noteOn(Bus::Music, 0, tone));
     std::vector<float> st(48000 * 2);
@@ -159,12 +159,12 @@ int runAudioSelfTest() {
     check(pitch && peak(tail, 0, tail.size()) == 0.0, "engine: queued A4 note plays 440 Hz in stereo; note-off fades to silence");
   }
   {
-    AudioEngine eng(kRate);
+    cAudioEngine eng(kRate);
     eng.setEnabled(false);
     check(!eng.post(AudioCommand::noteOff(Bus::Effects, 0)), "muted engine drops commands");
   }
   {
-    VoiceAllocator va(3);
+    cVoiceAllocator va(3);
     const size_t a = va.acquire(10), b = va.acquire(11), c = va.acquire(12);
     const size_t d = va.acquire(13);  // steals the oldest (10)
     check(a != b && b != c && d == a && !va.release(10) && va.release(13) == a && va.acquire(11) == b,
@@ -420,13 +420,13 @@ int runAudioSelfTest() {
     // un-virtualizing resumes bit-identically.
     const Adsr vadsr{0.01f, 0.05f, 0.8f, 0.2f};
     auto makeSynth = [&] {
-      Synth s(SynthPreset::sid3(), kRate);
+      cSynth s(SynthPreset::sid3(), kRate);
       s.noteOn(0, {220.0, Waveform::Saw, Duty::Half, vadsr, 0.7f, 3.0, 0.5f});  // sweep + hold
       s.noteOn(1, {440.0, Waveform::Pulse, Duty::Quarter, vadsr, 0.4f});
       s.noteOn(2, {110.0, Waveform::Noise, Duty::Half, vadsr, 0.5f, 0.f, 0.f, true});  // LFSR state
       return s;
     };
-    auto renderSeg = [&](Synth& s, size_t n) {
+    auto renderSeg = [&](cSynth& s, size_t n) {
       std::vector<float> b(n, 0.f);
       s.mixInto(b);
       return b;
@@ -435,11 +435,11 @@ int runAudioSelfTest() {
       return a.size() == b.size() &&
              std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
     };
-    Synth ref = makeSynth();
+    cSynth ref = makeSynth();
     const auto rA = renderSeg(ref, 1000);
     renderSeg(ref, 2000);
     const auto rC = renderSeg(ref, 1000);
-    Synth virt = makeSynth();
+    cSynth virt = makeSynth();
     const auto vA = renderSeg(virt, 1000);
     virt.setVirtualized(0, true);
     virt.setVirtualized(1, true);
@@ -463,7 +463,7 @@ int runAudioSelfTest() {
     // (1) Virtualization happens BEFORE stealing: the oldest inaudible voice
     // goes first, so a new source never kills an audible note while a
     // virtualized voice sits idle.
-    VoiceAllocator va(3);
+    cVoiceAllocator va(3);
     const size_t a = va.acquire(10), b = va.acquire(11), c = va.acquire(12);
     (void)c;
     va.setVirtualized(b, true);  // middle voice is inaudible (not the oldest)
@@ -502,14 +502,14 @@ int runAudioSelfTest() {
     check(ok, "SIMD: addInto + gain/clamp/duplicate bit-identical to scalar");
   }
   {
-    // (2) Synth::mixInto (SIMD batch) == per-sample scalar reference, bit-exact.
+    // (2) cSynth::mixInto (SIMD batch) == per-sample scalar reference, bit-exact.
     const Adsr flatAdsr{0.f, 0.f, 1.f, 0.f};
-    Synth s(SynthPreset::sid3(), kRate);
+    cSynth s(SynthPreset::sid3(), kRate);
     s.noteOn(0, {220.0, Waveform::Saw, Duty::Half, flatAdsr, 0.5f});
     s.noteOn(2, {110.0, Waveform::Pulse, Duty::Eighth, flatAdsr, 0.3f});
     std::vector<float> batched(997, 0.f);
     s.mixInto(batched);
-    Synth r(SynthPreset::sid3(), kRate);
+    cSynth r(SynthPreset::sid3(), kRate);
     r.noteOn(0, {220.0, Waveform::Saw, Duty::Half, flatAdsr, 0.5f});
     r.noteOn(2, {110.0, Waveform::Pulse, Duty::Eighth, flatAdsr, 0.3f});
     std::vector<float> ref(997, 0.f);
@@ -583,7 +583,7 @@ int runAudioSelfTest() {
     const Adsr perc{0.005f, 0.05f, 0.0f, 0.05f};  // self-terminating: decay to 0 -> Idle
     const NoteSpec hit{220.0, Waveform::Saw, Duty::Half, perc, 0.8f};
     auto renderOne = [&](bool bypass) {
-      AudioEngine eng(kRate);
+      cAudioEngine eng(kRate);
       eng.setEffectBypassed(bypass);
       eng.post(AudioCommand::noteOn(Bus::Effects, 3, hit));  // DMG noise voice
       std::vector<float> st(size_t(kRate) * 2, 0.f);        // 1 s stereo
@@ -678,7 +678,7 @@ int runAudioSelfTest() {
     // pressure the level stays 0 and behavior is unchanged.
     using ns = std::chrono::nanoseconds;
     const ns budget(10'000'000);
-    AudioEngine eng(kRate);
+    cAudioEngine eng(kRate);
     std::vector<float> st(2048 * 2, 0.f);
     eng.render(st.data(), 2048, 2);
     check(eng.shedLevel() == 0 && eng.lastAudioLoad() < 0.7,
@@ -706,7 +706,7 @@ int runAudioSelfTest() {
   {
     // (6) Level 3: half-rate render keeps the timeline (and pitch) exact -
     // aliasing instead of a dropout.
-    Synth s(SynthPreset::sid3(), kRate);
+    cSynth s(SynthPreset::sid3(), kRate);
     s.setRateDivider(2);
     const Adsr flatAdsr{0.f, 0.f, 1.f, 0.f};
     s.noteOn(0, {440.0, Waveform::Pulse, Duty::Half, flatAdsr, 0.5f});
@@ -929,7 +929,7 @@ int runAudioSelfTest() {
 
   // --- agent-audio tap (MCP audio.capture_chunk) ---
   {
-    AudioEngine eng(48000.f);
+    cAudioEngine eng(48000.f);
     float out[4096];
     check(!eng.tapEnabled(), "audio: tap starts disarmed");
     check(eng.drainTap(out, 4096) == 0, "audio: drainTap on a fresh engine yields nothing");

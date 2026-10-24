@@ -3,34 +3,34 @@
 
 namespace litholattice::ui {
 
-Dialog::Dialog(std::string title, Vec2 size) : Widget("panel"), title_(std::move(title)) {
+cDialog::cDialog(std::string title, Vec2 size) : cWidget("panel"), title_(std::move(title)) {
   layout() = Layout::at({0.5f, 0.5f}, {0.5f, 0.5f}, {}, size);
   body_ = &add<cStackPanel>(Orientation::Vertical, 6.f);
   buttons_ = &add<cStackPanel>(Orientation::Horizontal, 6.f);
   buttons_->setStretch(false);
 }
 
-Dialog& Dialog::show(UiRoot& ui, std::string title, Vec2 size) {
-  return static_cast<Dialog&>(ui.pushModal(std::make_unique<Dialog>(std::move(title), size)));
+cDialog& cDialog::show(cUiRoot& ui, std::string title, Vec2 size) {
+  return static_cast<cDialog&>(ui.pushModal(std::make_unique<cDialog>(std::move(title), size)));
 }
 
-Button& Dialog::addButton(std::string text, std::function<void()> onClick, bool closes) {
-  Button& b = buttons_->add<Button>(std::move(text));
-  b.on("click", [this, onClick = std::move(onClick), closes](Widget&) {
+cButton& cDialog::addButton(std::string text, std::function<void()> onClick, bool closes) {
+  cButton& b = buttons_->add<cButton>(std::move(text));
+  b.on("click", [this, onClick = std::move(onClick), closes](cWidget&) {
     if (onClick) onClick();
     if (closes) close();
   });
   return b;
 }
 
-void Dialog::close() {
+void cDialog::close() {
   emit("close");
   if (ui()) ui()->closeModal(*this);
 }
 
-float Dialog::titleHeight() const { return theme().glyphSize(style().textScale).y + 10; }
+float cDialog::titleHeight() const { return theme().glyphSize(style().textScale).y + 10; }
 
-Vec2 Dialog::measure(const Theme& theme) const {
+Vec2 cDialog::measure(const Theme& theme) const {
   const Edges& pad = theme.style(styleClass()).padding;
   const Vec2 b = childSize(*body_, theme), r = childSize(*buttons_, theme);
   const float title = theme.textWidth(title_) + 40;
@@ -38,7 +38,7 @@ Vec2 Dialog::measure(const Theme& theme) const {
           theme.glyphSize().y + 10 + b.y + (buttons_->children().empty() ? 0 : r.y + 8) + pad.vertical()};
 }
 
-void Dialog::arrange(const Theme& theme) {
+void cDialog::arrange(const Theme& theme) {
   const Rect c = contentRect();
   const float top = c.y + titleHeight();
   const bool hasButtons = !buttons_->children().empty();
@@ -49,14 +49,14 @@ void Dialog::arrange(const Theme& theme) {
   buttons_->place({c.right() - rowW, c.bottom() - rowH, rowW, rowH}, theme);
 }
 
-bool Dialog::onPointerDown(const UiEvent& e) {
+bool cDialog::onPointerDown(const UiEvent& e) {
   const Rect bar{rect().x, rect().y, rect().w, titleHeight() + style().padding.top};
   if (e.button != PointerButton::Left || !bar.contains(e.pos)) return false;
   grab_ = e.pos - rect().pos();
   return true;
 }
 
-void Dialog::onPointerMove(const UiEvent& e) {
+void cDialog::onPointerMove(const UiEvent& e) {
   if (!pressed() || grab_.x < 0) return;
   // Dragged: from now on placed by absolute offset.
   const Vec2 size = rect().size();
@@ -64,14 +64,14 @@ void Dialog::onPointerMove(const UiEvent& e) {
   place({e.pos.x - grab_.x, e.pos.y - grab_.y, size.x, size.y}, theme());
 }
 
-bool Dialog::onKey(const UiEvent& e) {
+bool cDialog::onKey(const UiEvent& e) {
   if (e.key != Key::Escape) return false;
   if (!closeGuard_ || closeGuard_()) close();
   return true;
 }
 
-void Dialog::paint(Painter& p) const {
-  Widget::paint(p);
+void cDialog::paint(Painter& p) const {
+  cWidget::paint(p);
   const Style& s = style();
   const Rect bar{rect().x, rect().y, rect().w, titleHeight() + s.padding.top};
   p.fill(bar, s.accent.withAlpha(0.35f));
@@ -84,7 +84,7 @@ Vec2 cTooltip::measure(const Theme& theme) const {
 }
 
 void cTooltip::paint(Painter& p) const {
-  Widget::paint(p);
+  cWidget::paint(p);
   const Style& s = style();
   p.text({contentRect().x, contentRect().y}, text_, s.text, s.textScale);
 }

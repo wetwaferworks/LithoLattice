@@ -10,7 +10,7 @@
 // Layering (locked):
 //   - The server NEVER touches engine subsystems directly. Every data source
 //     is an injectable seam interface declared below (ISimStatus, IWorldReader,
-//     ...). The game adapts its real classes (SimThread, ModLoader, ChunkMap,
+//     ...). The game adapts its real classes (SimThread, cModLoader, ChunkMap,
 //     cEntityMgr, cConsoleReg, cTextIndexer, cDefragService, ...) to
 //     these seams; the self-tests use stub seams. Consequence: the mcp library
 //     has no link dependencies on any other engine module — it only reads
@@ -438,7 +438,7 @@ struct McpBackends {
   /// camera, downgraded) and agent audio (mixed-output tap at a downgraded
   /// tier). Null = the vision.capture_frame / audio.capture_chunk tools
   /// report "not wired"; the game adapts these against its renderer and
-  /// AudioEngine — see IVisionCapture / IAudioCapture in mcp_senses.h.
+  /// cAudioEngine — see IVisionCapture / IAudioCapture in mcp_senses.h.
   std::shared_ptr<IVisionCapture> vision;
   std::shared_ptr<IAudioCapture> audio;
 };

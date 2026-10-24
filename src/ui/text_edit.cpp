@@ -7,7 +7,7 @@ namespace litholattice::ui {
 
 // ---- cTextEditBase
 
-cTextEditBase::cTextEditBase(std::string styleClass, bool multiLine) : Widget(std::move(styleClass)), buffer_(multiLine) {
+cTextEditBase::cTextEditBase(std::string styleClass, bool multiLine) : cWidget(std::move(styleClass)), buffer_(multiLine) {
   setFocusable(true);
 }
 

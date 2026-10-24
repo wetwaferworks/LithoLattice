@@ -1,4 +1,4 @@
-// Audio output device interface. Backends (miniaudio today) pull samples from an AudioEngine on
+// Audio output device interface. Backends (miniaudio today) pull samples from an cAudioEngine on
 // their own real-time thread for as long as the IAudioOutput object lives (RAII).
 #pragma once
 #include <memory>
@@ -6,7 +6,7 @@
 
 namespace litholattice {
 
-class AudioEngine;
+class cAudioEngine;
 
 class IAudioOutput {
  public:
@@ -17,6 +17,6 @@ class IAudioOutput {
 
 /// Opens the default playback device (stereo, float, engine sample rate) and starts pulling from
 /// `engine`, which must outlive the returned object. Returns nullptr and sets `err` on failure.
-std::unique_ptr<IAudioOutput> openAudioOutput(AudioEngine& engine, std::string* err);
+std::unique_ptr<IAudioOutput> openAudioOutput(cAudioEngine& engine, std::string* err);
 
 }  // namespace litholattice

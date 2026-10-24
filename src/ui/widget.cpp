@@ -26,24 +26,24 @@ Rect anchoredRect(const Layout& l, const Rect& parent, Vec2 size) {
   return r;
 }
 
-Widget::Widget(std::string styleClass) : styleClass_(std::move(styleClass)) {}
+cWidget::cWidget(std::string styleClass) : styleClass_(std::move(styleClass)) {}
 
-Widget::~Widget() {
+cWidget::~cWidget() {
   children_.clear();  // children first, while ui_ is still valid for them
   if (ui_) ui_->forget(this);
 }
 
-Widget& Widget::addChild(std::unique_ptr<Widget> child) {
+cWidget& cWidget::addChild(std::unique_ptr<cWidget> child) {
   child->parent_ = this;
   child->attach(ui_);
   children_.push_back(std::move(child));
   return *children_.back();
 }
 
-std::unique_ptr<Widget> Widget::removeChild(const Widget& child) {
+std::unique_ptr<cWidget> cWidget::removeChild(const cWidget& child) {
   const auto it = std::find_if(children_.begin(), children_.end(), [&](const auto& c) { return c.get() == &child; });
   if (it == children_.end()) return nullptr;
-  std::unique_ptr<Widget> w = std::move(*it);
+  std::unique_ptr<cWidget> w = std::move(*it);
   children_.erase(it);
   if (ui_) ui_->forget(w.get());
   w->parent_ = nullptr;
@@ -51,71 +51,71 @@ std::unique_ptr<Widget> Widget::removeChild(const Widget& child) {
   return w;
 }
 
-void Widget::clearChildren() { children_.clear(); }
+void cWidget::clearChildren() { children_.clear(); }
 
-void Widget::attach(UiRoot* ui) {
+void cWidget::attach(cUiRoot* ui) {
   if (ui_ && ui_ != ui) ui_->forget(this);
   ui_ = ui;
   for (auto& c : children_) c->attach(ui);
 }
 
-Widget* Widget::find(std::string_view id) {
+cWidget* cWidget::find(std::string_view id) {
   if (id_ == id) return this;
   for (auto& c : children_)
-    if (Widget* w = c->find(id)) return w;
+    if (cWidget* w = c->find(id)) return w;
   return nullptr;
 }
 
-Widget& Widget::setVisible(bool v) {
+cWidget& cWidget::setVisible(bool v) {
   visible_ = v;
   if (!v && ui_) ui_->forget(this);  // drops focus / hover / capture inside a hidden subtree
   return *this;
 }
 
-bool Widget::interactive() const {
-  for (const Widget* w = this; w; w = w->parent_)
+bool cWidget::interactive() const {
+  for (const cWidget* w = this; w; w = w->parent_)
     if (!w->visible_ || !w->enabled_) return false;
   return true;
 }
 
-const Theme& Widget::theme() const {
+const Theme& cWidget::theme() const {
   static const Theme kFallback = Theme::defaults();
   return ui_ ? ui_->theme() : kFallback;
 }
 
-const Style& Widget::style() const { return theme().style(styleClass_); }
+const Style& cWidget::style() const { return theme().style(styleClass_); }
 
-bool Widget::hovered() const { return ui_ && ui_->hover() == this; }
-bool Widget::pressed() const { return ui_ && ui_->capture() == this; }
-bool Widget::focused() const { return ui_ && ui_->focus() == this; }
-void Widget::focus() {
+bool cWidget::hovered() const { return ui_ && ui_->hover() == this; }
+bool cWidget::pressed() const { return ui_ && ui_->capture() == this; }
+bool cWidget::focused() const { return ui_ && ui_->focus() == this; }
+void cWidget::focus() {
   if (ui_ && focusable_) ui_->setFocus(this);
 }
 
-Widget& Widget::on(std::string event, Handler h) {
+cWidget& cWidget::on(std::string event, Handler h) {
   handlers_.emplace_back(std::move(event), std::move(h));
   return *this;
 }
 
-Widget& Widget::onScript(std::string event, std::string functionDecl) {
+cWidget& cWidget::onScript(std::string event, std::string functionDecl) {
   scriptHandlers_.emplace_back(std::move(event), std::move(functionDecl));
   return *this;
 }
 
-void Widget::emit(std::string_view event) {
+void cWidget::emit(std::string_view event) {
   for (auto& [name, h] : handlers_)
     if (name == event) h(*this);
   for (auto& [name, decl] : scriptHandlers_)
     if (name == event && ui_ && ui_->scriptHost()) ui_->scriptHost()->callHandler(decl, id_);
 }
 
-bool Widget::hasHandler(std::string_view event) const {
+bool cWidget::hasHandler(std::string_view event) const {
   const auto named = [&](const auto& p) { return p.first == event; };
   return std::any_of(handlers_.begin(), handlers_.end(), named) ||
          std::any_of(scriptHandlers_.begin(), scriptHandlers_.end(), named);
 }
 
-Vec2 Widget::childSize(const Widget& child, const Theme& theme) {
+Vec2 cWidget::childSize(const cWidget& child, const Theme& theme) {
   const Layout& l = child.layout();
   Vec2 s = (l.size.x > 0 && l.size.y > 0) ? l.size : child.measure(theme);
   if (l.size.x > 0) s.x = l.size.x;
@@ -123,7 +123,7 @@ Vec2 Widget::childSize(const Widget& child, const Theme& theme) {
   return {std::max(s.x, l.minSize.x), std::max(s.y, l.minSize.y)};
 }
 
-Vec2 Widget::measure(const Theme& theme) const {
+Vec2 cWidget::measure(const Theme& theme) const {
   // Fixed-size anchored children define the extent; stretched ones adapt to us.
   Vec2 extent;
   for (const auto& c : children_) {
@@ -138,12 +138,12 @@ Vec2 Widget::measure(const Theme& theme) const {
   return {extent.x + pad.horizontal(), extent.y + pad.vertical()};
 }
 
-void Widget::place(const Rect& r, const Theme& theme) {
+void cWidget::place(const Rect& r, const Theme& theme) {
   rect_ = r;
   arrange(theme);
 }
 
-void Widget::arrange(const Theme& theme) {
+void cWidget::arrange(const Theme& theme) {
   const Rect area = contentRect();
   for (auto& c : children_) {
     if (!c->visible()) continue;
@@ -151,7 +151,7 @@ void Widget::arrange(const Theme& theme) {
   }
 }
 
-Color Widget::stateBackground() const {
+Color cWidget::stateBackground() const {
   const Style& s = style();
   if (!interactive()) return s.disabled.a > 0 && s.background.a > 0 ? s.disabled : s.background;
   if (pressed()) return s.pressed;
@@ -159,27 +159,27 @@ Color Widget::stateBackground() const {
   return s.background;
 }
 
-void Widget::paint(Painter& p) const {
+void cWidget::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect_, s.background);
   if (s.borderWidth > 0) p.frame(rect_, s.border, s.borderWidth);
 }
 
-void Widget::paintChildren(Painter& p) const {
+void cWidget::paintChildren(Painter& p) const {
   for (const auto& c : children_) c->paintTree(p);
 }
 
-void Widget::paintTree(Painter& p) const {
+void cWidget::paintTree(Painter& p) const {
   if (!visible_) return;
   paint(p);
   paintChildren(p);
   if (focused()) p.frame(rect_, style().accent, 1.f);
 }
 
-Widget* Widget::hitTest(Vec2 p) {
+cWidget* cWidget::hitTest(Vec2 p) {
   if (!visible_ || !rect_.contains(p)) return nullptr;
   for (auto it = children_.rbegin(); it != children_.rend(); ++it)
-    if (Widget* w = (*it)->hitTest(p)) return w;
+    if (cWidget* w = (*it)->hitTest(p)) return w;
   return enabled_ ? this : nullptr;
 }
 

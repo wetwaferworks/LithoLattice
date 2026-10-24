@@ -8,7 +8,7 @@
 namespace litholattice::ui {
 
 /// Rows of text with one selected row; scrolls with the wheel and follows the keyboard.
-class cListView : public Widget {
+class cListView : public cWidget {
  public:
   cListView();
   void setItems(std::vector<std::string> items);
@@ -43,7 +43,7 @@ struct TreeNode {
 
 /// Expandable hierarchy. Right / Left expand / collapse (or move to the parent); the selection
 /// is a path of child indices.
-class cTreeView : public Widget {
+class cTreeView : public cWidget {
  public:
   cTreeView();
   std::vector<TreeNode>& roots() { return roots_; }
@@ -78,7 +78,7 @@ class cTreeView : public Widget {
 };
 
 /// A button showing the current item; opens a popup list to choose another.
-class cDropdown : public Widget {
+class cDropdown : public cWidget {
  public:
   explicit cDropdown(std::vector<std::string> items = {}, int selected = 0);
   void setItems(std::vector<std::string> items);
@@ -97,7 +97,7 @@ class cDropdown : public Widget {
  private:
   std::vector<std::string> items_;
   int selected_ = 0;
-  Widget* popup_ = nullptr;
+  cWidget* popup_ = nullptr;
 };
 
 }  // namespace litholattice::ui

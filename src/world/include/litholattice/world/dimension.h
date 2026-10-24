@@ -43,7 +43,7 @@ struct Dimension {
   }
 };
 
-class DimensionRegistry {
+class cDimensionReg {
  public:
   Dimension& add(std::unique_ptr<Dimension> d) { dims_.push_back(std::move(d)); return *dims_.back(); }
   /// `from` is accepted by find() as another name for dimension `to` (old names keep working).

@@ -9,7 +9,7 @@
 
 namespace litholattice::ui {
 
-class UiRoot;
+class cUiRoot;
 
 struct MenuItem {
   std::string label, shortcut;  ///< shortcut is display text only ("Ctrl+S")
@@ -23,11 +23,11 @@ struct MenuItem {
 };
 
 /// A popup menu. Open it with cMenu::open (or cMenuBar / ContextMenu do it).
-class cMenu : public Widget {
+class cMenu : public cWidget {
  public:
   explicit cMenu(std::vector<MenuItem> items);
   /// Opens `items` as a popup with its top-left at `pos`; returns the menu.
-  static cMenu& open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos);
+  static cMenu& open(cUiRoot& ui, std::vector<MenuItem> items, Vec2 pos);
   const std::vector<MenuItem>& items() const { return items_; }
   int highlighted() const { return highlight_; }
   /// Runs item `index` (action, script, then closes the menu chain). False if disabled.
@@ -59,7 +59,7 @@ class cMenu : public Widget {
 
 /// Horizontal bar of menu titles. Click (or Enter / Down) opens a menu below its title; while a
 /// menu is open, hovering another title switches to it; Left / Right switch too.
-class cMenuBar : public Widget {
+class cMenuBar : public cWidget {
  public:
   cMenuBar();
   void addMenu(std::string title, std::vector<MenuItem> items);
@@ -86,7 +86,7 @@ class cMenuBar : public Widget {
 
 /// Opens a context menu at the pointer (call from a "rightclick" handler).
 struct ContextMenu {
-  static cMenu& open(UiRoot& ui, Vec2 pointer, std::vector<MenuItem> items) { return cMenu::open(ui, std::move(items), pointer); }
+  static cMenu& open(cUiRoot& ui, Vec2 pointer, std::vector<MenuItem> items) { return cMenu::open(ui, std::move(items), pointer); }
 };
 
 }  // namespace litholattice::ui

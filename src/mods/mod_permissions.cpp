@@ -16,7 +16,7 @@ namespace litholattice::mods {
 namespace {
 
 // Canonical name table: the single source of truth for manifest permission
-// names. ModLoader::parsePermissions routes through permissionBitForName so
+// names. cModLoader::parsePermissions routes through permissionBitForName so
 // a name can never parse to a bit the manifest schema does not know.
 struct NameBit {
   const char* name;

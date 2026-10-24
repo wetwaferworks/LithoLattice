@@ -32,7 +32,7 @@ cDebugConsole::cDebugConsole(cConsoleReg& registry)
   lastToggle_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 }
 
-void cDebugConsole::attach(ui::UiRoot& ui) {
+void cDebugConsole::attach(ui::cUiRoot& ui) {
   ui_ = &ui;
   auto panel = std::make_unique<ui::cStackPanel>(ui::Orientation::Vertical, 2, "console");
   // Top-anchored dropdown: full width, top 42% of the viewport.
@@ -56,14 +56,14 @@ void cDebugConsole::attach(ui::UiRoot& ui) {
   auto& completion = stack.add<ui::cListView>();
   completion.setLayout(ui::Layout::sized({0, 0}));
   completion.setVisible(false);
-  completion.on("activate", [this](ui::Widget&) { acceptCompletion(); });
+  completion.on("activate", [this](ui::cWidget&) { acceptCompletion(); });
   completionView_ = &completion;
 
   auto& input = stack.add<ui::cTextBox>();
   input.setPlaceholder("type a lithoscript command (? for help)");
   input.setLayout(ui::Layout::sized({0, 28}));
-  input.on("submit", [this](ui::Widget&) { onSubmit(); });
-  input.on("change", [this](ui::Widget&) { refreshCompletion(); });
+  input.on("submit", [this](ui::cWidget&) { onSubmit(); });
+  input.on("change", [this](ui::cWidget&) { refreshCompletion(); });
   input_ = &input;
 
   panel->setVisible(false);
@@ -110,7 +110,7 @@ void cDebugConsole::toggle() {
   else open();
 }
 
-bool cDebugConsole::handleTildeKey(ui::UiRoot& ui, const ui::UiEvent& e) {
+bool cDebugConsole::handleTildeKey(ui::cUiRoot& ui, const ui::UiEvent& e) {
   if (e.type != ui::UiEvent::Type::Text) return false;
   if (e.codepoint != U'~' && e.codepoint != U'`') return false;
   const auto now = std::chrono::steady_clock::now();

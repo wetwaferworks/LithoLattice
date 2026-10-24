@@ -8,9 +8,9 @@ namespace litholattice::ui {
 
 // ---- cMenu
 
-cMenu::cMenu(std::vector<MenuItem> items) : Widget("menu"), items_(std::move(items)) { setFocusable(true); }
+cMenu::cMenu(std::vector<MenuItem> items) : cWidget("menu"), items_(std::move(items)) { setFocusable(true); }
 
-cMenu& cMenu::open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos) {
+cMenu& cMenu::open(cUiRoot& ui, std::vector<MenuItem> items, Vec2 pos) {
   auto menu = std::make_unique<cMenu>(std::move(items));
   menu->setLayout(Layout::at({0, 0}, {0, 0}, pos));
   cMenu& m = static_cast<cMenu&>(ui.openPopup(std::move(menu)));
@@ -73,7 +73,7 @@ bool cMenu::activate(int index) {
   cMenu* top = this;
   while (top->parentMenu_) top = top->parentMenu_;
   const std::function<void()> done = top->onDone;
-  UiRoot* root = ui();
+  cUiRoot* root = ui();
   if (root) root->closePopup(*top);
   if (item.action) item.action();
   if (!item.script.empty() && root && root->scriptHost()) root->scriptHost()->callHandler(item.script, item.label);
@@ -167,7 +167,7 @@ void cMenu::paint(Painter& p) const {
 
 // ---- cMenuBar
 
-cMenuBar::cMenuBar() : Widget("menu") { setFocusable(true); }
+cMenuBar::cMenuBar() : cWidget("menu") { setFocusable(true); }
 
 int cMenuBar::openIndex() const { return ui() && ui()->isPopupOpen(openMenu_) ? open_ : -1; }
 
@@ -243,7 +243,7 @@ void cMenuBar::paint(Painter& p) const {
 
 // ---- cDropdown (a button + a cMenu of its items)
 
-cDropdown::cDropdown(std::vector<std::string> items, int selected) : Widget("button"), items_(std::move(items)) {
+cDropdown::cDropdown(std::vector<std::string> items, int selected) : cWidget("button"), items_(std::move(items)) {
   setFocusable(true);
   setSelected(selected);
 }

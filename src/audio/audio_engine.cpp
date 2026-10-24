@@ -4,13 +4,13 @@
 
 namespace litholattice {
 
-AudioEngine::AudioEngine(float sampleRate)
+cAudioEngine::cAudioEngine(float sampleRate)
     : sampleRate_(sampleRate),
       music_(SynthPreset::sid3(), sampleRate),
       effects_(SynthPreset::dmg(), sampleRate),
       effect_(sampleRate) {}
 
-bool AudioEngine::post(const AudioCommand& cmd) {
+bool cAudioEngine::post(const AudioCommand& cmd) {
   if (!enabled()) return false;
   const bool critical = cmd.op == AudioCommand::Op::NoteOff ||
                         cmd.op == AudioCommand::Op::SetMasterGain;
@@ -27,7 +27,7 @@ bool AudioEngine::post(const AudioCommand& cmd) {
   return true;
 }
 
-void AudioEngine::apply(const AudioCommand& cmd) {
+void cAudioEngine::apply(const AudioCommand& cmd) {
   // The shedder's engine-virtualized bitmask tracks only voices the ENGINE
   // virtualized. Any game-driven change of a voice's flag (Virtualize command
   // or a fresh NoteOn, which starts audible) takes ownership away from the
@@ -50,7 +50,7 @@ void AudioEngine::apply(const AudioCommand& cmd) {
   }
 }
 
-void AudioEngine::applyShedActions() {
+void cAudioEngine::applyShedActions() {
   // Runs on the audio thread at the start of each render(), from the level
   // the previous render measured. Engine-virtualized voices are tracked in
   // shedVirtualized_ (one bitmask per synth); when the shedder steps DOWN,
@@ -59,9 +59,9 @@ void AudioEngine::applyShedActions() {
   // ownership of the voices it virtualized itself.
   const int level = shedder_.level();
   const float quiet = shedder_.policy().quietThreshold;
-  Synth* synths[2] = {&music_, &effects_};
+  cSynth* synths[2] = {&music_, &effects_};
   for (int bi = 0; bi < 2; ++bi) {
-    Synth* s = synths[bi];
+    cSynth* s = synths[bi];
     uint64_t& mask = shedVirtualized_[bi];
     s->setRateDivider(level >= 3 ? 2 : 1);
     const size_t cap = level >= 2 ? s->voiceCount() / 2 : s->voiceCount();
@@ -95,7 +95,7 @@ void AudioEngine::applyShedActions() {
   }
 }
 
-void AudioEngine::render(float* out, size_t frames, int channels) {
+void cAudioEngine::render(float* out, size_t frames, int channels) {
   const auto t0 = std::chrono::steady_clock::now();
   while (const auto cmd = queue_.tryPop()) {
     pendingCommands_.fetch_sub(1, std::memory_order_relaxed);
@@ -136,7 +136,7 @@ void AudioEngine::render(float* out, size_t frames, int channels) {
   updateShed(elapsed, budget);
 }
 
-size_t AudioEngine::drainTap(float* out, size_t maxFrames) {
+size_t cAudioEngine::drainTap(float* out, size_t maxFrames) {
   if (!out || maxFrames == 0) return 0;
   const size_t head = tapHead_.load(std::memory_order_acquire);
   size_t tail = tapTail_.load(std::memory_order_relaxed);

@@ -128,7 +128,7 @@ inline void applyGainClampDuplicate(float* out, const float* in, size_t n, float
 }
 
 /// out[i] += in[i/2] for i in [0, n): zero-order-hold duplication for the
-/// half-rate degradation path (Synth::mixInto at shed level 3).
+/// half-rate degradation path (cSynth::mixInto at shed level 3).
 /// Bit-identical to the scalar loop (same per-element op order).
 inline void addIntoDuplicated(float* out, const float* in, size_t n) {
 #if defined(LITHOLATTICE_SIMD_SSE2)

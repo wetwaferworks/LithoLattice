@@ -7,9 +7,9 @@
 
 namespace litholattice {
 
-class VoiceAllocator {
+class cVoiceAllocator {
  public:
-  explicit VoiceAllocator(size_t voices) : slots_(voices) {}
+  explicit cVoiceAllocator(size_t voices) : slots_(voices) {}
 
   /// Voice for `key`: its current one, else a free one, else the oldest (stolen).
   size_t acquire(uint64_t key);
@@ -20,7 +20,7 @@ class VoiceAllocator {
 
   /// Marks a voice virtualized (inaudible: its timeline is kept but it
   /// contributes nothing to the mix). Game thread only, like the rest of
-  /// this class; mirror the flags the audio thread holds on the Synth.
+  /// this class; mirror the flags the audio thread holds on the cSynth.
   void setVirtualized(size_t voice, bool v);
   bool virtualized(size_t voice) const;
 

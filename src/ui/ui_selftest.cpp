@@ -80,33 +80,33 @@ std::string str(const Rect& r) {
   return buf;
 }
 
-void click(UiRoot& ui, Vec2 p, PointerButton b = PointerButton::Left) {
+void click(cUiRoot& ui, Vec2 p, PointerButton b = PointerButton::Left) {
   ui.handleEvent(UiEvent::move(p));
   ui.handleEvent(UiEvent::down(p, b));
   ui.handleEvent(UiEvent::up(p, b));
 }
-Vec2 center(const Widget& w) { return {w.rect().x + w.rect().w * 0.5f, w.rect().y + w.rect().h * 0.5f}; }
-void type(UiRoot& ui, std::string_view s) {
+Vec2 center(const cWidget& w) { return {w.rect().x + w.rect().w * 0.5f, w.rect().y + w.rect().h * 0.5f}; }
+void type(cUiRoot& ui, std::string_view s) {
   for (const char c : s) ui.handleEvent(UiEvent::text(char32_t(c)));
 }
-void key(UiRoot& ui, Key k, uint8_t mods = kModNone) { ui.handleEvent(UiEvent::keyDown(k, mods)); }
+void key(cUiRoot& ui, Key k, uint8_t mods = kModNone) { ui.handleEvent(UiEvent::keyDown(k, mods)); }
 
 void testLayout(Checker& check) {
-  UiRoot ui;
-  Widget& root = ui.root();
+  cUiRoot ui;
+  cWidget& root = ui.root();
   auto& filled = root.add<cPanel>().setLayout(Layout::fill({10, 20, 30, 40}));
-  auto& boxed = root.add<Widget>().setLayout(Layout::at({0.5f, 1.f}, {0.5f, 1.f}, {0, -8}, {100, 50}));
+  auto& boxed = root.add<cWidget>().setLayout(Layout::at({0.5f, 1.f}, {0.5f, 1.f}, {0, -8}, {100, 50}));
   auto& stack = root.add<cStackPanel>(Orientation::Vertical, 5.f).setLayout(Layout::at({0, 0}, {0, 0}, {0, 0}, {200, 300}));
-  auto& a = stack.add<Widget>().setLayout(Layout::sized({0, 40}));
+  auto& a = stack.add<cWidget>().setLayout(Layout::sized({0, 40}));
   Layout lb = Layout::sized({0, 20}, 1.f);
   lb.margin = {2, 3, 4, 5};
-  auto& b = stack.add<Widget>().setLayout(lb);
-  auto& c = stack.add<Widget>().setLayout(Layout::sized({0, 10}, 3.f));
+  auto& b = stack.add<cWidget>().setLayout(lb);
+  auto& c = stack.add<cWidget>().setLayout(Layout::sized({0, 10}, 3.f));
   auto& row = root.add<cStackPanel>(Orientation::Horizontal, 0.f).setLayout(Layout::at({1, 0}, {1, 0}, {}, {90, 20}));
-  auto& r0 = row.add<Widget>().setLayout(Layout::sized({30, 0}));
-  auto& r1 = row.add<Widget>().setLayout(Layout::sized({0, 0}, 1.f));
+  auto& r0 = row.add<cWidget>().setLayout(Layout::sized({30, 0}));
+  auto& r1 = row.add<cWidget>().setLayout(Layout::sized({0, 0}, 1.f));
   auto& grid = root.add<cGridPanel>(3, Vec2{10, 10}, 2.f).setLayout(Layout::at({0, 0}, {0, 0}, {500, 500}));
-  for (int i = 0; i < 5; ++i) grid.add<Widget>();
+  for (int i = 0; i < 5; ++i) grid.add<cWidget>();
   ui.layout({800, 600});
 
   check(same(filled.rect(), 10, 20, 760, 540), "anchors: fill with insets " + str(filled.rect()));
@@ -118,7 +118,7 @@ void testLayout(Checker& check) {
   const Rect g4 = grid.children()[4]->rect();
   check(same(g4, 512, 512, 10, 10) && near(grid.measure(ui.theme()).x, 34), "grid: row-major cells with spacing " + str(g4));
   auto& padded = root.add<cPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 100}));
-  auto& inner = padded.add<Widget>();
+  auto& inner = padded.add<cWidget>();
   ui.layout({800, 600});
   check(same(inner.rect(), 8, 8, 84, 84), "panel padding (theme) insets children " + str(inner.rect()));
   cLabel& lbl = root.add<cLabel>("ab\nabcd");
@@ -148,12 +148,12 @@ void testTheme(Checker& check) {
 }
 
 void testFocus(Checker& check) {
-  UiRoot ui;
+  cUiRoot ui;
   auto& stack = ui.root().add<cStackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 200}));
-  auto& b1 = stack.add<Button>("one");
+  auto& b1 = stack.add<cButton>("one");
   auto& label = stack.add<cLabel>("not focusable");
-  auto& b2 = stack.add<Button>("two");
-  auto& b3 = stack.add<Button>("three");
+  auto& b2 = stack.add<cButton>("two");
+  auto& b3 = stack.add<cButton>("three");
   ui.layout({800, 600});
   (void)label;
   b1.focus();
@@ -172,7 +172,7 @@ void testFocus(Checker& check) {
 }
 
 void testNavigation(Checker& check) {
-  UiRoot ui;
+  cUiRoot ui;
   auto& grid = ui.root().add<cGridPanel>(3, Vec2{40, 40}, 4.f);
   std::vector<cSlot*> slots;
   for (int i = 0; i < 9; ++i) slots.push_back(&grid.add<cSlot>());
@@ -235,14 +235,14 @@ void testText(Checker& check) {
   single.insert("c\nd");
   check(single.text() == "cdab", "text: single-line buffer drops newlines (" + single.text() + ")");
 
-  UiRoot ui;
+  cUiRoot ui;
   cMemoryClipboard clip;
   ui.setClipboard(&clip);
   auto& ed = ui.root().add<cTextEditor>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {400, 160}));
   auto& editor = static_cast<cTextEditor&>(ed);
   int changes = 0, saves = 0;
-  editor.on("change", [&](Widget&) { ++changes; });
-  editor.on("save", [&](Widget&) { ++saves; });
+  editor.on("change", [&](cWidget&) { ++changes; });
+  editor.on("save", [&](cWidget&) { ++saves; });
   ui.layout({800, 600});
   editor.focus();
   type(ui, "void f()");
@@ -274,7 +274,7 @@ void testText(Checker& check) {
   auto& box = ui.root().add<cTextBox>("").setLayout(Layout::at({0, 0}, {0, 0}, {0, 300}, {120, 24}));
   auto& tb = static_cast<cTextBox&>(box);
   int submits = 0;
-  tb.on("submit", [&](Widget&) { ++submits; });
+  tb.on("submit", [&](cWidget&) { ++submits; });
   ui.layout({800, 600});
   click(ui, center(tb));
   type(ui, "42");
@@ -284,14 +284,14 @@ void testText(Checker& check) {
 }
 
 void testEvents(Checker& check) {
-  UiRoot ui;
+  cUiRoot ui;
   RecordingScripts scripts;
   ui.setScriptHost(&scripts);
   auto& stack = ui.root().add<cStackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {200, 400}));
-  auto& btn = stack.add<Button>("Go");
+  auto& btn = stack.add<cButton>("Go");
   btn.setId("go");
   int clicks = 0;
-  btn.on("click", [&](Widget&) { ++clicks; });
+  btn.on("click", [&](cWidget&) { ++clicks; });
   btn.onScript("click", "void onGo(const string &in)");
   auto& cb = stack.add<cCheckbox>("check");
   auto& slider = stack.add<cSlider>(0.f, 10.f, 0.f, 1.f);
@@ -326,8 +326,8 @@ void testEvents(Checker& check) {
   list.setLayout(Layout::at({0, 0}, {0, 0}, {300, 0}, {200, 100}));
   list.setItems({"a", "b", "c"});
   int selects = 0, activates = 0;
-  list.on("select", [&](Widget&) { ++selects; });
-  list.on("activate", [&](Widget&) { ++activates; });
+  list.on("select", [&](cWidget&) { ++selects; });
+  list.on("activate", [&](cWidget&) { ++activates; });
   ui.layout({800, 600});
   list.focus();
   key(ui, Key::Down);
@@ -351,7 +351,7 @@ void testEvents(Checker& check) {
   cDropdown& dd = ui.root().add<cDropdown>(std::vector<std::string>{"red", "green", "blue"});
   dd.setLayout(Layout::at({0, 0}, {0, 0}, {550, 0}, {120, 24}));
   int ddChanges = 0;
-  dd.on("change", [&](Widget&) { ++ddChanges; });
+  dd.on("change", [&](cWidget&) { ++ddChanges; });
   ui.layout({800, 600});
   click(ui, center(dd));
   const bool opened = ui.popupOpen();
@@ -366,13 +366,13 @@ void testEvents(Checker& check) {
 }
 
 void testLayers(Checker& check) {
-  UiRoot ui;
+  cUiRoot ui;
   RecordingScripts scripts;
   ui.setScriptHost(&scripts);
   ui.layout({800, 600});
-  auto& under = ui.root().add<Button>("under").setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 30}));
+  auto& under = ui.root().add<cButton>("under").setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 30}));
   int underClicks = 0;
-  under.on("click", [&](Widget&) { ++underClicks; });
+  under.on("click", [&](cWidget&) { ++underClicks; });
   bool saved = false, opened = false;
   cMenuBar& bar = ui.root().add<cMenuBar>();
   bar.setLayout(Layout::at({0, 0}, {0, 0}, {0, 100}, {400, 24}));
@@ -406,11 +406,11 @@ void testLayers(Checker& check) {
   ctx.activate(0);
   check(scripts.calls.size() == 1 && scripts.calls[0] == "void onQuit(const string &in)|Quit", "context menu: script item");
 
-  Dialog& dlg = Dialog::show(ui, "Confirm");
+  cDialog& dlg = cDialog::show(ui, "Confirm");
   dlg.body().add<cLabel>("Really?");
   bool ok = false;
   dlg.addButton("OK", [&] { ok = true; });
-  Button& cancel = dlg.addButton("Cancel");
+  cButton& cancel = dlg.addButton("Cancel");
   ui.layout({800, 600});
   click(ui, center(under));
   check(underClicks == 0 && ui.modalOpen() && ui.wantsKeyboard(), "modal: blocks input below");
@@ -422,7 +422,7 @@ void testLayers(Checker& check) {
   check(first && ui.focus() == &cancel, "modal: Tab cycles inside the dialog only");
   key(ui, Key::Enter);
   check(!ui.modalOpen() && ui.focus() == nullptr, "dialog: button closes it");
-  Dialog::show(ui, "Esc");
+  cDialog::show(ui, "Esc");
   key(ui, Key::Escape);
   check(!ui.modalOpen() && !ok, "dialog: Escape closes");
   click(ui, center(under));
@@ -549,9 +549,9 @@ void testModUiConfinement(Checker& check) {
     panel->place({0, 0, 400, 300}, Theme::defaults());
     const Rect badge = panel->badgeRect();
     bool clean = true;
-    std::vector<const Widget*> stack{panel.get()};
+    std::vector<const cWidget*> stack{panel.get()};
     while (!stack.empty()) {
-      const Widget* w = stack.back();
+      const cWidget* w = stack.back();
       stack.pop_back();
       if (w != panel.get() && !w->rect().intersect(badge).empty()) clean = false;
       for (const auto& ch : w->children()) stack.push_back(ch.get());
@@ -597,7 +597,7 @@ void testModUiConfinement(Checker& check) {
   {
     std::string err;
     auto panel = ModUiFactory::createPanel("mymod", "p6", "Attached", "", err);
-    UiRoot ui;
+    cUiRoot ui;
     cModPanel& ref = ModUiFactory::attachToRoot(ui, std::move(panel));
     check(!ui.modalOpen() && !ui.popupOpen() && ui.root().find("p6") == &ref,
           "mod UI: panel attaches to the main layer, never as modal/popup");

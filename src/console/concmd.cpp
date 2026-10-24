@@ -859,7 +859,7 @@ cConsoleReg::ExecResult cConsoleReg::execIncDec(const std::string& cvarName, boo
   return ExecResult::Ok;
 }
 
-void cConsoleReg::dispatchKeyBinds(const DeviceState& devices, bool textCapture) {
+void cConsoleReg::dispatchKeyBinds(const cDeviceState& devices, bool textCapture) {
   if (textCapture || keyBinds_.empty()) return;
   for (const auto& [_, bind] : keyBinds_) {
     if (!devices.keyPressed(bind.key)) continue;  // key parsed once at setKeyBind
