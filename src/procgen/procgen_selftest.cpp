@@ -288,7 +288,7 @@ constexpr const char* kGraphText = R"({
   "outputs": {"height": "height", "ripple": "ripple", "flat": 3}
 })";
 
-std::vector<float> evalGrid(const NoiseGraph& g, int output) {
+std::vector<float> evalGrid(const cNoiseGraph& g, int output) {
   std::vector<float> xs, ys, zs;
   for (int i = 0; i < 256; ++i) {
     xs.push_back(float(i % 16) * 7.f - 50.f);
@@ -311,7 +311,7 @@ void graphChecks(Checker& check) {
   const std::string text1 = d1.toJson().dump();
   const bool reparsed = GraphDesc::parse(text1, d2, err);
   check(reparsed && d2.toJson().dump() == text1, "graph: JSON round trip is lossless (dump -> parse -> dump)");
-  const auto g1 = NoiseGraph::compile(d1, 99, err), g2 = NoiseGraph::compile(d2, 99, err);
+  const auto g1 = cNoiseGraph::compile(d1, 99, err), g2 = cNoiseGraph::compile(d2, 99, err);
   check(g1 && g2, "graph: compiles" + (err.empty() ? std::string() : " (" + err + ")"));
   if (!g1 || !g2) return;
   bool equal = true, finite = true;
@@ -353,7 +353,7 @@ void graphChecks(Checker& check) {
   const bool cycleParsed = GraphDesc::parse(
       R"({"nodes": {"a": {"type": "clamp", "input": "b"}, "b": {"type": "scale_bias", "input": "a"}}, "outputs": {"o": "a"}})",
       cyclic, err);
-  const bool cycleRejected = cycleParsed && !NoiseGraph::compile(cyclic, 0, err);
+  const bool cycleRejected = cycleParsed && !cNoiseGraph::compile(cyclic, 0, err);
   check(cycleRejected && err.find("cycle") != std::string::npos, "graph: compile rejects cycles (" + err + ")");
 }
 
@@ -363,8 +363,8 @@ void graphNewNodeChecks(Checker& check) {
   std::string err;
   const auto compile = [&](const char* text) {
     GraphDesc d;
-    if (!GraphDesc::parse(text, d, err)) return std::shared_ptr<const NoiseGraph>{};
-    return NoiseGraph::compile(d, 99, err);
+    if (!GraphDesc::parse(text, d, err)) return std::shared_ptr<const cNoiseGraph>{};
+    return cNoiseGraph::compile(d, 99, err);
   };
   const std::string baseText =
       R"({"nodes": {"n": {"type": "noise", "noise": "perlin", "seed": 7, "frequency": 0.05}}, "outputs": {"o": "n"}})";
@@ -434,11 +434,11 @@ void biomeChecks(Checker& check) {
   BiomePoint desert{"desert", {0.9f, 0.1f, 0.5f, 0.5f}, {1, 1, 0, 0}};
   BiomePoint jungle{"jungle", {0.9f, 0.9f, 0.5f, 0.5f}, {1, 1, 0, 0}};
   BiomePoint tundra{"tundra", {0.1f, 0.5f, 0.5f, 0.5f}, {1, 0, 0, 0}};
-  const MultiNoiseBiomeSelector sel({desert, jungle, tundra});
+  const cMultiNoiseBiomeSel sel({desert, jungle, tundra});
   check(sel.select({0.85f, 0.2f, 0.f, 1.f}) == 0 && sel.select({0.8f, 0.8f, 1.f, 0.f}) == 1 &&
             sel.select({0.05f, 0.95f, 0.5f, 0.5f}) == 2,
         "biomes: multi-noise picks the nearest climate point (weights ignore unused parameters)");
-  const MultiNoiseBiomeSelector tie({{"a", {0.5f, 0.5f, 0.25f, 0.5f}, {0, 0, 1, 0}}, {"b", {0.5f, 0.5f, 0.75f, 0.5f}, {0, 0, 1, 0}}});
+  const cMultiNoiseBiomeSel tie({{"a", {0.5f, 0.5f, 0.25f, 0.5f}, {0, 0, 1, 0}}, {"b", {0.5f, 0.5f, 0.75f, 0.5f}, {0, 0, 1, 0}}});
   check(tie.select({0, 0, 0.5f, 0}) == 0 && tie.select({0, 0, 0.51f, 0}) == 1, "biomes: ties go to the earlier biome");
 }
 
@@ -717,7 +717,7 @@ class StampTopState final : public ISurfaceRule {
   }
 };
 
-/// Wafer-shaped generator JSON: climate -> 3-biome MultiNoiseBiomeSelector -> per-biome
+/// Wafer-shaped generator JSON: climate -> 3-biome cMultiNoiseBiomeSel -> per-biome
 /// heightmap terrain -> per-biome surface. The "t" climate node and the terrain biome list
 /// are parameters so tests can pin the climate or break the biome count.
 std::string waferLikeText(const char* tNode, const char* terrainBiomes) {
@@ -806,7 +806,7 @@ void waferBiomeChecks(Checker& check) {
       for (size_t i = 0; i < fm.biome.size() && flatOk; ++i) {
         const int x = int(i % 16), z = int(i / 16);
         flatOk = flatOk && fm.biome[i] == 1 && fm.height[i] == 60;
-        turfOk = turfOk && fb.get(x, 60, z) == MaterialId{2};  // LayeredSurface top = turf
+        turfOk = turfOk && fb.get(x, 60, z) == MaterialId{2};  // cLayeredSurface top = turf
       }
     }
   check(flatOk, "wafer: pinned-climate chunk is perfectly flat (height 60 everywhere)");
@@ -1010,10 +1010,10 @@ std::unique_ptr<const cGenPipeline> makeTreePipeline(uint64_t dimSeed, TraceTree
   if (!GraphDesc::parse(R"({"nodes": {"h": {"type": "constant", "value": 64}}, "outputs": {"height": "h"}})", desc,
                         err))
     return nullptr;
-  auto graph = NoiseGraph::compile(desc, dimSeed, err);
+  auto graph = cNoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
   cGenPipeline::Builder b(graph);
-  b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
+  b.terrain(std::make_unique<cHeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
   return b.build();
 }
@@ -1434,8 +1434,8 @@ void treeDensityChecks(Checker& check) {
   check(tipsRed + tipsBlue > 100 && redFrac > 0.05 && redFrac < 0.4, buf);
 }
 
-/// Fixed-weight blender stub: the integration contract IBiomeSelector::blendWeights.
-class FixedBlendSelector final : public IBiomeSelector {
+/// Fixed-weight blender stub: the integration contract IBiomeSel::blendWeights.
+class FixedBlendSelector final : public IBiomeSel {
  public:
   explicit FixedBlendSelector(float w0) : w0_(w0) {}
   uint8_t select(const ClimatePoint&) const override { return 0; }
@@ -1455,10 +1455,10 @@ std::unique_ptr<const cGenPipeline> makeBlendPipeline(uint64_t dimSeed, float w0
   if (!GraphDesc::parse(R"({"nodes": {"h": {"type": "constant", "value": 64}}, "outputs": {"height": "h"}})", desc,
                         err))
     return nullptr;
-  auto graph = NoiseGraph::compile(desc, dimSeed, err);
+  auto graph = cNoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
   cGenPipeline::Builder b(graph);
-  b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
+  b.terrain(std::make_unique<cHeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   b.biomes(std::make_unique<FixedBlendSelector>(w0));
   if (!b.feature("trees", std::make_unique<cTraceTreeFeature>(std::move(ts)))) return nullptr;
   return b.build();
@@ -1727,17 +1727,17 @@ std::unique_ptr<const cGenPipeline> makeCarverPipeline(uint64_t dimSeed,
   if (!GraphDesc::parse(R"({"nodes": {"h": {"type": "constant", "value": 64}}, "outputs": {"height": "h"}})",
                         desc, err))
     return nullptr;
-  auto graph = NoiseGraph::compile(desc, dimSeed, err);
+  auto graph = cNoiseGraph::compile(desc, dimSeed, err);
   if (!graph) return nullptr;
   cGenPipeline::Builder b(graph);
-  b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
+  b.terrain(std::make_unique<cHeightmapTerrain>(graph, graph->outputIndex("height"), MaterialId{1}, 0));
   for (auto& cv : carvers) b.carver(std::move(cv));
   return b.build();
 }
 
 constexpr float kCavePi = std::numbers::pi_v<float>;
 
-/// Independent replica of WormCaveCarver for one source chunk: the exact carved cells in the
+/// Independent replica of cWormCaveCarver for one source chunk: the exact carved cells in the
 /// target chunk (chunk-local coords). Mirrors the seeded stream consumption exactly, so any
 /// divergence (replay bug, stream shift, margin change) fails the comparison. Replica
 /// settings must already satisfy the carver's clamps; the density table stays empty, exactly
@@ -1849,7 +1849,7 @@ void replicaCavern(uint64_t dimSeed, int ccx, int ccz, const CavernSettings& st,
     }
 }
 
-/// Independent replica of RavineCarver for one source chunk.
+/// Independent replica of cRavineCarver for one source chunk.
 void replicaRavine(uint64_t dimSeed, int sx, int sz, const RavineSettings& st, int tcx, int tcz,
                    int surf, std::set<std::tuple<int, int, int>>& out) {
   const int n = 16;
@@ -1933,7 +1933,7 @@ void wormCaveChecks(Checker& check) {
   st.maxY = 30;
   st.surfaceMargin = 6;
   std::vector<std::unique_ptr<ICarver>> cv;
-  cv.push_back(std::make_unique<WormCaveCarver>(st));
+  cv.push_back(std::make_unique<cWormCaveCarver>(st));
   const auto gen = makeCarverPipeline(dimSeed, std::move(cv));
   check(gen != nullptr, "caves: worm code-built pipeline builds");
   if (!gen) return;
@@ -1971,7 +1971,7 @@ void wormCaveChecks(Checker& check) {
   const uint64_t h1 = hashBuffer(gen->generate(treeChunk(5, -7, dimSeed)));
   const uint64_t h2 = hashBuffer(gen->generate(treeChunk(5, -7, dimSeed)));
   std::vector<std::unique_ptr<ICarver>> cv2;
-  cv2.push_back(std::make_unique<WormCaveCarver>(st));
+  cv2.push_back(std::make_unique<cWormCaveCarver>(st));
   const auto genOther = makeCarverPipeline(dimensionSeed(4243, "caves"), std::move(cv2));
   const uint64_t h3 = genOther ? hashBuffer(genOther->generate(treeChunk(5, -7, dimensionSeed(4243, "caves")))) : 0;
   check(h1 == h2, "caves: the same worm chunk regenerates identically");
@@ -1982,7 +1982,7 @@ void wormCaveChecks(Checker& check) {
   bst.branchChance = 1.f;
   bst.maxBranches = 1;
   std::vector<std::unique_ptr<ICarver>> cv3;
-  cv3.push_back(std::make_unique<WormCaveCarver>(bst));
+  cv3.push_back(std::make_unique<cWormCaveCarver>(bst));
   const auto genB = makeCarverPipeline(dimSeed, std::move(cv3));
   check(genB != nullptr, "caves: branched worm pipeline builds");
   if (genB) {
@@ -2181,7 +2181,7 @@ void ravineChecks(Checker& check) {
   st.meander = 0.05f;
   st.bottomMargin = 4;
   std::vector<std::unique_ptr<ICarver>> cv;
-  cv.push_back(std::make_unique<RavineCarver>(st));
+  cv.push_back(std::make_unique<cRavineCarver>(st));
   const auto gen = makeCarverPipeline(dimSeed, std::move(cv));
   check(gen != nullptr, "caves: ravine code-built pipeline builds");
   if (!gen) return;
@@ -2659,7 +2659,7 @@ void mountainNodeChecks(Checker& check) {
     std::string err;
     if (!GraphDesc::parse("{\"nodes\": {\"n\": " + nodeJson + "}, \"outputs\": {\"o\": \"n\"}}", desc, err))
       return std::numeric_limits<float>::quiet_NaN();
-    auto g = NoiseGraph::compile(desc, dimensionSeed(3, "mountains"), err);
+    auto g = cNoiseGraph::compile(desc, dimensionSeed(3, "mountains"), err);
     if (!g) return std::numeric_limits<float>::quiet_NaN();
     return g->evaluateAt(g->outputIndex("o"), 0.f, 0.f, 0.f);
   };
@@ -2932,7 +2932,7 @@ void riverChecks(Checker& check) {
   s.cellSize = 64;
   s.minStartHeight = -1000.f;
   s.waterTable = -1000.f;
-  const NoiseGraph& g = gen->graph();
+  const cNoiseGraph& g = gen->graph();
   const int hOut = g.outputIndex("height");
   const uint64_t ds = dimensionSeed(7, "wafer");
   const auto p1 = cRiverCarver::traceRiver(g, hOut, ds, 0, 0, s, nullptr);

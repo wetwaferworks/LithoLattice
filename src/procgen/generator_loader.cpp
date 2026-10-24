@@ -17,11 +17,11 @@ constexpr std::array<std::string_view, kClimateParamCount> kClimateNames{"temper
                                                                          "erosion"};
 
 /// Shared state while loading one generator: graph, material lookup, first error.
-class Loader {
+class cLoader {
  public:
-  Loader(const MaterialResolver& materials, std::string& err) : materials_(materials), err_(err) {}
+  cLoader(const MaterialResolver& materials, std::string& err) : materials_(materials), err_(err) {}
 
-  std::shared_ptr<const NoiseGraph> graph;
+  std::shared_ptr<const cNoiseGraph> graph;
   ModelResolver models;  ///< null unless the game supplied .lthm model resolution
 
   std::optional<MaterialId> resolveMaterial(std::string_view name) { return materials_(name); }
@@ -52,7 +52,7 @@ class Loader {
   std::string& err_;
 };
 
-std::unique_ptr<ITerrainStage> loadTerrain(Loader& l, const Json& j) {
+std::unique_ptr<ITerrainStage> loadTerrain(cLoader& l, const Json& j) {
   const std::string type = j.getStr("type", "heightmap");
   if (type == "biome_heightmap") {
     const Json* list = j.get("biomes");
@@ -87,14 +87,14 @@ std::unique_ptr<ITerrainStage> loadTerrain(Loader& l, const Json& j) {
   MaterialId m{};
   int out = -1;
   if (!l.material(j, "material", m, "terrain") || !l.output(j, "output", out, "terrain")) return nullptr;
-  if (type == "heightmap") return std::make_unique<HeightmapTerrain>(l.graph, out, m, int(j.getNum("depth", 0)));
+  if (type == "heightmap") return std::make_unique<cHeightmapTerrain>(l.graph, out, m, int(j.getNum("depth", 0)));
   if (type == "density")
-    return std::make_unique<DensityTerrain>(l.graph, out, m, int(j.getNum("min_y", 0)), int(j.getNum("max_y", 255)));
+    return std::make_unique<cDensityTerrain>(l.graph, out, m, int(j.getNum("min_y", 0)), int(j.getNum("max_y", 255)));
   l.fail("terrain", "unknown type '" + type + "' (heightmap, biome_heightmap, density)");
   return nullptr;
 }
 
-std::unique_ptr<IClimateStage> loadClimate(Loader& l, const Json& j) {
+std::unique_ptr<IClimateStage> loadClimate(cLoader& l, const Json& j) {
   std::array<int, kClimateParamCount> outputs{-1, -1, -1, -1};
   for (size_t p = 0; p < kClimateParamCount; ++p)
     if (j.get(std::string(kClimateNames[p])) && !l.output(j, std::string(kClimateNames[p]).c_str(), outputs[p], "climate"))
@@ -102,7 +102,7 @@ std::unique_ptr<IClimateStage> loadClimate(Loader& l, const Json& j) {
   return std::make_unique<cGraphClimate>(l.graph, outputs, float(j.getNum("fallback", 0.5)));
 }
 
-bool loadBiomes(Loader& l, const Json& list, std::vector<BiomePoint>& points, std::vector<SurfaceLayers>& surfaces) {
+bool loadBiomes(cLoader& l, const Json& list, std::vector<BiomePoint>& points, std::vector<SurfaceLayers>& surfaces) {
   if (list.type != Json::Type::Array || list.arr.empty() || list.arr.size() > 256)
     return l.fail("biomes", "must be an array of 1..256 biomes");
   for (const Json& b : list.arr) {
@@ -127,10 +127,10 @@ bool loadBiomes(Loader& l, const Json& list, std::vector<BiomePoint>& points, st
   return true;
 }
 
-bool loadCarverDensity(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadCarverDensity(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                        const char* section, std::vector<float>& out);  // defined below
 
-std::unique_ptr<ICarver> loadRuinsCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
+std::unique_ptr<ICarver> loadRuinsCarver(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   constexpr const char* section = "carver 'ruins'";
   RuinsSettings s;
   if (!l.material(j, "trace", s.trace, section) || !l.material(j, "via", s.via, section)) return nullptr;
@@ -194,7 +194,7 @@ std::unique_ptr<ICarver> loadRuinsCarver(Loader& l, const Json& j, const std::ve
   return std::make_unique<cRuinsCarver>(std::move(s));
 }
 
-std::unique_ptr<ICarver> loadCheeseCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
+std::unique_ptr<ICarver> loadCheeseCarver(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   constexpr const char* section = "carver 'cheese'";
   CheeseSettings s;
   s.threshold = float(j.getNum("threshold", s.threshold));
@@ -206,7 +206,7 @@ std::unique_ptr<ICarver> loadCheeseCarver(Loader& l, const Json& j, const std::v
 }
 
 template <typename CarverT>
-std::unique_ptr<ICarver> loadTubeCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+std::unique_ptr<ICarver> loadTubeCarver(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                                         const char* section) {
   TubeCaveSettings s = CarverT().settings();  // tier defaults (spaghetti vs noodle)
   s.tubeRadius = float(j.getNum("tube_radius", s.tubeRadius));
@@ -217,7 +217,7 @@ std::unique_ptr<ICarver> loadTubeCarver(Loader& l, const Json& j, const std::vec
   return std::make_unique<CarverT>(s);
 }
 
-std::unique_ptr<ICarver> loadRiverCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
+std::unique_ptr<ICarver> loadRiverCarver(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   constexpr const char* section = "carver 'river'";
   RiverSettings s;
   if (!l.material(j, "water_material", s.water, section)) return nullptr;
@@ -274,7 +274,7 @@ std::unique_ptr<ICarver> loadRiverCarver(Loader& l, const Json& j, const std::ve
 /// Per-biome density multipliers for the cross-chunk carvers ("density": {"biome": m}).
 /// Missing object = no per-biome gating (empty table, every entry reads as 1). Unknown biome
 /// names are an error.
-bool loadCarverDensity(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadCarverDensity(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                        const char* section, std::vector<float>& out) {
   const Json* density = j.get("density");
   if (!density) return true;
@@ -293,7 +293,7 @@ bool loadCarverDensity(Loader& l, const Json& j, const std::vector<std::string>&
   return true;
 }
 
-std::unique_ptr<ICarver> loadRavineCarver(Loader& l, const Json& j,
+std::unique_ptr<ICarver> loadRavineCarver(cLoader& l, const Json& j,
                                          const std::vector<std::string>& biomeNames) {
   constexpr const char* section = "carver 'ravine'";
   RavineSettings s;
@@ -307,10 +307,10 @@ std::unique_ptr<ICarver> loadRavineCarver(Loader& l, const Json& j,
   s.meander = float(j.getNum("meander", s.meander));
   s.bottomMargin = int(j.getNum("bottom_margin", s.bottomMargin));
   if (!loadCarverDensity(l, j, biomeNames, section, s.density)) return nullptr;
-  return std::make_unique<RavineCarver>(s);
+  return std::make_unique<cRavineCarver>(s);
 }
 
-std::unique_ptr<ICarver> loadCavernCarver(Loader& l, const Json& j,
+std::unique_ptr<ICarver> loadCavernCarver(cLoader& l, const Json& j,
                                          const std::vector<std::string>& biomeNames) {
   constexpr const char* section = "carver 'cavern'";
   CavernSettings s;
@@ -328,7 +328,7 @@ std::unique_ptr<ICarver> loadCavernCarver(Loader& l, const Json& j,
   return std::make_unique<cCavernCarver>(s);
 }
 
-std::unique_ptr<ICarver> loadCarver(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
+std::unique_ptr<ICarver> loadCarver(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   const std::string type = j.getStr("type");
   if (type == "ravine") return loadRavineCarver(l, j, biomeNames);
   if (type == "cavern") return loadCavernCarver(l, j, biomeNames);
@@ -356,7 +356,7 @@ std::unique_ptr<ICarver> loadCarver(Loader& l, const Json& j, const std::vector<
   s.branchLengthFrac = float(j.getNum("branch_length_frac", s.branchLengthFrac));
   s.branchRadiusFrac = float(j.getNum("branch_radius_frac", s.branchRadiusFrac));
   if (!loadCarverDensity(l, j, biomeNames, "carver 'worm_cave'", s.density)) return nullptr;
-  return std::make_unique<WormCaveCarver>(s);
+  return std::make_unique<cWormCaveCarver>(s);
 }
 
 /// Fills a per-biome density table from "density" (default) plus the optional "biomes"
@@ -374,7 +374,7 @@ std::unique_ptr<ICarver> loadCarver(Loader& l, const Json& j, const std::vector<
 /// unlisted biomes, exactly as before (wafer.json relies on this: every
 /// scalar density in it is paired with a "biomes" object, so its loading
 /// is unchanged).
-bool loadBiomeDensity(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadBiomeDensity(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                       const std::string& section, std::array<float, 256>& out) {
   const Json* b = j.get("biomes");
   const double scalar = j.getNum("density", 0);
@@ -401,11 +401,11 @@ bool loadBiomeDensity(Loader& l, const Json& j, const std::vector<std::string>& 
   return true;
 }
 
-/// Loads a "lithoform_stamp" feature: a baked .lthm model (via the Loader's ModelResolver)
+/// Loads a "lithoform_stamp" feature: a baked .lthm model (via the cLoader's ModelResolver)
 /// stamped into the world on a coarse cell lattice. JSON keys: "model" (resolver name),
 /// "materials" ({"<palette byte>": "<material name>"}), "cell_size", "density", "biomes",
 /// "rotate" (0/1), "y_offset", "anchor_center" (0/1), "seed".
-std::unique_ptr<IFeature> loadLithoStampFeature(Loader& l, const Json& j,
+std::unique_ptr<IFeature> loadLithoStampFeature(cLoader& l, const Json& j,
                                                const std::vector<std::string>& biomeNames) {
   const std::string section = "feature '" + j.getStr("name") + "'";
   if (!l.models)
@@ -462,7 +462,7 @@ std::unique_ptr<IFeature> loadLithoStampFeature(Loader& l, const Json& j,
   return std::make_unique<cLithoStampFeature>(s, std::move(cells));
 }
 
-std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
+std::unique_ptr<IFeature> loadStructureFeature(cLoader& l, const Json& j,
                                               const std::vector<std::string>& biomeNames) {
   const std::string section = "feature '" + j.getStr("name") + "'";
   StructureSettings s;
@@ -584,7 +584,7 @@ std::unique_ptr<IFeature> loadStructureFeature(Loader& l, const Json& j,
 
 // ---- ecosystem diversity (2026-10-12) ----
 
-std::unique_ptr<IFeature> loadGroundCoverFeature(Loader& l, const Json& j,
+std::unique_ptr<IFeature> loadGroundCoverFeature(cLoader& l, const Json& j,
                                                 const std::vector<std::string>& biomeNames) {
   const std::string section = "feature '" + j.getStr("name") + "'";
   GroundCoverSettings s;
@@ -611,7 +611,7 @@ std::unique_ptr<IFeature> loadGroundCoverFeature(Loader& l, const Json& j,
   return std::make_unique<cGroundCoverFeature>(std::move(s));
 }
 
-std::unique_ptr<IFeature> loadRockFormationFeature(Loader& l, const Json& j,
+std::unique_ptr<IFeature> loadRockFormationFeature(cLoader& l, const Json& j,
                                                   const std::vector<std::string>& biomeNames) {
   const std::string section = "feature '" + j.getStr("name") + "'";
   RockFormationSettings s;
@@ -630,7 +630,7 @@ std::unique_ptr<IFeature> loadRockFormationFeature(Loader& l, const Json& j,
   return std::make_unique<cRockFormationFeature>(std::move(s));
 }
 
-std::unique_ptr<IFeature> loadWorleyOreFeature(Loader& l, const Json& j,
+std::unique_ptr<IFeature> loadWorleyOreFeature(cLoader& l, const Json& j,
                                               const std::vector<std::string>&) {
   const std::string section = "feature '" + j.getStr("name") + "'";
   WorleyOreVeinSettings s;
@@ -655,7 +655,7 @@ std::unique_ptr<IFeature> loadWorleyOreFeature(Loader& l, const Json& j,
 }
 
 /// Parses "biome_transitions": [{"a": name, "b": name, "result": name, "width": n}].
-bool loadBiomeTransitions(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
+bool loadBiomeTransitions(cLoader& l, const Json& json, const std::vector<std::string>& biomeNames,
                           cGenPipeline::Builder& b) {
   const Json* list = json.get("biome_transitions");
   if (!list) return true;
@@ -680,7 +680,7 @@ bool loadBiomeTransitions(Loader& l, const Json& json, const std::vector<std::st
 }
 
 /// Parses "fauna": {"<biome>": [{"mob": id, "weight": w, "pack": [min, max]}]}.
-bool loadFauna(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
+bool loadFauna(cLoader& l, const Json& json, const std::vector<std::string>& biomeNames,
                cGenPipeline::Builder& b) {
   const Json* fauna = json.get("fauna");
   if (!fauna) return true;
@@ -715,7 +715,7 @@ bool loadFauna(Loader& l, const Json& json, const std::vector<std::string>& biom
 }
 
 /// Parses "snowcap": {"snow": mat, "base_line": y, "latitude_falloff": f, ...}.
-bool loadSnowCap(Loader& l, const Json& json, cGenPipeline::Builder& b) {
+bool loadSnowCap(cLoader& l, const Json& json, cGenPipeline::Builder& b) {
   const Json* sc = json.get("snowcap");
   if (!sc) return true;
   constexpr const char* section = "snowcap";
@@ -735,7 +735,7 @@ bool loadSnowCap(Loader& l, const Json& json, cGenPipeline::Builder& b) {
 }
 
 /// Parses "sand_drifts": {"sand": mat, "frequency": f, "threshold": t, "depth": n, "biomes": {...}}.
-bool loadSandDrifts(Loader& l, const Json& json, const std::vector<std::string>& biomeNames,
+bool loadSandDrifts(cLoader& l, const Json& json, const std::vector<std::string>& biomeNames,
                      cGenPipeline::Builder& b) {
   const Json* sd = json.get("sand_drifts");
   if (!sd) return true;
@@ -754,7 +754,7 @@ bool loadSandDrifts(Loader& l, const Json& json, const std::vector<std::string>&
   return true;
 }
 
-std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vector<std::string>& biomeNames) {
+std::unique_ptr<IFeature> loadFeature(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames) {
   const std::string type = j.getStr("type"), section = "feature '" + j.getStr("name") + "'";
   if (type == "dungeon") {
     // Issue R-PG-2 (2026-10-23): dungeon generation has no design or implementation yet (chip
@@ -838,7 +838,7 @@ std::unique_ptr<IFeature> loadFeature(Loader& l, const Json& j, const std::vecto
 /// Resolves the "water" material: an explicit "water" key, else the registry's "water".
 /// Fails when the registry has no water block: an oceans/lakes section without water is a
 /// config error, not a silent no-op.
-bool loadWaterMaterial(Loader& l, const Json& j, const char* section, MaterialId& out) {
+bool loadWaterMaterial(cLoader& l, const Json& j, const char* section, MaterialId& out) {
   if (const Json* w = j.get("water")) {
     if (w->type != Json::Type::String) return l.fail(section, "'water' must be a material name");
     return l.material(j, "water", out, section);
@@ -848,7 +848,7 @@ bool loadWaterMaterial(Loader& l, const Json& j, const char* section, MaterialId
   return l.material(synth, "water", out, section);
 }
 
-bool loadOceanSettings(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadOceanSettings(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                        uint64_t dimensionSeed, OceanSettings& out) {
   constexpr const char* section = "oceans";
   out.seed = dimensionSeed;
@@ -880,7 +880,7 @@ bool loadOceanSettings(Loader& l, const Json& j, const std::vector<std::string>&
   return loadBiomeDensity(l, j, biomeNames, section, out.biomes.density);
 }
 
-bool loadLakeSettings(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadLakeSettings(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                       uint64_t dimensionSeed, LakeSettings& out) {
   constexpr const char* section = "lakes";
   out.seed = dimensionSeed;
@@ -900,7 +900,7 @@ bool loadLakeSettings(Loader& l, const Json& j, const std::vector<std::string>& 
   return loadBiomeDensity(l, j, biomeNames, section, out.biomes.density);
 }
 
-bool loadShoreLayers(Loader& l, const Json& j, const char* section, SurfaceLayers& out) {
+bool loadShoreLayers(cLoader& l, const Json& j, const char* section, SurfaceLayers& out) {
   if (!l.material(j, "top", out.top, section, false)) return false;
   if (!l.material(j, "filler", out.filler, section, false)) return false;
   out.fillerDepth = int(j.getNum("depth", out.fillerDepth));
@@ -908,7 +908,7 @@ bool loadShoreLayers(Loader& l, const Json& j, const char* section, SurfaceLayer
   return true;
 }
 
-bool loadShorelineSettings(Loader& l, const Json& j, const std::vector<std::string>& biomeNames,
+bool loadShorelineSettings(cLoader& l, const Json& j, const std::vector<std::string>& biomeNames,
                            cShorelineRule::Settings& out) {
   constexpr const char* section = "shoreline";
   out.band = int(j.getNum("band", out.band));
@@ -955,7 +955,7 @@ std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dim
                                                        const MaterialResolver& materials,
                                                        std::vector<std::unique_ptr<ISurfaceRule>> extraSurface,
                                                        ModelResolver models, std::string& err) {
-  Loader l(materials, err);
+  cLoader l(materials, err);
   l.models = std::move(models);
   const Json* graphJson = json.get("graph");
   const Json* terrainJson = json.get("terrain");
@@ -965,7 +965,7 @@ std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dim
   }
   GraphDesc desc;
   std::string graphErr;
-  if (!GraphDesc::fromJson(*graphJson, desc, graphErr) || !(l.graph = NoiseGraph::compile(desc, dimensionSeed, graphErr))) {
+  if (!GraphDesc::fromJson(*graphJson, desc, graphErr) || !(l.graph = cNoiseGraph::compile(desc, dimensionSeed, graphErr))) {
     l.fail("graph", graphErr);
     return nullptr;
   }
@@ -1018,13 +1018,13 @@ std::unique_ptr<const cGenPipeline> loadGenerator(const Json& json, uint64_t dim
       if (blendCount > 4) blendCount = 4;
       b.biomes(std::make_unique<cBlendedBiomeSel>(std::move(points), blendRadius, blendCount));
     } else if (selectorType == "multi_noise") {
-      b.biomes(std::make_unique<MultiNoiseBiomeSelector>(std::move(points)));
+      b.biomes(std::make_unique<cMultiNoiseBiomeSel>(std::move(points)));
     } else {
       l.fail("biomes", "unknown selector type '" + selectorType + "' (multi_noise, blended)");
       return nullptr;
     }
     const Json* surface = json.get("surface");
-    b.surface(std::make_unique<LayeredSurface>(std::move(surfaces),
+    b.surface(std::make_unique<cLayeredSurface>(std::move(surfaces),
                                               surface && surface->getStr("top_state") == "biome", dimensionSeed));
     // Ecosystem diversity (2026-10-12): transition bands rewrite the biome map before
     // terrain runs; fauna tables ride on the pipeline for the entity system.

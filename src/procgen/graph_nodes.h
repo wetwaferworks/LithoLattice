@@ -1,4 +1,4 @@
-// Private to procgen: the node type table and node implementations behind NoiseGraph.
+// Private to procgen: the node type table and node implementations behind cNoiseGraph.
 #pragma once
 #include <cstdint>
 #include <memory>

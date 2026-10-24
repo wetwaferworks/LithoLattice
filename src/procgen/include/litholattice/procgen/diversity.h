@@ -155,7 +155,7 @@ struct SnowCapSettings {
 };
 
 /// Static baking of snowfall: columns at/above the latitude-adjusted snow line get a snow
-/// top. Runs as a surface rule after LayeredSurface so it caps the biome's own top block.
+/// top. Runs as a surface rule after cLayeredSurface so it caps the biome's own top block.
 class cSnowCapRule final : public ISurfaceRule {
  public:
   explicit cSnowCapRule(SnowCapSettings s) : s_(std::move(s)) {}

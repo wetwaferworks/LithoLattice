@@ -333,12 +333,12 @@ void borderChecks(Checker& check) {
     check(false, "border graph parses (" + err + ")");
     return;
   }
-  auto graph = NoiseGraph::compile(desc, seed, err);
+  auto graph = cNoiseGraph::compile(desc, seed, err);
   check(graph != nullptr, "border graph compiles");
   if (!graph) return;
   cGenPipeline::Builder b(graph);
-  b.terrain(std::make_unique<HeightmapTerrain>(graph, graph->outputIndex("height"), kRock, 0));
-  b.biomes(std::make_unique<MultiNoiseBiomeSelector>(std::vector<BiomePoint>{{"ocean"}}));
+  b.terrain(std::make_unique<cHeightmapTerrain>(graph, graph->outputIndex("height"), kRock, 0));
+  b.biomes(std::make_unique<cMultiNoiseBiomeSel>(std::vector<BiomePoint>{{"ocean"}}));
   OceanSettings os;
   os.water = kWater;
   os.seaLevel = 256;

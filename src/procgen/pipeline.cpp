@@ -79,7 +79,7 @@ namespace {
 /// Binds `n` world columns (xs[i], 0, zs[i]) and runs the pipeline's climate stage + biome
 /// selector over them, writing the dominant biome-table index per point. Shared by biomeAt
 /// (n == 1) and sampleBiomes. Mirrors generate()'s binding (y = 0, w = 0).
-void selectBiomesAt(const IClimateStage* climate, const IBiomeSelector* biomes,
+void selectBiomesAt(const IClimateStage* climate, const IBiomeSel* biomes,
                     const int32_t* xs, const int32_t* zs, size_t n, uint8_t* out) {
   std::vector<float> fxs(n), fys(n, 0.f), fzs(n), fws(n, 0.f);
   for (size_t i = 0; i < n; ++i) {
@@ -126,7 +126,7 @@ std::vector<FaunaEntry> cGenPipeline::faunaAt(int32_t wx, int32_t wz) const {
   return faunaForBiome(biomeAt(wx, wz));
 }
 
-cGenPipeline::Builder::Builder(std::shared_ptr<const NoiseGraph> graph)
+cGenPipeline::Builder::Builder(std::shared_ptr<const cNoiseGraph> graph)
     : p_(std::make_unique<cGenPipeline>(Passkey{})) {
   p_->graph_ = std::move(graph);
 }
@@ -134,7 +134,7 @@ cGenPipeline::Builder& cGenPipeline::Builder::climate(std::unique_ptr<IClimateSt
   p_->climate_ = std::move(s);
   return *this;
 }
-cGenPipeline::Builder& cGenPipeline::Builder::biomes(std::unique_ptr<IBiomeSelector> s) {
+cGenPipeline::Builder& cGenPipeline::Builder::biomes(std::unique_ptr<IBiomeSel> s) {
   p_->biomes_ = std::move(s);
   return *this;
 }

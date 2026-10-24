@@ -12,7 +12,7 @@ namespace litholattice::procgen {
 
 // ---- climate
 
-cGraphClimate::cGraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback)
+cGraphClimate::cGraphClimate(std::shared_ptr<const cNoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback)
     : graph_(std::move(graph)), outputs_(outputs), fallback_(fallback) {}
 
 void cGraphClimate::sample(StageContext& ctx) const {
@@ -47,9 +47,9 @@ float hash01(int x, int z, uint64_t salt) {
 
 // ---- biomes
 
-MultiNoiseBiomeSelector::MultiNoiseBiomeSelector(std::vector<BiomePoint> biomes) : biomes_(std::move(biomes)) {}
+cMultiNoiseBiomeSel::cMultiNoiseBiomeSel(std::vector<BiomePoint> biomes) : biomes_(std::move(biomes)) {}
 
-uint8_t MultiNoiseBiomeSelector::select(const ClimatePoint& climate) const {
+uint8_t cMultiNoiseBiomeSel::select(const ClimatePoint& climate) const {
   size_t best = 0;
   float bestDist = std::numeric_limits<float>::max();
   for (size_t b = 0; b < biomes_.size() && b < 256; ++b) {
@@ -112,10 +112,10 @@ void cBlendedBiomeSel::blendWeights(const ClimatePoint& climate, float* out) con
 
 // ---- terrain
 
-HeightmapTerrain::HeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, int output, MaterialId material, int depth)
+cHeightmapTerrain::cHeightmapTerrain(std::shared_ptr<const cNoiseGraph> graph, int output, MaterialId material, int depth)
     : graph_(std::move(graph)), output_(output), material_(material), depth_(depth) {}
 
-void HeightmapTerrain::generate(StageContext& ctx) const {
+void cHeightmapTerrain::generate(StageContext& ctx) const {
   std::vector<float> h(ctx.columns.size());
   graph_->evaluate(output_, ctx.graph, h);
   const int n = ctx.chunk.size, top = ctx.blocks.height() - 1;
@@ -130,10 +130,10 @@ void HeightmapTerrain::generate(StageContext& ctx) const {
     }
 }
 
-DensityTerrain::DensityTerrain(std::shared_ptr<const NoiseGraph> graph, int output, MaterialId material, int minY, int maxY)
+cDensityTerrain::cDensityTerrain(std::shared_ptr<const cNoiseGraph> graph, int output, MaterialId material, int minY, int maxY)
     : graph_(std::move(graph)), output_(output), material_(material), minY_(minY), maxY_(maxY) {}
 
-void DensityTerrain::generate(StageContext& ctx) const {
+void cDensityTerrain::generate(StageContext& ctx) const {
   const int n = ctx.chunk.size, top = std::min(maxY_, ctx.blocks.height() - 1), lo = std::max(0, minY_);
   const size_t columns = ctx.columns.size();
   std::vector<float> ys(columns), density(columns);
@@ -156,7 +156,7 @@ void DensityTerrain::generate(StageContext& ctx) const {
   }
 }
 
-cBiomeHeightmapTerrain::cBiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome,
+cBiomeHeightmapTerrain::cBiomeHeightmapTerrain(std::shared_ptr<const cNoiseGraph> graph, std::vector<Entry> perBiome,
                                                int depth)
     : graph_(std::move(graph)), perBiome_(std::move(perBiome)), depth_(depth) {}
 
@@ -220,10 +220,10 @@ void cBiomeHeightmapTerrain::generate(StageContext& ctx) const {
 
 // ---- surface
 
-LayeredSurface::LayeredSurface(std::vector<SurfaceLayers> perBiome, bool topStateIsBiome, uint64_t ditherSeed)
+cLayeredSurface::cLayeredSurface(std::vector<SurfaceLayers> perBiome, bool topStateIsBiome, uint64_t ditherSeed)
     : perBiome_(std::move(perBiome)), topStateIsBiome_(topStateIsBiome), ditherSeed_(ditherSeed) {}
 
-void LayeredSurface::apply(StageContext& ctx) const {
+void cLayeredSurface::apply(StageContext& ctx) const {
   if (perBiome_.empty()) return;
   const int n = ctx.chunk.size;
   for (int z = 0; z < n; ++z)
@@ -300,7 +300,7 @@ float carveDensityAt(const std::vector<float>& density, uint8_t biome) {
 
 }  // namespace
 
-WormCaveCarver::WormCaveCarver(WormCaveSettings s) : s_(std::move(s)) {
+cWormCaveCarver::cWormCaveCarver(WormCaveSettings s) : s_(std::move(s)) {
   s_.minLength = std::max(1, s_.minLength);
   s_.maxLength = std::max(s_.minLength, s_.maxLength);
   s_.maxRadius = std::max(s_.minRadius, s_.maxRadius);
@@ -311,13 +311,13 @@ WormCaveCarver::WormCaveCarver(WormCaveSettings s) : s_(std::move(s)) {
   s_.branchRadiusFrac = std::clamp(s_.branchRadiusFrac, 0.05f, 1.f);
 }
 
-void WormCaveCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
+void cWormCaveCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void WormCaveCarver::carve(StageContext& ctx) const {
+void cWormCaveCarver::carve(StageContext& ctx) const {
   const ChunkInfo& c = ctx.chunk;
   const int n = c.size;
   const int reach = int(std::ceil((float(s_.maxLength) + s_.maxRadius) / float(n)));  // chunks a worm can cross
@@ -395,9 +395,9 @@ void WormCaveCarver::carve(StageContext& ctx) const {
     }
 }
 
-RavineCarver::RavineCarver() : RavineCarver(RavineSettings{}) {}
+cRavineCarver::cRavineCarver() : cRavineCarver(RavineSettings{}) {}
 
-RavineCarver::RavineCarver(RavineSettings s) : s_(std::move(s)) {
+cRavineCarver::cRavineCarver(RavineSettings s) : s_(std::move(s)) {
   s_.chance = std::clamp(s_.chance, 0.f, 1.f);
   s_.minLength = std::max(8, s_.minLength);
   s_.maxLength = std::max(s_.minLength, s_.maxLength);
@@ -409,13 +409,13 @@ RavineCarver::RavineCarver(RavineSettings s) : s_(std::move(s)) {
   s_.bottomMargin = std::max(1, s_.bottomMargin);
 }
 
-void RavineCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
+void cRavineCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   // Bind the dominant-biome probe to the finished pipeline. The pipeline outlives its
   // carvers, so the raw pointer is safe.
   probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-void RavineCarver::carve(StageContext& ctx) const {
+void cRavineCarver::carve(StageContext& ctx) const {
   const ChunkInfo& c = ctx.chunk;
   const int n = c.size, height = ctx.blocks.height();
   // A ravine step moves 1 block, so no carved point is further than maxLength + maxWidth
@@ -1545,7 +1545,7 @@ std::vector<std::array<int32_t, 2>> cStructureFeature::basesInRect(uint64_t dime
 
 // ---- rivers
 
-cRiverCarver::cRiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s)
+cRiverCarver::cRiverCarver(std::shared_ptr<const cNoiseGraph> graph, int heightOutput, RiverSettings s)
     : graph_(std::move(graph)), heightOutput_(heightOutput), s_(std::move(s)) {
   s_.cellSize = std::max(16, s_.cellSize);
   s_.chance = std::clamp(s_.chance, 0.f, 1.f);
@@ -1571,7 +1571,7 @@ void cRiverCarver::onPipelineBuilt(const cGenPipeline* pipeline) {
   if (!probe_) probe_ = [pipeline](int32_t wx, int32_t wz) { return pipeline->biomeAt(wx, wz); };
 }
 
-std::vector<RiverPoint> cRiverCarver::traceRiver(const NoiseGraph& graph, int heightOutput,
+std::vector<RiverPoint> cRiverCarver::traceRiver(const cNoiseGraph& graph, int heightOutput,
                                                uint64_t dimensionSeed, int32_t cellX, int32_t cellZ,
                                                const RiverSettings& s, const BiomeProbe& probe) {
   std::vector<RiverPoint> pts;

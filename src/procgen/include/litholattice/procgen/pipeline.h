@@ -97,9 +97,9 @@ class IClimateStage {
 class cGenPipeline;  // defined below; IFeature::onPipelineBuilt takes it
 
 /// Picks a biome per column from its climate; also owns the biome table.
-class IBiomeSelector {
+class IBiomeSel {
  public:
-  virtual ~IBiomeSelector() = default;
+  virtual ~IBiomeSel() = default;
   virtual uint8_t select(const ClimatePoint& climate) const = 0;
   /// Biomes in the table (0 if unknown). Sizes ColumnMaps::biomeWeight.
   virtual size_t biomeCount() const { return 0; }
@@ -213,7 +213,7 @@ class cGenPipeline {
 
   /// Generates one chunk column. Thread-safe.
   ColumnBuffer generate(const ChunkInfo& chunk, ColumnMaps* mapsOut = nullptr) const;
-  const NoiseGraph& graph() const { return *graph_; }
+  const cNoiseGraph& graph() const { return *graph_; }
   /// Dominant biome-table index at one world column, without generating a chunk: samples
   /// the climate stage at (wx, wz) and runs the biome selector. A pure function of the
   /// pipeline seed and the position; agrees with ColumnMaps::biome for generated columns.
@@ -233,9 +233,9 @@ class cGenPipeline {
   const std::vector<std::unique_ptr<IBiomePostStage>>& biomePostStages() const { return biomePost_; }
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   std::unique_ptr<IClimateStage> climate_;
-  std::unique_ptr<IBiomeSelector> biomes_;
+  std::unique_ptr<IBiomeSel> biomes_;
   std::unique_ptr<ITerrainStage> terrain_;
   std::vector<std::unique_ptr<IBiomePostStage>> biomePost_;
   std::vector<std::unique_ptr<ISurfaceRule>> surface_;
@@ -247,9 +247,9 @@ class cGenPipeline {
 /// Assembles a pipeline; graph and terrain are required, every other stage is optional.
 class cGenPipeline::Builder {
  public:
-  explicit Builder(std::shared_ptr<const NoiseGraph> graph);
+  explicit Builder(std::shared_ptr<const cNoiseGraph> graph);
   Builder& climate(std::unique_ptr<IClimateStage> s);
-  Builder& biomes(std::unique_ptr<IBiomeSelector> s);
+  Builder& biomes(std::unique_ptr<IBiomeSel> s);
   Builder& terrain(std::unique_ptr<ITerrainStage> s);
   /// Biome post-stage (transition bands, ...): runs after biome selection, before terrain.
   Builder& biomePost(std::unique_ptr<IBiomePostStage> s);

@@ -42,8 +42,8 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 ### 2.3 Dimensions, procgen generators and noise nodes (`world`, `procgen`)
 - **[EXISTS]** `Dimension` (id, name, biomes, `ColumnGenerator`, `SetupFn` for structures and spawn, `belowWorldFill`) and `DimensionRegistry` (`add`, `addAlias`, `find`).
 - **[EXISTS]** `ColumnGenerator::create(json, worldSeed, dimensionId, blocks, err)`: generators are data (JSON graphs) and thread-safe.
-- **[EXISTS]** Pipeline stage interfaces (`procgen/pipeline.h`): `IClimateStage`, `IBiomeSelector`, `ITerrainStage`, `ISurfaceRule`, `ICarver`, and `IFeature::place(ctx, rng)`, with built-in implementations in `stages.h` (`HeightmapTerrain`, `DensityTerrain`, `LayeredSurface`, `WormCaveCarver`, `RavineCarver`, `MultiNoiseBiomeSelector`, ...).
-- **[EXISTS]** Noise: `INoise` (`sample2/3/4`, `sampleBatch`), `NoiseType`, `NoiseSettings`, and the JSON node graph (`NoiseGraph`, `NodeDesc`, `GraphDesc`, `GraphContext`).
+- **[EXISTS]** Pipeline stage interfaces (`procgen/pipeline.h`): `IClimateStage`, `IBiomeSel`, `ITerrainStage`, `ISurfaceRule`, `ICarver`, and `IFeature::place(ctx, rng)`, with built-in implementations in `stages.h` (`cHeightmapTerrain`, `cDensityTerrain`, `cLayeredSurface`, `cWormCaveCarver`, `cRavineCarver`, `cMultiNoiseBiomeSel`, ...).
+- **[EXISTS]** Noise: `INoise` (`sample2/3/4`, `sampleBatch`), `NoiseType`, `NoiseSettings`, and the JSON node graph (`cNoiseGraph`, `NodeDesc`, `GraphDesc`, `GraphContext`).
 - **[PROPOSED]** `NoiseNodeRegistry` and `StageRegistry`, so mods add node types (`"mymod:terrace"`) and stages by name. The JSON loader resolves names through these registries instead of a built-in switch.
 
 ### 2.4 Render: materials, appearance, models (`render`, `assets`)
@@ -87,7 +87,7 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[EXISTS]** `IMovementMode` plug-ins: `makeWalk` (step up 1, drop 3), `makeClimb`, `makeFly`, `makeSwim`, `makeWireFollow`.
 - **[EXISTS]** `findPath`: bounded, deterministic A* (box `planRange` 32-64, node budget); unreachable or far goals return a hop (`hopToward`), replanned on arrival.
 - **[EXISTS]** Senses: `canSee` (voxel DDA, occluded, range + view cone: no wallhacks), `hear` (falloff, halved per occluder), `senseField` (signal / heat sampled by the game).
-- **[EXISTS]** Brains: utility AI (`UtilityAction`, `pickUtility`) with `ILearnedScorer` (stub `NullLearnedScorer`), behaviour-tree nodes (sequence, selector, inverter, condition, action, utility leaf).
+- **[EXISTS]** Brains: utility AI (`UtilityAction`, `pickUtility`) with `ILearnedScorer` (stub `cNullLearnedScorer`), behaviour-tree nodes (sequence, selector, inverter, condition, action, utility leaf).
 - **[EXISTS]** `AiWorld`: 8-16 Hz tick (`advance` from world ticks), per-tick path budget (excess waits in id order), distance LOD (think every 1/2/4 ticks), mob cap 64 (up to 128), waypoints, per-mob deterministic RNG; path searches run on a `JobPool` and apply in id order, so results do not depend on thread count. All AI state lives in `AiWorld` (server-authoritative friendly).
 - **[EXISTS]** Final-boss slot: `IBossSlot` (`allowDrop` drop gating, `surge` activity multiplier, `learnedScorer`), `SurgeSchedule`.
 - **[PROPOSED]** Wiring into LithoKraft (mob types, spawning, rendering, saving mobs), incremental (sliced) A*, script-defined behaviours.
@@ -221,17 +221,17 @@ flowchart TB
 ```mermaid
 sequenceDiagram
   participant App
-  participant Loader as ModLoader (proposed)
+  participant cLoader as ModLoader (proposed)
   participant Mod
   participant Reg as Registries
   participant Store as Storage
   App->>Loader: scan mods/, read mod.json
-  Loader->>Loader: check minApi, resolve deps, sort load order
+  cLoader->>Loader: check minApi, resolve deps, sort load order
   loop each mod in order
-    Loader->>Mod: create (native factory or script module)
+    cLoader->>Mod: create (native factory or script module)
     Mod->>Reg: onRegister: blocks, behaviours, payloads, actions, nodes
   end
-  Loader->>Reg: freeze (assign ids, read-only)
+  cLoader->>Reg: freeze (assign ids, read-only)
   App->>Store: open save: manifest + block-name palette
   Store-->>App: remap ids, warn on missing mods
   App->>Mod: onWorldLoad (dimension active)

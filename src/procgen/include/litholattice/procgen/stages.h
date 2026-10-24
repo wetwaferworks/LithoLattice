@@ -1,5 +1,5 @@
 // Built-in pipeline stages. Each is small and configured by value; generator_loader.h builds
-// them from JSON. Graph-driven stages hold the pipeline's NoiseGraph and an output index.
+// them from JSON. Graph-driven stages hold the pipeline's cNoiseGraph and an output index.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -21,11 +21,11 @@ namespace litholattice::procgen {
 class cGraphClimate final : public IClimateStage {
  public:
   /// outputs[p] = graph output index for parameter p, or -1.
-  cGraphClimate(std::shared_ptr<const NoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback = 0.5f);
+  cGraphClimate(std::shared_ptr<const cNoiseGraph> graph, std::array<int, kClimateParamCount> outputs, float fallback = 0.5f);
   void sample(StageContext& ctx) const override;
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   std::array<int, kClimateParamCount> outputs_;
   float fallback_;
 };
@@ -41,9 +41,9 @@ struct BiomePoint {
 
 /// Multi-noise selection: the biome whose point is nearest (weighted squared distance) to the
 /// column's climate. Ties go to the earlier biome.
-class MultiNoiseBiomeSelector final : public IBiomeSelector {
+class cMultiNoiseBiomeSel final : public IBiomeSel {
  public:
-  explicit MultiNoiseBiomeSelector(std::vector<BiomePoint> biomes);
+  explicit cMultiNoiseBiomeSel(std::vector<BiomePoint> biomes);
   uint8_t select(const ClimatePoint& climate) const override;
   size_t biomeCount() const override { return biomes_.size(); }
   const std::vector<BiomePoint>& biomes() const { return biomes_; }
@@ -61,7 +61,7 @@ class MultiNoiseBiomeSelector final : public IBiomeSelector {
 /// ColumnMaps::biomeWeight; the dominant (nearest) biome still goes into ColumnMaps::biome.
 /// Deterministic: a pure function of the climate point. General system: any dimension opts
 /// in through its generator JSON ("biomes": {"selector": {"type": "blended", ...}}).
-class cBlendedBiomeSel final : public IBiomeSelector {
+class cBlendedBiomeSel final : public IBiomeSel {
  public:
   /// blendRadius: climate-space distance with nonzero weight (> 0). blendCount: biomes kept
   /// per column, clamped to 2..4 by the loader.
@@ -80,13 +80,13 @@ class cBlendedBiomeSel final : public IBiomeSelector {
 // ---- terrain
 
 /// Solid from floor(graph output) down `depth` blocks (0 = down to y 0).
-class HeightmapTerrain final : public ITerrainStage {
+class cHeightmapTerrain final : public ITerrainStage {
  public:
-  HeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, int output, MaterialId material, int depth = 0);
+  cHeightmapTerrain(std::shared_ptr<const cNoiseGraph> graph, int output, MaterialId material, int depth = 0);
   void generate(StageContext& ctx) const override;
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   int output_;
   MaterialId material_;
   int depth_;
@@ -94,13 +94,13 @@ class HeightmapTerrain final : public ITerrainStage {
 
 /// 3D density: solid where the graph output is > 0, evaluated for y in [minY, maxY]; solid
 /// below minY, air above maxY. Allows overhangs and floating terrain.
-class DensityTerrain final : public ITerrainStage {
+class cDensityTerrain final : public ITerrainStage {
  public:
-  DensityTerrain(std::shared_ptr<const NoiseGraph> graph, int output, MaterialId material, int minY, int maxY);
+  cDensityTerrain(std::shared_ptr<const cNoiseGraph> graph, int output, MaterialId material, int minY, int maxY);
   void generate(StageContext& ctx) const override;
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   int output_;
   MaterialId material_;
   int minY_, maxY_;
@@ -110,7 +110,7 @@ class DensityTerrain final : public ITerrainStage {
 /// column's biome (ColumnMaps::biome, filled by the biome selector before terrain runs) picks
 /// the entry. Entries must cover every biome index the selector can produce; the generator
 /// loader enforces one entry per biome. Solid from floor(graph output) down `depth` blocks
-/// (0 = down to y 0), exactly like HeightmapTerrain.
+/// (0 = down to y 0), exactly like cHeightmapTerrain.
 ///
 /// Mountain support: an entry may name an extra `uplift` graph output (e.g. a `mountain_range`
 /// or `peak` node) scaled by `upliftAmplitude` blocks and added to the biome's base height
@@ -125,12 +125,12 @@ class cBiomeHeightmapTerrain final : public ITerrainStage {
     int upliftOutput = -1;      ///< optional extra graph output added to the height; -1 = none
     float upliftAmplitude = 1.f;  ///< scales the uplift output (blocks)
   };
-  cBiomeHeightmapTerrain(std::shared_ptr<const NoiseGraph> graph, std::vector<Entry> perBiome, int depth = 0);
+  cBiomeHeightmapTerrain(std::shared_ptr<const cNoiseGraph> graph, std::vector<Entry> perBiome, int depth = 0);
   void generate(StageContext& ctx) const override;
   size_t biomeCount() const { return perBiome_.size(); }
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   std::vector<Entry> perBiome_;
   int depth_;
 };
@@ -146,12 +146,12 @@ struct SurfaceLayers {
 
 /// Rewrites the top of each column with its biome's layers. With `topStateIsBiome`, the top
 /// block's state byte is the biome index (tints grass per biome).
-class LayeredSurface final : public ISurfaceRule {
+class cLayeredSurface final : public ISurfaceRule {
  public:
   /// ditherSeed salts the weight-proportioned palette dither (hash of column position).
   /// With unblended (one-hot) weights the dither always picks the dominant biome, so this
   /// is exactly the old behaviour.
-  LayeredSurface(std::vector<SurfaceLayers> perBiome, bool topStateIsBiome, uint64_t ditherSeed = 0);
+  cLayeredSurface(std::vector<SurfaceLayers> perBiome, bool topStateIsBiome, uint64_t ditherSeed = 0);
   void apply(StageContext& ctx) const override;
 
  private:
@@ -179,11 +179,11 @@ struct WormCaveSettings {
 /// worms of every chunk within reach (seeded from that chunk), so tunnels line up seamlessly.
 /// Per-biome density needs the pipeline's biome table: it is bound by onPipelineBuilt (every
 /// Builder::build pipeline does this); without a bound pipeline the density table is ignored.
-class WormCaveCarver final : public ICarver {
+class cWormCaveCarver final : public ICarver {
  public:
   /// Dominant biome-table index at a world column; bound to the pipeline by onPipelineBuilt.
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  explicit WormCaveCarver(WormCaveSettings s);
+  explicit cWormCaveCarver(WormCaveSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
@@ -195,7 +195,7 @@ class WormCaveCarver final : public ICarver {
 
 /// Long surface gashes that cut down from the terrain surface: a meandering path pinched at
 /// both ends, deepest and widest in the middle, with a V-shaped cross-section (sloped walls).
-/// Cross-chunk discipline mirrors WormCaveCarver: each chunk replays the ravines of every
+/// Cross-chunk discipline mirrors cWormCaveCarver: each chunk replays the ravines of every
 /// chunk within reach, seeded from that chunk, so gashes line up seamlessly. Ravines open at
 /// the surface by design, so surfaceMargin does not apply; bottomMargin floors the cut.
 struct RavineSettings {
@@ -208,12 +208,12 @@ struct RavineSettings {
   std::vector<float> density;    ///< per-biome density multiplier; missing entries = 1
 };
 
-class RavineCarver final : public ICarver {
+class cRavineCarver final : public ICarver {
  public:
   /// Dominant biome-table index at a world column; bound to the pipeline by onPipelineBuilt.
   using BiomeProbe = std::function<uint8_t(int32_t wx, int32_t wz)>;
-  RavineCarver();  // defaults, so {"type": "ravine"} keeps working
-  explicit RavineCarver(RavineSettings s);
+  cRavineCarver();  // defaults, so {"type": "ravine"} keeps working
+  explicit cRavineCarver(RavineSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   void setBiomeProbe(BiomeProbe probe) { probe_ = std::move(probe); }
@@ -226,7 +226,7 @@ class RavineCarver final : public ICarver {
 /// 3D-noise pocket caverns: large chambers on a coarse cell lattice (at most one candidate
 /// per cell), each an ellipsoid with noise-wobbled walls -- a guaranteed solid core plus a rim
 /// where a smooth value-noise field decides the boundary. Cross-chunk discipline mirrors
-/// WormCaveCarver: each chunk replays the cells within reach, seeded per cell, so chambers
+/// cWormCaveCarver: each chunk replays the cells within reach, seeded per cell, so chambers
 /// line up seamlessly. Per-biome density is bound by onPipelineBuilt like the worm carver.
 struct CavernSettings {
   int cellSize = 64;             ///< coarse lattice spacing in blocks
@@ -430,7 +430,7 @@ struct RiverSettings {
 /// candidates, so rivers begin in the hills) and walks the descending gradient of a routing
 /// height sampled from the graph (`routingOutput`, default "height"). The walk is a pure
 /// function of (dimensionSeed, origin cell): every chunk replays the origin cells within
-/// reach (like WormCaveCarver replays neighbouring worms) and only ever writes its own
+/// reach (like cWormCaveCarver replays neighbouring worms) and only ever writes its own
 /// columns, so rivers are deterministic, seeded, and chunk-pure. The walk never flows
 /// uphill: each step is checked against `uphillTol` with a few deflected retries, and the
 /// river stops at flat ground, the water table, or a peak it cannot get around.
@@ -452,7 +452,7 @@ struct RiverSettings {
 class cRiverCarver final : public ICarver {
  public:
   /// `heightOutput`: graph output index used for downhill routing (see caveat above).
-  cRiverCarver(std::shared_ptr<const NoiseGraph> graph, int heightOutput, RiverSettings s);
+  cRiverCarver(std::shared_ptr<const cNoiseGraph> graph, int heightOutput, RiverSettings s);
   void carve(StageContext& ctx) const override;
   void onPipelineBuilt(const cGenPipeline* pipeline) override;
   /// Override the biome probe (used for the per-biome spawn density). Bound to the
@@ -464,12 +464,12 @@ class cRiverCarver final : public ICarver {
   /// The river (possibly empty) spawned by the origin cell (cellX, cellZ): seeded start,
   /// downhill walk, water-table stop. A pure function of its inputs -- this is what the
   /// no-uphill-flow and determinism tests exercise directly. Thread-safe.
-  static std::vector<RiverPoint> traceRiver(const NoiseGraph& graph, int heightOutput,
+  static std::vector<RiverPoint> traceRiver(const cNoiseGraph& graph, int heightOutput,
                                            uint64_t dimensionSeed, int32_t cellX, int32_t cellZ,
                                            const RiverSettings& s, const BiomeProbe& probe);
 
  private:
-  std::shared_ptr<const NoiseGraph> graph_;
+  std::shared_ptr<const cNoiseGraph> graph_;
   int heightOutput_;
   RiverSettings s_;
   BiomeProbe probe_;

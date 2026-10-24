@@ -158,7 +158,7 @@ Json GraphDesc::toJson() const {
 
 // ---- compiled graph
 
-struct NoiseGraph::Compiled {
+struct cNoiseGraph::Compiled {
   struct Entry {
     std::unique_ptr<detail::cNode> node;
     std::vector<size_t> inputs;
@@ -169,11 +169,11 @@ struct NoiseGraph::Compiled {
   size_t cacheCount = 0;
 };
 
-NoiseGraph::NoiseGraph(Passkey, GraphDesc desc, uint64_t seed) : desc_(std::move(desc)), seed_(seed) {}
-NoiseGraph::~NoiseGraph() = default;
+cNoiseGraph::cNoiseGraph(Passkey, GraphDesc desc, uint64_t seed) : desc_(std::move(desc)), seed_(seed) {}
+cNoiseGraph::~cNoiseGraph() = default;
 
-std::shared_ptr<const NoiseGraph> NoiseGraph::compile(const GraphDesc& desc, uint64_t seed, std::string& err) {
-  auto g = std::make_shared<NoiseGraph>(Passkey{}, desc, seed);  // one allocation
+std::shared_ptr<const cNoiseGraph> cNoiseGraph::compile(const GraphDesc& desc, uint64_t seed, std::string& err) {
+  auto g = std::make_shared<cNoiseGraph>(Passkey{}, desc, seed);  // one allocation
   auto impl = std::make_unique<Compiled>();
   std::unordered_map<std::string, size_t> index;
   for (size_t i = 0; i < desc.nodes.size(); ++i) index.emplace(desc.nodes[i].name, i);
@@ -246,13 +246,13 @@ std::shared_ptr<const NoiseGraph> NoiseGraph::compile(const GraphDesc& desc, uin
   return g;
 }
 
-int NoiseGraph::outputIndex(std::string_view name) const {
+int cNoiseGraph::outputIndex(std::string_view name) const {
   for (size_t i = 0; i < desc_.outputs.size(); ++i)
     if (desc_.outputs[i].first == name) return int(i);
   return -1;
 }
 
-std::vector<std::string> NoiseGraph::outputNames() const {
+std::vector<std::string> cNoiseGraph::outputNames() const {
   std::vector<std::string> names;
   for (const auto& [name, node] : desc_.outputs) names.push_back(name);
   return names;
@@ -267,7 +267,7 @@ void GraphContext::bind(const PointsView& points) {
   }
 }
 
-const std::vector<float>& NoiseGraph::evalNode(size_t node, GraphContext& ctx) const {
+const std::vector<float>& cNoiseGraph::evalNode(size_t node, GraphContext& ctx) const {
   std::vector<float>& out = ctx.values_[node];
   if (ctx.stamps_[node] == ctx.epoch_) return out;
   const Compiled::Entry& e = impl_->entries[node];
@@ -290,7 +290,7 @@ const std::vector<float>& NoiseGraph::evalNode(size_t node, GraphContext& ctx) c
   return out;
 }
 
-void NoiseGraph::evaluate(int output, GraphContext& ctx, std::span<float> out) const {
+void cNoiseGraph::evaluate(int output, GraphContext& ctx, std::span<float> out) const {
   if (ctx.graph_ != this) {  // first use with this graph: size the scratch
     ctx.graph_ = this;
     ctx.values_.assign(impl_->entries.size(), {});
@@ -301,7 +301,7 @@ void NoiseGraph::evaluate(int output, GraphContext& ctx, std::span<float> out) c
   std::copy_n(v.begin(), std::min(v.size(), out.size()), out.begin());
 }
 
-float NoiseGraph::evaluateAt(int output, float x, float y, float z) const {
+float cNoiseGraph::evaluateAt(int output, float x, float y, float z) const {
   GraphContext ctx;
   const float w = 0;
   ctx.bind({{&x, 1}, {&y, 1}, {&z, 1}, {&w, 1}});

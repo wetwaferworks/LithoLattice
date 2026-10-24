@@ -34,7 +34,7 @@ class ILearnedScorer {
   virtual ~ILearnedScorer() = default;
   virtual std::optional<float> score(const AiContext& ctx, const UtilityAction& action) const = 0;
 };
-class NullLearnedScorer final : public ILearnedScorer {
+class cNullLearnedScorer final : public ILearnedScorer {
  public:
   std::optional<float> score(const AiContext&, const UtilityAction&) const override { return std::nullopt; }
 };

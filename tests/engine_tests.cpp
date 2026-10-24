@@ -5773,7 +5773,7 @@ void testAi() {
   std::vector<UtilityAction> acts = {{"eat", {[](const AiContext&) { return 0.9f; }}, 1.f, {}},
                                      {"flee", {[](const AiContext&) { return 0.2f; }}, 1.f, {}}};
   Flip flip;
-  NullLearnedScorer none;
+  cNullLearnedScorer none;
   check(pickUtility(ctx, acts) == 0 && pickUtility(ctx, acts, &none) == 0 && pickUtility(ctx, acts, &flip) == 1,
         "ai: utility AI picks the best score; the learned-model hook can override it (stub = no change)");
   int ran = 0;

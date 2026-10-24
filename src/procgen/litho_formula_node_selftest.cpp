@@ -49,7 +49,7 @@ void nodeChecks(Checker& check) {
   std::string err;
   GraphDesc desc;
   check(GraphDesc::parse(kSphereGraph, desc, err), "lithoform: sphere graph parses (" + err + ")");
-  auto g = NoiseGraph::compile(desc, 1234, err);
+  auto g = cNoiseGraph::compile(desc, 1234, err);
   check(g != nullptr, "lithoform: sphere graph compiles (" + err + ")");
   if (!g) return;
   const int out = g->outputIndex("d");
@@ -83,7 +83,7 @@ void nodeChecks(Checker& check) {
     "outputs": {"d": "s"}
   })";
   check(GraphDesc::parse(starGraph, desc2, err), "lithoform: star graph parses (" + err + ")");
-  auto g2 = NoiseGraph::compile(desc2, 99, err);
+  auto g2 = cNoiseGraph::compile(desc2, 99, err);
   check(g2 != nullptr, "lithoform: star graph compiles (" + err + ")");
   if (g2) {
     const int o2 = g2->outputIndex("d");
@@ -119,7 +119,7 @@ void nodeChecks(Checker& check) {
     "outputs": {"d": "c"}
   })";
   check(GraphDesc::parse(compGraph, desc3, err), "lithoform: composed graph parses (" + err + ")");
-  auto g3 = NoiseGraph::compile(desc3, 7, err);
+  auto g3 = cNoiseGraph::compile(desc3, 7, err);
   check(g3 != nullptr, "lithoform: composed graph compiles (" + err + ")");
   if (g3) {
     const int o3 = g3->outputIndex("d");
@@ -142,7 +142,7 @@ void nodeChecks(Checker& check) {
                     "radius": 8, "falloff": 0}},
     "outputs": {"d": "m"}
   })";
-  auto g4 = GraphDesc::parse(maskGraph, desc4, err) ? NoiseGraph::compile(desc4, 1, err) : nullptr;
+  auto g4 = GraphDesc::parse(maskGraph, desc4, err) ? cNoiseGraph::compile(desc4, 1, err) : nullptr;
   check(g4 != nullptr, "lithoform: hard-mask graph compiles (" + err + ")");
   if (g4) {
     const int o4 = g4->outputIndex("d");
@@ -159,7 +159,7 @@ void nodeChecks(Checker& check) {
                     "radius": 8, "falloff": 1, "rotation": [0, 0, 1.57079632679]}},
     "outputs": {"d": "r"}
   })";
-  auto g5 = GraphDesc::parse(rotGraph, desc5, err) ? NoiseGraph::compile(desc5, 1, err) : nullptr;
+  auto g5 = GraphDesc::parse(rotGraph, desc5, err) ? cNoiseGraph::compile(desc5, 1, err) : nullptr;
   check(g5 != nullptr, "lithoform: rotated graph compiles (" + err + ")");
   if (g5) {
     const int o5 = g5->outputIndex("d");
@@ -172,7 +172,7 @@ void nodeChecks(Checker& check) {
                       "radius": 8, "falloff": 1}},
       "outputs": {"d": "r"}
     })";
-    auto g6 = GraphDesc::parse(plainGraph, desc6, err) ? NoiseGraph::compile(desc6, 1, err) : nullptr;
+    auto g6 = GraphDesc::parse(plainGraph, desc6, err) ? cNoiseGraph::compile(desc6, 1, err) : nullptr;
     check(g6 != nullptr, "lithoform: unrotated twin compiles (" + err + ")");
     if (g6) {
       const int o6 = g6->outputIndex("d");
@@ -190,25 +190,25 @@ void nodeChecks(Checker& check) {
   check(!GraphDesc::parse(
             R"({"nodes": {"b": {"type": "lithoform", "radius": 0}}, "outputs": {"d": "b"}})", bad,
             err) ||
-            !NoiseGraph::compile(bad, 1, err),
+            !cNoiseGraph::compile(bad, 1, err),
         "lithoform: radius 0 rejected");
   GraphDesc bad2;
   check(!GraphDesc::parse(
             R"({"nodes": {"b": {"type": "lithoform", "falloff": -1}}, "outputs": {"d": "b"}})",
             bad2, err) ||
-            !NoiseGraph::compile(bad2, 1, err),
+            !cNoiseGraph::compile(bad2, 1, err),
         "lithoform: negative falloff rejected");
   GraphDesc bad3;
   check(!GraphDesc::parse(
             R"({"nodes": {"b": {"type": "lithoform", "theta": {"a": 1}}}, "outputs": {"d": "b"}})",
             bad3, err) ||
-            !NoiseGraph::compile(bad3, 1, err),
+            !cNoiseGraph::compile(bad3, 1, err),
         "lithoform: incomplete theta object rejected");
   GraphDesc bad4;
   check(!GraphDesc::parse(
             R"({"nodes": {"b": {"type": "lithoform", "rotation": [0, 0]}}, "outputs": {"d": "b"}})",
             bad4, err) ||
-            !NoiseGraph::compile(bad4, 1, err),
+            !cNoiseGraph::compile(bad4, 1, err),
         "lithoform: malformed rotation rejected");
 }
 
@@ -268,7 +268,7 @@ void voxelizerAgreementChecks(Checker& check) {
   })";
   check(GraphDesc::parse(graphJson, desc, err),
         "lithoform-vs-voxelizer: starfish graph parses (" + err + ")");
-  auto g = NoiseGraph::compile(desc, 1, err);
+  auto g = cNoiseGraph::compile(desc, 1, err);
   check(g != nullptr, "lithoform-vs-voxelizer: starfish graph compiles (" + err + ")");
   if (!g) return;
   const int out = g->outputIndex("d");

@@ -1,8 +1,8 @@
 // Composable noise node graph. A graph is described in JSON (see docs/PROCGEN.md), normalized
-// into a GraphDesc, then compiled with a seed into an immutable NoiseGraph that evaluates its
+// into a GraphDesc, then compiled with a seed into an immutable cNoiseGraph that evaluates its
 // named outputs over batches of world positions (structure-of-arrays).
 //
-//   GraphDesc::parse(text) -> GraphDesc -> NoiseGraph::compile(desc, seed) -> evaluate(output, ctx)
+//   GraphDesc::parse(text) -> GraphDesc -> cNoiseGraph::compile(desc, seed) -> evaluate(output, ctx)
 //
 // cNode types: constant, coordinate, noise, add, multiply, min, max, clamp, curve, select, blend,
 // terrace, scale_bias, cache, wave, abs, invert, power, fractal, warp (the last two are the
@@ -45,7 +45,7 @@ struct GraphDesc {
   Json toJson() const;
 };
 
-class NoiseGraph;
+class cNoiseGraph;
 
 /// Per-thread evaluation scratch: one value buffer per node, reused while the same points stay
 /// bound, plus the contents of cache nodes. Not thread-safe; give each worker its own.
@@ -61,7 +61,7 @@ class GraphContext {
   const PointsView& points() const { return points_; }
 
  private:
-  friend class NoiseGraph;
+  friend class cNoiseGraph;
   struct CacheEntry {
     uint64_t key = 0;
     std::vector<float> values;
@@ -69,27 +69,27 @@ class GraphContext {
   PointsView points_;
   uint64_t pointsKey_ = 0;
   uint32_t epoch_ = 1;
-  const NoiseGraph* graph_ = nullptr;
+  const cNoiseGraph* graph_ = nullptr;
   std::vector<std::vector<float>> values_;
   std::vector<uint32_t> stamps_;
   std::vector<CacheEntry> caches_;
 };
 
 /// A compiled, immutable graph. evaluate() is const and thread-safe given distinct contexts.
-class NoiseGraph {
+class cNoiseGraph {
  public:
   /// Builds the node objects; noise nodes seed from `seed` and their own seed parameter (or
   /// node name). Returns nullptr and sets `err` on unknown references or cycles.
-  static std::shared_ptr<const NoiseGraph> compile(const GraphDesc& desc, uint64_t seed, std::string& err);
-  /// Construction token: only NoiseGraph's own factory can make one, so it can use make_unique / make_shared.
+  static std::shared_ptr<const cNoiseGraph> compile(const GraphDesc& desc, uint64_t seed, std::string& err);
+  /// Construction token: only cNoiseGraph's own factory can make one, so it can use make_unique / make_shared.
   class Passkey {
-    friend class NoiseGraph;
+    friend class cNoiseGraph;
     Passkey() = default;
   };
-  NoiseGraph(Passkey, GraphDesc desc, uint64_t seed);
-  ~NoiseGraph();
-  NoiseGraph(const NoiseGraph&) = delete;
-  NoiseGraph& operator=(const NoiseGraph&) = delete;
+  cNoiseGraph(Passkey, GraphDesc desc, uint64_t seed);
+  ~cNoiseGraph();
+  cNoiseGraph(const cNoiseGraph&) = delete;
+  cNoiseGraph& operator=(const cNoiseGraph&) = delete;
 
   /// Index of a named output, or -1.
   int outputIndex(std::string_view name) const;
