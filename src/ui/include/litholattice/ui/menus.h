@@ -1,4 +1,4 @@
-// Menus: Menu (a popup list of MenuItems with shortcuts, checks, separators and submenus),
+// Menus: cMenu (a popup list of MenuItems with shortcuts, checks, separators and submenus),
 // cMenuBar (top-level titles that open menus) and ContextMenu (a menu at the pointer).
 // Items run a C++ action and / or a script handler; the menu closes afterwards.
 #pragma once
@@ -22,12 +22,12 @@ struct MenuItem {
   static MenuItem separatorItem() { MenuItem m; m.separator = true; return m; }
 };
 
-/// A popup menu. Open it with Menu::open (or cMenuBar / ContextMenu do it).
-class Menu : public Widget {
+/// A popup menu. Open it with cMenu::open (or cMenuBar / ContextMenu do it).
+class cMenu : public Widget {
  public:
-  explicit Menu(std::vector<MenuItem> items);
+  explicit cMenu(std::vector<MenuItem> items);
   /// Opens `items` as a popup with its top-left at `pos`; returns the menu.
-  static Menu& open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos);
+  static cMenu& open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos);
   const std::vector<MenuItem>& items() const { return items_; }
   int highlighted() const { return highlight_; }
   /// Runs item `index` (action, script, then closes the menu chain). False if disabled.
@@ -53,8 +53,8 @@ class Menu : public Widget {
   void step(int dir);
   std::vector<MenuItem> items_;
   int highlight_ = -1;
-  Menu* child_ = nullptr;   ///< open submenu
-  Menu* parentMenu_ = nullptr;
+  cMenu* child_ = nullptr;   ///< open submenu
+  cMenu* parentMenu_ = nullptr;
 };
 
 /// Horizontal bar of menu titles. Click (or Enter / Down) opens a menu below its title; while a
@@ -81,12 +81,12 @@ class cMenuBar : public Widget {
   int titleAt(Vec2 p) const;
   std::vector<std::pair<std::string, std::vector<MenuItem>>> menus_;
   int open_ = 0;
-  Menu* openMenu_ = nullptr;
+  cMenu* openMenu_ = nullptr;
 };
 
 /// Opens a context menu at the pointer (call from a "rightclick" handler).
 struct ContextMenu {
-  static Menu& open(UiRoot& ui, Vec2 pointer, std::vector<MenuItem> items) { return Menu::open(ui, std::move(items), pointer); }
+  static cMenu& open(UiRoot& ui, Vec2 pointer, std::vector<MenuItem> items) { return cMenu::open(ui, std::move(items), pointer); }
 };
 
 }  // namespace litholattice::ui

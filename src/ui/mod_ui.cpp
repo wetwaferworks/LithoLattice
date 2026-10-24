@@ -86,33 +86,33 @@ bool validateTree(const Widget& root, std::string& err) {
 
 }  // namespace
 
-ModPanel::ModPanel(std::string modId, std::string title)
-    : Panel(kModPanelStyleClass), modId_(std::move(modId)), title_(std::move(title)) {
-  body_ = &add<StackPanel>(Orientation::Vertical, 6.f);
+cModPanel::cModPanel(std::string modId, std::string title)
+    : cPanel(kModPanelStyleClass), modId_(std::move(modId)), title_(std::move(title)) {
+  body_ = &add<cStackPanel>(Orientation::Vertical, 6.f);
 }
 
-float ModPanel::badgeHeight() const {
+float cModPanel::badgeHeight() const {
   return theme().glyphSize(style().textScale).y + 8.f;
 }
 
-Rect ModPanel::badgeRect() const {
+Rect cModPanel::badgeRect() const {
   const float h = badgeHeight() + style().padding.top;
   return {rect().x, rect().y, rect().w, h};
 }
 
-void ModPanel::arrange(const Theme& theme) {
+void cModPanel::arrange(const Theme& theme) {
   const Rect c = contentRect();
   const float strip = badgeHeight() + style().padding.top;
   body_->place({c.x, c.y + strip, c.w, std::max(0.f, c.h - strip)}, theme);
 }
 
-void ModPanel::paint(Painter& p) const {
+void cModPanel::paint(Painter& p) const {
   Widget::paint(p);   // background + border of the "mod_panel" frame treatment
   paintChildren(p);   // the mod's content, confined below the badge strip
   paintBadge(p);      // LAST: nothing the mod owns can cover or remove it
 }
 
-void ModPanel::paintBadge(Painter& p) const {
+void cModPanel::paintBadge(Painter& p) const {
   const Rect bar = badgeRect();
   if (bar.empty()) return;
   p.fill(bar, kBadgeStripBg);
@@ -140,7 +140,7 @@ bool ModUiFactory::isValidModId(std::string_view id) {
   return true;
 }
 
-std::unique_ptr<ModPanel> ModUiFactory::createPanel(const std::string& modId,
+std::unique_ptr<cModPanel> ModUiFactory::createPanel(const std::string& modId,
                                                    const std::string& panelId,
                                                    const std::string& title,
                                                    const std::string& bodyJson,
@@ -158,7 +158,7 @@ std::unique_ptr<ModPanel> ModUiFactory::createPanel(const std::string& modId,
     return nullptr;
   }
 
-  auto panel = std::make_unique<ModPanel>(modId, title);
+  auto panel = std::make_unique<cModPanel>(modId, title);
   panel->setId(panelId);
 
   if (!bodyJson.empty()) {
@@ -183,11 +183,11 @@ std::unique_ptr<ModPanel> ModUiFactory::createPanel(const std::string& modId,
   return panel;
 }
 
-ModPanel& ModUiFactory::attachToRoot(UiRoot& ui, std::unique_ptr<ModPanel> panel) {
+cModPanel& ModUiFactory::attachToRoot(UiRoot& ui, std::unique_ptr<cModPanel> panel) {
   // Main layer only. Modals and popups stay engine-exclusive: a mod can never
   // seize the screen with a fake system prompt.
   Widget& w = ui.root().addChild(std::move(panel));
-  return static_cast<ModPanel&>(w);
+  return static_cast<cModPanel&>(w);
 }
 
 }  // namespace litholattice::ui

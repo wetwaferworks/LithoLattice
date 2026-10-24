@@ -5,8 +5,8 @@ namespace litholattice::ui {
 
 Dialog::Dialog(std::string title, Vec2 size) : Widget("panel"), title_(std::move(title)) {
   layout() = Layout::at({0.5f, 0.5f}, {0.5f, 0.5f}, {}, size);
-  body_ = &add<StackPanel>(Orientation::Vertical, 6.f);
-  buttons_ = &add<StackPanel>(Orientation::Horizontal, 6.f);
+  body_ = &add<cStackPanel>(Orientation::Vertical, 6.f);
+  buttons_ = &add<cStackPanel>(Orientation::Horizontal, 6.f);
   buttons_->setStretch(false);
 }
 
@@ -78,12 +78,12 @@ void Dialog::paint(Painter& p) const {
   p.textIn(bar.inset({s.padding.left, s.padding.top * 0.5f, 0, 0}), title_, s.text, false, s.textScale);
 }
 
-Vec2 Tooltip::measure(const Theme& theme) const {
+Vec2 cTooltip::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   return {theme.textWidth(text_, s.textScale) + s.padding.horizontal(), theme.glyphSize(s.textScale).y + s.padding.vertical()};
 }
 
-void Tooltip::paint(Painter& p) const {
+void cTooltip::paint(Painter& p) const {
   Widget::paint(p);
   const Style& s = style();
   p.text({contentRect().x, contentRect().y}, text_, s.text, s.textScale);

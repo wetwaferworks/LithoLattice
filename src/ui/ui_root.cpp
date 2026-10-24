@@ -18,7 +18,7 @@ bool isInside(const Widget* w, const Widget* ancestor) {
 }  // namespace
 
 UiRoot::UiRoot(Theme theme)
-    : theme_(std::move(theme)), root_(std::make_unique<Widget>("root")), tooltip_(std::make_unique<Tooltip>()) {
+    : theme_(std::move(theme)), root_(std::make_unique<Widget>("root")), tooltip_(std::make_unique<cTooltip>()) {
   root_->attach(this);
   tooltip_->attach(this);
 }

@@ -24,19 +24,19 @@ Vec2 textBlock(std::string_view text) {
 
 }  // namespace
 
-// ---- Label
+// ---- cLabel
 
-Label::Label(std::string text, std::string styleClass) : Widget(std::move(styleClass)), text_(std::move(text)) {}
+cLabel::cLabel(std::string text, std::string styleClass) : Widget(std::move(styleClass)), text_(std::move(text)) {}
 
-Vec2 Label::measure(const Theme& theme) const {
+Vec2 cLabel::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   const Vec2 g = theme.glyphSize(s.textScale), b = textBlock(text_);
   return {b.x * g.x + s.padding.horizontal(), b.y * g.y + s.padding.vertical()};
 }
 
-Widget* Label::hitTest(Vec2 p) { return tooltip().empty() ? nullptr : Widget::hitTest(p); }
+Widget* cLabel::hitTest(Vec2 p) { return tooltip().empty() ? nullptr : Widget::hitTest(p); }
 
-void Label::paint(Painter& p) const {
+void cLabel::paint(Painter& p) const {
   Widget::paint(p);
   const Style& s = style();
   const Rect c = contentRect();
@@ -320,24 +320,24 @@ void cNumberField::paint(Painter& p) const {
   p.textIn({m.right(), rect().y, pl.x - m.right(), rect().h}, shown, typing_.empty() ? s.text : s.accent, true, s.textScale);
 }
 
-// ---- Slot
+// ---- cSlot
 
-Slot::Slot(Vec2 size) : Widget("slot"), size_(size) { setFocusable(true); }
+cSlot::cSlot(Vec2 size) : Widget("slot"), size_(size) { setFocusable(true); }
 
-bool Slot::onPointerDown(const UiEvent& e) {
+bool cSlot::onPointerDown(const UiEvent& e) {
   if (e.button == PointerButton::Left) emit("click");
   else if (e.button == PointerButton::Right) emit("rightclick");
   else return false;
   return true;
 }
 
-bool Slot::onKey(const UiEvent& e) {
+bool cSlot::onKey(const UiEvent& e) {
   if (!isActivateKey(e)) return false;
   emit("click");
   return true;
 }
 
-void Slot::paint(Painter& p) const {
+void cSlot::paint(Painter& p) const {
   const Style& s = style();
   const float pad = std::max(2.f, size_.x * 0.15f);
   if (selected_) p.fill(rect().inset(Edges::all(-3)), s.accent);

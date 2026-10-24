@@ -55,8 +55,8 @@ struct TypeInfo {
 const std::map<std::string, TypeInfo, std::less<>>& types() {
   static const std::map<std::string, TypeInfo, std::less<>> kTypes = {
       {"widget", {{}, [](const Json&) { return std::make_unique<Widget>(); }}},
-      {"panel", {{}, [](const Json&) { return std::make_unique<Panel>(); }}},
-      {"label", {{"text"}, [](const Json& j) { return std::make_unique<Label>(text(j, "text")); }, false}},
+      {"panel", {{}, [](const Json&) { return std::make_unique<cPanel>(); }}},
+      {"label", {{"text"}, [](const Json& j) { return std::make_unique<cLabel>(text(j, "text")); }, false}},
       {"button", {{"text"}, [](const Json& j) { return std::make_unique<Button>(text(j, "text")); }, false}},
       {"image",
        {{"image", "size"}, [](const Json& j) { return std::make_unique<Image>(text(j, "image"), vec2(j.get("size"), {32, 32})); }, false}},
@@ -83,7 +83,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
         },
         false}},
       {"slot", {{"size", "image"}, [](const Json& j) {
-                  auto s = std::make_unique<Slot>(vec2(j.get("size"), {40, 40}));
+                  auto s = std::make_unique<cSlot>(vec2(j.get("size"), {40, 40}));
                   s->setIcon(text(j, "image"));
                   return s;
                 }, false}},
@@ -92,7 +92,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
                   }, false}},
       {"stack",
        {{"orientation", "spacing"},
-        [](const Json& j) { return std::make_unique<StackPanel>(orientation(j, Orientation::Vertical), float(j.getNum("spacing", 4))); }}},
+        [](const Json& j) { return std::make_unique<cStackPanel>(orientation(j, Orientation::Vertical), float(j.getNum("spacing", 4))); }}},
       {"grid",
        {{"columns", "cell", "spacing"},
         [](const Json& j) {

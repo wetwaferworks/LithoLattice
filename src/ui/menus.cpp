@@ -6,21 +6,21 @@
 
 namespace litholattice::ui {
 
-// ---- Menu
+// ---- cMenu
 
-Menu::Menu(std::vector<MenuItem> items) : Widget("menu"), items_(std::move(items)) { setFocusable(true); }
+cMenu::cMenu(std::vector<MenuItem> items) : Widget("menu"), items_(std::move(items)) { setFocusable(true); }
 
-Menu& Menu::open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos) {
-  auto menu = std::make_unique<Menu>(std::move(items));
+cMenu& cMenu::open(UiRoot& ui, std::vector<MenuItem> items, Vec2 pos) {
+  auto menu = std::make_unique<cMenu>(std::move(items));
   menu->setLayout(Layout::at({0, 0}, {0, 0}, pos));
-  Menu& m = static_cast<Menu&>(ui.openPopup(std::move(menu)));
+  cMenu& m = static_cast<cMenu&>(ui.openPopup(std::move(menu)));
   ui.setFocus(&m);
   return m;
 }
 
-float Menu::rowHeight() const { return theme().glyphSize(style().textScale).y + 6; }
+float cMenu::rowHeight() const { return theme().glyphSize(style().textScale).y + 6; }
 
-Vec2 Menu::measure(const Theme& theme) const {
+Vec2 cMenu::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   const Vec2 g = theme.glyphSize(s.textScale);
   size_t label = 4, shortcut = 0;
@@ -34,31 +34,31 @@ Vec2 Menu::measure(const Theme& theme) const {
   return {float(2 + label + 3 + std::max<size_t>(shortcut, 1)) * g.x + s.padding.horizontal(), h + s.padding.vertical()};
 }
 
-Rect Menu::rowRect(int i) const {
+Rect cMenu::rowRect(int i) const {
   const Rect c = contentRect();
   float y = c.y;
   for (int k = 0; k < i; ++k) y += items_[size_t(k)].separator ? 6 : rowHeight();
   return {c.x, y, c.w, items_[size_t(i)].separator ? 6 : rowHeight()};
 }
 
-int Menu::rowAt(Vec2 p) const {
+int cMenu::rowAt(Vec2 p) const {
   for (int i = 0; i < int(items_.size()); ++i)
     if (rowRect(i).contains(p)) return items_[size_t(i)].separator ? -1 : i;
   return -1;
 }
 
-void Menu::openSubmenu(int index) {
+void cMenu::openSubmenu(int index) {
   if (child_ && ui() && ui()->isPopupOpen(child_)) ui()->closePopup(*child_);
   child_ = nullptr;
   if (index < 0 || items_[size_t(index)].submenu.empty() || !ui()) return;
   const Rect r = rowRect(index);
-  Menu& sub = open(*ui(), items_[size_t(index)].submenu, {rect().right() - 2, r.y - style().padding.top});
+  cMenu& sub = open(*ui(), items_[size_t(index)].submenu, {rect().right() - 2, r.y - style().padding.top});
   sub.parentMenu_ = this;
   child_ = &sub;
   ui()->setFocus(this);  // keep keyboard here until the user enters the submenu
 }
 
-bool Menu::activate(int index) {
+bool cMenu::activate(int index) {
   if (index < 0 || index >= int(items_.size())) return false;
   const MenuItem item = items_[size_t(index)];  // copy: closing may release this menu
   if (item.separator || !item.enabled) return false;
@@ -70,7 +70,7 @@ bool Menu::activate(int index) {
     }
     return true;
   }
-  Menu* top = this;
+  cMenu* top = this;
   while (top->parentMenu_) top = top->parentMenu_;
   const std::function<void()> done = top->onDone;
   UiRoot* root = ui();
@@ -81,21 +81,21 @@ bool Menu::activate(int index) {
   return true;
 }
 
-bool Menu::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left || e.button == PointerButton::Right; }
+bool cMenu::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left || e.button == PointerButton::Right; }
 
-void Menu::onPointerUp(const UiEvent& e) {
+void cMenu::onPointerUp(const UiEvent& e) {
   const int i = rowAt(e.pos);
   if (i >= 0) activate(i);
 }
 
-void Menu::onPointerMove(const UiEvent& e) {
+void cMenu::onPointerMove(const UiEvent& e) {
   const int i = rowAt(e.pos);
   if (i == highlight_ || i < 0) return;
   highlight_ = i;
   openSubmenu(items_[size_t(i)].submenu.empty() ? -1 : i);
 }
 
-void Menu::step(int dir) {
+void cMenu::step(int dir) {
   const int n = int(items_.size());
   for (int k = 1; k <= n; ++k) {
     const int i = ((highlight_ < 0 ? (dir > 0 ? -1 : 0) : highlight_) + dir * k + n * 2) % n;
@@ -106,7 +106,7 @@ void Menu::step(int dir) {
   }
 }
 
-bool Menu::onKey(const UiEvent& e) {
+bool cMenu::onKey(const UiEvent& e) {
   switch (e.key) {
     case Key::Up: step(-1); return true;
     case Key::Down: step(1); return true;
@@ -125,7 +125,7 @@ bool Menu::onKey(const UiEvent& e) {
     case Key::Left:
     case Key::Escape:
       if (parentMenu_ && ui()) {
-        Menu* parent = parentMenu_;
+        cMenu* parent = parentMenu_;
         ui()->closePopup(*this);
         parent->child_ = nullptr;
         ui()->setFocus(parent);
@@ -144,7 +144,7 @@ bool Menu::onKey(const UiEvent& e) {
   }
 }
 
-void Menu::paint(Painter& p) const {
+void cMenu::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), s.background);
   p.frame(rect(), s.border, s.borderWidth);
@@ -195,7 +195,7 @@ void cMenuBar::openMenu(int index) {
   if (index < 0 || index >= count() || !ui()) return;
   open_ = index;
   const Rect t = titleRect(index);
-  openMenu_ = &Menu::open(*ui(), menus_[size_t(index)].second, {t.x, t.bottom()});
+  openMenu_ = &cMenu::open(*ui(), menus_[size_t(index)].second, {t.x, t.bottom()});
   openMenu_->onDone = [this] { openMenu_ = nullptr; };
   openMenu_->onNavigate = [this](int dir) { openMenu((open_ + dir + count()) % count()); };
 }
@@ -241,7 +241,7 @@ void cMenuBar::paint(Painter& p) const {
   }
 }
 
-// ---- cDropdown (a button + a Menu of its items)
+// ---- cDropdown (a button + a cMenu of its items)
 
 cDropdown::cDropdown(std::vector<std::string> items, int selected) : Widget("button"), items_(std::move(items)) {
   setFocusable(true);
@@ -270,7 +270,7 @@ void cDropdown::open() {
     m.action = [this, i] { setSelected(i, true); };
     list.push_back(std::move(m));
   }
-  Menu& m = Menu::open(*ui(), std::move(list), {rect().x, rect().bottom()});
+  cMenu& m = cMenu::open(*ui(), std::move(list), {rect().x, rect().bottom()});
   m.layout().minSize = {rect().w, 0};
   popup_ = &m;
 }

@@ -1,4 +1,4 @@
-// Layout containers and scrolling: StackPanel (vertical / horizontal), cGridPanel, cScrollBar,
+// Layout containers and scrolling: cStackPanel (vertical / horizontal), cGridPanel, cScrollBar,
 // cScrollView, cSplitter, cTabView.
 #pragma once
 #include <memory>
@@ -13,12 +13,12 @@ enum class Orientation { Vertical, Horizontal };
 /// Children one after another with `spacing`; along the axis each child gets its size (or
 /// layout().size) plus a share of the leftover space by layout().flex; across the axis it
 /// stretches (or keeps its size when `stretch` is false). Child margins are honoured.
-class StackPanel : public Widget {
+class cStackPanel : public Widget {
  public:
-  explicit StackPanel(Orientation o = Orientation::Vertical, float spacing = 4, std::string styleClass = "stack");
+  explicit cStackPanel(Orientation o = Orientation::Vertical, float spacing = 4, std::string styleClass = "stack");
   Orientation orientation() const { return orientation_; }
-  StackPanel& setSpacing(float s) { spacing_ = s; return *this; }
-  StackPanel& setStretch(bool s) { stretch_ = s; return *this; }
+  cStackPanel& setSpacing(float s) { spacing_ = s; return *this; }
+  cStackPanel& setStretch(bool s) { stretch_ = s; return *this; }
   Vec2 measure(const Theme& theme) const override;
 
  protected:

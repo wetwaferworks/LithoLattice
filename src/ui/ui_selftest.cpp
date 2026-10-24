@@ -94,15 +94,15 @@ void key(UiRoot& ui, Key k, uint8_t mods = kModNone) { ui.handleEvent(UiEvent::k
 void testLayout(Checker& check) {
   UiRoot ui;
   Widget& root = ui.root();
-  auto& filled = root.add<Panel>().setLayout(Layout::fill({10, 20, 30, 40}));
+  auto& filled = root.add<cPanel>().setLayout(Layout::fill({10, 20, 30, 40}));
   auto& boxed = root.add<Widget>().setLayout(Layout::at({0.5f, 1.f}, {0.5f, 1.f}, {0, -8}, {100, 50}));
-  auto& stack = root.add<StackPanel>(Orientation::Vertical, 5.f).setLayout(Layout::at({0, 0}, {0, 0}, {0, 0}, {200, 300}));
+  auto& stack = root.add<cStackPanel>(Orientation::Vertical, 5.f).setLayout(Layout::at({0, 0}, {0, 0}, {0, 0}, {200, 300}));
   auto& a = stack.add<Widget>().setLayout(Layout::sized({0, 40}));
   Layout lb = Layout::sized({0, 20}, 1.f);
   lb.margin = {2, 3, 4, 5};
   auto& b = stack.add<Widget>().setLayout(lb);
   auto& c = stack.add<Widget>().setLayout(Layout::sized({0, 10}, 3.f));
-  auto& row = root.add<StackPanel>(Orientation::Horizontal, 0.f).setLayout(Layout::at({1, 0}, {1, 0}, {}, {90, 20}));
+  auto& row = root.add<cStackPanel>(Orientation::Horizontal, 0.f).setLayout(Layout::at({1, 0}, {1, 0}, {}, {90, 20}));
   auto& r0 = row.add<Widget>().setLayout(Layout::sized({30, 0}));
   auto& r1 = row.add<Widget>().setLayout(Layout::sized({0, 0}, 1.f));
   auto& grid = root.add<cGridPanel>(3, Vec2{10, 10}, 2.f).setLayout(Layout::at({0, 0}, {0, 0}, {500, 500}));
@@ -117,11 +117,11 @@ void testLayout(Checker& check) {
   check(same(r0.rect(), 710, 0, 30, 20) && same(r1.rect(), 740, 0, 60, 20), "horizontal stack: fixed + flex child, right anchored");
   const Rect g4 = grid.children()[4]->rect();
   check(same(g4, 512, 512, 10, 10) && near(grid.measure(ui.theme()).x, 34), "grid: row-major cells with spacing " + str(g4));
-  auto& padded = root.add<Panel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 100}));
+  auto& padded = root.add<cPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 100}));
   auto& inner = padded.add<Widget>();
   ui.layout({800, 600});
   check(same(inner.rect(), 8, 8, 84, 84), "panel padding (theme) insets children " + str(inner.rect()));
-  Label& lbl = root.add<Label>("ab\nabcd");
+  cLabel& lbl = root.add<cLabel>("ab\nabcd");
   check(near(lbl.measure(ui.theme()).x, 32) && near(lbl.measure(ui.theme()).y, 32), "label measures multi-line text");
 }
 
@@ -149,9 +149,9 @@ void testTheme(Checker& check) {
 
 void testFocus(Checker& check) {
   UiRoot ui;
-  auto& stack = ui.root().add<StackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 200}));
+  auto& stack = ui.root().add<cStackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {100, 200}));
   auto& b1 = stack.add<Button>("one");
-  auto& label = stack.add<Label>("not focusable");
+  auto& label = stack.add<cLabel>("not focusable");
   auto& b2 = stack.add<Button>("two");
   auto& b3 = stack.add<Button>("three");
   ui.layout({800, 600});
@@ -174,8 +174,8 @@ void testFocus(Checker& check) {
 void testNavigation(Checker& check) {
   UiRoot ui;
   auto& grid = ui.root().add<cGridPanel>(3, Vec2{40, 40}, 4.f);
-  std::vector<Slot*> slots;
-  for (int i = 0; i < 9; ++i) slots.push_back(&grid.add<Slot>());
+  std::vector<cSlot*> slots;
+  for (int i = 0; i < 9; ++i) slots.push_back(&grid.add<cSlot>());
   ui.layout({800, 600});
   slots[4]->focus();
   key(ui, Key::Right);
@@ -287,7 +287,7 @@ void testEvents(Checker& check) {
   UiRoot ui;
   RecordingScripts scripts;
   ui.setScriptHost(&scripts);
-  auto& stack = ui.root().add<StackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {200, 400}));
+  auto& stack = ui.root().add<cStackPanel>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {200, 400}));
   auto& btn = stack.add<Button>("Go");
   btn.setId("go");
   int clicks = 0;
@@ -402,12 +402,12 @@ void testLayers(Checker& check) {
   const bool switched = bar.openIndex() == 1;
   click(ui, {700, 500});  // outside: closes, not passed on
   check(switched && !ui.popupOpen(), "menubar: Right switches menus, outside click closes");
-  Menu& ctx = ContextMenu::open(ui, {300, 300}, {quit});
+  cMenu& ctx = ContextMenu::open(ui, {300, 300}, {quit});
   ctx.activate(0);
   check(scripts.calls.size() == 1 && scripts.calls[0] == "void onQuit(const string &in)|Quit", "context menu: script item");
 
   Dialog& dlg = Dialog::show(ui, "Confirm");
-  dlg.body().add<Label>("Really?");
+  dlg.body().add<cLabel>("Really?");
   bool ok = false;
   dlg.addButton("OK", [&] { ok = true; });
   Button& cancel = dlg.addButton("Cancel");
@@ -478,8 +478,8 @@ void testDivider(Checker& check) {
 }
 
 void testModUiConfinement(Checker& check) {
-  // ModPanel is final: no subclass (and no mod) can override the badge paint.
-  static_assert(std::is_final_v<ModPanel>,
+  // cModPanel is final: no subclass (and no mod) can override the badge paint.
+  static_assert(std::is_final_v<cModPanel>,
                 "ModPanel must be final so the badge cannot be overridden");
 
   // Reserved style classes are rejected in mod JSON: a mod cannot take the
@@ -598,7 +598,7 @@ void testModUiConfinement(Checker& check) {
     std::string err;
     auto panel = ModUiFactory::createPanel("mymod", "p6", "Attached", "", err);
     UiRoot ui;
-    ModPanel& ref = ModUiFactory::attachToRoot(ui, std::move(panel));
+    cModPanel& ref = ModUiFactory::attachToRoot(ui, std::move(panel));
     check(!ui.modalOpen() && !ui.popupOpen() && ui.root().find("p6") == &ref,
           "mod UI: panel attaches to the main layer, never as modal/popup");
   }

@@ -283,7 +283,7 @@ void testModApiNetAudit(Checker& c) {
 // registerInputAction(mod, id, displayName) are strings-in/void-out — they
 // hand out no Painter*, no IUiRenderer*, no Widget*, no paint hook; the
 // onInputEvent(mod, key, down) hook carries no Text codepoints and no device
-// id. Enforcement lives in ui/mod_ui.h (ModUiFactory/ModPanel) and
+// id. Enforcement lives in ui/mod_ui.h (ModUiFactory/cModPanel) and
 // input/mod_input.h (cModInputRouter).
 void testModApiUiInputAudit(Checker& c) {
   bool clean = true;

@@ -1,5 +1,5 @@
 // cDebugConsole: the Half-Life-style dropdown console for lithoscript. Tilde
-// drops it from the top of the screen; it renders through the ui framework (a StackPanel holding
+// drops it from the top of the screen; it renders through the ui framework (a cStackPanel holding
 // a read-only cTextEditor log view over a cTextBox command line — composition,
 // no new widgets).
 //

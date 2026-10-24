@@ -10,12 +10,12 @@ float cross(Vec2 v, Orientation o) { return o == Orientation::Vertical ? v.x : v
 
 }  // namespace
 
-// ---- StackPanel
+// ---- cStackPanel
 
-StackPanel::StackPanel(Orientation o, float spacing, std::string styleClass)
+cStackPanel::cStackPanel(Orientation o, float spacing, std::string styleClass)
     : Widget(std::move(styleClass)), orientation_(o), spacing_(spacing) {}
 
-Vec2 StackPanel::measure(const Theme& theme) const {
+Vec2 cStackPanel::measure(const Theme& theme) const {
   float along = 0, across = 0;
   int n = 0;
   for (const auto& c : children()) {
@@ -33,7 +33,7 @@ Vec2 StackPanel::measure(const Theme& theme) const {
                                                : Vec2{along + pad.horizontal(), across + pad.vertical()};
 }
 
-void StackPanel::arrange(const Theme& theme) {
+void cStackPanel::arrange(const Theme& theme) {
   const Rect area = contentRect();
   const bool v = orientation_ == Orientation::Vertical;
   float fixed = 0, flex = 0;

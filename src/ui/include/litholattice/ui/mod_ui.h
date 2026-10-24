@@ -13,13 +13,13 @@
 //      event handlers from mod JSON are script functions only (Widget::on,
 //      the C++-callable overload, is never wired by the factory). Audited in
 //      mods_selftest.cpp (testModApiUiInputAudit).
-//   2. Badging: every mod panel root is a ModPanel (final). Its badge strip —
+//   2. Badging: every mod panel root is a cModPanel (final). Its badge strip —
 //      the amber MOD tag plus the owning mod's id — is painted by the engine
 //      with FIXED colours (not theme-dependent, so no pack or mod can hide
 //      it), the panel arranges children strictly below the strip, and the
 //      strip is painted AFTER the children: a mod child can never cover,
 //      remove, restyle, or opt out of the badge. Mods never receive a
-//      ModPanel*, so there is nothing to downcast or override.
+//      cModPanel*, so there is nothing to downcast or override.
 //   3. No spoofing the system look: the confined factory rejects the reserved
 //      style classes "dialog" (system modal look), "tooltip" (system hint
 //      look), and the engine-applied "mod_panel"/"mod_badge". Mod panels are
@@ -31,7 +31,7 @@
 //
 // THREAT MODEL (fake system prompt / credential phishing): a mod wants the
 // player to believe a system dialog is asking for a password, a key, or a
-// confirmation. Defences: (a) every mod-owned pixel lives under a ModPanel
+// confirmation. Defences: (a) every mod-owned pixel lives under a cModPanel
 // whose MOD badge is always visible and always names the mod — attribution
 // is inescapable; (b) mods cannot use the system dialog/tooltip frame
 // treatment; (c) mods cannot open modals, so they cannot seize the screen;
@@ -80,21 +80,21 @@ inline constexpr size_t kModUiMaxWidgets = 256;
 /// Max title length (registerUiPanel title).
 inline constexpr size_t kModUiMaxTitleLen = 128;
 
-/// A Panel that is always visibly badged as mod content. `final`: neither a
+/// A cPanel that is always visibly badged as mod content. `final`: neither a
 /// subclass nor a mod can override or skip the badge painting. The badge
 /// strip is engine-drawn with fixed colours, the panel arranges its children
 /// strictly below the strip, and the strip paints after the children — a mod
-/// child can never cover it. Mods never receive a ModPanel*.
-class ModPanel final : public Panel {
+/// child can never cover it. Mods never receive a cModPanel*.
+class cModPanel final : public cPanel {
  public:
-  ModPanel(std::string modId, std::string title);
+  cModPanel(std::string modId, std::string title);
 
   const std::string& modId() const { return modId_; }
   const std::string& title() const { return title_; }
 
   /// The mod's content goes here (filled by the confined factory from JSON).
-  StackPanel& body() { return *body_; }
-  const StackPanel& body() const { return *body_; }
+  cStackPanel& body() { return *body_; }
+  const cStackPanel& body() const { return *body_; }
 
   /// Height of the engine badge strip, in pixels at the current theme scale.
   float badgeHeight() const;
@@ -109,7 +109,7 @@ class ModPanel final : public Panel {
   void paintBadge(Painter& p) const;
 
   std::string modId_, title_;
-  StackPanel* body_ = nullptr;
+  cStackPanel* body_ = nullptr;
 };
 
 /// The confined widget factory for mods: the ONLY sanctioned path for mod
@@ -119,7 +119,7 @@ class ModUiFactory {
  public:
   ModUiFactory() = delete;
 
-  /// Builds a badged ModPanel for `modId` (must be [a-z0-9_]{1,64}, the
+  /// Builds a badged cModPanel for `modId` (must be [a-z0-9_]{1,64}, the
   /// extension-registry rule). `panelId` becomes the widget id; `title` is
   /// shown in the badge strip (capped at kModUiMaxTitleLen). `bodyJson` may
   /// be empty (empty body) or a widget-factory JSON object describing the
@@ -127,7 +127,7 @@ class ModUiFactory {
   /// closed factory type table, and rejected when it names a reserved style
   /// class. Returns nullptr + `err` on any violation. The caller (the game)
   /// owns the panel; the mod never sees the pointer.
-  static std::unique_ptr<ModPanel> createPanel(const std::string& modId,
+  static std::unique_ptr<cModPanel> createPanel(const std::string& modId,
                                               const std::string& panelId,
                                               const std::string& title,
                                               const std::string& bodyJson, std::string& err);
@@ -141,7 +141,7 @@ class ModUiFactory {
   /// Attaches a built panel to the UiRoot MAIN layer (never as a modal or
   /// popup: mods cannot open modals/popups, so a fake system prompt can
   /// never seize the screen). Returns the attached panel.
-  static ModPanel& attachToRoot(UiRoot& ui, std::unique_ptr<ModPanel> panel);
+  static cModPanel& attachToRoot(UiRoot& ui, std::unique_ptr<cModPanel> panel);
 };
 
 }  // namespace litholattice::ui

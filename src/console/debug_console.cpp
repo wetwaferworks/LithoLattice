@@ -34,7 +34,7 @@ cDebugConsole::cDebugConsole(cConsoleReg& registry)
 
 void cDebugConsole::attach(ui::UiRoot& ui) {
   ui_ = &ui;
-  auto panel = std::make_unique<ui::StackPanel>(ui::Orientation::Vertical, 2, "console");
+  auto panel = std::make_unique<ui::cStackPanel>(ui::Orientation::Vertical, 2, "console");
   // Top-anchored dropdown: full width, top 42% of the viewport.
   ui::Layout layout;
   layout.anchorMin = {0, 0};

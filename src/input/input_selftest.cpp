@@ -17,7 +17,7 @@ namespace litholattice {
 namespace {
 
 enum class TestAction : ActionId { Go, Fire, Alt, Aim, Count };
-enum class TestContext : uint8_t { Play, Menu };
+enum class TestContext : uint8_t { Play, cMenu };
 
 const ActionSet& testActions() {
   static const ActionSet set({{"Go"}, {"Fire"}, {"Alt"}, {"Aim", ActionKind::Axis2D}},
@@ -226,11 +226,11 @@ int runInputSelfTest() {
       in.update(backend);
     };
     frame({InputEvent::key(T::KeyDown, Key::W, 0)});
-    const bool go = in.pressed(TestAction::Go) && in.active(TestContext::Play) && !in.active(TestContext::Menu);
-    in.push(TestContext::Menu);
+    const bool go = in.pressed(TestAction::Go) && in.active(TestContext::Play) && !in.active(TestContext::cMenu);
+    in.push(TestContext::cMenu);
     frame({});
-    const bool gated = in.active(TestContext::Menu) && !in.held(TestAction::Go);
-    in.pop(TestContext::Menu);
+    const bool gated = in.active(TestContext::cMenu) && !in.held(TestAction::Go);
+    in.pop(TestContext::cMenu);
     frame({});
     check(go && gated && in.held(TestAction::Go), "contexts declared by the game: opaque context gates lower actions, pop resumes");
   }

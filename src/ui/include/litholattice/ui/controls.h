@@ -1,6 +1,6 @@
-// Basic controls: Panel, Label, Button, Image (icon), cCheckbox / Toggle, cProgressBar, cSlider,
-// cNumberField (integer, e.g. signal 0..64), Slot (an inventory cell) and cDivider (separator line).
-// Events: Button "click"; cCheckbox, cSlider, cNumberField "change"; Slot "click" / "rightclick".
+// Basic controls: cPanel, cLabel, Button, Image (icon), cCheckbox / Toggle, cProgressBar, cSlider,
+// cNumberField (integer, e.g. signal 0..64), cSlot (an inventory cell) and cDivider (separator line).
+// Events: Button "click"; cCheckbox, cSlider, cNumberField "change"; cSlot "click" / "rightclick".
 #pragma once
 #include <string>
 #include "litholattice/ui/widget.h"
@@ -9,19 +9,19 @@
 namespace litholattice::ui {
 
 /// Background + border container (style "panel"); children by anchors.
-class Panel : public Widget {
+class cPanel : public Widget {
  public:
-  explicit Panel(std::string styleClass = "panel") : Widget(std::move(styleClass)) {}
+  explicit cPanel(std::string styleClass = "panel") : Widget(std::move(styleClass)) {}
 };
 
 /// Single- or multi-line text ('\n' breaks lines). Not interactive.
-class Label : public Widget {
+class cLabel : public Widget {
  public:
-  explicit Label(std::string text = {}, std::string styleClass = "label");
+  explicit cLabel(std::string text = {}, std::string styleClass = "label");
   const std::string& text() const { return text_; }
-  Label& setText(std::string t) { text_ = std::move(t); return *this; }
-  Label& setColor(Color c) { color_ = c; hasColor_ = true; return *this; }
-  Label& setCentered(bool c) { centered_ = c; return *this; }
+  cLabel& setText(std::string t) { text_ = std::move(t); return *this; }
+  cLabel& setColor(Color c) { color_ = c; hasColor_ = true; return *this; }
+  cLabel& setCentered(bool c) { centered_ = c; return *this; }
   Vec2 measure(const Theme& theme) const override;
   Widget* hitTest(Vec2 p) override;  ///< only when it has a tooltip
 
@@ -157,16 +157,16 @@ class cNumberField : public Widget {
 
 /// Inventory / hotbar cell: an icon, an optional count or caption, selection highlight.
 /// Left click emits "click", right click "rightclick".
-class Slot : public Widget {
+class cSlot : public Widget {
  public:
-  explicit Slot(Vec2 size = {40, 40});
-  Slot& setIcon(std::string image, Color tint = {}) { icon_ = std::move(image); tint_ = tint; return *this; }
+  explicit cSlot(Vec2 size = {40, 40});
+  cSlot& setIcon(std::string image, Color tint = {}) { icon_ = std::move(image); tint_ = tint; return *this; }
   const std::string& icon() const { return icon_; }
-  Slot& setCaption(std::string c) { caption_ = std::move(c); return *this; }
-  Slot& setSelected(bool s) { selected_ = s; return *this; }
+  cSlot& setCaption(std::string c) { caption_ = std::move(c); return *this; }
+  cSlot& setSelected(bool s) { selected_ = s; return *this; }
   bool selected() const { return selected_; }
   /// Any per-slot payload (block id, item index); not interpreted by the UI.
-  Slot& setData(int d) { data_ = d; return *this; }
+  cSlot& setData(int d) { data_ = d; return *this; }
   int data() const { return data_; }
   Vec2 measure(const Theme&) const override { return size_; }
   bool onPointerDown(const UiEvent& e) override;

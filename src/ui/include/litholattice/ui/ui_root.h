@@ -10,7 +10,7 @@
 
 namespace litholattice::ui {
 
-class Tooltip;
+class cTooltip;
 
 /// Calls script handlers for widget events (implemented by the game on top of AngelScript).
 class IScriptHost {
@@ -98,7 +98,7 @@ class UiRoot {
   IScriptHost* scripts_ = nullptr;
   IClipboard* clipboard_ = nullptr;
   cMemoryClipboard fallbackClipboard_;
-  std::unique_ptr<Tooltip> tooltip_;  // drawn for the hovered widget's tooltip()
+  std::unique_ptr<cTooltip> tooltip_;  // drawn for the hovered widget's tooltip()
   Vec2 viewport_, pointer_;
   float time_ = 0, hoverTime_ = 0;
   uint8_t mods_ = kModNone;

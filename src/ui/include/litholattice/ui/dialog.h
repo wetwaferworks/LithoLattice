@@ -19,7 +19,7 @@ class Dialog : public Widget {
   static Dialog& show(UiRoot& ui, std::string title, Vec2 size = {});
   const std::string& title() const { return title_; }
   /// Where content goes (a vertical stack).
-  StackPanel& body() { return *body_; }
+  cStackPanel& body() { return *body_; }
   /// Adds a button to the bottom row; `closes` closes the dialog after `onClick`.
   Button& addButton(std::string text, std::function<void()> onClick = {}, bool closes = true);
   /// Emits "close" and removes the dialog from its UiRoot.
@@ -39,16 +39,16 @@ class Dialog : public Widget {
  private:
   float titleHeight() const;
   std::string title_;
-  StackPanel* body_ = nullptr;
-  StackPanel* buttons_ = nullptr;
+  cStackPanel* body_ = nullptr;
+  cStackPanel* buttons_ = nullptr;
   Vec2 grab_{-1, -1};
   std::function<bool()> closeGuard_;
 };
 
 /// A boxed one-line hint.
-class Tooltip : public Widget {
+class cTooltip : public Widget {
  public:
-  explicit Tooltip(std::string text = {}) : Widget("tooltip"), text_(std::move(text)) {}
+  explicit cTooltip(std::string text = {}) : Widget("tooltip"), text_(std::move(text)) {}
   void setText(std::string t) { text_ = std::move(t); }
   const std::string& text() const { return text_; }
   Vec2 measure(const Theme& theme) const override;
