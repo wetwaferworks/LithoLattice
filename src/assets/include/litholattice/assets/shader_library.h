@@ -32,7 +32,7 @@ class ShaderLibrary {
  public:
   /// Loads each program whose .vert and .frag both exist in the stack, with includes expanded;
   /// a program with only one stage or a broken include is skipped with a warning.
-  static ShaderLibrary load(const PackStack& stack, std::span<const std::string_view> programs,
+  static ShaderLibrary load(const cPackStack& stack, std::span<const std::string_view> programs,
                             std::vector<std::string>* warnings);
 
   const ShaderSource* find(std::string_view program) const;

@@ -1,4 +1,4 @@
-// ExtensionRuntime: budget tree + per-extension fault domains.
+// cExtensionRuntime: budget tree + per-extension fault domains.
 // See extension_runtime.h for the contracts.
 #include "litholattice/mods/extension_runtime.h"
 
@@ -8,7 +8,7 @@
 
 namespace litholattice {
 
-void ExtensionRuntime::sync() {
+void cExtensionRuntime::sync() {
   // Registry paths sort parents before children (a parent path is always a
   // strict prefix of its children's), so one ordered pass builds the quota
   // tree top-down.
@@ -44,7 +44,7 @@ void ExtensionRuntime::sync() {
   }
 }
 
-ExtensionRuntime::TickOutcome ExtensionRuntime::tick(
+cExtensionRuntime::TickOutcome cExtensionRuntime::tick(
     const std::string& path, const std::function<void()>& onTick) {
   const auto it = budgets_.find(path);
   if (it == budgets_.end()) return TickOutcome::kUnknown;
@@ -71,11 +71,11 @@ ExtensionRuntime::TickOutcome ExtensionRuntime::tick(
   return TickOutcome::kTicked;
 }
 
-void ExtensionRuntime::advanceTick() {
+void cExtensionRuntime::advanceTick() {
   for (auto& [path, budget] : budgets_) budget.advanceTick();
 }
 
-void ExtensionRuntime::onCrash(const std::string& path, const char* reason) {
+void cExtensionRuntime::onCrash(const std::string& path, const char* reason) {
   // Contain: mark it, run its onUnload exactly once, and unload its subtree.
   // ExtensionLoader::unloadMod invokes onUnload for every node it removes
   // (children-first) and never deletes save data; siblings and the parent
@@ -88,12 +88,12 @@ void ExtensionRuntime::onCrash(const std::string& path, const char* reason) {
   sync();  // drop the crashed subtree's budget nodes (keeps survivors' state)
 }
 
-const ExtensionBudget* ExtensionRuntime::budgetFor(const std::string& path) const {
+const ExtensionBudget* cExtensionRuntime::budgetFor(const std::string& path) const {
   const auto it = budgets_.find(path);
   return it == budgets_.end() ? nullptr : &it->second;
 }
 
-ExtensionBudget* ExtensionRuntime::budgetFor(const std::string& path) {
+ExtensionBudget* cExtensionRuntime::budgetFor(const std::string& path) {
   const auto it = budgets_.find(path);
   return it == budgets_.end() ? nullptr : &it->second;
 }

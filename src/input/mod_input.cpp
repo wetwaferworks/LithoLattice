@@ -3,7 +3,7 @@
 
 namespace litholattice {
 
-bool ModInputRouter::isValidId(std::string_view id) {
+bool cModInputRouter::isValidId(std::string_view id) {
   if (id.empty() || id.size() > 64) return false;
   for (char c : id) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
@@ -12,7 +12,7 @@ bool ModInputRouter::isValidId(std::string_view id) {
   return true;
 }
 
-bool ModInputRouter::registerAction(const std::string& modId, const std::string& actionId,
+bool cModInputRouter::registerAction(const std::string& modId, const std::string& actionId,
                                     const std::string& displayName, std::string& err) {
   if (!isValidId(modId)) {
     err = "mod input: invalid mod id (want [a-z0-9_]{1,64})";
@@ -37,7 +37,7 @@ bool ModInputRouter::registerAction(const std::string& modId, const std::string&
   return true;
 }
 
-size_t ModInputRouter::unregisterMod(const std::string& modId) {
+size_t cModInputRouter::unregisterMod(const std::string& modId) {
   size_t removed = 0;
   std::vector<std::string> keep;
   keep.reserve(order_.size());
@@ -54,7 +54,7 @@ size_t ModInputRouter::unregisterMod(const std::string& modId) {
   return removed;
 }
 
-std::vector<ModInputRouter::ModAction> ModInputRouter::actions() const {
+std::vector<cModInputRouter::ModAction> cModInputRouter::actions() const {
   std::vector<ModAction> out;
   out.reserve(order_.size());
   for (const std::string& id : order_) {
@@ -64,7 +64,7 @@ std::vector<ModInputRouter::ModAction> ModInputRouter::actions() const {
   return out;
 }
 
-bool ModInputRouter::hasAction(const std::string& namespacedId) const {
+bool cModInputRouter::hasAction(const std::string& namespacedId) const {
   return actions_.find(namespacedId) != actions_.end();
 }
 

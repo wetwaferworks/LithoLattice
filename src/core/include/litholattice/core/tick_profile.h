@@ -18,7 +18,7 @@ inline int64_t nowNs() {
 }
 inline double ms(int64_t ns) { return double(ns) * 1e-6; }
 
-/// World-simulation sub-phases of the current tick (sim thread only; written by SignalWorldSimulation::tick).
+/// World-simulation sub-phases of the current tick (sim thread only; written by cSignalWorldSim::tick).
 struct WorldSub { int64_t signalNs = 0, romNs = 0; };
 inline WorldSub& worldSub() { static WorldSub w; return w; }
 

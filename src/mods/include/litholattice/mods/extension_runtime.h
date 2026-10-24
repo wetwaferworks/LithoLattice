@@ -1,4 +1,4 @@
-// ExtensionRuntime (worker 3): the per-tick engine for loaded extensions.
+// cExtensionRuntime (worker 3): the per-tick engine for loaded extensions.
 // Owns the hierarchical ExtensionBudget tree (rebuilt from the
 // ExtensionLoader's registry + contexts) and runs each extension's onTick
 // inside a fault domain.
@@ -29,7 +29,7 @@
 
 namespace litholattice {
 
-class ExtensionRuntime {
+class cExtensionRuntime {
  public:
   enum class TickOutcome : uint8_t {
     kTicked,     ///< onTick ran (inside the fault domain)
@@ -39,7 +39,7 @@ class ExtensionRuntime {
     kUnknown,    ///< path is not a loaded extension
   };
 
-  explicit ExtensionRuntime(ExtensionLoader& loader) : loader_(loader) {}
+  explicit cExtensionRuntime(ExtensionLoader& loader) : loader_(loader) {}
 
   /// Rebuilds the budget tree from the loader's registry + contexts.
   /// Preserves gate state (throttle/suspend) for nodes that are still loaded;

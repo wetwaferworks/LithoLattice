@@ -7,7 +7,7 @@
 // a CPU budget per tick (overrun -> throttled for a few ticks -> suspended,
 // with a logged reason, per mod_safety.h) and a memory quota (overrun ->
 // suspended with a logged reason). Suspensions feed the automatic
-// suspension-recovery policy (SuspensionPolicy: backoff cooldown, probation,
+// suspension-recovery policy (cSuspensionPolicy: backoff cooldown, probation,
 // escalation to manual re-enable); every transition is logged through the
 // engine-log tap ("modsys:" lines) for the debug console.
 // Quota defaults are powers of two.
@@ -134,7 +134,7 @@ class ScriptEngine {
   /// The automatic suspension-recovery policy (backoff cooldown, probation,
   /// escalation to manual re-enable). Driven by beginTick()/suspend()/
   /// resume(); exposed for tests and admin introspection.
-  const SuspensionPolicy& suspensionPolicy() const { return suspensionPolicy_; }
+  const cSuspensionPolicy& suspensionPolicy() const { return suspensionPolicy_; }
   /// Script heap bytes currently attributed to this mod.
   /// Derived ONLY from the single shared quota account (review F-M1):
   /// there is no second counter for this value to disagree with.
@@ -240,7 +240,7 @@ class ScriptEngine {
   uint64_t cpuUsedUs_ = 0;      ///< this tick's hook CPU time
   std::string suspendReason_;
   std::string modId_;                ///< owning mod's id for log lines (empty until set)
-  SuspensionPolicy suspensionPolicy_;  ///< auto-recovery/backoff/probation/escalation
+  cSuspensionPolicy suspensionPolicy_;  ///< auto-recovery/backoff/probation/escalation
   // The ONE memory-quota counter (review F-M1): quotaAccount_->bytes. Both
   // accounting paths — the AngelScript shims and the global operator-new
   // hook — charge/credit THIS account and nothing else; the old separate

@@ -53,7 +53,7 @@ namespace litholattice {
 /// Engine-side registry of mod input actions + the delivery-policy check.
 /// Owned by the game (which also owns the InputSystem); the mod API's
 /// registerInputAction binds here AFTER the engine checks kPermInput.
-class ModInputRouter {
+class cModInputRouter {
  public:
   struct ModAction {
     std::string modId;        ///< owning mod

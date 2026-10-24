@@ -522,7 +522,7 @@ int runAudioSelfTest() {
     // (3) Occlusion bake cadence: re-bake every N ticks, when the listener
     // moves more than X blocks, or on chunk change. Default = chunk change.
     auto air = [](int, int, int) { return false; };
-    OcclusionBakeScheduler sched;
+    cOcclusionBakeScheduler sched;
     check(sched.cadence().bakeEveryTicks == 0 && sched.cadence().moveThreshold == 0.f &&
               sched.cadence().bakeOnChunkChange && sched.cadence().radius == 16,
           "occlusion cadence: default = bake on chunk change, no tick cadence, radius 16");
@@ -538,7 +538,7 @@ int runAudioSelfTest() {
     OcclusionCadence ultra;
     ultra.bakeEveryTicks = 1;
     ultra.bakeOnChunkChange = false;
-    OcclusionBakeScheduler su(ultra);
+    cOcclusionBakeScheduler su(ultra);
     ok = su.maybeBake(0, 0.5f, 0.5f, 0.5f, air);      // first call always bakes
     ok = ok && su.maybeBake(1, 0.5f, 0.5f, 0.5f, air);  // tick cadence: bakes
     ok = ok && !su.maybeBake(1, 0.5f, 0.5f, 0.5f, air); // same tick twice: no re-bake
@@ -548,7 +548,7 @@ int runAudioSelfTest() {
     tc.bakeEveryTicks = 4;
     tc.bakeOnChunkChange = false;
     tc.radius = 8;
-    OcclusionBakeScheduler s2(tc);
+    cOcclusionBakeScheduler s2(tc);
     ok = true;
     for (uint64_t t = 0; t < 8; ++t)
       ok = ok && (s2.maybeBake(t, 0.5f, 0.5f, 0.5f, air) == (t == 0 || t == 4));
@@ -558,7 +558,7 @@ int runAudioSelfTest() {
     mc.bakeEveryTicks = 1000;
     mc.moveThreshold = 2.0f;
     mc.bakeOnChunkChange = false;
-    OcclusionBakeScheduler s3(mc);
+    cOcclusionBakeScheduler s3(mc);
     ok = s3.maybeBake(0, 0.5f, 0.5f, 0.5f, air);          // first bake
     ok = ok && !s3.maybeBake(1, 1.0f, 0.5f, 0.5f, air);   // moved 0.5 < 2: no bake
     ok = ok && s3.maybeBake(2, 5.5f, 0.5f, 0.5f, air);    // moved 5 > 2: early bake

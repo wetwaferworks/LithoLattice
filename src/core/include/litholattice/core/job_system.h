@@ -146,21 +146,21 @@ struct ThreadUtil {
 /// RAII named thread with optional affinity: names itself, pins itself, joins on
 /// destruction (never detached). Used for the input thread; available to audio and
 /// render for their dedicated threads.
-class NamedThread {
+class cNamedThread {
  public:
   template <typename Fn>
-  NamedThread(const char* name, uint64_t affinityMask, Fn&& fn) {
+  cNamedThread(const char* name, uint64_t affinityMask, Fn&& fn) {
     thread_ = std::thread([n = std::string(name), affinityMask, f = std::forward<Fn>(fn)]() mutable {
       ThreadUtil::setName(n.c_str());
       if (affinityMask != 0) ThreadUtil::pinToCores(affinityMask);
       f();
     });
   }
-  ~NamedThread() {
+  ~cNamedThread() {
     if (thread_.joinable()) thread_.join();  // disciplined: never detached
   }
-  NamedThread(const NamedThread&) = delete;
-  NamedThread& operator=(const NamedThread&) = delete;
+  cNamedThread(const cNamedThread&) = delete;
+  cNamedThread& operator=(const cNamedThread&) = delete;
 
  private:
   std::thread thread_;
@@ -276,7 +276,7 @@ class JobSystem {
 
  private:
   struct Worker {
-    ChaseLevDeque<Job, kJobDequeCapacity> deques[kJobPriorityCount];
+    cChaseLevDeque<Job, kJobDequeCapacity> deques[kJobPriorityCount];
   };
 
   static thread_local bool t_onJobThread;

@@ -47,18 +47,18 @@
 namespace litholattice {
 
 template <typename T, size_t kCapacity = 1024>
-class ChaseLevDeque {
+class cChaseLevDeque {
   static_assert((kCapacity & (kCapacity - 1)) == 0, "capacity must be a power of two");
   static_assert(kCapacity >= 2, "capacity must hold at least two items");
 
  public:
-  ChaseLevDeque() {
+  cChaseLevDeque() {
     buffer_ = std::make_unique<Buffer>();
     array_.store(buffer_.get(), std::memory_order_relaxed);
   }
-  ~ChaseLevDeque() = default;  // threads must be joined before this runs (JobSystem does)
-  ChaseLevDeque(const ChaseLevDeque&) = delete;
-  ChaseLevDeque& operator=(const ChaseLevDeque&) = delete;
+  ~cChaseLevDeque() = default;  // threads must be joined before this runs (JobSystem does)
+  cChaseLevDeque(const cChaseLevDeque&) = delete;
+  cChaseLevDeque& operator=(const cChaseLevDeque&) = delete;
 
   // ---- owner operations (serialized by ownerM_) ----------------------------------
   // Single logical owner: JobSystem submits arrive from any thread, so the mutex

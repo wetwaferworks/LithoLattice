@@ -123,13 +123,13 @@ std::optional<fs::path> ResourcePack::checkedPath(std::string_view rel) const {
   return canonFile;
 }
 
-const ResourcePack* PackStack::ownerExact(std::string_view rel) const {
+const ResourcePack* cPackStack::ownerExact(std::string_view rel) const {
   for (auto it = packs_.rbegin(); it != packs_.rend(); ++it)
     if (it->has(rel)) return &*it;
   return nullptr;
 }
 
-std::string PackStack::resolve(std::string_view rel) const {
+std::string cPackStack::resolve(std::string_view rel) const {
   if (fallbacks_.empty() || ownerExact(rel)) return std::string(rel);
   for (const auto& [nw, old] : fallbacks_) {
     std::string alt(rel);
@@ -143,9 +143,9 @@ std::string PackStack::resolve(std::string_view rel) const {
   return std::string(rel);
 }
 
-const ResourcePack* PackStack::owner(std::string_view rel) const { return ownerExact(resolve(rel)); }
+const ResourcePack* cPackStack::owner(std::string_view rel) const { return ownerExact(resolve(rel)); }
 
-std::optional<fs::path> PackStack::find(std::string_view rel0) const {
+std::optional<fs::path> cPackStack::find(std::string_view rel0) const {
   const std::string rel = resolve(rel0);
   const ResourcePack* p = owner(rel);
   // Cortana 2026-10-15 1525 (ENGINE, CloudAtlas #4 / CA-04): return the CHECKED (canonical,
@@ -153,7 +153,7 @@ std::optional<fs::path> PackStack::find(std::string_view rel0) const {
   return p ? p->checkedPath(rel) : std::nullopt;
 }
 
-std::optional<std::string> PackStack::readText(std::string_view rel0, std::string* origin) const {
+std::optional<std::string> cPackStack::readText(std::string_view rel0, std::string* origin) const {
   const std::string rel = resolve(rel0);
   const ResourcePack* p = owner(rel);
   if (!p) return std::nullopt;

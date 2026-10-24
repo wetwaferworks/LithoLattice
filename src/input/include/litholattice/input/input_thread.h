@@ -3,7 +3,7 @@
 //
 // ==== THE INPUT-THREAD CONTRACT (read this before wiring input) ====
 // Who owns the input thread: InputPump. Construct it with the game's
-// IInputBackend; in Mode::Threaded it spawns one NamedThread ("litho-input",
+// IInputBackend; in Mode::Threaded it spawns one cNamedThread ("litho-input",
 // pinned to the realtime affinity mask) that polls the backend in a loop.
 // In Mode::Manual it spawns no thread and the owner calls pumpOnce() instead —
 // REQUIRED for backends that must stay on the main thread (the GLFW backend's

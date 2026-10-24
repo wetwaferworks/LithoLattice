@@ -6,7 +6,7 @@
 //   registration-order dependent and differ across sessions/mods). On load the strings resolve
 //   through the MaterialRegistry, so a save written when iron was ID 13 loads correctly when
 //   iron is ID 1.
-// HOW: the game registers it — WorldSave adds makeMaterialPayload(*materials) to its
+// HOW: the game registers it — cWorldSave adds makeMaterialPayload(*materials) to its
 //   PayloadRegistry (the game owns the registry instance; see initMaterialRegistry). It is a
 //   separate payload tag rather than a BLKS version bump, so old saves (no MATS payload) keep
 //   loading: they simply get the default palette (every byte -> global ID 0, the built-in

@@ -23,7 +23,7 @@ struct ResourceSet {
 };
 
 /// Never fails: anything broken becomes the missing texture plus a warning.
-ResourceSet loadResources(const PackStack& stack);
+ResourceSet loadResources(const cPackStack& stack);
 
 /// IEEE CRC32 (the provenance hash). The assets module links neither storage nor world,
 /// which carry their own copies; this one is local to pack provenance.
@@ -42,7 +42,7 @@ enum class Provenance { Absent, Verified, Mismatch };
 /// when the CRC32 of the source file bytes matches the marker. Mismatch when the marker
 /// is present but wrong, malformed, of unknown origin, or the source bytes can't be read;
 /// `err` describes the failure. Callers treat Absent and Mismatch alike: third-party.
-Provenance verifyTextureProvenance(const PackStack& stack, const std::string& rel,
+Provenance verifyTextureProvenance(const cPackStack& stack, const std::string& rel,
                                   const Json& def, std::string& err);
 
 /// Raster cache for SVG textures (Litho SVG): one rasterization per (CANONICAL
@@ -86,7 +86,7 @@ void clearSharedSvgRasterCache();
 
 /// Bounded LRU cache of DECODED raster images (CREW TILE, shake 2026-10-18):
 /// PNG textures used to be decoded from disk on EVERY resource load -- one
-/// full ResourceManager reload performs ~490 Image::load calls over the
+/// full cResourceMgr reload performs ~490 Image::load calls over the
 /// capture pack stack (measured census, shake report), and every hot reload
 /// (F9) pays it again, while SVG rasters already had this exact cache. This
 /// is the PNG twin of SvgRasterCache, same discipline: keyed by the

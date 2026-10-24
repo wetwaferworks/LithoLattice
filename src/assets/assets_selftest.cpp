@@ -80,7 +80,7 @@ int runAssetsSelfTest() {
   writePng(player / "textures/my_dirt.png", 4, 4, 0x800000FFu);
   writeFile(broken / "resources.json", R"({"textures": {"x": "y.png",})");
 
-  PackStack stack;
+  cPackStack stack;
   std::string err;
   for (const fs::path& p : {base, mod, player})
     if (auto pack = ResourcePack::open(p, &err)) stack.push(std::move(*pack));
@@ -102,7 +102,7 @@ int runAssetsSelfTest() {
   {
     std::string perr;
     const bool rejected = !ResourcePack::open(broken, &perr) && perr.find("resources.json") != std::string::npos;
-    PackStack s2;
+    cPackStack s2;
     s2.push(*ResourcePack::open(base, &perr));
     const fs::path odd = root / "odd";
     writeFile(odd / "resources.json", R"({"version": 9, "textures": ["x"], "colours": {}})");
@@ -164,7 +164,7 @@ int runAssetsSelfTest() {
     check(ok && *ok == "x\nA\ny" && cycle && missing, "shader includes: expanded in place; cycles and missing files are errors");
   }
   {
-    PackStack s3;
+    cPackStack s3;
     s3.push(*ResourcePack::open(base, &err));
     const ResourceSet before = loadResources(s3);
     writePng(base / "textures/a.png", 4, 4, 0x410000FFu);
@@ -213,7 +213,7 @@ int runAssetsSelfTest() {
     fs::copy_file(fixture, svgpack / "textures" / "sigil.svg", ec);
     writeFile(svgpack / "resources.json",
               R"({"version": 1, "tile_size": 32, "textures": {"sigil": "textures/sigil.svg"}})");
-    PackStack ssvg;
+    cPackStack ssvg;
     auto svgpackOpen = ResourcePack::open(svgpack, &serr);
     check(svgpackOpen.has_value(), "litho svg: svg test pack opens");
     if (svgpackOpen) ssvg.push(std::move(*svgpackOpen));
@@ -265,7 +265,7 @@ int runAssetsSelfTest() {
     badProv.add("origin", Json::string("litho-generated"));
     badProv.add("crc32", Json::string("0xdeadbeef"));
     writeFile(provpack / "resources.json", man.dump());
-    PackStack sp;
+    cPackStack sp;
     auto provOpen = ResourcePack::open(provpack, &perr);
     check(provOpen.has_value(), "provenance: test pack opens");
     if (provOpen) sp.push(std::move(*provOpen));
@@ -461,7 +461,7 @@ int runAssetsSelfTest() {
               std::string("{\"tile_size\":16,\"animations\":{\"spin\":{\"file\":\"textures/anim.png\","
                           "\"provenance\":{\"origin\":\"litho-generated\",\"crc32\":\"") +
                   crcBuf + "\"}}}}");
-    PackStack stack;
+    cPackStack stack;
     std::string perr;
     auto pack = ResourcePack::open(packDir, &perr);
     check(pack.has_value(), "provenance: animation pack opens");

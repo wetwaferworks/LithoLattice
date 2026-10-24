@@ -1,4 +1,4 @@
-// AbilityRegistry: the concrete IAbility. Applies boosts through the IStat
+// cAbilityReg: the concrete IAbility. Applies boosts through the IStat
 // it was constructed with, using the ability id as the boost source key —
 // one active instance per (player, ability) is the binary model, so the
 // source key can never collide with another ability's contribution.
@@ -15,12 +15,12 @@
 
 namespace litholattice {
 
-class AbilityRegistry final : public IAbility {
+class cAbilityReg final : public IAbility {
  public:
   /// Fired synchronously on activate / deactivate / expiry (not on grant).
   using ChangeFn = std::function<void(uint64_t playerId, uint32_t abilityId, bool active)>;
 
-  explicit AbilityRegistry(IStat& stats) : stats_(stats) {}
+  explicit cAbilityReg(IStat& stats) : stats_(stats) {}
   void setChangeCallback(ChangeFn fn) { changeFn_ = std::move(fn); }
 
   uint32_t registerAbility(const AbilityDef& def) override;

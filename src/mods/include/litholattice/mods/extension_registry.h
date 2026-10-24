@@ -63,7 +63,7 @@ class ExtensionRegistry {
   std::vector<std::string> childrenOf(const std::string& parentPath) const;
   /// Every registered dotted path, parents before children (lexicographic
   /// order guarantees it: a parent path is always a strict prefix of its
-  /// children's). Added for worker 3's budget-tree rebuild (ExtensionRuntime).
+  /// children's). Added for worker 3's budget-tree rebuild (cExtensionRuntime).
   std::vector<std::string> allPaths() const;
 
   /// "mod", "mod.child", ... — every segment [a-z0-9_]{1,64}.

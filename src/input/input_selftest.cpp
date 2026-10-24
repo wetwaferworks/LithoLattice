@@ -119,7 +119,7 @@ void testInputPump(const auto& check) {
 void testModInputConfinement(const auto& check) {
   // Registration: ids validated, namespaced per mod, duplicates refused.
   {
-    ModInputRouter router;
+    cModInputRouter router;
     std::string err;
     check(router.registerAction("mymod", "jump", "Jump", err),
           "mod input: valid action registers");
@@ -147,9 +147,9 @@ void testModInputConfinement(const auto& check) {
   // Delivery policy: nothing reaches a mod while the UI wants the keyboard
   // (system modal open, popup open, or a text field focused)  -  keystrokes
   // typed into system dialogs, passwords included, never reach mods.
-  check(ModInputRouter::shouldDeliverToMod(false),
+  check(cModInputRouter::shouldDeliverToMod(false),
         "mod input: key events delivered when the UI does not want the keyboard");
-  check(!ModInputRouter::shouldDeliverToMod(true),
+  check(!cModInputRouter::shouldDeliverToMod(true),
         "mod input: key events withheld while a system modal/text field has focus");
 
   // No raw device access: the router works with no InputSystem,
@@ -158,10 +158,10 @@ void testModInputConfinement(const auto& check) {
   // of this is audit-pinned in mods_selftest (no device/input-injection
   // tokens in any LithoLatticeModApi/LithoLatticeMod field name).
   {
-    ModInputRouter router;  // standalone: no input-system handles involved
+    cModInputRouter router;  // standalone: no input-system handles involved
     std::string err;
     check(router.registerAction("spy", "snoop", "Snoop", err) &&
-              !ModInputRouter::shouldDeliverToMod(true),
+              !cModInputRouter::shouldDeliverToMod(true),
           "mod input: router is standalone - registration and policy need no device handles");
   }
 
@@ -176,7 +176,7 @@ void testModInputConfinement(const auto& check) {
     sys.update(backend);  // empty frame: nothing pressed anywhere
     // The game would now call the mod's onInputEvent(key, down) directly -
     // the only engine->mod input path. Nothing flows back.
-    if (ModInputRouter::shouldDeliverToMod(false)) { /* game -> mod call */ }
+    if (cModInputRouter::shouldDeliverToMod(false)) { /* game -> mod call */ }
     check(!sys.devices().keyDown(Key::W) && !sys.pressed(TestAction::Go),
           "mod input: delivering a key event to a mod cannot inject into the engine pipeline");
   }

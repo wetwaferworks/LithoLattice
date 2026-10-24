@@ -284,7 +284,7 @@ void testModApiNetAudit(Checker& c) {
 // hand out no Painter*, no IUiRenderer*, no Widget*, no paint hook; the
 // onInputEvent(mod, key, down) hook carries no Text codepoints and no device
 // id. Enforcement lives in ui/mod_ui.h (ModUiFactory/ModPanel) and
-// input/mod_input.h (ModInputRouter).
+// input/mod_input.h (cModInputRouter).
 void testModApiUiInputAudit(Checker& c) {
   bool clean = true;
   for (const char* f : kAuditedModApiFields) clean = clean && !hasForbiddenUiInputToken(f);
@@ -1027,7 +1027,7 @@ void testExtensionBudgetHierarchy(Checker& c) {
   regLeaf(loader, "free", "1.0.0");
   std::string err;
   c(loader.loadMod("budgettest", err), "budget: tree loads");
-  ExtensionRuntime rt(loader);
+  cExtensionRuntime rt(loader);
   rt.sync();
   c(rt.budgetNodeCount() == 4, "budget: one node per loaded mod/extension");
 
@@ -1057,10 +1057,10 @@ void testExtensionBudgetHierarchy(Checker& c) {
   c(small->gate() == BudgetGate::kAllow && mod->gate() == BudgetGate::kAllow,
     "budget: throttling one extension leaves parent and siblings unaffected");
   c(rt.tick("budgettest.big", [&] { bigRan = true; }) ==
-        ExtensionRuntime::TickOutcome::kThrottled &&
+        cExtensionRuntime::TickOutcome::kThrottled &&
         !bigRan,
     "budget: a throttled extension's tick is skipped, not run");
-  c(rt.tick("budgettest.small", [] {}) == ExtensionRuntime::TickOutcome::kTicked,
+  c(rt.tick("budgettest.small", [] {}) == cExtensionRuntime::TickOutcome::kTicked,
     "budget: the sibling still ticks while the over-quota one is throttled");
 
   // After the cooldown the node resumes (on probation); a short new streak
@@ -1073,7 +1073,7 @@ void testExtensionBudgetHierarchy(Checker& c) {
   c(big->gate() == BudgetGate::kSuspended && !big->suspendReason().empty(),
     "budget: sustained overruns after probation suspend with a logged reason");
   c(rt.tick("budgettest.big", [&] { bigRan = true; }) ==
-        ExtensionRuntime::TickOutcome::kSuspended &&
+        cExtensionRuntime::TickOutcome::kSuspended &&
         !bigRan,
     "budget: a suspended extension never runs again until reload");
   c(small->gate() == BudgetGate::kAllow && mod->gate() == BudgetGate::kAllow,
@@ -1106,16 +1106,16 @@ void testExtensionCrashIsolation(Checker& c) {
   c(loader.loadMod("crashtest", err),
     "crashiso: parent + crashing child + healthy sibling load");
 
-  ExtensionRuntime rt(loader);
+  cExtensionRuntime rt(loader);
   rt.sync();
   // The parent ticks fine before the crash.
-  c(rt.tick("crashtest", [] {}) == ExtensionRuntime::TickOutcome::kTicked,
+  c(rt.tick("crashtest", [] {}) == cExtensionRuntime::TickOutcome::kTicked,
     "crashiso: parent ticks before the crash");
 
   // The crash.
-  const ExtensionRuntime::TickOutcome r = rt.tick(
+  const cExtensionRuntime::TickOutcome r = rt.tick(
       "crashtest.crashy", [] { budgetfix::crashyTick(nullptr, nullptr); });
-  c(r == ExtensionRuntime::TickOutcome::kCrashed,
+  c(r == cExtensionRuntime::TickOutcome::kCrashed,
     "crashiso: a throwing onTick is contained (kCrashed), not propagated");
   c(budgetfix::g_crashyUnloads == 1,
     "crashiso: the crashed extension's onUnload ran exactly once");
@@ -1130,14 +1130,14 @@ void testExtensionCrashIsolation(Checker& c) {
         loader.registry().contains("crashtest.healthy") &&
         loader.contextFor("crashtest.healthy") != nullptr,
     "crashiso: parent and healthy sibling survive the crash");
-  c(rt.tick("crashtest", [] {}) == ExtensionRuntime::TickOutcome::kTicked,
+  c(rt.tick("crashtest", [] {}) == cExtensionRuntime::TickOutcome::kTicked,
     "crashiso: the parent keeps ticking after the crash");
   c(rt.tick("crashtest.healthy",
             [] { budgetfix::healthyTick(nullptr, nullptr); }) ==
-            ExtensionRuntime::TickOutcome::kTicked &&
+            cExtensionRuntime::TickOutcome::kTicked &&
         budgetfix::g_healthyTicks == 1,
     "crashiso: the healthy sibling keeps ticking after the crash");
-  c(rt.tick("crashtest.crashy", [] {}) == ExtensionRuntime::TickOutcome::kUnknown,
+  c(rt.tick("crashtest.crashy", [] {}) == cExtensionRuntime::TickOutcome::kUnknown,
     "crashiso: ticking the unloaded crashed path is kUnknown, not fatal");
 
   // Reloading the same identity clears the crash mark (fresh state).

@@ -244,7 +244,7 @@ void ScriptEngine::beginTick() {
   }
   // Suspension policy: backoff-cooldown countdown with auto-recovery onto
   // probation, probation countdown, and clean-tick decay of the record.
-  if (suspensionPolicy_.onTick(prevTickClean) == SuspensionPolicy::TickAction::kAutoRecover) {
+  if (suspensionPolicy_.onTick(prevTickClean) == cSuspensionPolicy::TickAction::kAutoRecover) {
     quotaState_ = QuotaState::kNormal;
     throttleTicksRemaining_ = 0;
     throttleCount_ = 0;
@@ -256,7 +256,7 @@ void ScriptEngine::beginTick() {
 void ScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
   cpuUsedUs_ += elapsedUs;
   if (quotaState_ == QuotaState::kSuspended) return;
-  // Probation halves the effective budget (see SuspensionPolicy).
+  // Probation halves the effective budget (see cSuspensionPolicy).
   const uint32_t effectiveBudget = suspensionPolicy_.effectiveCpuBudgetUs(modBudgetUs_);
   if (cpuUsedUs_ <= effectiveBudget) { throttleCount_ = 0; return; }  // clean tick: streak broken
   if (suspensionPolicy_.probationActive()) {

@@ -55,7 +55,7 @@ std::optional<std::string> expandShaderIncludes(std::string_view source, const S
   return out;
 }
 
-ShaderLibrary ShaderLibrary::load(const PackStack& stack, std::span<const std::string_view> programs,
+ShaderLibrary ShaderLibrary::load(const cPackStack& stack, std::span<const std::string_view> programs,
                                   std::vector<std::string>* warnings) {
   ShaderLibrary lib;
   const ShaderIncludeResolver fromStack = [&stack](std::string_view name) {

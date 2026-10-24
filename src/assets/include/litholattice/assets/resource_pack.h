@@ -55,7 +55,7 @@ bool isSafePackPath(std::string_view rel);
 
 /// Ordered packs, lowest priority first: engine base, then art packs and mods, then the
 /// player's pack. A file or definition resolves to the highest pack that has it.
-class PackStack {
+class cPackStack {
  public:
   /// Adds `pack` above every pack already in the stack.
   void push(ResourcePack pack) { packs_.push_back(std::move(pack)); }

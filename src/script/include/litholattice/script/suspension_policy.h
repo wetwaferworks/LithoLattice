@@ -50,7 +50,7 @@
 
 namespace litholattice {
 
-class SuspensionPolicy {
+class cSuspensionPolicy {
  public:
   static constexpr uint32_t kBackoffBaseTicks = 64;          // 2^6
   static constexpr uint32_t kBackoffMaxTicks = 4096;        // 2^12

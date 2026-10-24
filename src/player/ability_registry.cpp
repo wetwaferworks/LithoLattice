@@ -1,4 +1,4 @@
-// AbilityRegistry implementation. Time advances only through tick(), so
+// cAbilityReg implementation. Time advances only through tick(), so
 // durations and cooldowns are pure functions of the tick sequence.
 #include "litholattice/player/ability_registry.h"
 
@@ -7,7 +7,7 @@
 
 namespace litholattice {
 
-uint32_t AbilityRegistry::registerAbility(const AbilityDef& def) {
+uint32_t cAbilityReg::registerAbility(const AbilityDef& def) {
   if (!def.name || def.name[0] == '\0') return 0;
   if (const uint32_t existing = findAbility(def.name)) return existing;  // first-wins, as stats
   uint32_t id = def.id;
@@ -27,22 +27,22 @@ uint32_t AbilityRegistry::registerAbility(const AbilityDef& def) {
   return id;
 }
 
-uint32_t AbilityRegistry::findAbility(std::string_view name) const {
+uint32_t cAbilityReg::findAbility(std::string_view name) const {
   const auto it = byName_.find(std::string(name));
   return it == byName_.end() ? 0 : it->second;
 }
 
-const AbilityDef* AbilityRegistry::abilityDef(uint32_t abilityId) const {
+const AbilityDef* cAbilityReg::abilityDef(uint32_t abilityId) const {
   const auto it = defs_.find(abilityId);
   return it == defs_.end() ? nullptr : &it->second.def;
 }
 
-void AbilityRegistry::grant(uint64_t playerId, uint32_t abilityId) {
+void cAbilityReg::grant(uint64_t playerId, uint32_t abilityId) {
   if (!abilityDef(abilityId)) return;  // unknown ability: fail closed, no record
   granted_[playerId].insert(abilityId);
 }
 
-void AbilityRegistry::revoke(uint64_t playerId, uint32_t abilityId) {
+void cAbilityReg::revoke(uint64_t playerId, uint32_t abilityId) {
   endActive(playerId, abilityId, /*startCooldown=*/false);
   const auto git = granted_.find(playerId);
   if (git != granted_.end()) {
@@ -56,17 +56,17 @@ void AbilityRegistry::revoke(uint64_t playerId, uint32_t abilityId) {
   }
 }
 
-bool AbilityRegistry::isGranted(uint64_t playerId, uint32_t abilityId) const {
+bool cAbilityReg::isGranted(uint64_t playerId, uint32_t abilityId) const {
   const auto it = granted_.find(playerId);
   return it != granted_.end() && it->second.count(abilityId) != 0;
 }
 
-bool AbilityRegistry::isActive(uint64_t playerId, uint32_t abilityId) const {
+bool cAbilityReg::isActive(uint64_t playerId, uint32_t abilityId) const {
   const auto it = active_.find(playerId);
   return it != active_.end() && it->second.count(abilityId) != 0;
 }
 
-bool AbilityRegistry::activate(uint64_t playerId, uint32_t abilityId) {
+bool cAbilityReg::activate(uint64_t playerId, uint32_t abilityId) {
   const AbilityDef* def = abilityDef(abilityId);
   if (!def || !isGranted(playerId, abilityId)) return false;
   if (!stats_.statDef(def->targetStatId)) return false;  // nowhere to put the boost
@@ -87,7 +87,7 @@ bool AbilityRegistry::activate(uint64_t playerId, uint32_t abilityId) {
   return true;
 }
 
-void AbilityRegistry::endActive(uint64_t playerId, uint32_t abilityId, bool startCooldown) {
+void cAbilityReg::endActive(uint64_t playerId, uint32_t abilityId, bool startCooldown) {
   const auto pit = active_.find(playerId);
   if (pit == active_.end() || !pit->second.count(abilityId)) return;
   pit->second.erase(abilityId);
@@ -100,11 +100,11 @@ void AbilityRegistry::endActive(uint64_t playerId, uint32_t abilityId, bool star
   if (changeFn_) changeFn_(playerId, abilityId, false);
 }
 
-void AbilityRegistry::deactivate(uint64_t playerId, uint32_t abilityId) {
+void cAbilityReg::deactivate(uint64_t playerId, uint32_t abilityId) {
   endActive(playerId, abilityId, /*startCooldown=*/true);
 }
 
-void AbilityRegistry::tick(uint32_t dtTicks) {
+void cAbilityReg::tick(uint32_t dtTicks) {
   now_ += dtTicks;
   // Collect first: expiring mutates active_ (and fires callbacks that could
   // re-enter the registry). Map order keeps expiry deterministic:
@@ -117,7 +117,7 @@ void AbilityRegistry::tick(uint32_t dtTicks) {
     endActive(playerId, abilityId, /*startCooldown=*/true);
 }
 
-void AbilityRegistry::removePlayer(uint64_t playerId) {
+void cAbilityReg::removePlayer(uint64_t playerId) {
   // Remove boosts explicitly: just dropping active_ would leak the
   // contributions in the stat registry forever.
   const auto pit = active_.find(playerId);
@@ -132,7 +132,7 @@ void AbilityRegistry::removePlayer(uint64_t playerId) {
   cooldownUntil_.erase(playerId);
 }
 
-uint32_t AbilityRegistry::cooldownRemaining(uint64_t playerId, uint32_t abilityId) const {
+uint32_t cAbilityReg::cooldownRemaining(uint64_t playerId, uint32_t abilityId) const {
   const auto pit = cooldownUntil_.find(playerId);
   if (pit == cooldownUntil_.end()) return 0;
   const auto it = pit->second.find(abilityId);

@@ -36,7 +36,7 @@
 // is inescapable; (b) mods cannot use the system dialog/tooltip frame
 // treatment; (c) mods cannot open modals, so they cannot seize the screen;
 // (d) keystrokes typed while a system modal/text field has focus never reach
-// mods at all (see input/mod_input.h: ModInputRouter::shouldDeliverToMod) —
+// mods at all (see input/mod_input.h: cModInputRouter::shouldDeliverToMod) —
 // even the REAL password dialog is unreadable to mods. Honest scope, as with
 // the net confinement: for native (C++) mods the API surface is the real
 // control — in-process code could in principle call engine internals it links

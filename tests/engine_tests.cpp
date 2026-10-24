@@ -371,14 +371,14 @@ void testFailFast() {
 void testJobSystem() {
   std::printf("core: work-stealing job system (Chase-Lev deques, priorities, fences, io, affinity)\n");
   {
-    ChaseLevDeque<int, 16> dq;
+    cChaseLevDeque<int, 16> dq;
     for (int i = 0; i < 14; ++i) { int v = i; dq.pushBottom(std::move(v)); }
     bool ok = true; int expect = 13, v = -1;
     while (dq.popBottom(v)) ok = ok && v == expect--;
     check(ok && expect == -1, "chase-lev: owner push/pop is LIFO");
   }
   {
-    ChaseLevDeque<int, 16> dq;
+    cChaseLevDeque<int, 16> dq;
     bool ok = true;
     for (int i = 0; i < 15; ++i) { int v = i; ok = ok && dq.pushBottom(std::move(v)); }
     int v = 99;
@@ -398,7 +398,7 @@ void testJobSystem() {
       ThrowCopy& operator=(const ThrowCopy& o) { if (g_throwCopyArmed) throw std::runtime_error("copy boom"); v = o.v; return *this; }
       ThrowCopy& operator=(ThrowCopy&& o) noexcept { v = o.v; return *this; }
     };
-    ChaseLevDeque<ThrowCopy, 16> dq;
+    cChaseLevDeque<ThrowCopy, 16> dq;
     for (int i = 0; i < 3; ++i) { ThrowCopy t(i); dq.pushBottom(std::move(t)); }
     ThrowCopy out;
     g_throwCopyArmed = true;
@@ -410,7 +410,7 @@ void testJobSystem() {
     check(ok, "chase-lev: a throwing copy in popBottom loses nothing — the job stays queued and pops later");
   }
   {
-    ChaseLevDeque<int, 64> dq;
+    cChaseLevDeque<int, 64> dq;
     for (int i = 0; i < 63; ++i) { int v = i; dq.pushBottom(std::move(v)); }
     std::atomic<int> stolen{0}, stolenSum{0};
     std::vector<std::thread> thieves;
@@ -7415,7 +7415,7 @@ void testScriptSandbox() {
 
   // --- suspension policy: backoff schedule is doubling, capped ----------------
   {
-    using P = SuspensionPolicy;
+    using P = cSuspensionPolicy;
     check(P::backoffTicksFor(1) == 64 && P::backoffTicksFor(2) == 128 &&
               P::backoffTicksFor(3) == 256 && P::backoffTicksFor(4) == 512 &&
               P::backoffTicksFor(5) == 1024 && P::backoffTicksFor(6) == 2048 &&
@@ -7449,7 +7449,7 @@ void testScriptSandbox() {
     check(se.suspended() && se.suspensionPolicy().cooldownRemaining() == 1,
           "suspension policy: mod stays suspended until the cooldown elapses");
     se.beginTick();  // 64th tick: cooldown hits zero
-    const SuspensionPolicy& pol = se.suspensionPolicy();
+    const cSuspensionPolicy& pol = se.suspensionPolicy();
     check(!se.suspended() && pol.probationActive() && pol.probationRemaining() == 64,
           "suspension policy: cooldown elapses -> auto-recovery onto 64-tick probation");
     check(pol.effectiveCpuBudgetUs(1024) == 512 && pol.effectiveCpuBudgetUs(1) == 1,
@@ -7499,7 +7499,7 @@ void testScriptSandbox() {
           "suspension policy: idle cooldown still auto-recovers");
     // 256 clean ticks (64 probation + 192 monitoring) decay consecutive 1 -> 0.
     for (uint32_t i = 0; i < 256; ++i) se.beginTick();
-    const SuspensionPolicy& pol = se.suspensionPolicy();
+    const cSuspensionPolicy& pol = se.suspensionPolicy();
     check(pol.consecutiveSuspensions() == 0 && !pol.probationActive() && !se.suspended(),
           "suspension policy: 256 clean ticks decay the consecutive count to 0");
   }
@@ -7518,7 +7518,7 @@ void testScriptSandbox() {
       se.beginTick();
       se.callHook("void onTick()");  // overrun -> suspend (immediate on probation)
       check(se.suspended(), "suspension policy: overrun suspends the mod");
-      const SuspensionPolicy& pol = se.suspensionPolicy();
+      const cSuspensionPolicy& pol = se.suspensionPolicy();
       check(pol.consecutiveSuspensions() == n, "suspension policy: consecutive count tracks");
       if (n < 8) {
         const uint32_t cd = pol.cooldownRemaining();
@@ -7533,7 +7533,7 @@ void testScriptSandbox() {
     check(se.suspended() && se.suspensionPolicy().escalated(),
           "suspension policy: escalated mod stays suspended without manual re-enable");
     se.resume();
-    const SuspensionPolicy& pol = se.suspensionPolicy();
+    const cSuspensionPolicy& pol = se.suspensionPolicy();
     check(!se.suspended() && !pol.escalated() && pol.consecutiveSuspensions() == 0 &&
               pol.cooldownRemaining() == 0 && !pol.probationActive(),
           "suspension policy: manual resume() clears escalation and the whole record");
@@ -7561,7 +7561,7 @@ void testScriptSandbox() {
     check(se.suspensionPolicy().consecutiveSuspensions() == 2,
           "suspension policy: two consecutive suspensions on the record");
     se.resume();
-    const SuspensionPolicy& pol = se.suspensionPolicy();
+    const cSuspensionPolicy& pol = se.suspensionPolicy();
     check(!se.suspended() && pol.consecutiveSuspensions() == 0 && pol.cooldownRemaining() == 0 &&
               !pol.probationActive() && !pol.escalated(),
           "suspension policy: resume() clears consecutive count, cooldown, and probation");

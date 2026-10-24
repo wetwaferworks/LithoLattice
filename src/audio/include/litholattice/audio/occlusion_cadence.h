@@ -39,9 +39,9 @@ inline constexpr int kCadenceChunkSize = 16;
 
 /// Owns one OcclusionField and decides when it needs a re-bake.
 /// Game thread only (bake() mutates; the audio thread reads the field).
-class OcclusionBakeScheduler {
+class cOcclusionBakeScheduler {
  public:
-  explicit OcclusionBakeScheduler(OcclusionCadence cadence = {}) : cadence_(cadence) {}
+  explicit cOcclusionBakeScheduler(OcclusionCadence cadence = {}) : cadence_(cadence) {}
 
   void setCadence(const OcclusionCadence& c) { cadence_ = c; }
   const OcclusionCadence& cadence() const { return cadence_; }

@@ -5,17 +5,17 @@
 namespace litholattice {
 
 // The cap is exactly base << 6: 64 -> 128 -> 256 -> 512 -> 1024 -> 2048 -> 4096.
-static_assert(SuspensionPolicy::kBackoffBaseTicks << 6 == SuspensionPolicy::kBackoffMaxTicks,
+static_assert(cSuspensionPolicy::kBackoffBaseTicks << 6 == cSuspensionPolicy::kBackoffMaxTicks,
               "backoff cap must equal base<<6");
 
-uint32_t SuspensionPolicy::backoffTicksFor(uint32_t consecutive) {
+uint32_t cSuspensionPolicy::backoffTicksFor(uint32_t consecutive) {
   if (consecutive == 0) return 0;
   // Doubling per consecutive suspension, capped: shift never exceeds 6.
   const uint32_t shift = consecutive - 1 > 6 ? 6 : consecutive - 1;
   return kBackoffBaseTicks << shift;
 }
 
-bool SuspensionPolicy::onSuspended(const std::string& reason) {
+bool cSuspensionPolicy::onSuspended(const std::string& reason) {
   ++consecutiveSuspensions_;
   cleanStreak_ = 0;
   logWarn("modsys: suspended mod '%s': %s", displayId(), reason.c_str());
@@ -38,7 +38,7 @@ bool SuspensionPolicy::onSuspended(const std::string& reason) {
   return true;
 }
 
-SuspensionPolicy::TickAction SuspensionPolicy::onTick(bool clean) {
+cSuspensionPolicy::TickAction cSuspensionPolicy::onTick(bool clean) {
   switch (state_) {
     case State::kCooldown: {
       // The mod ran nothing while cooling down: no clean credit accrues.
@@ -81,7 +81,7 @@ SuspensionPolicy::TickAction SuspensionPolicy::onTick(bool clean) {
   return TickAction::kNone;  // unreachable
 }
 
-bool SuspensionPolicy::reset() {
+bool cSuspensionPolicy::reset() {
   const bool hadState =
       state_ != State::kMonitoring || consecutiveSuspensions_ > 0 || cleanStreak_ > 0;
   state_ = State::kMonitoring;
@@ -92,7 +92,7 @@ bool SuspensionPolicy::reset() {
   return hadState;
 }
 
-uint32_t SuspensionPolicy::effectiveCpuBudgetUs(uint32_t baseBudgetUs) const {
+uint32_t cSuspensionPolicy::effectiveCpuBudgetUs(uint32_t baseBudgetUs) const {
   if (!probationActive()) return baseBudgetUs;
   // Halved on probation, but never zero: a zero budget would suspend the mod
   // for executing at all.

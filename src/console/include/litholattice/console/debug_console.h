@@ -7,7 +7,7 @@
 // while UiRoot::wantsKeyboard() (a text field has focus, a modal/popup is
 // open) — typing "~" in a field keeps working. While the console is open its
 // TextBox holds focus, so wantsKeyboard() is true and keystrokes typed here
-// never reach mods (ModInputRouter::shouldDeliverToMod), exactly like any
+// never reach mods (cModInputRouter::shouldDeliverToMod), exactly like any
 // other text field. Tilde while open closes it (HL1 behavior).
 //
 // GAME WIRING (one call site, see Game::routeUiInput):

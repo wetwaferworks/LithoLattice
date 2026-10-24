@@ -36,7 +36,7 @@ int numToIntClamped(double v, double lo, double hi) {
   return int(v);
 }
 
-Merged mergeManifests(const PackStack& stack, std::vector<std::string>& warn) {
+Merged mergeManifests(const cPackStack& stack, std::vector<std::string>& warn) {
   Merged m;
   for (const ResourcePack& pack : stack.packs()) {
     const Json* man = pack.manifest();
@@ -78,7 +78,7 @@ SvgRasterCache& sharedSvgCache() {
   return cache;
 }
 
-std::optional<Image> loadImage(const PackStack& stack, const std::string& rel0, int tileSize, std::string& origin,
+std::optional<Image> loadImage(const cPackStack& stack, const std::string& rel0, int tileSize, std::string& origin,
                               std::string& err) {
   const std::string rel = stack.resolve(rel0);  // 2026-10-16: renamed-file fallback
   if (!isSafePackPath(rel)) { err = "unsafe path '" + rel + "'"; return std::nullopt; }
@@ -254,7 +254,7 @@ bool parseCrc32Field(const Json& c, uint32_t& out, std::string& err) {
 }
 
 // Source file bytes, resolved with the same rules as loadImage.
-bool readSourceBytes(const PackStack& stack, const std::string& rel0, std::vector<uint8_t>& out,
+bool readSourceBytes(const cPackStack& stack, const std::string& rel0, std::vector<uint8_t>& out,
                      std::string& err) {
   const std::string rel = stack.resolve(rel0);  // 2026-10-16: renamed-file fallback
   if (!isSafePackPath(rel)) { err = "unsafe path '" + rel + "'"; return false; }
@@ -456,7 +456,7 @@ uint32_t lithoCrc32(std::span<const uint8_t> bytes) {
   return crc ^ 0xFFFFFFFFu;
 }
 
-Provenance verifyTextureProvenance(const PackStack& stack, const std::string& rel,
+Provenance verifyTextureProvenance(const cPackStack& stack, const std::string& rel,
                                   const Json& def, std::string& err) {
   const Json* p = def.get("provenance");
   if (!p) return Provenance::Absent;
@@ -479,7 +479,7 @@ Provenance verifyTextureProvenance(const PackStack& stack, const std::string& re
   return Provenance::Verified;
 }
 
-ResourceSet loadResources(const PackStack& stack) {
+ResourceSet loadResources(const cPackStack& stack) {
   std::vector<std::string> warn;
   const Merged m = mergeManifests(stack, warn);
   ResourceSet rs{TextureRegistry(m.tileSize), {}, {}};

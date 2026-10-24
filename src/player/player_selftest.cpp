@@ -153,7 +153,7 @@ int main() {
   check(vitals.serializeVitals(kP1, vbuf, 4) == 0, "vital serialize: small buffer writes nothing");
 
   // -- Abilities: grant/activate/boost/expiry/cooldown ----------------------
-  AbilityRegistry abilities(stats);
+  cAbilityReg abilities(stats);
   const uint32_t sprint = abilities.registerAbility(
       AbilityDef{0, "Sprintor", might, /*boost=*/16, /*duration=*/100, /*cooldown=*/50});
   check(sprint != 0, "ability: registered");
@@ -301,7 +301,7 @@ int main() {
 
   VitalRegistry soloVitals;
   StatRegistry soloStats;
-  AbilityRegistry soloAbilities(soloStats);
+  cAbilityReg soloAbilities(soloStats);
   const StandardVitals sv = registerStandardVitals(soloVitals);
   const uint32_t soloMight = soloStats.registerStat(StatDef{0, "might", 0, 64, 64});
   Player solo(9, "Solo", soloVitals, soloStats, soloAbilities);

@@ -8,7 +8,7 @@
 namespace litholattice {
 
 Player::Player(uint64_t playerId, std::string displayName, VitalRegistry& vitals,
-               StatRegistry& stats, AbilityRegistry& abilities)
+               StatRegistry& stats, cAbilityReg& abilities)
     : name_(std::move(displayName)), vitals_(vitals), stats_(stats), abilities_(abilities) {
   state_.playerId = playerId;
 }

@@ -1,5 +1,5 @@
 // Player: the concrete IPlayer. Owns the PlayerState and display name;
-// borrows the shared VitalRegistry/StatRegistry/AbilityRegistry it is
+// borrows the shared VitalRegistry/StatRegistry/cAbilityReg it is
 // keyed into.
 //
 // Notification routing: when a PlayerManager owns this player it installs
@@ -22,7 +22,7 @@ namespace litholattice {
 class Player final : public IPlayer {
  public:
   Player(uint64_t playerId, std::string displayName, VitalRegistry& vitals, StatRegistry& stats,
-         AbilityRegistry& abilities);
+         cAbilityReg& abilities);
 
   uint64_t playerId() const override { return state_.playerId; }
   const std::string& displayName() const override { return name_; }
@@ -66,7 +66,7 @@ class Player final : public IPlayer {
   std::string name_;
   VitalRegistry& vitals_;
   StatRegistry& stats_;
-  AbilityRegistry& abilities_;
+  cAbilityReg& abilities_;
   std::vector<IPlayerListener*> listeners_;
   bool routed_ = false;
 };
