@@ -37,7 +37,7 @@
 //    columns intersecting the ray from its position along its velocity
 //    for kChunkLookaheadBlocks blocks, through the chunk-request SEAM
 //    (setChunkRequester). The engine never touches game streaming code;
-//    the game implements the seam against its ChunkStreamer (deduplicated
+//    the game implements the seam against its cChunkStreamer (deduplicated
 //    there, in-flight-capped, lower priority than the player's own
 //    requests because the game issues player requests first each frame).
 //    Requests are ALSO deduplicated inside the manager (a column is only

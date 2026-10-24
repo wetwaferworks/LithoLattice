@@ -323,7 +323,7 @@ struct ChunkKey {
 // Every dimension's declared bounds must fit inside this range — the
 // bounded dimensions do by an order of magnitude (largest: the Cosmic at
 // +/-262144) — and the enforcement points are dimension/streamer setup
-// (ChunkStreamer refuses out-of-range request centres, loudly, once) and
+// (cChunkStreamer refuses out-of-range request centres, loudly, once) and
 // packPosInRange() for new call sites. The VOID is the at-risk design:
 // its locked "infinite" extent cannot be represented in a packPos key at
 // all; before the Void is registered it must be given a finite bound

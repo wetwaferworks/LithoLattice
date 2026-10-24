@@ -97,7 +97,7 @@ class AudioEngine {
   /// Game/MCP thread (single reader): drains up to maxFrames mono samples
   /// into `out`. Returns frames actually drained. Overflow on the writer
   /// drops the oldest (a tap, not a recorder).
-  // Cortana 2026-10-15 1505 (audit F-3, confirmed): the only caller is McpSensesAdapter, serialized by its audioMutex_.
+  // Cortana 2026-10-15 1505 (audit F-3, confirmed): the only caller is cMcpSensesAdapter, serialized by its audioMutex_.
   size_t drainTap(float* out, size_t maxFrames);
 
   /// Graceful degradation under CPU pressure (see degradation.h). The
