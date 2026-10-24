@@ -189,7 +189,7 @@ inline void makeNonce(uint32_t sessionId, uint64_t counter,
 ///
 /// Verify-then-commit split (review F-L1): peek() answers "would accept()
 /// take this counter?" WITHOUT mutating the window, and commit() advances
-/// the window for a counter peek() approved. CryptoSession::openPacket
+/// the window for a counter peek() approved. cCryptoSession::openPacket
 /// peeks, runs the cipher, and commits ONLY on successful authentication —
 /// the old accept-before-open order let one forged packet with a far-future
 /// counter shift the window and drop every legitimate packet behind it.

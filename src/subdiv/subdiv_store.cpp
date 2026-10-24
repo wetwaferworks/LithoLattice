@@ -1,4 +1,4 @@
-// cSubdivStore: chunk-scoped block -> SparseOctree map (workstream 1).
+// cSubdivStore: chunk-scoped block -> cSparseOctree map (workstream 1).
 // See subdiv_store.h for the serialized format.
 
 #include "litholattice/subdiv/subdiv_store.h"

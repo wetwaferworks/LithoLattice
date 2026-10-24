@@ -156,7 +156,7 @@ class ICarver {
   virtual void carve(StageContext& ctx) const = 0;
   /// Called once the pipeline is fully built (by cGenPipeline::Builder::build(), so
   /// every pipeline gets it automatically), letting a carver bind pipeline services it
-  /// cannot take at construction time. RiverCarver uses it to bind its biome probe.
+  /// cannot take at construction time. cRiverCarver uses it to bind its biome probe.
   /// Default: no-op.
   virtual void onPipelineBuilt(const cGenPipeline* pipeline) { (void)pipeline; }
 };
@@ -172,7 +172,7 @@ class IFeature {
   virtual void place(StageContext& ctx, Rng& rng) const = 0;
   /// Called once the pipeline is fully built (by cGenPipeline::Builder::build(), so
   /// every pipeline gets it automatically), letting a feature bind pipeline services it
-  /// cannot take at construction time. StructureFeature uses it to bind its dominant-biome
+  /// cannot take at construction time. cStructureFeature uses it to bind its dominant-biome
   /// probe to the finished pipeline. Default: no-op.
   virtual void onPipelineBuilt(const cGenPipeline* pipeline) { (void)pipeline; }
 };

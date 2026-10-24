@@ -47,7 +47,7 @@
 //    scheduler's. The seam sits at graph granularity deliberately.
 // 4. Inheriting from ITraceJit (a ISimSystem that IS-A JIT). REJECTED: it
 //    couples compile policy to scheduling. The builder must be able to swap
-//    BasicTraceJit for the real bytecode JIT without touching scheduler-facing
+//    cBasicTraceJit for the real bytecode JIT without touching scheduler-facing
 //    code; has-a keeps the two axes independent. The wrapper owns graph
 //    lifetime and scheduling visibility; the JIT owns compilation and
 //    execution mechanics. Each side can be replaced without the other moving.
@@ -103,7 +103,7 @@
 // - Freeing via a DIFFERENT ITraceJit than the one that compiled: the
 //   wrapper always frees through the borrowed jit_; if you ever allow the
 //   JIT pointer to change, free the old graph with the OLD jit first.
-// - ITraceJit::free is not guaranteed to sanitize: BasicTraceJit::free
+// - ITraceJit::free is not guaranteed to sanitize: cBasicTraceJit::free
 //   clears bytecode but leaves nodeCount/id stale. freeGraph() zeroes those
 //   fields AFTER calling free() so a stray execute() degrades to a no-op
 //   instead of reading freed memory. Keep that sanitization if you touch

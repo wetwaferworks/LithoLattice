@@ -226,7 +226,7 @@ class cSoftwareRenderer : public IRenderer {
   void renderFrameDetached(const FrameParams& fp, uint64_t drainTarget,
                            const std::function<void(std::exception_ptr)>& onDone);
   /// Pool-wide detached mode (Design B, Stage 1): while on, the shared
-  /// SwBandPool spawns one extra worker — the executor that runs
+  /// cSwBandPool spawns one extra worker — the executor that runs
   /// renderFrameDetached bodies (band count unchanged; synchronous run()
   /// keeps caller-runs-band-0 with the remaining workers, and a detached
   /// body calling run() takes the pool's tlInRun_ inline path). Set by the

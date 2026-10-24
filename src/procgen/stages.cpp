@@ -279,7 +279,7 @@ uint64_t carveCellSeed(uint64_t featSeed, int32_t ccx, int32_t ccz) {
 }
 
 /// Smooth trilinear value noise on the integer lattice: a pure function of (seed, position),
-/// no state, thread-safe. CavernCarver uses it for wobbly chamber walls.
+/// no state, thread-safe. cCavernCarver uses it for wobbly chamber walls.
 float carveNoise3(uint64_t seed, float x, float y, float z) {
   const int xi = int(std::floor(x)), yi = int(std::floor(y)), zi = int(std::floor(z));
   const float xf = x - float(xi), yf = y - float(yi), zf = z - float(zi);
