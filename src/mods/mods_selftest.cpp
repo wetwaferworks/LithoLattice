@@ -95,30 +95,30 @@ void testFacetQuery(Checker& c) {
 }
 
 void testIdentity(Checker& c) {
-  c(ExtensionRegistry::joinPath("lithokraft.worldedit", "brushes") == "lithokraft.worldedit.brushes",
+  c(cExtensionReg::joinPath("lithokraft.worldedit", "brushes") == "lithokraft.worldedit.brushes",
     "identity: dotted path formation");
-  c(ExtensionRegistry::joinPath("", "lithokraft") == "lithokraft",
+  c(cExtensionReg::joinPath("", "lithokraft") == "lithokraft",
     "identity: top-level mod has no leading dot");
   const std::vector<std::string> parts =
-      ExtensionRegistry::splitPath("lithokraft.worldedit.brushes");
+      cExtensionReg::splitPath("lithokraft.worldedit.brushes");
   c(parts.size() == 3 && parts[0] == "lithokraft" && parts[1] == "worldedit" && parts[2] == "brushes",
     "identity: dotted path parsing round-trips");
-  c(ExtensionRegistry::splitPath("lithokraft..brushes").empty() &&
-        ExtensionRegistry::splitPath("").empty() &&
-        ExtensionRegistry::splitPath("Bad-Id.brushes").empty(),
+  c(cExtensionReg::splitPath("lithokraft..brushes").empty() &&
+        cExtensionReg::splitPath("").empty() &&
+        cExtensionReg::splitPath("Bad-Id.brushes").empty(),
     "identity: empty segments, empty paths, and bad ids are rejected");
-  c(ExtensionRegistry::isValidId("brushes") && ExtensionRegistry::isValidId("a1_") &&
-        !ExtensionRegistry::isValidId("") && !ExtensionRegistry::isValidId("Bad-Id") &&
-        !ExtensionRegistry::isValidId(std::string(65, 'a')),
+  c(cExtensionReg::isValidId("brushes") && cExtensionReg::isValidId("a1_") &&
+        !cExtensionReg::isValidId("") && !cExtensionReg::isValidId("Bad-Id") &&
+        !cExtensionReg::isValidId(std::string(65, 'a')),
     "identity: ids are [a-z0-9_]{1,64}");
-  c(ExtensionRegistry::parentPath("lithokraft.worldedit.brushes") == "lithokraft.worldedit" &&
-        ExtensionRegistry::parentPath("lithokraft") == "",
+  c(cExtensionReg::parentPath("lithokraft.worldedit.brushes") == "lithokraft.worldedit" &&
+        cExtensionReg::parentPath("lithokraft") == "",
     "identity: parent path derivation");
 }
 
 void testTreeAndDepthCap(Checker& c) {
   c(kDefaultMaxExtensionDepth == 8, "depth: default cap is the k-prefix constant 8");
-  ExtensionRegistry reg;
+  cExtensionReg reg;
   c(reg.maxExtensionDepth() == 8, "depth: registry starts at the default cap");
   c(reg.registerMod("lithokraft") && !reg.registerMod("lithokraft") &&
         !reg.registerMod("Bad-Id"),
@@ -151,7 +151,7 @@ void testTreeAndDepthCap(Checker& c) {
 }
 
 void testDepthOverride(Checker& c) {
-  ExtensionRegistry reg;
+  cExtensionReg reg;
   reg.setMaxExtensionDepth(16);
   c(reg.maxExtensionDepth() == 16, "depth: setMaxExtensionDepth raises the cap");
   std::string parent = "root";
@@ -516,7 +516,7 @@ void testModSaveData(Checker& c) {
   }
 }
 
-// ---- ExtensionLoader: recursive loading, scoping, privilege, unload ----
+// ---- cExtensionLoader: recursive loading, scoping, privilege, unload ----
 
 // A fake extensible parent for loader tests. Owns all strings the facet
 // points at; the facet stays valid as long as the FakeParent lives.
@@ -595,25 +595,25 @@ LithoLatticeQueryExtensibleFn slotFn(int i) {
   }
 }
 
-void regParent(ExtensionLoader& loader, int slot, const FakeParent& parent,
+void regParent(cExtensionLoader& loader, int slot, const FakeParent& parent,
                const char* id, const char* version,
                const LithoLatticeMod* imod = nullptr, bool firstParty = false) {
   g_slots[slot] = parent.facet();
   loader.registerStaticModule(
-      ExtensionLoader::StaticModule(id, version, slotFn(slot), imod, firstParty));
+      cExtensionLoader::StaticModule(id, version, slotFn(slot), imod, firstParty));
 }
 
-void regLeaf(ExtensionLoader& loader, const char* id, const char* version,
+void regLeaf(cExtensionLoader& loader, const char* id, const char* version,
              const LithoLatticeMod* imod = nullptr) {
   loader.registerStaticModule(
-      ExtensionLoader::StaticModule(id, version, nullptr, imod));
+      cExtensionLoader::StaticModule(id, version, nullptr, imod));
 }
 
 void testExtensionLoaderNesting(Checker& c) {
   FakeParent root({{"a", ">=1.0.0", 25}});
   FakeParent pa({{"b", "*", 10}});
   FakeParent pb({{"cc", "=1.0.0", 0}});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 0, root, "root", "1.0.0");
   regParent(loader, 1, pa, "a", "1.2.0");
   regParent(loader, 2, pb, "b", "2.0.0");
@@ -647,7 +647,7 @@ void testExtensionLoaderNesting(Checker& c) {
 void testExtensionLoaderDepthCap(Checker& c) {
   // Exactly 8 deep (caproot.d1...d8): the 8th level sits exactly at the cap.
   {
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     std::vector<std::string> ids = {"caproot"};
     for (int i = 1; i <= 8; ++i) ids.push_back("d" + std::to_string(i));
     std::vector<std::unique_ptr<FakeParent>> mods;  // fix 3b ASAN-2: stable addresses
@@ -664,7 +664,7 @@ void testExtensionLoaderDepthCap(Checker& c) {
   }
   // 9 deep: the 9th level is refused, fail-closed with rollback.
   {
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     std::vector<std::string> ids = {"caproot9"};
     for (int i = 1; i <= 9; ++i) ids.push_back("e" + std::to_string(i));
     std::vector<std::unique_ptr<FakeParent>> mods;  // fix 3b ASAN-2: stable addresses
@@ -689,7 +689,7 @@ void testExtensionLoaderCycle(Checker& c) {
   // Self-declaration: "selfish" declares "selfish" as its extension.
   {
     FakeParent p({{"selfish", "*", 0}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 0, p, "selfish", "1.0.0");
     std::string err;
     c(!loader.loadMod("selfish", err), "loader: self-declaration is rejected");
@@ -701,7 +701,7 @@ void testExtensionLoaderCycle(Checker& c) {
   {
     FakeParent pa({{"cyc_b", "*", 0}});
     FakeParent pb({{"cyc_a", "*", 0}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 1, pa, "cyc_a", "1.0.0");
     regParent(loader, 2, pb, "cyc_b", "1.0.0");
     std::string err;
@@ -714,7 +714,7 @@ void testExtensionLoaderCycle(Checker& c) {
     FakeParent r({{"m1", "*", 0}, {"m2", "*", 0}});
     FakeParent m1({{"dleaf", "*", 0}});
     FakeParent m2({{"dleaf", "*", 0}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 3, r, "droot", "1.0.0");
     regParent(loader, 4, m1, "m1", "1.0.0");
     regParent(loader, 5, m2, "m2", "1.0.0");
@@ -730,7 +730,7 @@ void testExtensionLoaderCycle(Checker& c) {
 void testExtensionVersionRange(Checker& c) {
   FakeParent vr({{"newkid", ">=2.0.0", 0}});
   FakeParent vr2({{"oldkid", "^1.0.0", 0}});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 6, vr, "vroot", "1.0.0");
   regParent(loader, 7, vr2, "vroot2", "1.0.0");
   regLeaf(loader, "newkid", "1.0.0");  // too old for >=2.0.0
@@ -764,7 +764,7 @@ void testExtensionContextIsolation(Checker& c) {
   // there is no member, accessor, or path by which an extension could reach
   // the full LithoLatticeModApi or a sibling extension.
   FakeParent iroot({{"kid", "*", 0}, {"sib", "*", 0}});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 8, iroot, "iroot", "1.0.0");
   regLeaf(loader, "kid", "1.0.0");
   regLeaf(loader, "sib", "1.0.0");
@@ -787,7 +787,7 @@ void testExtensionPrivilege(Checker& c) {
   // (grants are not transitive).
   FakeParent vipP({{"vkid", "*", 0}});
   FakeParent fproot({{"vip", "*", 0}, {"pleb", "*", 0}}, {"vip"});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 9, fproot, "fproot", "1.0.0", nullptr, true);
   regParent(loader, 10, vipP, "vip", "1.0.0");
   regLeaf(loader, "pleb", "1.0.0");
@@ -824,7 +824,7 @@ void countingOnUnload(LithoLatticeModHandle) { ++g_unloadCalls; }
 void testCascadeUnload(Checker& c) {
   FakeParent uroot({{"ua", "*", 0}});
   FakeParent ua({{"ub", "*", 0}});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   LithoLatticeMod imod{};
   imod.size = sizeof(LithoLatticeMod);
   imod.onUnload = countingOnUnload;
@@ -953,7 +953,7 @@ void testExtensionShareSumClamp(Checker& c) {
   // 60 + 60 = 120 -> 50 / 50.
   {
     FakeParent greedy({{"a", "*", 60}, {"b", "*", 60}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 15, greedy, "greedy", "1.0.0");
     regLeaf(loader, "a", "1.0.0");
     regLeaf(loader, "b", "1.0.0");
@@ -968,7 +968,7 @@ void testExtensionShareSumClamp(Checker& c) {
   // 70 + 40 = 110 -> floor(70*100/110) = 63, floor(40*100/110) = 36.
   {
     FakeParent uneven({{"x", "*", 70}, {"y", "*", 40}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 15, uneven, "uneven", "1.0.0");
     regLeaf(loader, "x", "1.0.0");
     regLeaf(loader, "y", "1.0.0");
@@ -983,7 +983,7 @@ void testExtensionShareSumClamp(Checker& c) {
   {
     FakeParent root({{"p", "*", 100}});
     FakeParent pa({{"m", "*", 25}, {"n", "*", 10}});
-    ExtensionLoader loader;
+    cExtensionLoader loader;
     regParent(loader, 15, root, "okroot", "1.0.0");
     regParent(loader, 14, pa, "p", "1.0.0");
     regLeaf(loader, "m", "1.0.0");
@@ -1020,7 +1020,7 @@ LithoLatticeMod makeMod(void (*tick)(LithoLatticeModHandle, LithoLatticeWorldHan
 
 void testExtensionBudgetHierarchy(Checker& c) {
   FakeParent root({{"big", "*", 25}, {"small", "*", 10}, {"free", "*", 0}});
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 13, root, "budgettest", "1.0.0");
   regLeaf(loader, "big", "1.0.0");
   regLeaf(loader, "small", "1.0.0");
@@ -1031,10 +1031,10 @@ void testExtensionBudgetHierarchy(Checker& c) {
   rt.sync();
   c(rt.budgetNodeCount() == 4, "budget: one node per loaded mod/extension");
 
-  const ExtensionBudget* mod = rt.budgetFor("budgettest");
-  ExtensionBudget* big = rt.budgetFor("budgettest.big");
-  ExtensionBudget* small = rt.budgetFor("budgettest.small");
-  const ExtensionBudget* free = rt.budgetFor("budgettest.free");
+  const cExtensionBudget* mod = rt.budgetFor("budgettest");
+  cExtensionBudget* big = rt.budgetFor("budgettest.big");
+  cExtensionBudget* small = rt.budgetFor("budgettest.small");
+  const cExtensionBudget* free = rt.budgetFor("budgettest.free");
   c(mod && big && small && free, "budget: every node gets a budget");
   c(mod->tickQuotaUs() == kDefaultModTickBudgetUs,
     "budget: top-level mod gets the default 1024us tick budget");
@@ -1098,7 +1098,7 @@ void testExtensionCrashIsolation(Checker& c) {
   static LithoLatticeMod crashyMod =
       budgetfix::makeMod(budgetfix::crashyTick, budgetfix::crashyUnload);
   static LithoLatticeMod healthyMod = budgetfix::makeMod(budgetfix::healthyTick, nullptr);
-  ExtensionLoader loader;
+  cExtensionLoader loader;
   regParent(loader, 13, root, "crashtest", "1.0.0");
   regLeaf(loader, "crashy", "1.0.0", &crashyMod);
   regLeaf(loader, "healthy", "1.0.0", &healthyMod);

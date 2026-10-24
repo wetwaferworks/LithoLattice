@@ -1,4 +1,4 @@
-// ExtensionLoader (worker 2): recursive extension loading for IExtensible
+// cExtensionLoader (worker 2): recursive extension loading for IExtensible
 // parents, scoped extension contexts, capability scoping, privilege
 // default-deny, and cascade unload.
 //
@@ -9,7 +9,7 @@
 //   1. Recursive loading: for each loaded mod, query the IExtensible facet
 //      (LithoLatticeExtensibleQuery); for each declared extension, resolve it
 //      (v1 static linking: match by registered mod id), register it in the
-//      ExtensionRegistry, and recurse. The depth cap is enforced during
+//      cExtensionReg, and recurse. The depth cap is enforced during
 //      recursion (fail-closed: over-cap levels are refused and the partial
 //      load is rolled back). Cycles — a mod declaring itself or an ancestor
 //      as its extension — are rejected with a clear error.
@@ -39,7 +39,7 @@
 //   - ExtensionContext::budgetShare records the parent's reserved per-tick
 //     budget percent for the extension; wire it into the tick scheduler for
 //     budget enforcement (0 = no reserved share, best-effort in the parent).
-//   - ExtensionLoader::registerStaticModule takes the IMod lifecycle so the
+//   - cExtensionLoader::registerStaticModule takes the IMod lifecycle so the
 //     unload path can invoke onUnload; per-extension crash isolation (fault
 //     domains around extension ticks) hooks in at the same place.
 //   - ExtensionContext::childApi is the capability-scoping seam: future API
@@ -88,7 +88,7 @@ struct ExtensionContext {
   const LithoLatticeExtensionApi* childApi = nullptr;
 };
 
-class ExtensionLoader {
+class cExtensionLoader {
  public:
   /// One statically-linked module (v1; the DLL era resolves these via dlsym).
   struct StaticModule {
@@ -136,8 +136,8 @@ class ExtensionLoader {
   /// for top-level mods (they get no extension context).
   const ExtensionContext* contextFor(const std::string& path) const;
 
-  const ExtensionRegistry& registry() const { return registry_; }
-  ExtensionRegistry& registry() { return registry_; }
+  const cExtensionReg& registry() const { return registry_; }
+  cExtensionReg& registry() { return registry_; }
 
   /// Load order (dotted paths, parent before children) of the most recent
   /// loadMod() call. Test seam.
@@ -164,12 +164,12 @@ class ExtensionLoader {
   uint32_t effectiveShare(const std::string& parentPath, uint32_t declIndex,
                           uint32_t declared) const;
 
-  ExtensionRegistry registry_;
+  cExtensionReg registry_;
   std::map<std::string, StaticModule> staticModules_;  // by mod id
   std::map<std::string, ExtensionContext> contexts_;   // by dotted path
   std::set<std::string> loadedMods_;                   // top-level ids
   // Per-load share plan: parentPath -> effective budgetShare per decl index
-  // (ExtensionBudget::clampShares; warn-and-clamp when siblings sum > 100).
+  // (cExtensionBudget::clampShares; warn-and-clamp when siblings sum > 100).
   // Populated during loadMod(), cleared when it returns (success or rollback).
   std::map<std::string, std::vector<uint32_t>> sharePlan_;
   std::vector<std::string> lastLoadOrder_;

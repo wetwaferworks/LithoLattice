@@ -70,13 +70,13 @@ bool& builtinsDone() {
 
 }  // namespace
 
-void ScriptBindingAllowlist::registerBuiltins() {
+void cScriptBindingAllowlist::registerBuiltins() {
   if (builtinsDone()) return;
   builtinsDone() = true;
   for (const ScriptBindingEntry& e : kBuiltinBindings) table().push_back(e);
 }
 
-bool ScriptBindingAllowlist::registerBinding(const ScriptBindingEntry& entry) {
+bool cScriptBindingAllowlist::registerBinding(const ScriptBindingEntry& entry) {
   if (isAllowlisted(entry.decl)) {
     logError("[allowlist] refused duplicate binding: %s", entry.decl);
     return false;
@@ -90,18 +90,18 @@ bool ScriptBindingAllowlist::registerBinding(const ScriptBindingEntry& entry) {
   return true;
 }
 
-bool ScriptBindingAllowlist::isAllowlisted(const std::string& decl) {
+bool cScriptBindingAllowlist::isAllowlisted(const std::string& decl) {
   for (const ScriptBindingEntry& e : table())
     if (decl == e.decl) return true;
   return false;
 }
 
-uint32_t ScriptBindingAllowlist::requiredPermissions(const std::string& decl) {
+uint32_t cScriptBindingAllowlist::requiredPermissions(const std::string& decl) {
   for (const ScriptBindingEntry& e : table())
     if (decl == e.decl) return e.requiredPermissions;
   return 0;
 }
 
-const std::vector<ScriptBindingEntry>& ScriptBindingAllowlist::entries() { return table(); }
+const std::vector<ScriptBindingEntry>& cScriptBindingAllowlist::entries() { return table(); }
 
 }  // namespace litholattice

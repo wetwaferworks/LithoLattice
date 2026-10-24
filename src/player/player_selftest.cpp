@@ -57,7 +57,7 @@ int main() {
   // -- Stats: registration, defaults, clamp, adjust -------------------------
   // (Health/oxygen/stamina are VITALS now — tested in the IVitals section
   // below. Stats under test here are plain game-style numbers.)
-  StatRegistry stats;
+  cStatReg stats;
   const uint32_t might = stats.registerStat(StatDef{0, "might", 0, 64, 64});
   const uint32_t focus = stats.registerStat(StatDef{0, "focus", 0, 64, 0});
   check(might != 0 && focus != 0 && might != focus, "stat: ids assigned");
@@ -97,7 +97,7 @@ int main() {
   check(stats.get(kP1, might) == 40, "boost: all removed returns to base");
 
   // -- Vitals (IVitals): standard set + modding-style custom registration ---
-  VitalRegistry vitals;
+  cVitalReg vitals;
   const StandardVitals vit = registerStandardVitals(vitals);
   check(vit.health != 0 && vit.oxygen != 0 && vit.stamina != 0, "vitals: ids assigned");
   check(vitals.findVital("health") == vit.health, "vitals: findVital by name");
@@ -140,7 +140,7 @@ int main() {
   uint8_t vbuf[256];
   const uint32_t vwritten = vitals.serializeVitals(kP1, vbuf, sizeof(vbuf));
   check(vwritten == 4 + 3 * 8, "vital serialize: size = header + touched vitals");
-  VitalRegistry vitals2;
+  cVitalReg vitals2;
   registerStandardVitals(vitals2);
   vitals2.registerVital(VitalDef{0, "test_pool", 0, 100, 50});
   check(vitals2.deserializeVitals(kP1, vbuf, vwritten) == vwritten, "vital deserialize: bytes read");
@@ -195,7 +195,7 @@ int main() {
   uint8_t buf[256];
   const uint32_t written = stats.serializeStats(kP1, buf, sizeof(buf));
   check(written == 4 + 2 * 8, "stat serialize: size = header + touched stats");
-  StatRegistry stats2;
+  cStatReg stats2;
   const uint32_t might2 = stats2.registerStat(StatDef{0, "might", 0, 64, 64});
   const uint32_t focus2 = stats2.registerStat(StatDef{0, "focus", 0, 64, 0});
   check(might2 == might && focus2 == focus, "stat serialize: same registration order, same ids");
@@ -208,8 +208,8 @@ int main() {
 
   // -- Standard stats: XP is a STAT, not a vital ----------------------------
   {
-    StatRegistry xpStats;
-    VitalRegistry xpVitals;
+    cStatReg xpStats;
+    cVitalReg xpVitals;
     registerStandardVitals(xpVitals);
     const StandardStats ss = registerStandardStats(xpStats);
     check(ss.xp != 0, "xp: id assigned");
@@ -299,8 +299,8 @@ int main() {
   local.notifyStateChanged();
   check(listener.stateEvents == 1, "manager: notifyStateChanged fires listener");
 
-  VitalRegistry soloVitals;
-  StatRegistry soloStats;
+  cVitalReg soloVitals;
+  cStatReg soloStats;
   cAbilityReg soloAbilities(soloStats);
   const StandardVitals sv = registerStandardVitals(soloVitals);
   const uint32_t soloMight = soloStats.registerStat(StatDef{0, "might", 0, 64, 64});

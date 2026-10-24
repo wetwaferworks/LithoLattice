@@ -110,7 +110,7 @@ class ISimSystem {
 };
 
 // ---- the scheduler -------------------------------------------------------------
-class DeterministicScheduler {
+class cDeterministicScheduler {
  public:
   /// How a typed structural command is applied to the world. Always called
   /// single-threaded, between stages, in (system, seq) order (`systemId` is the
@@ -118,7 +118,7 @@ class DeterministicScheduler {
   /// and use their own callback.
   using ApplyFn = std::function<void(void* world, size_t systemId, const StructuralCommand& cmd)>;
 
-  explicit DeterministicScheduler(ApplyFn apply) : apply_(std::move(apply)) {}
+  explicit cDeterministicScheduler(ApplyFn apply) : apply_(std::move(apply)) {}
 
   /// Registers a system; returns its system id (registration order). Rebuilds
   /// the stage plan. Ids are stable: never reused or reordered.

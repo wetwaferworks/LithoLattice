@@ -9,7 +9,7 @@
 //   void   consoleSetCvar(const string &in name, const string &in value)
 //
 // `registerConsoleScriptBindings()` adds those declarations to the
-// ScriptBindingAllowlist (idempotent; call once at startup). Afterwards the
+// cScriptBindingAllowlist (idempotent; call once at startup). Afterwards the
 // game (or a mod host) calls bindConsoleToScripts() per ScriptEngine — the
 // per-mod permission check happens inside bindGlobalFunction. Keep the
 // returned ConsoleScriptContext alive as long as the ScriptEngine.

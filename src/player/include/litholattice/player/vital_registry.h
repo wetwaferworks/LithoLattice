@@ -1,7 +1,7 @@
-// VitalRegistry: the concrete IVitals. One registry serves every player;
+// cVitalReg: the concrete IVitals. One registry serves every player;
 // per-player data is keyed by player id in ordered maps, so iteration (and
 // therefore serialization) is deterministic by (player, vital id).
-// Mirrors StatRegistry's patterns minus the boost layer (see vital.h).
+// Mirrors cStatReg's patterns minus the boost layer (see vital.h).
 #pragma once
 
 #include <cstdint>
@@ -14,7 +14,7 @@
 
 namespace litholattice {
 
-class VitalRegistry final : public IVitals {
+class cVitalReg final : public IVitals {
  public:
   /// Fired synchronously whenever a player's vital value changes (set /
   /// adjust). Not fired when the value is unchanged, so listeners can
@@ -36,7 +36,7 @@ class VitalRegistry final : public IVitals {
   std::vector<uint32_t> touchedVitals(uint64_t playerId) const;
 
   /// Vital-block serialization: [u32 count][count x {u32 vitalId, i32 value}]
-  /// in vital-id order — same shape as StatRegistry's stat block. Returns
+  /// in vital-id order — same shape as cStatReg's stat block. Returns
   /// bytes written, or 0 when maxLen is too small (nothing is written then).
   uint32_t serializeVitals(uint64_t playerId, uint8_t* out, uint32_t maxLen) const;
   /// Inverse of serializeVitals. Replaces the player's stored values

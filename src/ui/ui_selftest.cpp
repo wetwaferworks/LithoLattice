@@ -105,7 +105,7 @@ void testLayout(Checker& check) {
   auto& row = root.add<StackPanel>(Orientation::Horizontal, 0.f).setLayout(Layout::at({1, 0}, {1, 0}, {}, {90, 20}));
   auto& r0 = row.add<Widget>().setLayout(Layout::sized({30, 0}));
   auto& r1 = row.add<Widget>().setLayout(Layout::sized({0, 0}, 1.f));
-  auto& grid = root.add<GridPanel>(3, Vec2{10, 10}, 2.f).setLayout(Layout::at({0, 0}, {0, 0}, {500, 500}));
+  auto& grid = root.add<cGridPanel>(3, Vec2{10, 10}, 2.f).setLayout(Layout::at({0, 0}, {0, 0}, {500, 500}));
   for (int i = 0; i < 5; ++i) grid.add<Widget>();
   ui.layout({800, 600});
 
@@ -173,7 +173,7 @@ void testFocus(Checker& check) {
 
 void testNavigation(Checker& check) {
   UiRoot ui;
-  auto& grid = ui.root().add<GridPanel>(3, Vec2{40, 40}, 4.f);
+  auto& grid = ui.root().add<cGridPanel>(3, Vec2{40, 40}, 4.f);
   std::vector<Slot*> slots;
   for (int i = 0; i < 9; ++i) slots.push_back(&grid.add<Slot>());
   ui.layout({800, 600});
@@ -236,7 +236,7 @@ void testText(Checker& check) {
   check(single.text() == "cdab", "text: single-line buffer drops newlines (" + single.text() + ")");
 
   UiRoot ui;
-  MemoryClipboard clip;
+  cMemoryClipboard clip;
   ui.setClipboard(&clip);
   auto& ed = ui.root().add<TextEditor>().setLayout(Layout::at({0, 0}, {0, 0}, {}, {400, 160}));
   auto& editor = static_cast<TextEditor&>(ed);
@@ -460,13 +460,13 @@ void testFactory(Checker& check) {
 }
 
 void testDivider(Checker& check) {
-  Divider h;
+  cDivider h;
   check(h.orientation() == Orientation::Horizontal && near(h.measure(Theme::defaults()).y, 1.f),
         "divider: horizontal measures thickness height");
-  Divider v(Orientation::Vertical, 3.f);
+  cDivider v(Orientation::Vertical, 3.f);
   check(near(v.measure(Theme::defaults()).x, 3.f) && near(v.measure(Theme::defaults()).y, 0.f),
         "divider: vertical measures thickness width");
-  Divider thin(Orientation::Horizontal, 0.f);
+  cDivider thin(Orientation::Horizontal, 0.f);
   check(near(thin.thickness(), 1.f), "divider: thickness clamps to >= 1");
   check(h.hitTest({4, 4}) == nullptr, "divider: never interactive");
   RecordingRenderer r;

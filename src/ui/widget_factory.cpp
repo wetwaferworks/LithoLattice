@@ -65,7 +65,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
         [](const Json& j) { return std::make_unique<Checkbox>(text(j, "text"), j.getBool("checked", false), j.getBool("toggle", false)); },
         false}},
       {"progress", {{"value"}, [](const Json& j) {
-                      auto p = std::make_unique<ProgressBar>();
+                      auto p = std::make_unique<cProgressBar>();
                       p->setValue(float(j.getNum("value", 0)));
                       return p;
                     }, false}},
@@ -88,7 +88,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
                   return s;
                 }, false}},
       {"divider", {{"orientation", "thickness"}, [](const Json& j) {
-                    return std::make_unique<Divider>(orientation(j, Orientation::Horizontal), float(j.getNum("thickness", 1)));
+                    return std::make_unique<cDivider>(orientation(j, Orientation::Horizontal), float(j.getNum("thickness", 1)));
                   }, false}},
       {"stack",
        {{"orientation", "spacing"},
@@ -96,7 +96,7 @@ const std::map<std::string, TypeInfo, std::less<>>& types() {
       {"grid",
        {{"columns", "cell", "spacing"},
         [](const Json& j) {
-          return std::make_unique<GridPanel>(int(j.getNum("columns", 4)), vec2(j.get("cell"), {40, 40}), float(j.getNum("spacing", 4)));
+          return std::make_unique<cGridPanel>(int(j.getNum("columns", 4)), vec2(j.get("cell"), {40, 40}), float(j.getNum("spacing", 4)));
         }}},
       {"textbox", {{"text", "placeholder"}, [](const Json& j) {
                      auto t = std::make_unique<TextBox>(text(j, "text"));
@@ -165,7 +165,7 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
       err = path + ": 'scroll' needs exactly one child";
       return nullptr;
     }
-    auto sv = std::make_unique<ScrollView>();
+    auto sv = std::make_unique<cScrollView>();
     sv->setContent(std::move(kids[0]));
     w = std::move(sv);
   } else if (split) {
@@ -173,7 +173,7 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
       err = path + ": 'splitter' needs exactly two children";
       return nullptr;
     }
-    auto sp = std::make_unique<Splitter>(orientation(j, Orientation::Horizontal), float(j.getNum("ratio", 0.3)));
+    auto sp = std::make_unique<cSplitter>(orientation(j, Orientation::Horizontal), float(j.getNum("ratio", 0.3)));
     sp->setPane(0, std::move(kids[0]));
     sp->setPane(1, std::move(kids[1]));
     w = std::move(sp);
@@ -183,7 +183,7 @@ std::unique_ptr<Widget> build(const Json& j, const std::string& path, std::strin
       err = path + ": 'tabs' needs one title per child";
       return nullptr;
     }
-    auto tv = std::make_unique<TabView>();
+    auto tv = std::make_unique<cTabView>();
     for (size_t i = 0; i < kids.size(); ++i) tv->addTab(titles[i], std::move(kids[i]));
     w = std::move(tv);
   } else {

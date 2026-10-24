@@ -1,4 +1,4 @@
-// ExtensionLoader: recursive extension loading, scoped contexts, privilege
+// cExtensionLoader: recursive extension loading, scoped contexts, privilege
 // default-deny, cascade unload. See extension_loader.h for the contracts.
 #include "litholattice/mods/extension_loader.h"
 
@@ -91,8 +91,8 @@ bool versionSatisfies(const char* range, const std::string& version) {
 
 }  // namespace
 
-void ExtensionLoader::registerStaticModule(StaticModule module) {
-  if (!ExtensionRegistry::isValidId(module.id)) {
+void cExtensionLoader::registerStaticModule(StaticModule module) {
+  if (!cExtensionReg::isValidId(module.id)) {
     logError("mods: refusing static module with invalid id '%s'", module.id.c_str());
     return;
   }
@@ -104,7 +104,7 @@ void ExtensionLoader::registerStaticModule(StaticModule module) {
   staticModules_.emplace(module.id, std::move(module));
 }
 
-bool ExtensionLoader::validateFacet(const LithoLatticeExtensible* facet,
+bool cExtensionLoader::validateFacet(const LithoLatticeExtensible* facet,
                                     std::string& err) const {
   if (!facet) {
     err = "null facet";
@@ -129,7 +129,7 @@ bool ExtensionLoader::validateFacet(const LithoLatticeExtensible* facet,
   return true;
 }
 
-uint32_t ExtensionLoader::effectiveShare(const std::string& parentPath,
+uint32_t cExtensionLoader::effectiveShare(const std::string& parentPath,
                                           uint32_t declIndex,
                                           uint32_t declared) const {
   const auto it = sharePlan_.find(parentPath);
@@ -137,14 +137,14 @@ uint32_t ExtensionLoader::effectiveShare(const std::string& parentPath,
   return it->second[declIndex];
 }
 
-bool ExtensionLoader::loadExtension(const std::string& parentPath,
+bool cExtensionLoader::loadExtension(const std::string& parentPath,
                                     const LithoLatticeExtensionDecl& decl,
                                     uint32_t declIndex,
                                     const LithoLatticeExtensible* parentFacet,
                                     std::vector<std::string>& ancestors,
                                     std::vector<std::string>& added,
                                     std::string& err) {
-  if (!decl.id || !ExtensionRegistry::isValidId(decl.id)) {
+  if (!decl.id || !cExtensionReg::isValidId(decl.id)) {
     err = "parent '" + parentPath + "': extension decl has an invalid id";
     return false;
   }
@@ -181,7 +181,7 @@ bool ExtensionLoader::loadExtension(const std::string& parentPath,
     uint32_t parentDepth = 0;
     if (registry_.depthOf(parentPath, parentDepth) &&
         parentDepth + 1 > registry_.maxExtensionDepth()) {
-      err = "depth cap: '" + ExtensionRegistry::joinPath(parentPath, id) +
+      err = "depth cap: '" + cExtensionReg::joinPath(parentPath, id) +
             "' would sit at depth " + std::to_string(parentDepth + 1) +
             ", over the max of " + std::to_string(registry_.maxExtensionDepth()) +
             " (fail-closed: refused, not truncated)";
@@ -216,7 +216,7 @@ bool ExtensionLoader::loadExtension(const std::string& parentPath,
   if (childFacet) {
     if (!validateFacet(childFacet, err)) return false;
     // Warn-and-clamp this level's sibling shares before recursing.
-    sharePlan_[path] = ExtensionBudget::clampShares(childFacet);
+    sharePlan_[path] = cExtensionBudget::clampShares(childFacet);
     ancestors.push_back(id);
     for (uint32_t i = 0; i < childFacet->extensionCount; ++i) {
       if (!loadExtension(path, childFacet->extensions[i], i, childFacet, ancestors,
@@ -228,7 +228,7 @@ bool ExtensionLoader::loadExtension(const std::string& parentPath,
   return true;
 }
 
-bool ExtensionLoader::loadMod(const std::string& id, std::string& err) {
+bool cExtensionLoader::loadMod(const std::string& id, std::string& err) {
   if (loadedMods_.count(id)) return true;  // idempotent
   const auto it = staticModules_.find(id);
   if (it == staticModules_.end()) {
@@ -253,7 +253,7 @@ bool ExtensionLoader::loadMod(const std::string& id, std::string& err) {
     if (validateFacet(facet, err)) {
       // Sibling-share validation (worker 3): warn-and-clamp this level's
       // shares so every context carries an effective share summing <= 100.
-      sharePlan_[id] = ExtensionBudget::clampShares(facet);
+      sharePlan_[id] = cExtensionBudget::clampShares(facet);
       std::vector<std::string> ancestors{id};
       for (uint32_t i = 0; i < facet->extensionCount; ++i) {
         if (!loadExtension(id, facet->extensions[i], i, facet, ancestors, added, err)) {
@@ -288,14 +288,14 @@ bool ExtensionLoader::loadMod(const std::string& id, std::string& err) {
   return true;
 }
 
-void ExtensionLoader::collectSubtree(const std::string& path,
+void cExtensionLoader::collectSubtree(const std::string& path,
                                      std::vector<std::string>& out) const {
   out.push_back(path);
   for (const std::string& child : registry_.childrenOf(path))
     collectSubtree(child, out);
 }
 
-void ExtensionLoader::unloadMod(const std::string& id) {
+void cExtensionLoader::unloadMod(const std::string& id) {
   lastUnloadOrder_.clear();
   if (!registry_.contains(id)) return;  // unknown: no-op
   std::vector<std::string> subtree;
@@ -327,7 +327,7 @@ void ExtensionLoader::unloadMod(const std::string& id) {
           subtree.size() > 0 ? subtree.size() - 1 : 0);
 }
 
-const ExtensionContext* ExtensionLoader::contextFor(const std::string& path) const {
+const ExtensionContext* cExtensionLoader::contextFor(const std::string& path) const {
   const auto it = contexts_.find(path);
   return it == contexts_.end() ? nullptr : &it->second;
 }

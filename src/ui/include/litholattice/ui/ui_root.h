@@ -97,7 +97,7 @@ class UiRoot {
   Widget *focus_ = nullptr, *hover_ = nullptr, *capture_ = nullptr;
   IScriptHost* scripts_ = nullptr;
   IClipboard* clipboard_ = nullptr;
-  MemoryClipboard fallbackClipboard_;
+  cMemoryClipboard fallbackClipboard_;
   std::unique_ptr<Tooltip> tooltip_;  // drawn for the hovered widget's tooltip()
   Vec2 viewport_, pointer_;
   float time_ = 0, hoverTime_ = 0;

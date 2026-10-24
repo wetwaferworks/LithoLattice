@@ -5,11 +5,11 @@
 // CPU 1024µs + script-heap memory 1MiB quotas, throttle-8-then-suspend — but
 // it is script-hook-specific (AngelScript allocations via memory shims), not
 // a general native-mod framework. Extensions are native IMod children, so
-// this file stays a standalone ExtensionBudget tracker with a concrete
+// this file stays a standalone cExtensionBudget tracker with a concrete
 // consumption seam for the hardening agent:
 //   (a) kDefaultModTickBudgetUs == ScriptEngine::kDefaultModBudgetUs (both
 //       1024µs = 2^10): the top-level numbers already agree;
-//   (b) drive ExtensionBudget::recordUsage()/noteMemoryBytes() from the
+//   (b) drive cExtensionBudget::recordUsage()/noteMemoryBytes() from the
 //       agent's own measurement points and the throttle/suspend state machine
 //       below applies unchanged — or promote this class to the shared
 //       implementation behind ScriptEngine's QuotaState.
@@ -25,7 +25,7 @@
 // a security violation): clampShares() scales every share down
 // proportionally so they sum to <= 100 and logs the effective values
 // (warn-and-clamp). The mod.json parser already clamps any single share to
-// 100; the C facet path clamps via ExtensionLoader (see extension_loader.cpp).
+// 100; the C facet path clamps via cExtensionLoader (see extension_loader.cpp).
 #pragma once
 
 #include <chrono>
@@ -70,9 +70,9 @@ enum class BudgetGate : uint8_t {
 /// path calls beginTick()/endTick() (or recordUsage()) around the
 /// extension's onTick; the gate then says whether the next tick may run.
 /// Siblings are independent nodes, so throttling one never affects another.
-class ExtensionBudget {
+class cExtensionBudget {
  public:
-  ExtensionBudget(std::string path, uint64_t tickQuotaUs, uint64_t memoryQuotaBytes);
+  cExtensionBudget(std::string path, uint64_t tickQuotaUs, uint64_t memoryQuotaBytes);
 
   const std::string& path() const { return path_; }
   uint64_t tickQuotaUs() const { return tickQuotaUs_; }

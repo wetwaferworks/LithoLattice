@@ -22,7 +22,7 @@
 //   at most the events not yet pumped.
 //   Trailer (40 bytes): 'LLDT', u16 demo format version, u16 reserved,
 //   u64 finalWorldHash, u64 totalEvents (all segments), u64 totalTicks,
-//   u64 checksum = DeterministicScheduler::hashBytes over ALL preceding
+//   u64 checksum = cDeterministicScheduler::hashBytes over ALL preceding
 //   file bytes (the same FNV-1a the LLCS format uses).
 //
 // World-permanence doctrine governs the parser: fail-closed on CORRUPTION

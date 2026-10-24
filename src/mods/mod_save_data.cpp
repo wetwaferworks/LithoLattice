@@ -85,7 +85,7 @@ cModSaveReg::cModSaveReg(std::filesystem::path worldDir)
     : worldDir_(std::move(worldDir)), saveDir_(worldDir_ / kModSaveDirName) {}
 
 std::filesystem::path cModSaveReg::sectionPath(const std::string& modId) const {
-  if (!ExtensionRegistry::isValidId(modId)) return {};
+  if (!cExtensionReg::isValidId(modId)) return {};
   return saveDir_ / (modId + kModSaveFileSuffix);
 }
 
@@ -241,7 +241,7 @@ std::vector<ModSaveResult> cModSaveReg::loadAll(const std::vector<RunningMod>& m
           name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
         continue;
       const std::string id = name.substr(0, name.size() - suffix.size());
-      if (!ExtensionRegistry::isValidId(id)) {
+      if (!cExtensionReg::isValidId(id)) {
         logError("modsave: ignoring file with invalid mod id '%s' (left on disk)",
                  name.c_str());
         continue;

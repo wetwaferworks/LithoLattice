@@ -100,7 +100,7 @@ class ModNetGate {
 
   /// Register a mod for network access. False on an invalid id or a
   /// duplicate (logged). Ids are [a-z0-9_]{1,64} (same rule as
-  /// ExtensionRegistry::isValidId; duplicated here so net never depends
+  /// cExtensionReg::isValidId; duplicated here so net never depends
   /// on the mods module).
   bool registerMod(const std::string& modId, ModNetBudgets budgets = {});
 

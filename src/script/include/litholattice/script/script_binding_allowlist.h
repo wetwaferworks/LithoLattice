@@ -34,7 +34,7 @@ struct ScriptBindingEntry {
   const char* description;       // human-readable; used by docs/tests
 };
 
-class ScriptBindingAllowlist {
+class cScriptBindingAllowlist {
  public:
   /// Registers the built-in table (core + standard game/mod API). Idempotent;
   /// called by ScriptEngine::init() so scripts always have a complete list.
@@ -55,7 +55,7 @@ class ScriptBindingAllowlist {
   static const std::vector<ScriptBindingEntry>& entries();
 
  private:
-  ScriptBindingAllowlist() = delete;
+  cScriptBindingAllowlist() = delete;
 };
 
 }  // namespace litholattice

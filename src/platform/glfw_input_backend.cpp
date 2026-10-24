@@ -65,9 +65,9 @@ static_assert(GLFW_GAMEPAD_AXIS_LAST + 1 == int(GamepadAxis::Count), "GLFW gamep
 
 }  // namespace
 
-GlfwInputBackend* GlfwInputBackend::from(GLFWwindow* w) { return static_cast<GlfwInputBackend*>(glfwGetWindowUserPointer(w)); }
+cGlfwInputBackend* cGlfwInputBackend::from(GLFWwindow* w) { return static_cast<cGlfwInputBackend*>(glfwGetWindowUserPointer(w)); }
 
-GlfwInputBackend::GlfwInputBackend(GLFWwindow* window) : window_(window) {
+cGlfwInputBackend::cGlfwInputBackend(GLFWwindow* window) : window_(window) {
   glfwSetWindowUserPointer(window_, this);
   glfwSetKeyCallback(window_, &onKey);
   glfwSetCharCallback(window_, &onChar);
@@ -78,7 +78,7 @@ GlfwInputBackend::GlfwInputBackend(GLFWwindow* window) : window_(window) {
   if (glfwRawMouseMotionSupported()) glfwSetInputMode(window_, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 }
 
-GlfwInputBackend::~GlfwInputBackend() {
+cGlfwInputBackend::~cGlfwInputBackend() {
   glfwSetKeyCallback(window_, nullptr);
   glfwSetCharCallback(window_, nullptr);
   glfwSetMouseButtonCallback(window_, nullptr);
@@ -88,7 +88,7 @@ GlfwInputBackend::~GlfwInputBackend() {
   glfwSetWindowUserPointer(window_, nullptr);
 }
 
-void GlfwInputBackend::onKey(GLFWwindow* w, int key, int, int action, int) {
+void cGlfwInputBackend::onKey(GLFWwindow* w, int key, int, int action, int) {
   const Key k = fromGlfwKey(key);
   if (k == Key::Unknown) return;
   const auto type = action == GLFW_PRESS ? InputEvent::Type::KeyDown
@@ -96,17 +96,17 @@ void GlfwInputBackend::onKey(GLFWwindow* w, int key, int, int action, int) {
   from(w)->push(InputEvent::key(type, k, glfwGetTime()));
 }
 
-void GlfwInputBackend::onChar(GLFWwindow* w, unsigned int cp) { from(w)->push(InputEvent::text(char32_t(cp), glfwGetTime())); }
+void cGlfwInputBackend::onChar(GLFWwindow* w, unsigned int cp) { from(w)->push(InputEvent::text(char32_t(cp), glfwGetTime())); }
 
-void GlfwInputBackend::onMouseButton(GLFWwindow* w, int button, int action, int) {
+void cGlfwInputBackend::onMouseButton(GLFWwindow* w, int button, int action, int) {
   if (const auto b = fromGlfwButton(button))
     from(w)->push(InputEvent::mouse(action == GLFW_PRESS ? InputEvent::Type::MouseDown : InputEvent::Type::MouseUp, *b, glfwGetTime()));
 }
 
-void GlfwInputBackend::onScroll(GLFWwindow* w, double, double dy) { from(w)->push(InputEvent::wheel(float(dy), glfwGetTime())); }
+void cGlfwInputBackend::onScroll(GLFWwindow* w, double, double dy) { from(w)->push(InputEvent::wheel(float(dy), glfwGetTime())); }
 
-void GlfwInputBackend::onCursor(GLFWwindow* w, double x, double y) {
-  GlfwInputBackend* self = from(w);
+void cGlfwInputBackend::onCursor(GLFWwindow* w, double x, double y) {
+  cGlfwInputBackend* self = from(w);
   const double t = glfwGetTime();
   if (self->haveCursor_) self->push(InputEvent::motion(float(x - self->lastX_), float(y - self->lastY_), t));
   self->lastX_ = x;
@@ -118,17 +118,17 @@ void GlfwInputBackend::onCursor(GLFWwindow* w, double x, double y) {
   self->push(InputEvent::cursor(float(ww > 0 ? x * fw / ww : x), float(wh > 0 ? y * fh / wh : y), t));
 }
 
-void GlfwInputBackend::onFocus(GLFWwindow* w, int focused) {
-  GlfwInputBackend* self = from(w);
+void cGlfwInputBackend::onFocus(GLFWwindow* w, int focused) {
+  cGlfwInputBackend* self = from(w);
   self->haveCursor_ = false;  // no motion jump from where the cursor went while away
   if (focused) ++self->focusGained_; else ++self->focusLost_;
   self->push(focused ? InputEvent::focusGained(glfwGetTime()) : InputEvent::focusLost(glfwGetTime()));
 }
 
-bool GlfwInputBackend::addGamepadMappings(const char* text) { return glfwUpdateGamepadMappings(text) == GLFW_TRUE; }
+bool cGlfwInputBackend::addGamepadMappings(const char* text) { return glfwUpdateGamepadMappings(text) == GLFW_TRUE; }
 
 // Gamepads are polled (GLFW has no gamepad callbacks); state changes become events.
-void GlfwInputBackend::pollGamepads(double now) {
+void cGlfwInputBackend::pollGamepads(double now) {
   using T = InputEvent::Type;
   for (int slot = 0; slot < kMaxGamepads; ++slot) {
     PadState& p = pads_[size_t(slot)];
@@ -158,7 +158,7 @@ void GlfwInputBackend::pollGamepads(double now) {
   }
 }
 
-void GlfwInputBackend::poll(std::vector<InputEvent>& out) {
+void cGlfwInputBackend::poll(std::vector<InputEvent>& out) {
   glfwPollEvents();  // runs the callbacks above (and the window's close / resize handling)
   pollGamepads(glfwGetTime());
   out.insert(out.end(), pending_.begin(), pending_.end());

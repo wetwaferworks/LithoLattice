@@ -3,7 +3,7 @@
 // network, or system access). Runaway scripts are aborted after a time budget.
 //
 // One ScriptEngine = one mod's sandbox. It carries that mod's permission
-// bitmask (ScriptBindingAllowlist + LithoLatticeModPermission) and its quotas:
+// bitmask (cScriptBindingAllowlist + LithoLatticeModPermission) and its quotas:
 // a CPU budget per tick (overrun -> throttled for a few ticks -> suspended,
 // with a logged reason, per mod_safety.h) and a memory quota (overrun ->
 // suspended with a logged reason). Suspensions feed the automatic
@@ -73,7 +73,7 @@ class ScriptEngine {
 
   /// Gated binding registration: the ONLY way to add a script API. Refuses
   /// (returns < 0, logs a reason) when `decl` is not on the
-  /// ScriptBindingAllowlist, or when the mod's permission bitmask does not
+  /// cScriptBindingAllowlist, or when the mod's permission bitmask does not
   /// grant the entry's required bits. The raw asIScriptEngine* is deliberately
   /// NOT exposed: every binding goes through the allowlist, no bypass.
   /// Returns the AngelScript result (>= 0 on success).

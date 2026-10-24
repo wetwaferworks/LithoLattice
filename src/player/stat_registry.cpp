@@ -1,4 +1,4 @@
-// StatRegistry implementation. See stat.h for the base/boost value model.
+// cStatReg implementation. See stat.h for the base/boost value model.
 #include "litholattice/player/stat_registry.h"
 
 #include <algorithm>
@@ -27,7 +27,7 @@ int32_t getI32(const uint8_t* in) { return static_cast<int32_t>(getU32(in)); }
 
 }  // namespace
 
-uint32_t StatRegistry::registerStat(const StatDef& def) {
+uint32_t cStatReg::registerStat(const StatDef& def) {
   if (!def.name || def.name[0] == '\0' || def.minValue > def.maxValue) return 0;
   // First-wins by name (same rule as the content registry): a duplicate
   // registration returns the existing id and keeps the original def, so two
@@ -53,24 +53,24 @@ uint32_t StatRegistry::registerStat(const StatDef& def) {
   return id;
 }
 
-uint32_t StatRegistry::findStat(std::string_view name) const {
+uint32_t cStatReg::findStat(std::string_view name) const {
   const auto it = byName_.find(std::string(name));
   return it == byName_.end() ? 0 : it->second;
 }
 
-const StatDef* StatRegistry::statDef(uint32_t statId) const {
+const StatDef* cStatReg::statDef(uint32_t statId) const {
   const auto it = defs_.find(statId);
   return it == defs_.end() ? nullptr : &it->second.def;
 }
 
-int32_t StatRegistry::baseOrDefault(uint64_t playerId, uint32_t statId, const StatDef& def) const {
+int32_t cStatReg::baseOrDefault(uint64_t playerId, uint32_t statId, const StatDef& def) const {
   const auto pit = base_.find(playerId);
   if (pit == base_.end()) return def.defaultValue;
   const auto sit = pit->second.find(statId);
   return sit == pit->second.end() ? def.defaultValue : sit->second;
 }
 
-int32_t StatRegistry::effective(uint64_t playerId, uint32_t statId, const StatDef& def) const {
+int32_t cStatReg::effective(uint64_t playerId, uint32_t statId, const StatDef& def) const {
   int64_t v = baseOrDefault(playerId, statId, def);
   const auto pit = boosts_.find(playerId);
   if (pit != boosts_.end()) {
@@ -81,17 +81,17 @@ int32_t StatRegistry::effective(uint64_t playerId, uint32_t statId, const StatDe
   return clampTo(def, v);
 }
 
-int32_t StatRegistry::get(uint64_t playerId, uint32_t statId) const {
+int32_t cStatReg::get(uint64_t playerId, uint32_t statId) const {
   const StatDef* def = statDef(statId);
   return def ? effective(playerId, statId, *def) : 0;
 }
 
-int32_t StatRegistry::getBase(uint64_t playerId, uint32_t statId) const {
+int32_t cStatReg::getBase(uint64_t playerId, uint32_t statId) const {
   const StatDef* def = statDef(statId);
   return def ? baseOrDefault(playerId, statId, *def) : 0;
 }
 
-void StatRegistry::fireIfChanged(uint64_t playerId, uint32_t statId, int32_t oldEffective) {
+void cStatReg::fireIfChanged(uint64_t playerId, uint32_t statId, int32_t oldEffective) {
   if (!changeFn_) return;
   const StatDef* def = statDef(statId);
   if (!def) return;
@@ -99,7 +99,7 @@ void StatRegistry::fireIfChanged(uint64_t playerId, uint32_t statId, int32_t old
   if (now != oldEffective) changeFn_(playerId, statId, oldEffective, now);
 }
 
-void StatRegistry::set(uint64_t playerId, uint32_t statId, int32_t value) {
+void cStatReg::set(uint64_t playerId, uint32_t statId, int32_t value) {
   const StatDef* def = statDef(statId);
   if (!def) return;
   const int32_t old = effective(playerId, statId, *def);
@@ -107,14 +107,14 @@ void StatRegistry::set(uint64_t playerId, uint32_t statId, int32_t value) {
   fireIfChanged(playerId, statId, old);
 }
 
-void StatRegistry::adjust(uint64_t playerId, uint32_t statId, int32_t delta) {
+void cStatReg::adjust(uint64_t playerId, uint32_t statId, int32_t delta) {
   const StatDef* def = statDef(statId);
   if (!def) return;
   // int64 intermediate: base + delta can overflow int32 before clamping.
   set(playerId, statId, clampTo(*def, int64_t(baseOrDefault(playerId, statId, *def)) + delta));
 }
 
-void StatRegistry::addBoost(uint64_t playerId, uint32_t statId, int32_t amount, uint64_t source) {
+void cStatReg::addBoost(uint64_t playerId, uint32_t statId, int32_t amount, uint64_t source) {
   const StatDef* def = statDef(statId);
   if (!def) return;
   const int32_t old = effective(playerId, statId, *def);
@@ -122,7 +122,7 @@ void StatRegistry::addBoost(uint64_t playerId, uint32_t statId, int32_t amount, 
   fireIfChanged(playerId, statId, old);
 }
 
-void StatRegistry::removeBoost(uint64_t playerId, uint32_t statId, uint64_t source) {
+void cStatReg::removeBoost(uint64_t playerId, uint32_t statId, uint64_t source) {
   const StatDef* def = statDef(statId);
   if (!def) return;
   const auto pit = boosts_.find(playerId);
@@ -136,12 +136,12 @@ void StatRegistry::removeBoost(uint64_t playerId, uint32_t statId, uint64_t sour
   fireIfChanged(playerId, statId, old);
 }
 
-void StatRegistry::removePlayer(uint64_t playerId) {
+void cStatReg::removePlayer(uint64_t playerId) {
   base_.erase(playerId);
   boosts_.erase(playerId);
 }
 
-std::vector<uint32_t> StatRegistry::touchedStats(uint64_t playerId) const {
+std::vector<uint32_t> cStatReg::touchedStats(uint64_t playerId) const {
   std::vector<uint32_t> out;
   const auto pit = base_.find(playerId);
   if (pit != base_.end())
@@ -149,7 +149,7 @@ std::vector<uint32_t> StatRegistry::touchedStats(uint64_t playerId) const {
   return out;  // map order = ascending stat id
 }
 
-uint32_t StatRegistry::serializeStats(uint64_t playerId, uint8_t* out, uint32_t maxLen) const {
+uint32_t cStatReg::serializeStats(uint64_t playerId, uint8_t* out, uint32_t maxLen) const {
   const std::vector<uint32_t> ids = touchedStats(playerId);
   const uint32_t need = 4 + static_cast<uint32_t>(ids.size()) * 8;
   if (!out || maxLen < need) return 0;
@@ -164,7 +164,7 @@ uint32_t StatRegistry::serializeStats(uint64_t playerId, uint8_t* out, uint32_t 
   return need;
 }
 
-uint32_t StatRegistry::deserializeStats(uint64_t playerId, const uint8_t* in, uint32_t len) {
+uint32_t cStatReg::deserializeStats(uint64_t playerId, const uint8_t* in, uint32_t len) {
   if (!in || len < 4) return 0;
   const uint32_t count = getU32(in);
   // Validate the full block before mutating anything (fail closed).

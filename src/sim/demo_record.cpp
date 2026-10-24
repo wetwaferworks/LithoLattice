@@ -238,7 +238,7 @@ DemoParseResult parseDemo(const uint8_t* data, size_t n) {
       if (getU16(at + 4) != kDemoFormatVersion)
         return hardError(DemoError::UnsupportedVersion, "demo: unsupported trailer format version");
       const uint64_t storedSum = getU64(at + 32);
-      if (DeterministicScheduler::hashBytes(data, offset) != storedSum)
+      if (cDeterministicScheduler::hashBytes(data, offset) != storedSum)
         return hardError(DemoError::TrailerChecksum, "demo: trailer checksum mismatch");
       r.trailer.finalWorldHash = getU64(at + 8);
       r.trailer.totalEvents = getU64(at + 16);
@@ -359,7 +359,7 @@ bool DemoRecorder::finish(uint64_t finalWorldHash, uint64_t totalTicks) {
     return false;
   }
   pump();  // final pump: everything applied up to here lands in a segment
-  const uint64_t sum = DeterministicScheduler::hashBytes(bytes_.data(), bytes_.size());
+  const uint64_t sum = cDeterministicScheduler::hashBytes(bytes_.data(), bytes_.size());
   bytes_.insert(bytes_.end(), kDemoTrailerMagic, kDemoTrailerMagic + 4);
   putU16(bytes_, kDemoFormatVersion);
   putU16(bytes_, 0);

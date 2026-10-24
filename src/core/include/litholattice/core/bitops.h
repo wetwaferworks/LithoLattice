@@ -9,7 +9,7 @@
 //   only where a differential test against the original expression
 //   passes (tools/bitops_diff_test.cpp). Anything whose optimization
 //   would change a value — e.g. re-associating the FNV-1a byte loop in
-//   DeterministicScheduler::hashBytes — is NOT adopted, by the hash law.
+//   cDeterministicScheduler::hashBytes — is NOT adopted, by the hash law.
 // - Header-only, constexpr where the original was, always-inline: the
 //   call must never cost more than the expression it spells.
 // - Portable C++ is the canonical form. Compiler builtins are used only

@@ -29,7 +29,7 @@ class IClipboard {
 };
 
 /// Process-local clipboard (tests, or when no OS clipboard is wired).
-class MemoryClipboard final : public IClipboard {
+class cMemoryClipboard final : public IClipboard {
  public:
   std::string text() const override { return text_; }
   void setText(const std::string& text) override { text_ = text; }

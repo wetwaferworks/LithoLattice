@@ -1,5 +1,5 @@
 // Trace JIT composition seam (sim/): wraps a compiled Trace graph as a
-// DeterministicScheduler ISimSystem.
+// cDeterministicScheduler ISimSystem.
 //
 // ============================================================================
 // DESIGN REASONING (for the builder — read before refining this file)
@@ -29,7 +29,7 @@
 //    the fact, if at all. Declarations are load-bearing; lying in them
 //    silently voids the whole determinism argument.
 // 2. The JIT owning its own scheduling (JIT submits its own jobs / ticks
-//    itself outside DeterministicScheduler::runTick). REJECTED: two schedulers
+//    itself outside cDeterministicScheduler::runTick). REJECTED: two schedulers
 //    means the JIT can run while a stage's command buffers haven't drained,
 //    or while another writer's stage is mid-flight. Stage order, drain order,
 //    and the "world is never mutated mid-stage" invariant all assume ONE
@@ -163,7 +163,7 @@ namespace litholattice {
 /// (100/101/102/200/201) on purpose.
 constexpr uint32_t kSignalNetworkRes = 300;
 
-/// A compiled Trace graph wrapped as a DeterministicScheduler system.
+/// A compiled Trace graph wrapped as a cDeterministicScheduler system.
 ///
 /// Construction compiles the graph once (via the borrowed ITraceJit);
 /// update() executes it once per tick; the destructor frees it. recompile()

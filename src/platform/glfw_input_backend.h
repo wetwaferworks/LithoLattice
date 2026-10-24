@@ -12,12 +12,12 @@ namespace litholattice {
 /// Keyboard, mouse (buttons, wheel, motion, cursor), text (char callback), focus, and gamepads
 /// through glfwGetGamepadState (SDL_GameControllerDB mappings built into GLFW, plus an optional
 /// gamecontrollerdb.txt). Callbacks append to a pending list; poll() pumps GLFW and hands it over.
-class GlfwInputBackend final : public IInputBackend {
+class cGlfwInputBackend final : public IInputBackend {
  public:
-  explicit GlfwInputBackend(GLFWwindow* window);
-  ~GlfwInputBackend() override;
-  GlfwInputBackend(const GlfwInputBackend&) = delete;
-  GlfwInputBackend& operator=(const GlfwInputBackend&) = delete;
+  explicit cGlfwInputBackend(GLFWwindow* window);
+  ~cGlfwInputBackend() override;
+  cGlfwInputBackend(const cGlfwInputBackend&) = delete;
+  cGlfwInputBackend& operator=(const cGlfwInputBackend&) = delete;
 
   std::string_view name() const override { return "glfw"; }
   void poll(std::vector<InputEvent>& out) override;
@@ -46,7 +46,7 @@ class GlfwInputBackend final : public IInputBackend {
   static void onScroll(GLFWwindow* w, double dx, double dy);
   static void onCursor(GLFWwindow* w, double x, double y);
   static void onFocus(GLFWwindow* w, int focused);
-  static GlfwInputBackend* from(GLFWwindow* w);
+  static cGlfwInputBackend* from(GLFWwindow* w);
 
   GLFWwindow* window_;
   std::vector<InputEvent> pending_;

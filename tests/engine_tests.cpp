@@ -4233,10 +4233,10 @@ struct SchedWorld {
 };
 
 uint64_t schedWorldHash(const SchedWorld& w) {
-  uint64_t h = DeterministicScheduler::hashBytes(w.lo.data(), w.lo.size() * sizeof(uint64_t));
-  h = DeterministicScheduler::hashBytes(w.hi.data(), w.hi.size() * sizeof(uint64_t), h);
-  h = DeterministicScheduler::hashU64(w.checksum, h);
-  return DeterministicScheduler::hashBytes(w.entities.data(), w.entities.size() * sizeof(uint64_t), h);
+  uint64_t h = cDeterministicScheduler::hashBytes(w.lo.data(), w.lo.size() * sizeof(uint64_t));
+  h = cDeterministicScheduler::hashBytes(w.hi.data(), w.hi.size() * sizeof(uint64_t), h);
+  h = cDeterministicScheduler::hashU64(w.checksum, h);
+  return cDeterministicScheduler::hashBytes(w.entities.data(), w.entities.size() * sizeof(uint64_t), h);
 }
 
 class NopSystem : public ISimSystem {
@@ -4281,8 +4281,8 @@ class FoldSystem : public ISimSystem {
   }
   void update(SchedTickContext& ctx) override {
     auto* w = static_cast<SchedWorld*>(ctx.world);
-    uint64_t h = DeterministicScheduler::hashBytes(w->lo.data(), w->lo.size() * sizeof(uint64_t));
-    w->checksum = DeterministicScheduler::hashBytes(w->hi.data(), w->hi.size() * sizeof(uint64_t), h);
+    uint64_t h = cDeterministicScheduler::hashBytes(w->lo.data(), w->lo.size() * sizeof(uint64_t));
+    w->checksum = cDeterministicScheduler::hashBytes(w->hi.data(), w->hi.size() * sizeof(uint64_t), h);
   }
 };
 
@@ -4334,7 +4334,7 @@ void testDetSched() {
 
   // --- conflict-DAG -> greedy stages ---
   {
-    DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+    cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
     sched.addSystem(std::make_unique<NopSystem>("A", std::vector<ResourceAccess>{writeRes(1)}));
     sched.addSystem(std::make_unique<NopSystem>("B", std::vector<ResourceAccess>{readRes(1)}));
     sched.addSystem(std::make_unique<NopSystem>("C", std::vector<ResourceAccess>{writeRes(2)}));
@@ -4352,7 +4352,7 @@ void testDetSched() {
   // --- command buffers drain in (system, seq) order ---
   {
     SchedWorld w;
-    DeterministicScheduler sched([&](void* wp, size_t sysId, const StructuralCommand& c) {
+    cDeterministicScheduler sched([&](void* wp, size_t sysId, const StructuralCommand& c) {
       static_cast<SchedWorld*>(wp)->drainLog.push_back((sysId << 32) | c.payload);
     });
     sched.addSystem(std::make_unique<PushSystem>("P", kLog, std::vector<uint64_t>{11, 12}));
@@ -4368,7 +4368,7 @@ void testDetSched() {
     bool ok = true;
     for (unsigned threads : {1u, 4u}) {
       SchedWorld w;
-      DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+      cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
       sched.addSystem(std::make_unique<SpawnOneSystem>());
       sched.addSystem(std::make_unique<ObserveSystem>());
       const auto& st = sched.stages();
@@ -4404,7 +4404,7 @@ void testDetSched() {
   {
     auto runWorld = [](unsigned threads, uint64_t ticks) {
       SchedWorld w;
-      DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+      cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
       sched.addSystem(std::make_unique<AccSystem>("lo", kCellsLo, 0));
       sched.addSystem(std::make_unique<AccSystem>("hi", kCellsHi, 128));
       sched.addSystem(std::make_unique<FoldSystem>());
@@ -4429,7 +4429,7 @@ void testDetSched() {
   {
     auto runWorldJs = [](unsigned threads, uint64_t ticks) {
       SchedWorld w;
-      DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+      cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
       sched.addSystem(std::make_unique<AccSystem>("lo", kCellsLo, 0));
       sched.addSystem(std::make_unique<AccSystem>("hi", kCellsHi, 128));
       sched.addSystem(std::make_unique<FoldSystem>());
@@ -4440,7 +4440,7 @@ void testDetSched() {
     };
     auto runWorldPool1 = [] {
       SchedWorld w;
-      DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+      cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
       sched.addSystem(std::make_unique<AccSystem>("lo", kCellsLo, 0));
       sched.addSystem(std::make_unique<AccSystem>("hi", kCellsHi, 128));
       sched.addSystem(std::make_unique<FoldSystem>());
@@ -4511,7 +4511,7 @@ void testTraceJitCompose() {
   // --- stage placement: conflicts with a same-resource writer, shares a stage with a disjoint reader ---
   {
     FakeJit jit;
-    DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+    cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
     sched.addSystem(std::make_unique<TraceJitSystem>(&jit, nullptr, 0));  // id 0: Write(kSignalNetworkRes)
     sched.addSystem(std::make_unique<NopSystem>("w", std::vector<ResourceAccess>{writeRes(kSignalNetworkRes)}));
     sched.addSystem(std::make_unique<NopSystem>("r", std::vector<ResourceAccess>{readRes(900)}));
@@ -4526,7 +4526,7 @@ void testTraceJitCompose() {
     bool ok = true;
     for (unsigned threads : {1u, 4u}) {
       FakeJit jit;
-      DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+      cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
       auto sys = std::make_unique<TraceJitSystem>(&jit, nullptr, 0);
       TraceJitSystem* raw = sys.get();
       const uint64_t graphId = raw->graph().id;
@@ -4547,7 +4547,7 @@ void testTraceJitCompose() {
     auto sys = std::make_unique<TraceJitSystem>(&jit, nullptr, 0);
     TraceJitSystem* raw = sys.get();
     const uint64_t id1 = raw->graph().id;
-    DeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
+    cDeterministicScheduler sched([](void*, size_t, const StructuralCommand&) {});
     sched.addSystem(std::move(sys));
     SchedWorld w;
     JobPool pool(1);
@@ -7141,13 +7141,13 @@ void testScriptSandbox() {
   std::printf("script: binding allowlist + per-mod CPU/memory quotas\n");
 
   // --- allowlist: the table is deny-by-default --------------------------------
-  ScriptBindingAllowlist::registerBuiltins();
-  check(ScriptBindingAllowlist::isAllowlisted("void log(const string &in)") &&
-            !ScriptBindingAllowlist::isAllowlisted("void system(const string &in)") &&
-            !ScriptBindingAllowlist::isAllowlisted("int open(const string &in, int)"),
+  cScriptBindingAllowlist::registerBuiltins();
+  check(cScriptBindingAllowlist::isAllowlisted("void log(const string &in)") &&
+            !cScriptBindingAllowlist::isAllowlisted("void system(const string &in)") &&
+            !cScriptBindingAllowlist::isAllowlisted("int open(const string &in, int)"),
         "allowlist: core bindings listed; system()/open() are not");
-  check(ScriptBindingAllowlist::requiredPermissions("int setBlock(int, int, int, uint16)") == uint32_t(kPermWorldWrite) &&
-            ScriptBindingAllowlist::requiredPermissions("void log(const string &in)") == 0,
+  check(cScriptBindingAllowlist::requiredPermissions("int setBlock(int, int, int, uint16)") == uint32_t(kPermWorldWrite) &&
+            cScriptBindingAllowlist::requiredPermissions("void log(const string &in)") == 0,
         "allowlist: entries carry their permission bits (setBlock needs world-write, log needs none)");
 
   // --- allowlist: the script host refuses unlisted / unpermitted bindings ----
@@ -7171,7 +7171,7 @@ void testScriptSandbox() {
   }
   {  // fix 3c (Elfie P2): the generic calling convention (WASM / AS_MAX_PORTABILITY) forced natively
     ScriptEngine::forceGenericCalls(true);
-    ScriptBindingAllowlist::registerBinding({"string genEcho(const string &in, bool, float, int)", 0, "fix 3c generic test"});
+    cScriptBindingAllowlist::registerBinding({"string genEcho(const string &in, bool, float, int)", 0, "fix 3c generic test"});
     ScriptEngine se;
     bool ok = se.init() && ScriptEngine::useGenericCalls();
     se.setModPermissions(kPermWorldRead);
@@ -7191,16 +7191,16 @@ void testScriptSandbox() {
 
   // --- allowlist: runtime registration is guarded too -------------------------
   {
-    ScriptBindingAllowlist::registerBuiltins();
-    check(!ScriptBindingAllowlist::registerBinding(
+    cScriptBindingAllowlist::registerBuiltins();
+    check(!cScriptBindingAllowlist::registerBinding(
               {"void exfiltrateFile(const string &in)", kPermWorldRead, "evil"}),
           "allowlist: runtime binding with a file-access token is refused");
-    check(!ScriptBindingAllowlist::registerBinding({"void sysExec(const string &in)", 0, "evil"}),
+    check(!cScriptBindingAllowlist::registerBinding({"void sysExec(const string &in)", 0, "evil"}),
           "allowlist: runtime binding with a process token is refused");
-    check(ScriptBindingAllowlist::registerBinding({"string modVersion()", 0, "test-only custom binding"}) &&
-              ScriptBindingAllowlist::isAllowlisted("string modVersion()"),
+    check(cScriptBindingAllowlist::registerBinding({"string modVersion()", 0, "test-only custom binding"}) &&
+              cScriptBindingAllowlist::isAllowlisted("string modVersion()"),
           "allowlist: legit runtime binding is accepted");
-    check(!ScriptBindingAllowlist::registerBinding({"string modVersion()", 0, "duplicate"}),
+    check(!cScriptBindingAllowlist::registerBinding({"string modVersion()", 0, "duplicate"}),
           "allowlist: duplicate runtime binding is refused");
   }
 

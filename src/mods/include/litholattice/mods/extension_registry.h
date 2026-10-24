@@ -1,4 +1,4 @@
-// ExtensionRegistry: tracks the mod/extension tree for IExtensible parents.
+// cExtensionReg: tracks the mod/extension tree for IExtensible parents.
 //
 // Dotted identity paths: every extension is addressed by the full path from
 // its top-level mod, e.g. "lithokraft.worldedit.brushes". Parent/child links
@@ -22,7 +22,7 @@
 namespace litholattice {
 
 /// Default extension nesting cap. A k-prefix constant, NOT hardcoded behavior:
-/// ExtensionRegistry::setMaxExtensionDepth() overrides it at runtime.
+/// cExtensionReg::setMaxExtensionDepth() overrides it at runtime.
 inline constexpr uint32_t kDefaultMaxExtensionDepth = 8;
 
 /// One node in the extension tree.
@@ -33,7 +33,7 @@ struct ExtensionNode {
   uint32_t depth = 0;      ///< top-level mod = 0; each nesting level +1
 };
 
-class ExtensionRegistry {
+class cExtensionReg {
  public:
   uint32_t maxExtensionDepth() const { return maxDepth_; }
 
@@ -51,7 +51,7 @@ class ExtensionRegistry {
   std::string registerExtension(const std::string& parentPath, const std::string& id);
 
   /// Removes a single node by dotted path. Does NOT cascade: the caller
-  /// (ExtensionLoader::unloadMod) removes descendants first, children-first.
+  /// (cExtensionLoader::unloadMod) removes descendants first, children-first.
   /// Returns false when the path is unknown.
   bool unregister(const std::string& path);
 

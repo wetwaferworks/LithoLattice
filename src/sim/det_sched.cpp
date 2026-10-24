@@ -25,7 +25,7 @@ uint64_t detKey(uint64_t entity, uint64_t tick, uint64_t salt) {
   return h;
 }
 
-uint64_t DeterministicScheduler::hashBytes(const void* p, size_t n, uint64_t h) {
+uint64_t cDeterministicScheduler::hashBytes(const void* p, size_t n, uint64_t h) {
   const auto* b = static_cast<const unsigned char*>(p);
   // Build 59: the step is spelled through the shared bit-ops header
   // (kFnvPrime == 0x100000001B3, proven in tools/bitops_diff_test.cpp).
@@ -34,7 +34,7 @@ uint64_t DeterministicScheduler::hashBytes(const void* p, size_t n, uint64_t h) 
   return h;
 }
 
-size_t DeterministicScheduler::addSystem(std::unique_ptr<ISimSystem> sys) {
+size_t cDeterministicScheduler::addSystem(std::unique_ptr<ISimSystem> sys) {
   const size_t id = systems_.size();
   systems_.push_back(std::move(sys));
   buffers_.push_back(std::make_unique<CommandBuffer>());
@@ -54,7 +54,7 @@ bool conflictsOn(const std::vector<ResourceAccess>& a, const std::vector<Resourc
 
 }  // namespace
 
-void DeterministicScheduler::rebuildStages() {
+void cDeterministicScheduler::rebuildStages() {
   const size_t n = systems_.size();
   std::vector<std::vector<ResourceAccess>> decl(n);
   for (size_t i = 0; i < n; ++i) decl[i] = systems_[i]->access();
@@ -75,7 +75,7 @@ void DeterministicScheduler::rebuildStages() {
   for (size_t i = 0; i < n; ++i) stages_[stageOf[i]].push_back(i);
 }
 
-void DeterministicScheduler::drainStage(void* world) {
+void cDeterministicScheduler::drainStage(void* world) {
   // Fixed deterministic order: system registration order, then per-system seq.
   // Single-threaded here; commands become visible to the next stage, never
   // mid-stage.
@@ -94,7 +94,7 @@ void DeterministicScheduler::drainStage(void* world) {
   drainTmp_.clear();
 }
 
-void DeterministicScheduler::runTick(uint64_t tick, void* world, JobPool& pool) {
+void cDeterministicScheduler::runTick(uint64_t tick, void* world, JobPool& pool) {
   const uint64_t failedBefore = pool.failedJobs();
   for (size_t s = 0; s < stages_.size(); ++s) {
     for (const size_t id : stages_[s]) {
@@ -113,7 +113,7 @@ void DeterministicScheduler::runTick(uint64_t tick, void* world, JobPool& pool) 
   }
 }
 
-void DeterministicScheduler::runTick(uint64_t tick, void* world, JobSystem& jobs) {
+void cDeterministicScheduler::runTick(uint64_t tick, void* world, JobSystem& jobs) {
   for (size_t s = 0; s < stages_.size(); ++s) {
     JobFence fence(jobs);  // the stage barrier: all systems done before the drain
     for (const size_t id : stages_[s]) {

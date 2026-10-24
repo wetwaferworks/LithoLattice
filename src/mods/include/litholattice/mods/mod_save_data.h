@@ -41,7 +41,7 @@
 // engine itself — a crash, a disk fault, or a hand-edited file must not let
 // garbage flow into the sim. Every section is validated before the mod's
 // onWorldStart runs; onWorldStop/onUnload never see unverified data. Mod ids
-// are validated ([a-z0-9_]{1,64}, ExtensionRegistry::isValidId) before they
+// are validated ([a-z0-9_]{1,64}, cExtensionReg::isValidId) before they
 // touch the filesystem, so a malicious id cannot escape <world>/moddata.
 #pragma once
 

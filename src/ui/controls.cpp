@@ -143,19 +143,19 @@ void Checkbox::paint(Painter& p) const {
   p.textIn({box.right() + g.x, c.y, c.w, c.h}, text_, interactive() ? s.text : s.textDisabled, false, s.textScale);
 }
 
-// ---- ProgressBar
+// ---- cProgressBar
 
-ProgressBar& ProgressBar::setValue(float v) {
+cProgressBar& cProgressBar::setValue(float v) {
   value_ = std::clamp(v, 0.f, 1.f);
   return *this;
 }
 
-Vec2 ProgressBar::measure(const Theme& theme) const {
+Vec2 cProgressBar::measure(const Theme& theme) const {
   const Style& s = theme.style(styleClass());
   return {120, theme.glyphSize(s.textScale).y + s.padding.vertical()};
 }
 
-void ProgressBar::paint(Painter& p) const {
+void cProgressBar::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), s.background);
   const Rect c = rect().inset(Edges::all(s.borderWidth + 1));
@@ -346,14 +346,14 @@ void Slot::paint(Painter& p) const {
   if (!caption_.empty()) p.text({rect().x + 2, rect().y + 1}, caption_, s.text, s.textScale);
 }
 
-Divider::Divider(Orientation o, float thickness) : Widget("divider"), orientation_(o), thickness_(std::max(1.f, thickness)) {}
+cDivider::cDivider(Orientation o, float thickness) : Widget("divider"), orientation_(o), thickness_(std::max(1.f, thickness)) {}
 
-Vec2 Divider::measure(const Theme& theme) const {
+Vec2 cDivider::measure(const Theme& theme) const {
   (void)theme;
   return orientation_ == Orientation::Horizontal ? Vec2{0, thickness_} : Vec2{thickness_, 0};
 }
 
-void Divider::paint(Painter& p) const {
+void cDivider::paint(Painter& p) const {
   const Style& s = style();
   const Rect r = rect();
   if (orientation_ == Orientation::Horizontal) {

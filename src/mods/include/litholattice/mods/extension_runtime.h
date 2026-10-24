@@ -1,6 +1,6 @@
 // cExtensionRuntime (worker 3): the per-tick engine for loaded extensions.
-// Owns the hierarchical ExtensionBudget tree (rebuilt from the
-// ExtensionLoader's registry + contexts) and runs each extension's onTick
+// Owns the hierarchical cExtensionBudget tree (rebuilt from the
+// cExtensionLoader's registry + contexts) and runs each extension's onTick
 // inside a fault domain.
 //
 // Crash isolation, one level down (JD's call, 2026-10-11): an extension that
@@ -39,7 +39,7 @@ class cExtensionRuntime {
     kUnknown,    ///< path is not a loaded extension
   };
 
-  explicit cExtensionRuntime(ExtensionLoader& loader) : loader_(loader) {}
+  explicit cExtensionRuntime(cExtensionLoader& loader) : loader_(loader) {}
 
   /// Rebuilds the budget tree from the loader's registry + contexts.
   /// Preserves gate state (throttle/suspend) for nodes that are still loaded;
@@ -56,15 +56,15 @@ class cExtensionRuntime {
   /// True once path has crashed. The mark is diagnostic history: it persists
   /// after the crashed subtree unloads and clears only when the path reloads.
   bool crashed(const std::string& path) const { return crashed_.count(path) != 0; }
-  const ExtensionBudget* budgetFor(const std::string& path) const;
-  ExtensionBudget* budgetFor(const std::string& path);
+  const cExtensionBudget* budgetFor(const std::string& path) const;
+  cExtensionBudget* budgetFor(const std::string& path);
   size_t budgetNodeCount() const { return budgets_.size(); }
 
  private:
   void onCrash(const std::string& path, const char* reason);
 
-  ExtensionLoader& loader_;
-  std::map<std::string, ExtensionBudget> budgets_;  // by dotted path
+  cExtensionLoader& loader_;
+  std::map<std::string, cExtensionBudget> budgets_;  // by dotted path
   std::set<std::string> crashed_;
 };
 

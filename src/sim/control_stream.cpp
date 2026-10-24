@@ -267,7 +267,7 @@ bool writeControlStream(const ControlStreamHeader& header, const std::vector<Con
         return false;  // unknown kind: refuse to write an unreadable record
     }
   }
-  const uint64_t sum = DeterministicScheduler::hashBytes(out.data(), out.size());
+  const uint64_t sum = cDeterministicScheduler::hashBytes(out.data(), out.size());
   putU64(out, sum);
   return true;
 }
@@ -284,7 +284,7 @@ ControlStreamParse parseControlStream(const uint8_t* data, size_t n) {
   // Checksum first (fail-closed): everything after this is trusted layout.
   uint64_t stored = 0;
   for (int i = 0; i < 8; ++i) stored |= uint64_t(data[n - 8 + size_t(i)]) << (8 * i);
-  if (DeterministicScheduler::hashBytes(data, n - 8) != stored) return fail("control stream: checksum mismatch");
+  if (cDeterministicScheduler::hashBytes(data, n - 8) != stored) return fail("control stream: checksum mismatch");
   Reader rd{data, n - 8, 0};
   uint8_t m0, m1, m2, m3;
   if (!rd.u8(m0) || !rd.u8(m1) || !rd.u8(m2) || !rd.u8(m3) || m0 != 'L' || m1 != 'L' || m2 != 'C' || m3 != 'S')

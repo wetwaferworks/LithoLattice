@@ -31,7 +31,7 @@ bool ModNetGate::denyLogGate(DenyLogWindow& w, uint64_t nowMs, const std::string
 }
 
 bool ModNetGate::isValidModId(const std::string& id) {
-  // Same rule as ExtensionRegistry::isValidId ([a-z0-9_]{1,64}); duplicated
+  // Same rule as cExtensionReg::isValidId ([a-z0-9_]{1,64}); duplicated
   // so the net module never depends on the mods module.
   if (id.empty() || id.size() > 64) return false;
   for (char ch : id) {

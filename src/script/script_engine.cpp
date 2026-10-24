@@ -146,7 +146,7 @@ void ScriptEngine::scriptLog(const std::string& msg, ScriptEngine* self) {
 
 bool ScriptEngine::init() {
   installMemoryShims();
-  ScriptBindingAllowlist::registerBuiltins();
+  cScriptBindingAllowlist::registerBuiltins();
   engine_ = asCreateScriptEngine();
   if (!engine_) { logError("AngelScript: engine creation failed"); return false; }
   engine_->SetMessageCallback(asFUNCTION(messageCallback), this, asCALL_CDECL);
@@ -183,7 +183,7 @@ int ScriptEngine::bindFunction(const char* decl, const ScriptFn& fn, void* obj) 
 
 int ScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, asDWORD callConv, void* obj) {
   if (!engine_) return asERROR;
-  if (!ScriptBindingAllowlist::isAllowlisted(decl)) {
+  if (!cScriptBindingAllowlist::isAllowlisted(decl)) {
     logError("[script] binding refused: '%s' is not on the script binding allowlist", decl);
     return asINVALID_DECLARATION;
   }
@@ -194,7 +194,7 @@ int ScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, a
   BindingRecord* rec = nullptr;
   for (auto& b : bindings_)
     if (b.decl == decl) { rec = &b; break; }
-  const uint32_t need = ScriptBindingAllowlist::requiredPermissions(decl);
+  const uint32_t need = cScriptBindingAllowlist::requiredPermissions(decl);
   if ((modPermissions_ & need) != need) {
     if (!rec) bindings_.push_back(BindingRecord{decl, funcPointer, callConv, obj, false});
     logError("[script] binding refused: '%s' requires permission bits 0x%x (mod holds 0x%x)", decl, need,
@@ -317,7 +317,7 @@ void ScriptEngine::syncBindings() {
   if (!engine_) return;
   bool revoked = false;
   for (auto& b : bindings_) {
-    const uint32_t need = ScriptBindingAllowlist::requiredPermissions(b.decl.c_str());
+    const uint32_t need = cScriptBindingAllowlist::requiredPermissions(b.decl.c_str());
     const bool granted = (modPermissions_ & need) == need;
     if (granted && !b.bound) {
       // Widened mask: a previously refused binding can register now.
@@ -369,7 +369,7 @@ void ScriptEngine::rebuildSandbox() {
   // re-register every other granted record.
   for (auto& b : bindings_) {
     if (b.bound) continue;
-    const uint32_t need = ScriptBindingAllowlist::requiredPermissions(b.decl.c_str());
+    const uint32_t need = cScriptBindingAllowlist::requiredPermissions(b.decl.c_str());
     if ((modPermissions_ & need) != need) continue;
     if (engine_->RegisterGlobalFunction(b.decl.c_str(), b.func, b.callConv, b.obj) >= 0) {
       b.bound = true;

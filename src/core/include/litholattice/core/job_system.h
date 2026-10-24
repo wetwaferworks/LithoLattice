@@ -36,7 +36,7 @@
 // objects that die before the JobSystem does.
 //
 // ---- determinism ----------------------------------------------------------------
-// The system provides WHERE work runs; the DeterministicScheduler (sim/det_sched.h)
+// The system provides WHERE work runs; the cDeterministicScheduler (sim/det_sched.h)
 // declares the ORDER. A stage's systems are submitted behind a JobFence; the fence
 // is the stage barrier, so stages still run strictly in order and command buffers
 // still drain between stages exactly as on the JobPool path. Stealing only moves a

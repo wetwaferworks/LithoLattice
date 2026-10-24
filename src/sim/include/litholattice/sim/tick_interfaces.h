@@ -15,7 +15,7 @@ namespace litholattice {
 /// Per-tick context handed to behaviors. `rng` is deterministic per position
 /// and tick (splitmix64), matching the random-tick RNG.
 /// (Not the scheduler's SchedTickContext in det_sched.h: that one is the
-/// DeterministicScheduler's per-system context. The two were both named
+/// cDeterministicScheduler's per-system context. The two were both named
 /// TickContext — renamed to kill the latent ODR violation.)
 struct TickContext {
   ChunkMap& world;

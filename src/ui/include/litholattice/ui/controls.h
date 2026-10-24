@@ -1,5 +1,5 @@
-// Basic controls: Panel, Label, Button, Image (icon), Checkbox / Toggle, ProgressBar, Slider,
-// NumberField (integer, e.g. signal 0..64), Slot (an inventory cell) and Divider (separator line).
+// Basic controls: Panel, Label, Button, Image (icon), Checkbox / Toggle, cProgressBar, Slider,
+// NumberField (integer, e.g. signal 0..64), Slot (an inventory cell) and cDivider (separator line).
 // Events: Button "click"; Checkbox, Slider, NumberField "change"; Slot "click" / "rightclick".
 #pragma once
 #include <string>
@@ -91,12 +91,12 @@ class Checkbox : public Widget {
 };
 
 /// Horizontal bar filled to value() in [0, 1], with optional centred text.
-class ProgressBar : public Widget {
+class cProgressBar : public Widget {
  public:
-  ProgressBar() : Widget("progress") {}
+  cProgressBar() : Widget("progress") {}
   float value() const { return value_; }
-  ProgressBar& setValue(float v);
-  ProgressBar& setText(std::string t) { text_ = std::move(t); return *this; }
+  cProgressBar& setValue(float v);
+  cProgressBar& setText(std::string t) { text_ = std::move(t); return *this; }
   Vec2 measure(const Theme& theme) const override;
 
  protected:
@@ -185,11 +185,11 @@ class Slot : public Widget {
 
 /// Thin separator line (horizontal or vertical) drawn in the style's accent color.
 /// Non-interactive; visually groups menu sections. Style class "divider".
-class Divider : public Widget {
+class cDivider : public Widget {
  public:
-  explicit Divider(Orientation o = Orientation::Horizontal, float thickness = 1.f);
+  explicit cDivider(Orientation o = Orientation::Horizontal, float thickness = 1.f);
   Orientation orientation() const { return orientation_; }
-  Divider& setThickness(float t) { thickness_ = t < 1.f ? 1.f : t; return *this; }
+  cDivider& setThickness(float t) { thickness_ = t < 1.f ? 1.f : t; return *this; }
   float thickness() const { return thickness_; }
   Vec2 measure(const Theme& theme) const override;
   Widget* hitTest(Vec2) override { return nullptr; }

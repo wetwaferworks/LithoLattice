@@ -13,7 +13,7 @@
 //   and stops the tick. That throw is the fail-fast signal and it MUST NOT be
 //   swallowed. The production tick loop owns the conversion into a death:
 //
-//   1. If the production tick loop calls DeterministicScheduler::runTick
+//   1. If the production tick loop calls cDeterministicScheduler::runTick
 //      directly (headless harness / SimThread integration), the catch site is
 //      the innermost loop body around the runTick call: catch std::exception,
 //      then call simFailFastFromException(e, "det_sched", <running tick>).

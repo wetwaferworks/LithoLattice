@@ -1,4 +1,4 @@
-// VitalRegistry implementation. See vital.h for the value model.
+// cVitalReg implementation. See vital.h for the value model.
 #include "litholattice/player/vital_registry.h"
 
 #include <algorithm>
@@ -26,7 +26,7 @@ int32_t getI32(const uint8_t* in) { return static_cast<int32_t>(getU32(in)); }
 
 }  // namespace
 
-uint32_t VitalRegistry::registerVital(const VitalDef& def) {
+uint32_t cVitalReg::registerVital(const VitalDef& def) {
   if (!def.name || def.name[0] == '\0' || def.minValue > def.maxValue) return 0;
   // First-wins by name (same rule as stats, abilities, and the content
   // registry): a duplicate registration returns the existing id and keeps
@@ -53,17 +53,17 @@ uint32_t VitalRegistry::registerVital(const VitalDef& def) {
   return id;
 }
 
-uint32_t VitalRegistry::findVital(std::string_view name) const {
+uint32_t cVitalReg::findVital(std::string_view name) const {
   const auto it = byName_.find(std::string(name));
   return it == byName_.end() ? 0 : it->second;
 }
 
-const VitalDef* VitalRegistry::vitalDef(uint32_t vitalId) const {
+const VitalDef* cVitalReg::vitalDef(uint32_t vitalId) const {
   const auto it = defs_.find(vitalId);
   return it == defs_.end() ? nullptr : &it->second.def;
 }
 
-int32_t VitalRegistry::valueOrDefault(uint64_t playerId, uint32_t vitalId,
+int32_t cVitalReg::valueOrDefault(uint64_t playerId, uint32_t vitalId,
                                       const VitalDef& def) const {
   const auto pit = values_.find(playerId);
   if (pit == values_.end()) return def.defaultValue;
@@ -71,12 +71,12 @@ int32_t VitalRegistry::valueOrDefault(uint64_t playerId, uint32_t vitalId,
   return vit == pit->second.end() ? def.defaultValue : vit->second;
 }
 
-int32_t VitalRegistry::get(uint64_t playerId, uint32_t vitalId) const {
+int32_t cVitalReg::get(uint64_t playerId, uint32_t vitalId) const {
   const VitalDef* def = vitalDef(vitalId);
   return def ? valueOrDefault(playerId, vitalId, *def) : 0;
 }
 
-void VitalRegistry::set(uint64_t playerId, uint32_t vitalId, int32_t value) {
+void cVitalReg::set(uint64_t playerId, uint32_t vitalId, int32_t value) {
   const VitalDef* def = vitalDef(vitalId);
   if (!def) return;
   const int32_t old = valueOrDefault(playerId, vitalId, *def);
@@ -85,16 +85,16 @@ void VitalRegistry::set(uint64_t playerId, uint32_t vitalId, int32_t value) {
   if (changeFn_ && now != old) changeFn_(playerId, vitalId, old, now);
 }
 
-void VitalRegistry::adjust(uint64_t playerId, uint32_t vitalId, int32_t delta) {
+void cVitalReg::adjust(uint64_t playerId, uint32_t vitalId, int32_t delta) {
   const VitalDef* def = vitalDef(vitalId);
   if (!def) return;
   // int64 intermediate: value + delta can overflow int32 before clamping.
   set(playerId, vitalId, clampTo(*def, int64_t(valueOrDefault(playerId, vitalId, *def)) + delta));
 }
 
-void VitalRegistry::removePlayer(uint64_t playerId) { values_.erase(playerId); }
+void cVitalReg::removePlayer(uint64_t playerId) { values_.erase(playerId); }
 
-std::vector<uint32_t> VitalRegistry::touchedVitals(uint64_t playerId) const {
+std::vector<uint32_t> cVitalReg::touchedVitals(uint64_t playerId) const {
   std::vector<uint32_t> out;
   const auto pit = values_.find(playerId);
   if (pit != values_.end())
@@ -102,7 +102,7 @@ std::vector<uint32_t> VitalRegistry::touchedVitals(uint64_t playerId) const {
   return out;  // map order = ascending vital id
 }
 
-uint32_t VitalRegistry::serializeVitals(uint64_t playerId, uint8_t* out, uint32_t maxLen) const {
+uint32_t cVitalReg::serializeVitals(uint64_t playerId, uint8_t* out, uint32_t maxLen) const {
   const std::vector<uint32_t> ids = touchedVitals(playerId);
   const uint32_t need = 4 + static_cast<uint32_t>(ids.size()) * 8;
   if (!out || maxLen < need) return 0;
@@ -117,7 +117,7 @@ uint32_t VitalRegistry::serializeVitals(uint64_t playerId, uint8_t* out, uint32_
   return need;
 }
 
-uint32_t VitalRegistry::deserializeVitals(uint64_t playerId, const uint8_t* in, uint32_t len) {
+uint32_t cVitalReg::deserializeVitals(uint64_t playerId, const uint8_t* in, uint32_t len) {
   if (!in || len < 4) return 0;
   const uint32_t count = getU32(in);
   // Validate the full block before mutating anything (fail closed).

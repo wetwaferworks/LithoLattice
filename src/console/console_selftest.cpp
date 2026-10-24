@@ -988,8 +988,8 @@ int runConsoleSelfTest() {
   // ---- AngelScript exposure, permission-gated ----
   {
     registerConsoleScriptBindings();
-    bool ok = ScriptBindingAllowlist::isAllowlisted("void consoleCmd(const string &in)") &&
-              ScriptBindingAllowlist::requiredPermissions("string consoleCvar(const string &in)") ==
+    bool ok = cScriptBindingAllowlist::isAllowlisted("void consoleCmd(const string &in)") &&
+              cScriptBindingAllowlist::requiredPermissions("string consoleCvar(const string &in)") ==
                   uint32_t(kPermConsole);
     check(ok, "AngelScript: console decls on the allowlist, gated on kPermConsole");
 

@@ -1,5 +1,5 @@
-// Layout containers and scrolling: StackPanel (vertical / horizontal), GridPanel, ScrollBar,
-// ScrollView, Splitter, TabView.
+// Layout containers and scrolling: StackPanel (vertical / horizontal), cGridPanel, ScrollBar,
+// cScrollView, cSplitter, cTabView.
 #pragma once
 #include <memory>
 #include <string>
@@ -31,12 +31,12 @@ class StackPanel : public Widget {
 };
 
 /// Fixed-size cells in `columns` columns (row-major), `spacing` between cells.
-class GridPanel : public Widget {
+class cGridPanel : public Widget {
  public:
-  GridPanel(int columns, Vec2 cell, float spacing = 4, std::string styleClass = "stack");
+  cGridPanel(int columns, Vec2 cell, float spacing = 4, std::string styleClass = "stack");
   int columns() const { return columns_; }
   Vec2 cell() const { return cell_; }
-  GridPanel& setColumns(int c) { columns_ = std::max(1, c); return *this; }
+  cGridPanel& setColumns(int c) { columns_ = std::max(1, c); return *this; }
   Vec2 measure(const Theme& theme) const override;
 
  protected:
@@ -76,9 +76,9 @@ class ScrollBar : public Widget {
 
 /// Scrolls one content widget vertically (wheel, scroll bar, ensureVisible()). The content
 /// keeps the view's width and its own preferred height.
-class ScrollView : public Widget {
+class cScrollView : public Widget {
  public:
-  ScrollView();
+  cScrollView();
   /// Replaces the content; returns it.
   Widget& setContent(std::unique_ptr<Widget> content);
   template <typename T, typename... Args>
@@ -105,9 +105,9 @@ class ScrollView : public Widget {
 };
 
 /// Two panes with a draggable divider; ratio() is the first pane's share.
-class Splitter : public Widget {
+class cSplitter : public Widget {
  public:
-  explicit Splitter(Orientation o = Orientation::Horizontal, float ratio = 0.3f);
+  explicit cSplitter(Orientation o = Orientation::Horizontal, float ratio = 0.3f);
   /// Sets pane 0 or 1 (replacing any previous one); returns it.
   Widget& setPane(int index, std::unique_ptr<Widget> pane);
   float ratio() const { return ratio_; }
@@ -130,9 +130,9 @@ class Splitter : public Widget {
 };
 
 /// Pages with a tab header; one page visible. "change" when the user switches tabs.
-class TabView : public Widget {
+class cTabView : public Widget {
  public:
-  TabView();
+  cTabView();
   /// Adds a page; returns it.
   Widget& addTab(std::string title, std::unique_ptr<Widget> page);
   int current() const { return current_; }

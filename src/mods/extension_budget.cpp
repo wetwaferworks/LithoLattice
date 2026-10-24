@@ -1,28 +1,28 @@
-// ExtensionBudget: hierarchical per-tick budgets. See extension_budget.h.
+// cExtensionBudget: hierarchical per-tick budgets. See extension_budget.h.
 #include "litholattice/mods/extension_budget.h"
 
 #include "litholattice/core/log.h"
 
 namespace litholattice {
 
-ExtensionBudget::ExtensionBudget(std::string path, uint64_t tickQuotaUs,
+cExtensionBudget::cExtensionBudget(std::string path, uint64_t tickQuotaUs,
                                  uint64_t memoryQuotaBytes)
     : path_(std::move(path)),
       tickQuotaUs_(tickQuotaUs),
       memoryQuotaBytes_(memoryQuotaBytes) {}
 
-uint64_t ExtensionBudget::childTickQuota(uint64_t parentQuotaUs, uint32_t sharePercent) {
+uint64_t cExtensionBudget::childTickQuota(uint64_t parentQuotaUs, uint32_t sharePercent) {
   if (sharePercent > 100) sharePercent = 100;
   return parentQuotaUs * sharePercent / 100;
 }
 
-uint64_t ExtensionBudget::childMemoryQuota(uint64_t parentQuotaBytes,
+uint64_t cExtensionBudget::childMemoryQuota(uint64_t parentQuotaBytes,
                                            uint32_t sharePercent) {
   if (sharePercent > 100) sharePercent = 100;
   return parentQuotaBytes * sharePercent / 100;
 }
 
-std::vector<uint32_t> ExtensionBudget::clampShares(const LithoLatticeExtensible* facet) {
+std::vector<uint32_t> cExtensionBudget::clampShares(const LithoLatticeExtensible* facet) {
   std::vector<uint32_t> out;
   if (!facet) return out;
   uint64_t sum = 0;
@@ -46,12 +46,12 @@ std::vector<uint32_t> ExtensionBudget::clampShares(const LithoLatticeExtensible*
   return out;
 }
 
-void ExtensionBudget::beginTick() {
+void cExtensionBudget::beginTick() {
   tickStart_ = std::chrono::steady_clock::now();
   tickOpen_ = true;
 }
 
-void ExtensionBudget::endTick() {
+void cExtensionBudget::endTick() {
   if (!tickOpen_) return;
   tickOpen_ = false;
   const auto elapsed = std::chrono::steady_clock::now() - tickStart_;
@@ -59,7 +59,7 @@ void ExtensionBudget::endTick() {
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()));
 }
 
-void ExtensionBudget::recordUsage(uint64_t elapsedUs) {
+void cExtensionBudget::recordUsage(uint64_t elapsedUs) {
   if (gate_ == BudgetGate::kSuspended) return;
   const bool cpuOver = elapsedUs > tickQuotaUs_;
   const bool memOver = memoryBytes_ > memoryQuotaBytes_;
@@ -70,7 +70,7 @@ void ExtensionBudget::recordUsage(uint64_t elapsedUs) {
   onOverrun(cpuOver ? "cpu" : "memory");
 }
 
-void ExtensionBudget::noteMemoryBytes(int64_t delta) {
+void cExtensionBudget::noteMemoryBytes(int64_t delta) {
   if (delta < 0 && static_cast<uint64_t>(-delta) > memoryBytes_) {
     memoryBytes_ = 0;
   } else {
@@ -78,7 +78,7 @@ void ExtensionBudget::noteMemoryBytes(int64_t delta) {
   }
 }
 
-void ExtensionBudget::advanceTick() {
+void cExtensionBudget::advanceTick() {
   if (gate_ != BudgetGate::kThrottled || cooldownTicks_ == 0) return;
   if (--cooldownTicks_ == 0) {
     gate_ = BudgetGate::kAllow;
@@ -88,7 +88,7 @@ void ExtensionBudget::advanceTick() {
   }
 }
 
-void ExtensionBudget::onOverrun(const char* kind) {
+void cExtensionBudget::onOverrun(const char* kind) {
   ++overrunStreak_;
   const uint32_t limit = probation_ ? kBudgetProbationStreak : kBudgetThrottleStreak;
   if (overrunStreak_ < limit) return;
@@ -100,7 +100,7 @@ void ExtensionBudget::onOverrun(const char* kind) {
   }
 }
 
-void ExtensionBudget::enterThrottled(const char* kind) {
+void cExtensionBudget::enterThrottled(const char* kind) {
   gate_ = BudgetGate::kThrottled;
   cooldownTicks_ = kBudgetThrottleCooldownTicks;
   ++throttleCount_;
@@ -112,7 +112,7 @@ void ExtensionBudget::enterThrottled(const char* kind) {
       static_cast<unsigned long long>(memoryQuotaBytes_));
 }
 
-void ExtensionBudget::enterSuspended(const char* kind) {
+void cExtensionBudget::enterSuspended(const char* kind) {
   gate_ = BudgetGate::kSuspended;
   suspendReason_ = std::string("sustained budget overrun (") + kind +
                    ") after throttle probation";

@@ -14,7 +14,7 @@ namespace litholattice {
 
 struct Window::Impl {
   GLFWwindow* win = nullptr;
-  std::unique_ptr<GlfwInputBackend> input;
+  std::unique_ptr<cGlfwInputBackend> input;
 };
 
 std::unique_ptr<Window> Window::create(const WindowDesc& d) {
@@ -44,7 +44,7 @@ std::unique_ptr<Window> Window::create(const WindowDesc& d) {
   w->api_ = d.api;
   w->impl_ = std::make_unique<Impl>();
   w->impl_->win = gw;
-  w->impl_->input = std::make_unique<GlfwInputBackend>(gw);
+  w->impl_->input = std::make_unique<cGlfwInputBackend>(gw);
   w->vsync_ = d.vsync;
   w->winW_ = d.width; w->winH_ = d.height;
   glfwGetWindowPos(gw, &w->winX_, &w->winY_);

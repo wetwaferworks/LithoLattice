@@ -1,4 +1,4 @@
-// StatRegistry: the concrete IStat. One registry serves every player;
+// cStatReg: the concrete IStat. One registry serves every player;
 // per-player data is keyed by player id in ordered maps, so iteration (and
 // therefore serialization) is deterministic by (player, stat id).
 #pragma once
@@ -13,7 +13,7 @@
 
 namespace litholattice {
 
-class StatRegistry final : public IStat {
+class cStatReg final : public IStat {
  public:
   /// Fired synchronously whenever a player's EFFECTIVE value changes,
   /// whatever the cause (set/adjust/boost add/boost remove/expiry-driven

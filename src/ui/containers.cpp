@@ -67,12 +67,12 @@ void StackPanel::arrange(const Theme& theme) {
   }
 }
 
-// ---- GridPanel
+// ---- cGridPanel
 
-GridPanel::GridPanel(int columns, Vec2 cell, float spacing, std::string styleClass)
+cGridPanel::cGridPanel(int columns, Vec2 cell, float spacing, std::string styleClass)
     : Widget(std::move(styleClass)), columns_(std::max(1, columns)), cell_(cell), spacing_(spacing) {}
 
-Vec2 GridPanel::measure(const Theme& theme) const {
+Vec2 cGridPanel::measure(const Theme& theme) const {
   const int n = int(std::count_if(children().begin(), children().end(), [](const auto& c) { return c->visible(); }));
   const int cols = std::min(columns_, std::max(1, n)), rows = (n + columns_ - 1) / columns_;
   const Edges& pad = theme.style(styleClass()).padding;
@@ -80,7 +80,7 @@ Vec2 GridPanel::measure(const Theme& theme) const {
           float(rows) * cell_.y + float(std::max(0, rows - 1)) * spacing_ + pad.vertical()};
 }
 
-void GridPanel::arrange(const Theme& theme) {
+void cGridPanel::arrange(const Theme& theme) {
   const Rect area = contentRect();
   int i = 0;
   for (const auto& c : children()) {
@@ -149,14 +149,14 @@ void ScrollBar::paint(Painter& p) const {
   p.fill(thumb().inset(Edges::all(1)), pressed() || hovered() ? s.pressed : s.hover);
 }
 
-// ---- ScrollView
+// ---- cScrollView
 
-ScrollView::ScrollView() : Widget("scrollview") {
+cScrollView::cScrollView() : Widget("scrollview") {
   bar_ = &add<ScrollBar>(Orientation::Vertical);
   bar_->on("change", [this](Widget&) { relayout(); });
 }
 
-Widget& ScrollView::setContent(std::unique_ptr<Widget> content) {
+Widget& cScrollView::setContent(std::unique_ptr<Widget> content) {
   if (content_) removeChild(*content_);
   content_ = &addChild(std::move(content));
   // Keep the scroll bar on top (painted and hit-tested last).
@@ -165,18 +165,18 @@ Widget& ScrollView::setContent(std::unique_ptr<Widget> content) {
   return *content_;
 }
 
-Rect ScrollView::viewRect() const {
+Rect cScrollView::viewRect() const {
   const Rect c = contentRect();
   return bar_->needed() ? Rect{c.x, c.y, std::max(0.f, c.w - ScrollBar::kThickness), c.h} : c;
 }
 
-Vec2 ScrollView::measure(const Theme& theme) const {
+Vec2 cScrollView::measure(const Theme& theme) const {
   const Edges& pad = theme.style(styleClass()).padding;
   const Vec2 s = content_ ? childSize(*content_, theme) : Vec2{};
   return {s.x + ScrollBar::kThickness + pad.horizontal(), std::min(s.y, 240.f) + pad.vertical()};
 }
 
-void ScrollView::arrange(const Theme& theme) {
+void cScrollView::arrange(const Theme& theme) {
   const Rect c = contentRect();
   const float contentH = content_ ? childSize(*content_, theme).y : 0.f;
   bar_->setRange(contentH, c.h);
@@ -185,20 +185,20 @@ void ScrollView::arrange(const Theme& theme) {
   bar_->place({c.right() - ScrollBar::kThickness, c.y, ScrollBar::kThickness, c.h}, theme);
 }
 
-void ScrollView::ensureVisible(const Rect& r) {
+void cScrollView::ensureVisible(const Rect& r) {
   const Rect view = viewRect();
   if (r.y < view.y) bar_->setOffset(bar_->offset() - (view.y - r.y));
   else if (r.bottom() > view.bottom()) bar_->setOffset(bar_->offset() + (r.bottom() - view.bottom()));
   relayout();
 }
 
-bool ScrollView::onWheel(const UiEvent& e) {
+bool cScrollView::onWheel(const UiEvent& e) {
   if (!bar_->needed()) return false;
   bar_->setOffset(bar_->offset() - e.wheel * 48.f, true);
   return true;
 }
 
-Widget* ScrollView::hitTest(Vec2 p) {
+Widget* cScrollView::hitTest(Vec2 p) {
   if (!visible() || !rect().contains(p)) return nullptr;
   if (bar_->needed())
     if (Widget* w = bar_->hitTest(p)) return w;
@@ -207,7 +207,7 @@ Widget* ScrollView::hitTest(Vec2 p) {
   return enabled() ? this : nullptr;
 }
 
-void ScrollView::paintChildren(Painter& p) const {
+void cScrollView::paintChildren(Painter& p) const {
   if (content_) {
     Painter::ClipScope clip(p, viewRect());
     content_->paintTree(p);
@@ -215,27 +215,27 @@ void ScrollView::paintChildren(Painter& p) const {
   bar_->paintTree(p);
 }
 
-// ---- Splitter
+// ---- cSplitter
 
-Splitter::Splitter(Orientation o, float ratio) : Widget("splitter"), orientation_(o), ratio_(std::clamp(ratio, 0.05f, 0.95f)) {}
+cSplitter::cSplitter(Orientation o, float ratio) : Widget("splitter"), orientation_(o), ratio_(std::clamp(ratio, 0.05f, 0.95f)) {}
 
-Widget& Splitter::setPane(int index, std::unique_ptr<Widget> pane) {
+Widget& cSplitter::setPane(int index, std::unique_ptr<Widget> pane) {
   const size_t i = index ? 1 : 0;
   if (panes_[i]) removeChild(*panes_[i]);
   panes_[i] = &addChild(std::move(pane));
   return *panes_[i];
 }
 
-void Splitter::setRatio(float r) { ratio_ = std::clamp(r, 0.05f, 0.95f); }
+void cSplitter::setRatio(float r) { ratio_ = std::clamp(r, 0.05f, 0.95f); }
 
-Rect Splitter::handleRect() const {
+Rect cSplitter::handleRect() const {
   const Rect c = contentRect();
   return orientation_ == Orientation::Horizontal
              ? Rect{c.x + (c.w - kHandle) * ratio_, c.y, kHandle, c.h}
              : Rect{c.x, c.y + (c.h - kHandle) * ratio_, c.w, kHandle};
 }
 
-void Splitter::arrange(const Theme& theme) {
+void cSplitter::arrange(const Theme& theme) {
   const Rect c = contentRect(), h = handleRect();
   const bool horiz = orientation_ == Orientation::Horizontal;
   const Rect a = horiz ? Rect{c.x, c.y, h.x - c.x, c.h} : Rect{c.x, c.y, c.w, h.y - c.y};
@@ -244,14 +244,14 @@ void Splitter::arrange(const Theme& theme) {
   if (panes_[1]) panes_[1]->place(b, theme);
 }
 
-Widget* Splitter::hitTest(Vec2 p) {
+Widget* cSplitter::hitTest(Vec2 p) {
   if (visible() && enabled() && handleRect().contains(p)) return this;
   return Widget::hitTest(p);
 }
 
-bool Splitter::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left && handleRect().contains(e.pos); }
+bool cSplitter::onPointerDown(const UiEvent& e) { return e.button == PointerButton::Left && handleRect().contains(e.pos); }
 
-void Splitter::onPointerMove(const UiEvent& e) {
+void cSplitter::onPointerMove(const UiEvent& e) {
   if (!pressed()) return;
   const Rect c = contentRect();
   const bool horiz = orientation_ == Orientation::Horizontal;
@@ -260,16 +260,16 @@ void Splitter::onPointerMove(const UiEvent& e) {
   relayout();
 }
 
-void Splitter::paint(Painter& p) const {
+void cSplitter::paint(Painter& p) const {
   const Style& s = style();
   p.fill(handleRect(), pressed() || hovered() ? s.pressed : s.hover);
 }
 
-// ---- TabView
+// ---- cTabView
 
-TabView::TabView() : Widget("tabs") { setFocusable(true); }
+cTabView::cTabView() : Widget("tabs") { setFocusable(true); }
 
-Widget& TabView::addTab(std::string title, std::unique_ptr<Widget> page) {
+Widget& cTabView::addTab(std::string title, std::unique_ptr<Widget> page) {
   titles_.push_back(std::move(title));
   pages_.push_back(&addChild(std::move(page)));
   if (current_ < 0) setCurrent(0);
@@ -277,7 +277,7 @@ Widget& TabView::addTab(std::string title, std::unique_ptr<Widget> page) {
   return *pages_.back();
 }
 
-void TabView::setCurrent(int index, bool notify) {
+void cTabView::setCurrent(int index, bool notify) {
   if (index < 0 || index >= count() || index == current_) return;
   current_ = index;
   for (size_t i = 0; i < pages_.size(); ++i) pages_[i]->setVisible(int(i) == index);
@@ -285,18 +285,18 @@ void TabView::setCurrent(int index, bool notify) {
   if (notify) emit("change");
 }
 
-float TabView::headerHeight() const {
+float cTabView::headerHeight() const {
   return theme().glyphSize(style().textScale).y + 8;
 }
 
-Rect TabView::tabRect(int i) const {
+Rect cTabView::tabRect(int i) const {
   const Theme& t = theme();
   float x = rect().x;
   for (int k = 0; k < i; ++k) x += t.textWidth(titles_[size_t(k)], style().textScale) + 16;
   return {x, rect().y, t.textWidth(titles_[size_t(i)], style().textScale) + 16, headerHeight()};
 }
 
-Vec2 TabView::measure(const Theme& theme) const {
+Vec2 cTabView::measure(const Theme& theme) const {
   Vec2 s;
   for (const Widget* p : pages_) {
     const Vec2 c = childSize(*p, theme);
@@ -305,13 +305,13 @@ Vec2 TabView::measure(const Theme& theme) const {
   return {s.x, s.y + theme.glyphSize(style().textScale).y + 8};
 }
 
-void TabView::arrange(const Theme& theme) {
+void cTabView::arrange(const Theme& theme) {
   const Rect body{rect().x, rect().y + headerHeight(), rect().w, std::max(0.f, rect().h - headerHeight())};
   for (Widget* p : pages_)
     if (p->visible()) p->place(body, theme);
 }
 
-bool TabView::onPointerDown(const UiEvent& e) {
+bool cTabView::onPointerDown(const UiEvent& e) {
   for (int i = 0; i < count(); ++i)
     if (tabRect(i).contains(e.pos)) {
       setCurrent(i, true);
@@ -320,14 +320,14 @@ bool TabView::onPointerDown(const UiEvent& e) {
   return false;
 }
 
-bool TabView::onKey(const UiEvent& e) {
+bool cTabView::onKey(const UiEvent& e) {
   if (e.key == Key::Left && current_ > 0) setCurrent(current_ - 1, true);
   else if (e.key == Key::Right && current_ + 1 < count()) setCurrent(current_ + 1, true);
   else return false;
   return true;
 }
 
-void TabView::paint(Painter& p) const {
+void cTabView::paint(Painter& p) const {
   const Style& s = style();
   p.fill(rect(), s.background);
   for (int i = 0; i < count(); ++i) {

@@ -1,15 +1,15 @@
-// ExtensionRegistry: dotted identity paths, parent/child links, depth cap.
+// cExtensionReg: dotted identity paths, parent/child links, depth cap.
 #include "litholattice/mods/extension_registry.h"
 
 #include <algorithm>
 
 namespace litholattice {
 
-void ExtensionRegistry::setMaxExtensionDepth(uint32_t depth) {
+void cExtensionReg::setMaxExtensionDepth(uint32_t depth) {
   maxDepth_ = (depth == 0) ? kDefaultMaxExtensionDepth : depth;
 }
 
-bool ExtensionRegistry::registerMod(const std::string& id) {
+bool cExtensionReg::registerMod(const std::string& id) {
   if (!isValidId(id) || contains(id)) return false;
   ExtensionNode node;
   node.id = id;
@@ -21,7 +21,7 @@ bool ExtensionRegistry::registerMod(const std::string& id) {
   return true;
 }
 
-std::string ExtensionRegistry::registerExtension(const std::string& parentPath,
+std::string cExtensionReg::registerExtension(const std::string& parentPath,
                                                 const std::string& id) {
   const ExtensionNode* parent = find(parentPath);
   if (!parent || !isValidId(id)) return "";
@@ -39,11 +39,11 @@ std::string ExtensionRegistry::registerExtension(const std::string& parentPath,
   return path;
 }
 
-bool ExtensionRegistry::contains(const std::string& path) const {
+bool cExtensionReg::contains(const std::string& path) const {
   return nodes_.find(path) != nodes_.end();
 }
 
-bool ExtensionRegistry::unregister(const std::string& path) {
+bool cExtensionReg::unregister(const std::string& path) {
   const auto it = nodes_.find(path);
   if (it == nodes_.end()) return false;
   nodes_.erase(it);
@@ -51,19 +51,19 @@ bool ExtensionRegistry::unregister(const std::string& path) {
   return true;
 }
 
-const ExtensionNode* ExtensionRegistry::find(const std::string& path) const {
+const ExtensionNode* cExtensionReg::find(const std::string& path) const {
   const auto it = nodes_.find(path);
   return it == nodes_.end() ? nullptr : &it->second;
 }
 
-bool ExtensionRegistry::depthOf(const std::string& path, uint32_t& depth) const {
+bool cExtensionReg::depthOf(const std::string& path, uint32_t& depth) const {
   const ExtensionNode* node = find(path);
   if (!node) return false;
   depth = node->depth;
   return true;
 }
 
-std::vector<std::string> ExtensionRegistry::childrenOf(const std::string& parentPath) const {
+std::vector<std::string> cExtensionReg::childrenOf(const std::string& parentPath) const {
   std::vector<std::string> out;
   for (const std::string& path : order_) {
     const ExtensionNode& node = nodes_.at(path);
@@ -72,7 +72,7 @@ std::vector<std::string> ExtensionRegistry::childrenOf(const std::string& parent
   return out;
 }
 
-std::vector<std::string> ExtensionRegistry::allPaths() const {
+std::vector<std::string> cExtensionReg::allPaths() const {
   // nodes_ is a std::map keyed by dotted path: iteration is lexicographic,
   // and a parent path is always a strict prefix of its children's paths, so
   // parents come out before children.
@@ -82,7 +82,7 @@ std::vector<std::string> ExtensionRegistry::allPaths() const {
   return out;
 }
 
-bool ExtensionRegistry::isValidId(std::string_view id) {
+bool cExtensionReg::isValidId(std::string_view id) {
   if (id.empty() || id.size() > 64) return false;
   for (char c : id) {
     const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
@@ -91,7 +91,7 @@ bool ExtensionRegistry::isValidId(std::string_view id) {
   return true;
 }
 
-bool ExtensionRegistry::isValidPath(std::string_view path) {
+bool cExtensionReg::isValidPath(std::string_view path) {
   if (path.empty()) return false;
   size_t start = 0;
   bool any = false;
@@ -105,11 +105,11 @@ bool ExtensionRegistry::isValidPath(std::string_view path) {
   return any;
 }
 
-std::string ExtensionRegistry::joinPath(const std::string& parentPath, std::string_view id) {
+std::string cExtensionReg::joinPath(const std::string& parentPath, std::string_view id) {
   return parentPath.empty() ? std::string(id) : parentPath + "." + std::string(id);
 }
 
-std::vector<std::string> ExtensionRegistry::splitPath(std::string_view path) {
+std::vector<std::string> cExtensionReg::splitPath(std::string_view path) {
   std::vector<std::string> parts;
   if (!isValidPath(path)) return parts;
   size_t start = 0;
@@ -122,7 +122,7 @@ std::vector<std::string> ExtensionRegistry::splitPath(std::string_view path) {
   return parts;
 }
 
-std::string ExtensionRegistry::parentPath(std::string_view path) {
+std::string cExtensionReg::parentPath(std::string_view path) {
   const std::vector<std::string> parts = splitPath(path);
   if (parts.size() < 2) return "";
   std::string out = parts[0];

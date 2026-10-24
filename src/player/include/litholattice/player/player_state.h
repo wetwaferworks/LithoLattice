@@ -38,7 +38,7 @@ struct PlayerState {
 };
 
 /// Player manager: tracks all players (local + remote in multiplayer).
-/// Owns the shared VitalRegistry/StatRegistry/cAbilityReg and one
+/// Owns the shared cVitalReg/cStatReg/cAbilityReg and one
 /// concrete Player per participant, and routes registry change callbacks
 /// into each player's IPlayerListeners.
 ///
@@ -67,10 +67,10 @@ class PlayerManager {
   void remove(uint64_t playerId);
 
   // -- Extended API (the seam above is the original declaration) ----------
-  VitalRegistry& vitals() { return vitals_; }
-  const VitalRegistry& vitals() const { return vitals_; }
-  StatRegistry& stats() { return stats_; }
-  const StatRegistry& stats() const { return stats_; }
+  cVitalReg& vitals() { return vitals_; }
+  const cVitalReg& vitals() const { return vitals_; }
+  cStatReg& stats() { return stats_; }
+  const cStatReg& stats() const { return stats_; }
   cAbilityReg& abilities() { return abilities_; }
   const cAbilityReg& abilities() const { return abilities_; }
 
@@ -102,8 +102,8 @@ class PlayerManager {
   void routeStatChanged(uint64_t playerId, uint32_t statId, int32_t oldValue, int32_t newValue);
   void routeAbilityChanged(uint64_t playerId, uint32_t abilityId, bool active);
 
-  VitalRegistry vitals_;
-  StatRegistry stats_;
+  cVitalReg vitals_;
+  cStatReg stats_;
   cAbilityReg abilities_;
   std::map<uint64_t, std::unique_ptr<Player>> players_;  // id order
   uint64_t localId_ = 1;  // 0 is reserved; the first real player is 1

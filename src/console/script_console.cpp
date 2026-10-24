@@ -82,9 +82,9 @@ const BindingDecl kConsoleBindings[] = {
 }  // namespace
 
 void registerConsoleScriptBindings() {
-  ScriptBindingAllowlist::registerBuiltins();
+  cScriptBindingAllowlist::registerBuiltins();
   for (const BindingDecl& b : kConsoleBindings)
-    ScriptBindingAllowlist::registerBinding({b.decl, uint32_t(kPermConsole), b.description});
+    cScriptBindingAllowlist::registerBinding({b.decl, uint32_t(kPermConsole), b.description});
 }
 
 std::shared_ptr<ConsoleScriptContext> bindConsoleToScripts(ScriptEngine& se, cConsoleReg& registry,

@@ -152,10 +152,10 @@ ModInfo ModLoader::parseModJson(const std::string& path) {
   info.type = j.getStr("type", "content");
   if (info.id.empty()) { logError("mod.json: %s: missing id", path.c_str()); return info; }
   // Review F-M7: mod ids are validated, not just non-empty — the same
-  // [a-z0-9_]{1,64} format ExtensionRegistry enforces for extension ids.
+  // [a-z0-9_]{1,64} format cExtensionReg enforces for extension ids.
   // An unvalidated id is the key permission grants are stored under, so a
   // crafted id must never reach the store or the loader.
-  if (!ExtensionRegistry::isValidId(info.id)) {
+  if (!cExtensionReg::isValidId(info.id)) {
     logError("mod.json: %s: invalid mod id '%s' (must match [a-z0-9_]{1,64})", path.c_str(),
              info.id.c_str());
     info.id.clear();
@@ -226,7 +226,7 @@ ModInfo ModLoader::parseModJson(const std::string& path) {
       decl.id = e.getStr("id");
       decl.versionRange = e.getStr("version", "*");
       const double share = e.getNum("budgetShare", 0);
-      if (!ExtensionRegistry::isValidId(decl.id)) {
+      if (!cExtensionReg::isValidId(decl.id)) {
         logError("mod.json: %s: bad extension id '%s' (entry skipped)", path.c_str(),
                  decl.id.c_str());
         continue;
