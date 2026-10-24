@@ -14,7 +14,7 @@ uint64_t cellKey(Cell c) { return (uint64_t(uint32_t(c.x) & 0x3fffff) << 42) | (
 ///  - Diagonal marginal is 424, not 448: kCostDiag - kCostWalk =
 ///    1448 - 1024 = 424. The draft's 448 would price a (1,1) step at 1472
 ///    against its true cost 1448 -- still inadmissible, by 24 per diagonal.
-///    With 424 the horizontal term is EXACT for flat Walk travel (tight on
+///    With 424 the horizontal term is EXACT for flat cWalk travel (tight on
 ///    both orthogonal and diagonal ground moves).
 ///  - Vertical is 512 per level, not 1024: a horizontal edge BUNDLES
 ///    vertical travel -- step-up costs 1536 = 1024 (across) + 512 (up), a
@@ -33,7 +33,7 @@ uint64_t cellKey(Cell c) { return (uint64_t(uint32_t(c.x) & 0x3fffff) << 42) | (
 ///    octile-tight heuristic by up to ~248 (plus 512 if the landing is a
 ///    level down) -- the diagonal-premium inconsistency already filed as
 ///    B-L1 in the edge costs themselves. A* over cLeap can therefore still
-///    be marginally suboptimal across a diagonal gap; Walk-family, HPA and
+///    be marginally suboptimal across a diagonal gap; cWalk-family, HPA and
 ///    the optimality fixture are exact. Closing it belongs with the B-L1
 ///    cost-model fix, not with a weaker heuristic for every other mode.
 NavCost heurFp(Cell a, Cell b) {
@@ -50,17 +50,17 @@ constexpr NavCost kCostStep = 1536;    // 1.5 (flat + 512 step premium)
 constexpr NavCost kCostDiag = 1448;    // ~sqrt(2) * 1024
 constexpr NavCost kCostClimb = 2048;   // 2.0
 constexpr NavCost kCostJumpUp2 = 2560; // 2.5
-bool standable(const NavView& n, int x, int y, int z) { return n.bits(x, y, z) & kNavStandable; }
-bool passable(const NavView& n, int x, int y, int z) { return n.bits(x, y, z) & kNavPassable; }
-bool headroom(const NavView& n, int x, int y, int z) { return passable(n, x, y + 1, z); }
+bool standable(const cNavView& n, int x, int y, int z) { return n.bits(x, y, z) & kNavStandable; }
+bool passable(const cNavView& n, int x, int y, int z) { return n.bits(x, y, z) & kNavPassable; }
+bool headroom(const cNavView& n, int x, int y, int z) { return passable(n, x, y + 1, z); }
 
-/// Ground locomotion shared by Walk / Climb / cLeap: flat moves, step-up 1 and
+/// Ground locomotion shared by cWalk / cClimb / cLeap: flat moves, step-up 1 and
 /// ledge drops up to maxDrop, in all 8 horizontal directions. Diagonals carry
 /// a corner-cut guard: both orthogonal neighbour cells at the relevant level
 /// must be passable, so a mover never clips through a diagonal wall corner.
 /// Costs are the pre-P1 float costs in fixed point (step = flat + 512,
 /// drop = flat + 512 per level fallen, diagonal base 1448).
-void groundMoves(const NavView& n, Cell c, int maxDrop, std::vector<NavStep>& out) {
+void groundMoves(const cNavView& n, Cell c, int maxDrop, std::vector<NavStep>& out) {
   auto tryDir = [&](int dx, int dz, bool diag) {
     const int x = c.x + dx, z = c.z + dz;
     const NavCost base = diag ? kCostDiag : kCostWalk;
@@ -90,49 +90,49 @@ void groundMoves(const NavView& n, Cell c, int maxDrop, std::vector<NavStep>& ou
   for (auto& d : kD) tryDir(d[0], d[1], true);
 }
 
-/// Vertical moves on climbable cells (ladders / vines), shared by Climb/cLeap.
-void climbMoves(const NavView& n, Cell c, std::vector<NavStep>& out) {
+/// Vertical moves on climbable cells (ladders / vines), shared by cClimb/cLeap.
+void climbMoves(const cNavView& n, Cell c, std::vector<NavStep>& out) {
   for (int dy : {1, -1})
     if ((n.bits(c.x, c.y + dy, c.z) & kNavClimb) || ((n.bits(c.x, c.y, c.z) & kNavClimb) && passable(n, c.x, c.y + dy, c.z)))
       out.push_back({{c.x, c.y + dy, c.z}, kCostClimb, StepTag::kClimb});
 }
 
-class Walk : public IMovementMode {
+class cWalk : public IMovementMode {
  public:
-  explicit Walk(int maxDrop) : maxDrop_(maxDrop) {}
+  explicit cWalk(int maxDrop) : maxDrop_(maxDrop) {}
   std::string_view name() const override { return "walk"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
     groundMoves(n, c, maxDrop_, out);
   }
  protected:
   int maxDrop_;
 };
-class Climb : public Walk {
+class cClimb : public cWalk {
  public:
-  Climb() : Walk(3) {}
+  cClimb() : cWalk(3) {}
   std::string_view name() const override { return "climb"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
-    Walk::neighbours(n, c, out);
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
+    cWalk::neighbours(n, c, out);
     climbMoves(n, c, out);
   }
 };
-/// cLeap (P1): Walk + Climb, plus jump-up 2, gap jumps of 2-4 cells and long
+/// cLeap (P1): cWalk + cClimb, plus jump-up 2, gap jumps of 2-4 cells and long
 /// drops of 4-8. Jump feasibility is closed-form from the cell model (per the
 /// research report's S3 lesson: no runtime physics rollouts — headroom, arc
 /// clearance and landing checks are pure nav-bit queries, hence exact and
 /// deterministic). Numeric costs are JD-review-pending.
-class cLeap final : public Climb {
+class cLeap final : public cClimb {
  public:
   std::string_view name() const override { return "leap"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
-    Climb::neighbours(n, c, out);
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
+    cClimb::neighbours(n, c, out);
     jumpUp2(n, c, out);
     gapJumps(n, c, out);
     longDrops(n, c, out);
   }
 
  private:
-  static void jumpUp2(const NavView& n, Cell c, std::vector<NavStep>& out) {
+  static void jumpUp2(const cNavView& n, Cell c, std::vector<NavStep>& out) {
     auto tryDir = [&](int dx, int dz, bool diag) {
       const int x = c.x + dx, z = c.z + dz;
       // Landing standable at +2 with headroom above it; the mover needs
@@ -147,7 +147,7 @@ class cLeap final : public Climb {
     for (auto& d : kH) tryDir(d[0], d[1], false);
     for (auto& d : kD) tryDir(d[0], d[1], true);
   }
-  static void gapJumps(const NavView& n, Cell c, std::vector<NavStep>& out) {
+  static void gapJumps(const cNavView& n, Cell c, std::vector<NavStep>& out) {
     auto tryDir = [&](int dx, int dz, bool diag) {
       for (int dist = 2; dist <= 4; ++dist) {
         const int lx = c.x + dx * dist, lz = c.z + dz * dist;
@@ -175,7 +175,7 @@ class cLeap final : public Climb {
     for (auto& d : kH) tryDir(d[0], d[1], false);
     for (auto& d : kD) tryDir(d[0], d[1], true);
   }
-  static void longDrops(const NavView& n, Cell c, std::vector<NavStep>& out) {
+  static void longDrops(const cNavView& n, Cell c, std::vector<NavStep>& out) {
     auto tryDir = [&](int dx, int dz, bool diag) {
       const int x = c.x + dx, z = c.z + dz;
       const NavCost base = diag ? kCostDiag : kCostWalk;
@@ -206,22 +206,22 @@ class cLeap final : public Climb {
     for (auto& d : kD) tryDir(d[0], d[1], true);
   }
 };
-class Fly final : public IMovementMode {
+class cFly final : public IMovementMode {
  public:
   std::string_view name() const override { return "fly"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
     static constexpr int k6[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     for (auto& d : k6)
       if (passable(n, c.x + d[0], c.y + d[1], c.z + d[2]))
         out.push_back({{c.x + d[0], c.y + d[1], c.z + d[2]}, kCostWalk, StepTag::kFly});
   }
 };
-class Swim final : public Walk {
+class cSwim final : public cWalk {
  public:
-  Swim() : Walk(3) {}
+  cSwim() : cWalk(3) {}
   std::string_view name() const override { return "swim"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
-    Walk::neighbours(n, c, out);
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
+    cWalk::neighbours(n, c, out);
     static constexpr int k6[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     for (auto& d : k6)
       if (n.bits(c.x + d[0], c.y + d[1], c.z + d[2]) & kNavFluid)
@@ -231,7 +231,7 @@ class Swim final : public Walk {
 class cWireFollow final : public IMovementMode {
  public:
   std::string_view name() const override { return "wire-follow"; }
-  void neighbours(const NavView& n, Cell c, std::vector<NavStep>& out) const override {
+  void neighbours(const cNavView& n, Cell c, std::vector<NavStep>& out) const override {
     for (auto& d : kH)
       for (int dy : {0, 1, -1}) {
         const int x = c.x + d[0], y = c.y + dy, z = c.z + d[1];
@@ -244,13 +244,13 @@ class cWireFollow final : public IMovementMode {
 };
 }  // namespace
 
-WalkCache::WalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
+cWalkCache::cWalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
                      size_t maxColumns)
     : world_(world), blocks_(blocks), rules_(std::move(rules)), maxColumns_(maxColumns) {
   if (!rules_.solid) rules_.solid = [this](BlockId b) { return blocks_.has(b, kSolid); };
 }
 
-uint8_t WalkCache::compute(int x, int y, int z) const {
+uint8_t cWalkCache::compute(int x, int y, int z) const {
   auto at = [&](int yy) { return yy < 0 || yy >= kWorldHeight ? BlockId(kAir) : world_.get(x, yy, z); };
   const BlockId b = at(y), below = at(y - 1);
   uint8_t r = 0;
@@ -263,7 +263,7 @@ uint8_t WalkCache::compute(int x, int y, int z) const {
   return r;
 }
 
-std::shared_ptr<const WalkCache::Column> WalkCache::column(int cx, int cz) const {
+std::shared_ptr<const cWalkCache::Column> cWalkCache::column(int cx, int cz) const {
   uint64_t gen;
   {
     std::lock_guard l(m_);
@@ -319,14 +319,14 @@ std::shared_ptr<const WalkCache::Column> WalkCache::column(int cx, int cz) const
   return it->second;
 }
 
-uint8_t WalkCache::bits(int x, int y, int z) const {
+uint8_t cWalkCache::bits(int x, int y, int z) const {
   if (y < 0 || y >= kWorldHeight) return y >= kWorldHeight ? uint8_t(kNavPassable) : uint8_t(0);
   const auto col = column(x >> 4, z >> 4);
   if (!col) return 0;
   return assemble(*col, cellIndex(x & 15, y, z & 15));
 }
 
-size_t WalkCache::cachedBytes() const {
+size_t cWalkCache::cachedBytes() const {
   std::lock_guard l(m_);
   size_t n = 0;
   for (const auto& entry : cols_) {
@@ -336,7 +336,7 @@ size_t WalkCache::cachedBytes() const {
   return n;
 }
 
-std::vector<int16_t> WalkCache::standableSpans(int x, int z) const {
+std::vector<int16_t> cWalkCache::standableSpans(int x, int z) const {
   const auto col = column(x >> 4, z >> 4);
   if (!col) return {};
   const size_t i = size_t(z & 15) * kChunkSize + size_t(x & 15);
@@ -345,14 +345,14 @@ std::vector<int16_t> WalkCache::standableSpans(int x, int z) const {
   return {col->spanData.begin() + off, col->spanData.begin() + off + n};
 }
 
-int WalkCache::topStandable(int x, int z) const {
+int cWalkCache::topStandable(int x, int z) const {
   const auto col = column(x >> 4, z >> 4);
   if (!col) return -1;
   const size_t i = size_t(z & 15) * kChunkSize + size_t(x & 15);
   return col->spanCnt[i] ? int(col->spanData[col->spanOff[i]]) : -1;
 }
 
-uint8_t NavView::bits(int x, int y, int z) const {
+uint8_t cNavView::bits(int x, int y, int z) const {
   if (y < 0 || y >= kWorldHeight) return y >= kWorldHeight ? uint8_t(kNavPassable) : uint8_t(0);
   const uint64_t key = colKey(x >> 4, z >> 4);
   if (key != lastKey_) {
@@ -361,30 +361,30 @@ uint8_t NavView::bits(int x, int y, int z) const {
     lastKey_ = key;
     lastCol_ = it->second.get();
   }
-  return lastCol_ ? WalkCache::assemble(*lastCol_, WalkCache::cellIndex(x & 15, y, z & 15)) : uint8_t(0);
+  return lastCol_ ? cWalkCache::assemble(*lastCol_, cWalkCache::cellIndex(x & 15, y, z & 15)) : uint8_t(0);
 }
 
-uint64_t WalkCache::generation() const { std::lock_guard l(m_); return generation_; }
+uint64_t cWalkCache::generation() const { std::lock_guard l(m_); return generation_; }
 
-uint64_t WalkCache::columnVersion(int cx, int cz) const {
+uint64_t cWalkCache::columnVersion(int cx, int cz) const {
   std::lock_guard l(m_);
   const auto it = colVer_.find(colKey(cx, cz));
   return it == colVer_.end() ? 0 : it->second;
 }
 
-void WalkCache::invalidate(int x, int z) {
+void cWalkCache::invalidate(int x, int z) {
   std::lock_guard l(m_);
   cols_.erase(colKey(x >> 4, z >> 4));
   ++colVer_[colKey(x >> 4, z >> 4)];
   ++generation_;
 }
-size_t WalkCache::cachedColumns() const { std::lock_guard l(m_); return cols_.size(); }
+size_t cWalkCache::cachedColumns() const { std::lock_guard l(m_); return cols_.size(); }
 
-std::unique_ptr<IMovementMode> makeWalk(int maxDrop) { return std::make_unique<Walk>(maxDrop); }
-std::unique_ptr<IMovementMode> makeClimb() { return std::make_unique<Climb>(); }
+std::unique_ptr<IMovementMode> makeWalk(int maxDrop) { return std::make_unique<cWalk>(maxDrop); }
+std::unique_ptr<IMovementMode> makeClimb() { return std::make_unique<cClimb>(); }
 std::unique_ptr<IMovementMode> makeLeap() { return std::make_unique<cLeap>(); }
-std::unique_ptr<IMovementMode> makeFly() { return std::make_unique<Fly>(); }
-std::unique_ptr<IMovementMode> makeSwim() { return std::make_unique<Swim>(); }
+std::unique_ptr<IMovementMode> makeFly() { return std::make_unique<cFly>(); }
+std::unique_ptr<IMovementMode> makeSwim() { return std::make_unique<cSwim>(); }
 std::unique_ptr<IMovementMode> makeWireFollow() { return std::make_unique<cWireFollow>(); }
 
 Cell hopToward(Cell from, Cell goal, int hop) {
@@ -394,9 +394,9 @@ Cell hopToward(Cell from, Cell goal, int hop) {
   return {from.x + dx * hop / m, from.y + dy * hop / m, from.z + dz * hop / m};
 }
 
-Path findPath(const WalkCache& cache, const PathRequest& req) {
+Path findPath(const cWalkCache& cache, const PathRequest& req) {
   Path out;
-  const NavView nav(cache);
+  const cNavView nav(cache);
   if (!req.mode) return out;
   struct Node { NavCost f, g; uint64_t order; Cell c; };
   auto cmp = [](const Node& a, const Node& b) { return a.f != b.f ? a.f > b.f : a.order > b.order; };  // FIFO ties: deterministic
@@ -448,9 +448,9 @@ Path findPath(const WalkCache& cache, const PathRequest& req) {
   return out;
 }
 
-Path smoothPath(const WalkCache& cache, const Path& in) {
+Path smoothPath(const cWalkCache& cache, const Path& in) {
   if (in.cells.size() < 3 || in.steps.size() != in.cells.size()) return in;
-  const NavView nav(cache);
+  const cNavView nav(cache);
   // Can the mover travel the straight segment a -> b (same y) directly?
   // Exact integer supercover of the segment: every crossed cell must be
   // standable with headroom. Corner crossings count BOTH side cells, so a

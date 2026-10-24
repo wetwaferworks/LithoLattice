@@ -5725,7 +5725,7 @@ void testAi() {
   for (int x = 40; x < 60; ++x) w.set(x, 10, 70, wire);                               // a wire track
   NavRules rules;
   rules.track = [&](BlockId b) { return b == wire; };
-  WalkCache nav(w, reg, rules);
+  cWalkCache nav(w, reg, rules);
   check((nav.bits(3, 10, 3) & kNavStandable) && !(nav.bits(20, 10, 3) & kNavPassable) && (nav.bits(5, 11, 5) & kNavStandable),
         "ai: walk cache: floor standable, wall blocked, step top standable");
   const size_t cols = nav.cachedColumns();
@@ -5767,7 +5767,7 @@ void testAi() {
   struct Flip final : ILearnedScorer {
     std::optional<float> score(const AiContext&, const UtilityAction& a) const override { return a.name == "flee" ? 1.f : 0.f; }
   };
-  AiWorld world(nav, {}, nullptr);
+  cAiWorld world(nav, {}, nullptr);
   const uint32_t a = *world.spawn({2, 10, 2}, walk.get());
   AiContext ctx{world, *world.mob(a), AiRng{1}, 0, 1.f, {}};
   std::vector<UtilityAction> acts = {{"eat", {[](const AiContext&) { return 0.9f; }}, 1.f, {}},
@@ -5788,10 +5788,10 @@ void testAi() {
 
   // Cap, waypoints, boss hooks, LOD, budget, determinism across thread counts.
   AiConfig cap; cap.mobCap = 500;
-  AiWorld big(nav, cap);
+  cAiWorld big(nav, cap);
   int spawned = 0;
   while (big.spawn({1, 10, 1}, walk.get())) ++spawned;
-  AiWorld small(nav, {});
+  cAiWorld small(nav, {});
   int spawned64 = 0;
   while (small.spawn({1, 10, 1}, walk.get())) ++spawned64;
   check(spawned == 128 && spawned64 == 64, "ai: mob cap 64 by default, configurable up to 128");
@@ -5800,7 +5800,7 @@ void testAi() {
   };
   NoDiamonds gate;
   world.setBossSlot(&gate);
-  SurgeSchedule surge(10, 3, 2.f);
+  cSurgeSchedule surge(10, 3, 2.f);
   check(!world.requestDrop(a, 7) && world.requestDrop(a, 3) && surge.surge(1) == 2.f && surge.surge(5) == 1.f,
         "ai: final-boss slot: drop gating and surge schedule hooks");
   world.setWaypoint("arena", {30, 10, 40});
@@ -5808,7 +5808,7 @@ void testAi() {
 
   auto run = [&](JobPool* pool, std::vector<Cell>& end) {
     AiConfig c; c.pathsPerTick = 8; c.seed = 42;
-    AiWorld aw(nav, c, pool);
+    cAiWorld aw(nav, c, pool);
     aw.setWaypoint("arena", {100, 10, 100});
     for (int i = 0; i < 64; ++i) {
       std::vector<UtilityAction> brainActs = {
@@ -5835,9 +5835,9 @@ void testAi() {
   check(e1 == e4 && moved, "ai: deterministic: 64 mobs end in identical cells with 1 or 4 path threads");
   check(deferred > 0, "ai: path budget: requests over the per-tick budget wait their turn");
   AiConfig hz; hz.hz = 40;
-  AiWorld clamped(nav, hz);
+  cAiWorld clamped(nav, hz);
   clamped.advance(64, 64);
-  AiWorld lod(nav, {});
+  cAiWorld lod(nav, {});
   const uint32_t far = *lod.spawn({120, 10, 120}, walk.get(), btAction([](AiContext&) { return BtStatus::Success; }));
   const uint32_t near = *lod.spawn({1, 10, 1}, walk.get(), btAction([](AiContext&) { return BtStatus::Success; }));
   lod.setObservers({{0, 10, 0}});
@@ -5851,7 +5851,7 @@ void testAi() {
   // untouched, duplicate despawn requests are harmless, and the world keeps
   // ticking afterwards.
   {
-    AiWorld selfKill(nav, {});
+    cAiWorld selfKill(nav, {});
     uint32_t selfId = 0;
     BtPtr suicide = btAction([&](AiContext& x) {
       x.world.despawn(x.mob.id);
@@ -5911,7 +5911,7 @@ void testAi() {
     for (int y = 10; y <= 13; ++y) lw.set(49, y, 45, ladder);                                 // ladder column on its face
     NavRules r2;
     r2.climbable = [&](BlockId b) { return b == ladder; };
-    WalkCache lnav(lw, reg2, r2);
+    cWalkCache lnav(lw, reg2, r2);
     auto leap = makeLeap(), walk2 = makeWalk(), climb2 = makeClimb();
     auto hasTag = [](const Path& p, StepTag t) {
       return std::any_of(p.steps.begin(), p.steps.end(), [&](StepTag s) { return s == t; });
@@ -5964,8 +5964,8 @@ void testAi() {
     check(findPath(lnav, {{2, 10, 2}, {14, 10, 2}, walk2.get(), 48}).cells.size() > 2,
           "ai: smoothing is opt-in (default path keeps its steps)");
 
-    // P2 feed: a live AiWorld mob carries the tags parallel to its path.
-    AiWorld lw2(lnav, {}, nullptr);
+    // P2 feed: a live cAiWorld mob carries the tags parallel to its path.
+    cAiWorld lw2(lnav, {}, nullptr);
     const uint32_t lm = *lw2.spawn({2, 10, 2}, leap.get());
     lw2.setGoal(lm, {14, 10, 2});
     lw2.tick();
@@ -5980,25 +5980,25 @@ void testAi() {
           "ai: P3 spans: the 3-high wall column tops at y=13, exactly one span");
     check(lnav.topStandable(21, 35) == -1 && lnav.standableSpans(21, 35).empty(),
           "ai: P3 spans: the ditch column has no standable span");
-    WalkCache mc(lw, reg2, r2);
+    cWalkCache mc(lw, reg2, r2);
     mc.prewarm(0, 0);
     const size_t mcBytes = mc.cachedBytes();
     check(mc.cachedColumns() == 1 && mcBytes >= 122880 && mcBytes < 160000,
           "ai: P3 storage: a cached column is ~120 KiB of bit-planes + sidecar (was 192 KiB)");
-    WalkCache lc(lw, reg2, r2, 2);
+    cWalkCache lc(lw, reg2, r2, 2);
     const uint8_t wantBits = lc.bits(2, 10, 2);  // column (0,0)
     lc.bits(18, 10, 2);                          // column (1,0)
     lc.bits(34, 10, 2);                          // column (2,0) -> evicts (0,0)
     check(lc.cachedColumns() == 2, "ai: P3 LRU: the cap holds at 2 columns");
     check(lc.bits(2, 10, 2) == wantBits && lc.cachedColumns() == 2,
           "ai: P3 LRU: an evicted column recomputes to identical bits");
-    WalkCache tiny(lw, reg2, r2, 3);
+    cWalkCache tiny(lw, reg2, r2, 3);
     const Path t1 = findPath(tiny, {{7, 10, 15}, {30, 10, 35}, leap.get(), 48});
     check(t1.complete && t1.cells == r1.cells && t1.steps == r1.steps,
           "ai: P3 LRU: a search through a too-small cache is byte-identical");
   }
 
-  // ---- P4: flow fields, HPA*-lite, portal-pair cache, AiWorld flags ----
+  // ---- P4: flow fields, HPA*-lite, portal-pair cache, cAiWorld flags ----
   {
     cFlowField ff;
     check(ff.build(nav, {30, 10, 40}), "ai: P4 flow: field builds toward a standable goal");
@@ -6059,11 +6059,11 @@ void testAi() {
     }
     nav.invalidate(20, 40);
 
-    // AiWorld consumption, behind flags (default off -- every pre-existing
-    // AiWorld check above already proves the off behaviour is unchanged).
+    // cAiWorld consumption, behind flags (default off -- every pre-existing
+    // cAiWorld check above already proves the off behaviour is unchanged).
     AiConfig hc;
     hc.useHpa = true;
-    AiWorld hw(nav, hc, nullptr);
+    cAiWorld hw(nav, hc, nullptr);
     const uint32_t hm = *hw.spawn({2, 10, 2}, walk.get());
     hw.setGoal(hm, {100, 10, 100});
     hw.tick();
@@ -6071,7 +6071,7 @@ void testAi() {
     check(hmob && hmob->path.size() > 40, "ai: P4 AiWorld: useHpa plans a full cross-map route in one tick");
     AiConfig fc;
     fc.useFlowField = true;
-    AiWorld fwl(nav, fc, nullptr);
+    cAiWorld fwl(nav, fc, nullptr);
     const uint32_t fm = *fwl.spawn({10, 10, 40}, walk.get());
     fwl.setGoal(fm, {30, 10, 40});
     for (int t = 0; t < 30 && fwl.mob(fm) && !(fwl.mob(fm)->pos == (Cell{30, 10, 40})); ++t) fwl.tick();
@@ -6097,10 +6097,10 @@ void testAi() {
     for (int z = 0; z < 32; ++z)
       for (int x = 0; x < 32; ++x) hw.set(x, 9, z, rockH);
     for (int x : {4, 5, 6, 7, 10, 11}) { hw.set(x, 10, 5, rockH); hw.set(x, 11, 5, rockH); }
-    WalkCache hnav(hw, regH, {});
+    cWalkCache hnav(hw, regH, {});
     auto hwk = makeWalk();
     auto dijkstraRef = [&](Cell from, Cell to, const IMovementMode* mode, int maxRange) {
-      NavView nv(hnav);
+      cNavView nv(hnav);
       std::unordered_map<Cell, NavCost, CellHash> dist;
       std::unordered_map<Cell, bool, CellHash> done;
       dist[from] = 0;
@@ -6157,7 +6157,7 @@ void testAi() {
     ChunkMap cw2 = worldWithColumns(3, &regC);  // x, z in 0..47
     for (int z = 0; z < 48; ++z)
       for (int x = 0; x < 48; ++x) cw2.set(x, 9, z, rockC);
-    WalkCache cnav(cw2, regC, {});
+    cWalkCache cnav(cw2, regC, {});
     auto cwk = makeWalk();
     HpaGraph cg(cnav);
     const auto cr1 = cg.findPath({2, 10, 8}, {40, 10, 8}, cwk.get());
@@ -6192,7 +6192,7 @@ void testAi() {
       for (int x = 0; x < 16; ++x) dw.set(x, 12, z, rockD);
       for (int x = 16; x < 32; ++x) dw.set(x, 9, z, rockD);
     }
-    WalkCache dnav(dw, regD, {});
+    cWalkCache dnav(dw, regD, {});
     auto dwk = makeWalk();
     HpaGraph dg(dnav);
     const auto down = dg.findPath({8, 13, 8}, {24, 10, 8}, dwk.get());

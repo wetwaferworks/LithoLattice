@@ -1,8 +1,8 @@
 // Hierarchical pathfinding + flow fields (P4, 2026-10-14), layered over the
-// WalkCache without changing it. Same determinism rules as findPath:
+// cWalkCache without changing it. Same determinism rules as findPath:
 // integer fixed-point costs, FIFO tie-breaks, node budgets -- never
 // wall-clock. Everything here is derived data, rebuilt lazily and repaired
-// from the WalkCache's per-column version counters; nothing is persisted.
+// from the cWalkCache's per-column version counters; nothing is persisted.
 //
 // Three pieces:
 //  - cFlowField: a Dijkstra integration field over Walk-semantics steps.
@@ -40,7 +40,7 @@ class cFlowField {
   /// Build over `cache` for standable cells within Chebyshev `maxRange`
   /// of `goal`, visiting at most `maxCells` cells (budget, not clock).
   /// Returns false when the goal cell itself is not standable.
-  bool build(const WalkCache& cache, Cell goal, int maxRange = 48, size_t maxCells = 65536);
+  bool build(const cWalkCache& cache, Cell goal, int maxRange = 48, size_t maxCells = 65536);
   Cell goal() const { return goal_; }
   size_t size() const { return dist_.size(); }
   /// Exact field distance of a cell (kUnreached when not in the field).
@@ -52,7 +52,7 @@ class cFlowField {
   std::optional<Cell> next(Cell from) const;
 
  private:
-  const WalkCache* cache_ = nullptr;
+  const cWalkCache* cache_ = nullptr;
   std::unique_ptr<IMovementMode> walk_;
   Cell goal_{};
   std::unordered_map<Cell, NavCost, CellHash> dist_;
@@ -75,7 +75,7 @@ struct HpaPortal {
 
 class HpaGraph {
  public:
-  explicit HpaGraph(const WalkCache& cache) : cache_(cache) {}
+  explicit HpaGraph(const cWalkCache& cache) : cache_(cache) {}
 
   /// A full, refined, mode-exact path from `from` to `to`, routed over
   /// the entrance graph; nullopt when no route exists (callers fall back
@@ -99,9 +99,9 @@ class HpaGraph {
   const Cluster& ensure(int cx, int cz);
   Path refineLeg(Cell a, Cell b, const IMovementMode* mode, int maxNodes, bool useCache);
 
-  const WalkCache& cache_;
+  const cWalkCache& cache_;
   std::unique_ptr<IMovementMode> walk_;  // graph costs are Walk-costed; refinement is mode-exact
-  uint64_t legEpoch_ = 0;  // B-C1: WalkCache generation the leg cache was built under;
+  uint64_t legEpoch_ = 0;  // B-C1: cWalkCache generation the leg cache was built under;
                            // a mismatch at findPath entry clears legCache_/legOrder_
   std::unordered_map<uint64_t, Cluster> clusters_;
   struct LegKey {

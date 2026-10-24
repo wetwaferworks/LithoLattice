@@ -15,13 +15,13 @@ namespace litholattice::ai {
 namespace {
 
 uint64_t colKey(int cx, int cz) { return (uint64_t(uint32_t(cx)) << 32) | uint32_t(cz); }
-bool standable(const NavView& n, Cell c) { return (n.bits(c.x, c.y, c.z) & kNavStandable) != 0; }
-bool passable(const NavView& n, Cell c) { return (n.bits(c.x, c.y, c.z) & kNavPassable) != 0; }
+bool standable(const cNavView& n, Cell c) { return (n.bits(c.x, c.y, c.z) & kNavStandable) != 0; }
+bool passable(const cNavView& n, Cell c) { return (n.bits(c.x, c.y, c.z) & kNavPassable) != 0; }
 
 // Exact Walk legality for one axis-aligned step a -> b (mirrors
 // groundMoves in nav.cpp: flat needs standable + headroom, step-up needs
 // the mover's head cell too, drops need a passable shaft).
-bool stepLegal(const NavView& n, Cell a, Cell b) {
+bool stepLegal(const cNavView& n, Cell a, Cell b) {
   if (!standable(n, b)) return false;
   const int dy = b.y - a.y;
   if (dy == 0) return passable(n, {b.x, b.y + 1, b.z});
@@ -49,7 +49,7 @@ NavCost stepCostFor(int dy) {  // axis steps only (portals never diagonal)
 // form a run; each run emits one portal at its middle crossing. Both
 // adjacent clusters compute this identically (grouping keys on the
 // canonical side only), so their portal sets always agree.
-void scanBorder(const NavView& nav, bool axisX, int lx, int lz, std::vector<HpaPortal>& out) {
+void scanBorder(const cNavView& nav, bool axisX, int lx, int lz, std::vector<HpaPortal>& out) {
   struct Cross { Cell l, r; NavCost step; bool revOk; NavCost revStep; int lane; };
   std::vector<Cross> all;
   for (int lane = 0; lane < kChunkSize; ++lane) {
@@ -90,12 +90,12 @@ void scanBorder(const NavView& nav, bool axisX, int lx, int lz, std::vector<HpaP
 
 // ---------------------------------------------------------------- cFlowField
 
-bool cFlowField::build(const WalkCache& cache, Cell goal, int maxRange, size_t maxCells) {
+bool cFlowField::build(const cWalkCache& cache, Cell goal, int maxRange, size_t maxCells) {
   cache_ = &cache;
   goal_ = goal;
   dist_.clear();
   if (!walk_) walk_ = makeWalk();
-  NavView nav(cache);
+  cNavView nav(cache);
   if (!standable(nav, goal)) return false;
   struct Item { NavCost d; uint64_t seq; Cell c; };
   struct Cmp {
@@ -154,7 +154,7 @@ std::optional<Cell> cFlowField::next(Cell from) const {
   if (!cache_ || !walk_) return std::nullopt;
   const NavCost d0 = dist(from);
   if (d0 == kUnreached || d0 == 0) return std::nullopt;
-  NavView nav(*cache_);
+  cNavView nav(*cache_);
   std::vector<NavStep> nb;
   walk_->neighbours(nav, from, nb);
   std::optional<Cell> best;
@@ -177,7 +177,7 @@ const HpaGraph::Cluster& HpaGraph::ensure(int cx, int cz) {
   Cluster cl;
   cl.vers = vers;
   {
-    NavView nav(cache_);
+    cNavView nav(cache_);
     scanBorder(nav, true, cx, cz, cl.portals);        // east (this cluster is canonical/west)
     scanBorder(nav, true, cx - 1, cz, cl.portals);    // west (neighbour canonical)
     scanBorder(nav, false, cx, cz, cl.portals);       // south (this cluster canonical/north)
@@ -231,7 +231,7 @@ std::optional<Path> HpaGraph::findPath(Cell from, Cell to, const IMovementMode* 
   if (!mode) return std::nullopt;
   // B-C1: the portal-pair leg cache is keyed by cells + mode only, so any
   // world edit since it was filled can make a cached leg stale (a wall
-  // built across its corridor). The WalkCache generation bumps on EVERY
+  // built across its corridor). The cWalkCache generation bumps on EVERY
   // invalidate(); when it has moved, drop the whole cache before serving
   // anything from it. Epoch-clear chosen over key-augmentation: simpler,
   // obviously correct, and the cache is a pure speed device -- refilling

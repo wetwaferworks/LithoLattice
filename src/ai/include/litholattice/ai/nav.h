@@ -69,7 +69,7 @@ struct NavStep {
   StepTag tag = StepTag::kWalk;
 };
 
-class WalkCache {
+class cWalkCache {
  public:
   /// P3 memory (2026-10-14): columns are 5 bit-planes (120 KiB) instead of
   /// a byte array (192 KiB), a power-of-two-friendly LRU cap bounds how many
@@ -78,20 +78,20 @@ class WalkCache {
   /// `maxColumns` default 512 is JD-review-pending (0 = unbounded, the old
   /// behaviour). Memory per cached column ≈ 120 KiB planes + ~1.6 KiB
   /// struct + ~2 B per standable cell of span data.
-  WalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
+  cWalkCache(const ChunkMap& world, const BlockRegistry& blocks, NavRules rules,
             size_t maxColumns = 512);
   /// Bits of a cell (0 outside loaded columns / the world).
   /// Thread contract (B-H3 discipline, 2026-10-15): the cache structure
   /// itself is thread-safe, but computing an uncached column reads the
   /// ChunkMap, which only the caller's designated reader thread may do
-  /// (in production the AiWorld tick thread, at the AI-tick boundary --
+  /// (in production the cAiWorld tick thread, at the AI-tick boundary --
   /// the same boundary at which invalidations are drained). A
   /// worker-thread first-compute is a contract VIOLATION, not a benign
   /// stretch: it reads live ChunkMap storage concurrently with the
   /// mutating owner thread, which is a C++ data race (UB). The
   /// discipline that upholds this: whoever submits searches to a pool
   /// must first pre-warm, on the reader thread, every column the search
-  /// can touch. AiWorld::tick does exactly that for its plan jobs (the
+  /// can touch. cAiWorld::tick does exactly that for its plan jobs (the
   /// full planRange box around each pending search, plus a one-column
   /// margin for movement-mode overshoot) before any job is submitted,
   /// so pool workers only ever read already-cached, immutable columns.
@@ -122,7 +122,7 @@ class WalkCache {
   int topStandable(int x, int z) const;
 
  private:
-  friend class NavView;
+  friend class cNavView;
   struct Column {
     // Bit-planes: one bit per cell per NavBits flag (5 planes, plane p
     // holds bit 1<<p) = 5 * 24 KiB = 120 KiB per column.
@@ -164,17 +164,17 @@ class WalkCache {
   mutable std::unordered_map<uint64_t, uint64_t> colVer_;  ///< per-column edit epoch (P4)
 };
 
-/// One search's view of a WalkCache: keeps the columns it touched alive and skips the cache
+/// One search's view of a cWalkCache: keeps the columns it touched alive and skips the cache
 /// lock on repeat lookups (single-threaded; make one per search).
-class NavView {
+class cNavView {
  public:
-  explicit NavView(const WalkCache& cache) : cache_(cache) {}
+  explicit cNavView(const cWalkCache& cache) : cache_(cache) {}
   uint8_t bits(int x, int y, int z) const;
  private:
-  const WalkCache& cache_;
+  const cWalkCache& cache_;
   mutable uint64_t lastKey_ = ~0ull;
-  mutable const WalkCache::Column* lastCol_ = nullptr;
-  mutable std::unordered_map<uint64_t, std::shared_ptr<const WalkCache::Column>> held_;
+  mutable const cWalkCache::Column* lastCol_ = nullptr;
+  mutable std::unordered_map<uint64_t, std::shared_ptr<const cWalkCache::Column>> held_;
 };
 
 /// A movement mode plug-in: which neighbour steps are legal and what they cost.
@@ -183,7 +183,7 @@ class IMovementMode {
   virtual ~IMovementMode() = default;
   virtual std::string_view name() const = 0;
   /// Appends legal steps from `c` (fixed-point costs, each >= 1 unit).
-  virtual void neighbours(const NavView& nav, Cell c, std::vector<NavStep>& out) const = 0;
+  virtual void neighbours(const cNavView& nav, Cell c, std::vector<NavStep>& out) const = 0;
 };
 
 /// Built-in modes: walk (step up 1, drop up to 3, diagonals with a corner-cut
@@ -213,13 +213,13 @@ struct Path {
 };
 /// Bounded A* (deterministic tie-breaking). If the goal is outside maxRange or unreachable in
 /// budget, returns the explored cell closest to the goal as a hop.
-Path findPath(const WalkCache& nav, const PathRequest& req);
+Path findPath(const cWalkCache& nav, const PathRequest& req);
 /// Greedy string-pull over a found path: on flat (single-y) legs, drop every
 /// intermediate cell the mover can walk past in a straight line (each crossed
 /// cell standable with headroom). Conservative: legs that change level are
 /// kept verbatim, so a smoothed path is always a subsequence of legal travel.
 /// Tags on kept cells are preserved; merged legs are tagged kWalk.
-Path smoothPath(const WalkCache& nav, const Path& in);
+Path smoothPath(const cWalkCache& nav, const Path& in);
 /// The intermediate target for a long trip: the goal clamped to `hop` blocks from `from`.
 Cell hopToward(Cell from, Cell goal, int hop = 48);
 

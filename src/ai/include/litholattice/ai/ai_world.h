@@ -1,4 +1,4 @@
-// AiWorld: owns the mobs and runs the AI tick (8-16 Hz) with a per-tick path budget, distance
+// cAiWorld: owns the mobs and runs the AI tick (8-16 Hz) with a per-tick path budget, distance
 // LOD and a mob cap. Path searches run in parallel but are applied in mob-id order, so the
 // outcome never depends on thread count or timing (server-authoritative friendly: all state is
 // here, nothing client-side).
@@ -48,9 +48,9 @@ class IBossSlot {
   virtual const ILearnedScorer* learnedScorer() const { return nullptr; }
 };
 /// Simple surge schedule: `mult` for `length` ticks every `period` ticks.
-class SurgeSchedule final : public IBossSlot {
+class cSurgeSchedule final : public IBossSlot {
  public:
-  SurgeSchedule(uint64_t period, uint64_t length, float mult) : period_(period), length_(length), mult_(mult) {}
+  cSurgeSchedule(uint64_t period, uint64_t length, float mult) : period_(period), length_(length), mult_(mult) {}
   float surge(uint64_t tick) const override { return period_ && tick % period_ < length_ ? mult_ : 1.f; }
  private:
   uint64_t period_, length_;
@@ -75,9 +75,9 @@ struct Mob {
   uint64_t thoughts = 0;
 };
 
-class AiWorld;
+class cAiWorld;
 struct AiContext {
-  AiWorld& world;
+  cAiWorld& world;
   Mob& mob;
   AiRng rng;
   uint64_t tick = 0;
@@ -91,9 +91,9 @@ struct AiStats {
   double tickMs = 0;
 };
 
-class AiWorld {
+class cAiWorld {
  public:
-  AiWorld(const WalkCache& nav, AiConfig cfg, JobPool* pool = nullptr);
+  cAiWorld(const cWalkCache& nav, AiConfig cfg, JobPool* pool = nullptr);
   /// nullopt when the cap is reached.
   std::optional<uint32_t> spawn(Cell at, const IMovementMode* mode, BtPtr brain = nullptr);
   bool despawn(uint32_t id);
@@ -117,10 +117,10 @@ class AiWorld {
   void tick();
   const AiStats& stats() const { return stats_; }
   const AiConfig& config() const { return cfg_; }
-  const WalkCache& nav() const { return nav_; }
+  const cWalkCache& nav() const { return nav_; }
 
  private:
-  const WalkCache& nav_;
+  const cWalkCache& nav_;
   AiConfig cfg_;
   HpaGraph hpa_;  // P4: lazy/repaired from nav_ versions; only consulted when cfg_.useHpa
   // P4 flow-field state (single current field, keyed by goal + nav

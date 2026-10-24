@@ -25,9 +25,9 @@ int pickUtility(const AiContext& ctx, const std::vector<UtilityAction>& actions,
 }
 
 namespace {
-class Sequence final : public IBtNode {
+class cSequence final : public IBtNode {
  public:
-  explicit Sequence(std::vector<BtPtr> c) : c_(std::move(c)) {}
+  explicit cSequence(std::vector<BtPtr> c) : c_(std::move(c)) {}
   BtStatus tick(AiContext& ctx) override {
     for (; at_ < c_.size(); ++at_) {
       const BtStatus s = c_[at_]->tick(ctx);
@@ -41,9 +41,9 @@ class Sequence final : public IBtNode {
   std::vector<BtPtr> c_;
   size_t at_ = 0;
 };
-class Selector final : public IBtNode {
+class cSelector final : public IBtNode {
  public:
-  explicit Selector(std::vector<BtPtr> c) : c_(std::move(c)) {}
+  explicit cSelector(std::vector<BtPtr> c) : c_(std::move(c)) {}
   BtStatus tick(AiContext& ctx) override {
     for (auto& n : c_)
       if (const BtStatus s = n->tick(ctx); s != BtStatus::Failure) return s;
@@ -92,8 +92,8 @@ class cUtility final : public IBtNode {
 };
 }  // namespace
 
-BtPtr btSequence(std::vector<BtPtr> c) { return std::make_unique<Sequence>(std::move(c)); }
-BtPtr btSelector(std::vector<BtPtr> c) { return std::make_unique<Selector>(std::move(c)); }
+BtPtr btSequence(std::vector<BtPtr> c) { return std::make_unique<cSequence>(std::move(c)); }
+BtPtr btSelector(std::vector<BtPtr> c) { return std::make_unique<cSelector>(std::move(c)); }
 BtPtr btInverter(BtPtr c) { return std::make_unique<cInverter>(std::move(c)); }
 BtPtr btCondition(std::function<bool(const AiContext&)> p) { return std::make_unique<cCondition>(std::move(p)); }
 BtPtr btAction(std::function<BtStatus(AiContext&)> a) { return std::make_unique<cAction>(std::move(a)); }

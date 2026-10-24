@@ -83,19 +83,19 @@ Namespaces: engine = `litholattice::` (sub-namespaces `procgen::`, `ui::`, `stor
 - **[PROPOSED]** A stable script API layer: `ll::` (engine: blocks, world queries, UI, sfx, timers) and `<modid>::` (bindings a native or base mod exports). It is versioned with the SDK (section 3.3). Each script mod gets its own module, so names don't collide.
 
 ### 2.11 AI [EXISTS: core] (`src/ai`, `litholattice::ai`)
-- **[EXISTS]** `WalkCache` (per-chunk-column nav bits: passable / standable / climb / fluid / track, invalidated per column) with game-supplied `NavRules`; `NavView` per search.
+- **[EXISTS]** `cWalkCache` (per-chunk-column nav bits: passable / standable / climb / fluid / track, invalidated per column) with game-supplied `NavRules`; `cNavView` per search.
 - **[EXISTS]** `IMovementMode` plug-ins: `makeWalk` (step up 1, drop 3), `makeClimb`, `makeFly`, `makeSwim`, `makeWireFollow`.
 - **[EXISTS]** `findPath`: bounded, deterministic A* (box `planRange` 32-64, node budget); unreachable or far goals return a hop (`hopToward`), replanned on arrival.
 - **[EXISTS]** Senses: `canSee` (voxel DDA, occluded, range + view cone: no wallhacks), `hear` (falloff, halved per occluder), `senseField` (signal / heat sampled by the game).
 - **[EXISTS]** Brains: utility AI (`UtilityAction`, `pickUtility`) with `ILearnedScorer` (stub `cNullLearnedScorer`), behaviour-tree nodes (sequence, selector, inverter, condition, action, utility leaf).
-- **[EXISTS]** `AiWorld`: 8-16 Hz tick (`advance` from world ticks), per-tick path budget (excess waits in id order), distance LOD (think every 1/2/4 ticks), mob cap 64 (up to 128), waypoints, per-mob deterministic RNG; path searches run on a `JobPool` and apply in id order, so results do not depend on thread count. All AI state lives in `AiWorld` (server-authoritative friendly).
-- **[EXISTS]** Final-boss slot: `IBossSlot` (`allowDrop` drop gating, `surge` activity multiplier, `learnedScorer`), `SurgeSchedule`.
+- **[EXISTS]** `cAiWorld`: 8-16 Hz tick (`advance` from world ticks), per-tick path budget (excess waits in id order), distance LOD (think every 1/2/4 ticks), mob cap 64 (up to 128), waypoints, per-mob deterministic RNG; path searches run on a `JobPool` and apply in id order, so results do not depend on thread count. All AI state lives in `cAiWorld` (server-authoritative friendly).
+- **[EXISTS]** Final-boss slot: `IBossSlot` (`allowDrop` drop gating, `surge` activity multiplier, `learnedScorer`), `cSurgeSchedule`.
 - **[PROPOSED]** Wiring into LithoKraft (mob types, spawning, rendering, saving mobs), incremental (sliced) A*, script-defined behaviours.
 All **[PROPOSED]**: an engine module `ai`, with mobs and NPCs as game code.
-- `IAgent` (body: position, velocity, `MovementMode {Walk, Climb, Swim, Fly, Phase}` for Void entities).
+- `IAgent` (body: position, velocity, `MovementMode {cWalk, cClimb, cSwim, cFly, Phase}` for Void entities).
 - `ISense` (sight cone, hearing via signal and sound events, wire "taste" for virus mobs). Each produces percepts into a blackboard.
 - `IConsideration` (utility curve over blackboard keys, 0..1) and `IAction`. The utility selector picks the top-scored action.
-- Behavior-tree nodes: `IBtNode` (`Sequence`, `Selector`, `Parallel`, `Decorator`, leaf actions), registered by name and authored in JSON.
+- Behavior-tree nodes: `IBtNode` (`cSequence`, `cSelector`, `Parallel`, `Decorator`, leaf actions), registered by name and authored in JSON.
 - **Learned-model hook**: `IScoreModel::adjust(span<const float> features, span<float> scores)`, called after the utility scoring. The Daemon combat model plugs in here. It is optional, with no-op stubs.
 - **Waypoints**: a waypoint block or tag plus `IPathfinder` (A* over the voxel grid, budgeted per tick). Player-built NPCs get direct actions (step, use) and `goTo(waypoint|tag)`.
 - AI runs on its own fixed-rate step (8-16 Hz) inside the sim thread, using a `ClockDomain`-like scheduler.

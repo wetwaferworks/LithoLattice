@@ -7,14 +7,14 @@
 
 namespace litholattice::ai {
 
-AiWorld::AiWorld(const WalkCache& nav, AiConfig cfg, JobPool* pool) : nav_(nav), cfg_(cfg), hpa_(nav), pool_(pool) {
+cAiWorld::cAiWorld(const cWalkCache& nav, AiConfig cfg, JobPool* pool) : nav_(nav), cfg_(cfg), hpa_(nav), pool_(pool) {
   cfg_.hz = std::clamp(cfg_.hz, 8, 16);
   cfg_.mobCap = std::clamp(cfg_.mobCap, 1, 128);
   cfg_.planRange = std::clamp(cfg_.planRange, 32, 64);
   cfg_.pathsPerTick = std::max(1, cfg_.pathsPerTick);
 }
 
-std::optional<uint32_t> AiWorld::spawn(Cell at, const IMovementMode* mode, BtPtr brain) {
+std::optional<uint32_t> cAiWorld::spawn(Cell at, const IMovementMode* mode, BtPtr brain) {
   if (int(mobs_.size()) >= cfg_.mobCap) return std::nullopt;
   const uint32_t id = nextId_++;
   Mob m;
@@ -22,7 +22,7 @@ std::optional<uint32_t> AiWorld::spawn(Cell at, const IMovementMode* mode, BtPtr
   mobs_.emplace(id, std::move(m));
   return id;
 }
-bool AiWorld::despawn(uint32_t id) {
+bool cAiWorld::despawn(uint32_t id) {
   if (ticking_) {
     // Deferred: tick() is iterating mobs_ and may hold a Mob& to this entry.
     if (mobs_.count(id)) { pendingDespawn_.push_back(id); return true; }
@@ -30,20 +30,20 @@ bool AiWorld::despawn(uint32_t id) {
   }
   return mobs_.erase(id) > 0;
 }
-Mob* AiWorld::mob(uint32_t id) { auto it = mobs_.find(id); return it == mobs_.end() ? nullptr : &it->second; }
-void AiWorld::setGoal(uint32_t id, Cell goal) {
+Mob* cAiWorld::mob(uint32_t id) { auto it = mobs_.find(id); return it == mobs_.end() ? nullptr : &it->second; }
+void cAiWorld::setGoal(uint32_t id, Cell goal) {
   if (Mob* m = mob(id)) { m->goal = goal; m->wantPath = true; m->path.clear(); m->pathSteps.clear(); m->pathAt = 0; }
 }
-std::optional<Cell> AiWorld::waypoint(const std::string& name) const {
+std::optional<Cell> cAiWorld::waypoint(const std::string& name) const {
   auto it = waypoints_.find(name);
   return it == waypoints_.end() ? std::nullopt : std::optional<Cell>(it->second);
 }
-bool AiWorld::requestDrop(uint32_t id, uint32_t item) const {
+bool cAiWorld::requestDrop(uint32_t id, uint32_t item) const {
   auto it = mobs_.find(id);
   return it != mobs_.end() && boss().allowDrop(it->second, item);
 }
 
-void AiWorld::advance(int simTicks, int worldTps) {
+void cAiWorld::advance(int simTicks, int worldTps) {
   if (worldTps <= 0) return;
   // Ginny 2026-10-16 (determinism list #3): exact integer accumulator. acc_ counts AI-tick
   // fractions in units of 1/worldTps, so non-dividing rates (e.g. 12 Hz at 32 TPS) never drift.
@@ -51,7 +51,7 @@ void AiWorld::advance(int simTicks, int worldTps) {
   while (acc_ >= worldTps) { acc_ -= worldTps; tick(); }
 }
 
-void AiWorld::tick() {
+void cAiWorld::tick() {
   const auto t0 = std::chrono::steady_clock::now();
   ticking_ = true;
   ++tick_;
@@ -137,7 +137,7 @@ void AiWorld::tick() {
   // is that a JobPool worker never triggers a first-compute of a column
   // (a first-compute reads the live ChunkMap, which the mutating owner
   // thread may be writing concurrently: a data race, UB -- see the
-  // WalkCache thread contract in nav.h). The search box: findPath keeps
+  // cWalkCache thread contract in nav.h). The search box: findPath keeps
   // every candidate cell within planRange of `from` on x/z (y is free --
   // a column spans the full height), and movement modes probe a few
   // cells beyond a candidate (widest: Leap gap jumps, 4 cells), so the
