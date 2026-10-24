@@ -339,14 +339,16 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
         const CellState st = in.st[ci];
         const int mn[3] = {x * 16, y * 16, z * 16};
         const BlockDef& def = jobDef(b);  // jobDefs only grows via jobDef(), called once per cell: ref stays valid for this cell
-        if ((def.flags & kAttachable) && stAttach(st)) {
+        // 2026-10-24 (JD: LEDs drawn as the X sprite): a legacy attachable with no mount face recorded
+        // (scene-placed, older saves) draws the floor-mounted box model, matching the sim's floor default.
+        if (def.flags & kAttachable) {
           if (const BoxModel* bm = look.boxModel(def, st)) {  // attached: the oriented box model
             const CustomBlock cell{in, reg, mats, b, st, x, y, z};
             const bool on = look.active(def, st);
             // 2026-10-16 (JD): a sprite-shaped attachable (Red/Blue LED) on a wall leans out like a
             // Minecraft wall torch: modelled upright, raised 3/16, its base against the wall, then
             // the top sheared 4/16 away from the wall. Render only (state and sim untouched).
-            const int af = stAttach(st);
+            const int af = stAttach(st) ? stAttach(st) : 1;
             const bool tilt = def.shape == Shape::Cross && af >= 3 && af <= 6;
             int wdx = 0, wdy = 0, wdz = 0;
             attachOffset(af, wdx, wdy, wdz);
