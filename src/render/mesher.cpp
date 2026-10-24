@@ -353,13 +353,8 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
             int wdx = 0, wdy = 0, wdz = 0;
             attachOffset(af, wdx, wdy, wdz);
             const size_t tiltFrom = out.verts.size();
-            const int turns = (af == 1 || af == 2) ? look.boxModelTurns(def, st) : 0;  // 2026-10-24: floor / ceiling facing
+            const int turns = (tilt || af == 1 || af == 2) ? look.boxModelTurns(def, st) : 0;  // 2026-10-24: floor / ceiling facing
             for (BoxModel::Box box : bm->orientedBoxes(tilt ? 1 : af, turns)) {
-              if (tilt) {
-                box.min[1] += 3; box.max[1] += 3;
-                box.min[0] += 7 * wdx; box.max[0] += 7 * wdx;
-                box.min[2] += 7 * wdz; box.max[2] += 7 * wdz;
-              }
               const FaceMaterial& fm = mats.face(b, bm->materials[size_t(box.material)].slot, on);
               FaceLook fl = look.faceLookAt(def, st, FaceSlot::Top, on, in.cx * 16 + x, in.sy * 16 + y,
                                              in.cz * 16 + z);
@@ -375,7 +370,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
                 writer.face(cell, f, box.min, box.max, fm, fl);
               }
             }
-            if (tilt) {  // 2026-10-24 7:00 PM (JD): lean 45 degrees out from the wall (solid model, no cutout)  // 2026-10-24 (JD 6:12 PM): the shear twisted the LED into a ribbon; upright model, raised against the wall
+            if (false) {  // 2026-10-24 LED v2: lean is baked into the wall model; was 7:00 PM (JD): lean 45 degrees out from the wall (solid model, no cutout)  // 2026-10-24 (JD 6:12 PM): the shear twisted the LED into a ribbon; upright model, raised against the wall
               for (size_t i = tiltFrom; i < out.verts.size(); ++i) {
                 PackedVertex& v = out.verts[i];
                 const int ly = int(v.y) - y * 16;  // 3 (base) .. 13 (top)
