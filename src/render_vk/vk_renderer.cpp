@@ -709,12 +709,14 @@ class cVulkanRenderer final : public IRenderer {
     return kPacked12Default;
   }();
   // Mega-draw V1 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA selects the chunk draw path.
-  // 0 = per-draw push constants (default), 1 = per-draw instance buffer (V2), 2 = indirect draws per arena block (V3).
+  // 0 = per-draw push constants (old path), 1 = per-draw instance buffer (V2), 2 = indirect draws per arena block (V3),
+  // 3 = V3 + storage-buffer records (V2b; default since 2026-10-25 by JD's call). Fallbacks: missing features,
+  // pipelines or buffers drop to V2 direct draws or the old path.
   const int megaMode_ = [] {
     const char* e = std::getenv("LL_VK_MEGA");
-    if (!e || !*e) return 0;
+    if (!e || !*e) return 3;
     const int v = std::atoi(e);
-    if (v < 0 || v > 3) { logWarn("vulkan: LL_VK_MEGA='%s' not understood (use 0/1/2/3); keeping 0", e); return 0; }
+    if (v < 0 || v > 3) { logWarn("vulkan: LL_VK_MEGA='%s' not understood (use 0/1/2/3); keeping the default 3", e); return 3; }
     return v;
   }();
   // Mega-draw V2b (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=3 = V3 indirect draws + records
