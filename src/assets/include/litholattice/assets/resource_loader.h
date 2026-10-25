@@ -66,6 +66,7 @@ struct SvgRasterCache {
     int tile = 0;
     uintmax_t size = 0;
     std::filesystem::file_time_type mtime{};
+    uint64_t digest = 0;  ///< Cortana 2026-10-25: content FNV-1a; mtime alone misses same-size rewrites within the FS timestamp tick
     bool operator==(const Key&) const = default;
   };
   struct KeyHash {
@@ -111,6 +112,7 @@ struct TextureDecodeCache {
     std::string path;
     uintmax_t size = 0;
     std::filesystem::file_time_type mtime{};
+    uint64_t digest = 0;  ///< Cortana 2026-10-25: content FNV-1a; mtime alone misses same-size rewrites within the FS timestamp tick
     bool operator==(const Key&) const = default;
   };
   struct KeyHash {

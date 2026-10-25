@@ -280,6 +280,22 @@ bool readSourceBytes(const cPackStack& stack, const std::string& rel0, std::vect
 
 }  // namespace
 
+// Cortana 2026-10-25 (flaky "hot reload diff", Linux): file mtime has coarse
+// granularity (the kernel's cached clock tick, ~4 ms on ext4/overlayfs), so a
+// same-size rewrite inside one tick kept path+size+mtime and hit the stale
+// decode. Keys now also carry a content digest (FNV-1a 64 over the bytes);
+// reading a small texture file is far cheaper than decoding it.
+static uint64_t fileDigest(const std::filesystem::path& file) {
+  std::FILE* f = std::fopen(file.string().c_str(), "rb");
+  if (!f) return 0;
+  uint64_t h = 1469598103934665603ull;
+  unsigned char buf[16384];
+  for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+    for (size_t i = 0; i < n; ++i) { h ^= buf[i]; h *= 1099511628211ull; }
+  std::fclose(f);
+  return h;
+}
+
 size_t SvgRasterCache::KeyHash::operator()(const Key& k) const noexcept {
   size_t h = std::hash<std::string>{}(k.path);
   h ^= std::hash<int>{}(k.tile) + 0x9e3779b9 + (h << 6) + (h >> 2);
@@ -288,6 +304,7 @@ size_t SvgRasterCache::KeyHash::operator()(const Key& k) const noexcept {
   // hash that omits it clusters every revision of a file into one bucket.
   h ^= std::hash<long long>{}(static_cast<long long>(k.mtime.time_since_epoch().count())) +
        0x9e3779b9 + (h << 6) + (h >> 2);
+  h ^= std::hash<uint64_t>{}(k.digest) + 0x9e3779b9 + (h << 6) + (h >> 2);
   return h;
 }
 
@@ -303,6 +320,7 @@ SvgRasterCache::Key SvgRasterCache::makeKey(const std::string& absPath, int tile
   k.tile = tileSize;
   k.size = std::filesystem::file_size(absPath, ec);
   k.mtime = std::filesystem::last_write_time(absPath, ec);
+  k.digest = fileDigest(absPath);
   return k;
 }
 
@@ -355,6 +373,7 @@ size_t TextureDecodeCache::KeyHash::operator()(const Key& k) const noexcept {
   h ^= std::hash<uintmax_t>{}(k.size) + 0x9e3779b9 + (h << 6) + (h >> 2);
   h ^= std::hash<long long>{}(static_cast<long long>(k.mtime.time_since_epoch().count())) +
        0x9e3779b9 + (h << 6) + (h >> 2);
+  h ^= std::hash<uint64_t>{}(k.digest) + 0x9e3779b9 + (h << 6) + (h >> 2);
   return h;
 }
 
@@ -368,6 +387,7 @@ TextureDecodeCache::Key TextureDecodeCache::makeKey(const std::filesystem::path&
   k.path = ec ? file.generic_string() : canon.generic_string();
   k.size = std::filesystem::file_size(file, ec);
   k.mtime = std::filesystem::last_write_time(file, ec);
+  k.digest = fileDigest(file);
   return k;
 }
 
