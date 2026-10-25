@@ -10,7 +10,8 @@
 //    UV origin and UV sign map, faceAo high bits) instead of 16 material bits in the quad itself; bit
 //    order differs from the brief's table. Every packed quad is decoded again on the CPU and kept only when
 //    its four Packed12 vertices come back bit-identical, so the picture cannot change.
-//  - Meshes with alpha-blend faces stay entirely on Packed12 (sorted blend pass).
+//  - Alpha-blend faces stay on Packed12 in the fallback range (Phase 4 B blend split); the rest of a blended
+//    mesh is pulled. LL_VK_BLENDSPLIT=0 keeps blended meshes entirely on Packed12 (sorted blend pass).
 //
 // Quad (uvec2 lo, hi):
 //   lo:  0-5 ox | 6-11 oy | 12-17 oz (cells) | 18-23 W | 24-29 H (cells, along axes a=(n+1)%3, b=(n+2)%3)
@@ -25,9 +26,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 #include "litholattice/render_vk/packed_vertex12.h"
+// Review R2 (fix pass 2026-10-25): encodePulled compares decoded vertices with memcmp, which is only an exact
+// value check while GpuVertex12 is 12 padding-free bytes.
+static_assert(sizeof(litholattice::vk::GpuVertex12) == 12, "GpuVertex12 must stay 12 bytes");
+static_assert(std::has_unique_object_representations_v<litholattice::vk::GpuVertex12>, "GpuVertex12 must have no padding (memcmp check)");
 
 namespace litholattice::vk {
 
@@ -97,7 +103,10 @@ inline void noteSubCell(const GpuVertex12* g) {
   }
   const uint32_t t = face | ((mn[n] & 15u) << 3) | ((mn[a] & 15u) << 7) | ((mx[a] & 15u) << 11) | ((mn[b] & 15u) << 15) |
                      ((mx[b] & 15u) << 19) | (uint32_t(mn[n] != mx[n]) << 23);
-  SubCellCensus& s = subCellCensus(); std::lock_guard<std::mutex> lk(s.mu); ++s.tuples[t]; ++s.raw[rw | (uint64_t(face) << 48)];
+  SubCellCensus& s = subCellCensus(); std::lock_guard<std::mutex> lk(s.mu); ++s.tuples[t];
+  // Review C5 (fix pass 2026-10-25): the raw map only feeds a count; cap it so a long census cannot grow without bound.
+  constexpr size_t kRawCap = size_t(1) << 20;
+  if (const uint64_t key = rw | (uint64_t(face) << 48); s.raw.size() < kRawCap || s.raw.count(key)) ++s.raw[key];
 }
 inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut, uint32_t* why = nullptr) {
   GpuVertex12 g[4];
