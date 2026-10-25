@@ -227,7 +227,7 @@ static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
 // default (e.g. LL_SW_P2=0 = the pre-Pass-2 renderer). LL_SW_AB=<frame> renders that frame
 // twice, Pass 2 off then on, and logs the pixel diff (A/B identity proof on real frames).
-enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u };
+enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
 static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull;  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
 static std::atomic<unsigned> g_p2{[] {
   const char* e = std::getenv("LL_SW_P2");
@@ -1094,7 +1094,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     setFinMip(S.mip);  // Cortana 2026-10-16 (BUG-0005)
     const float *v0 = S.v0, *v1 = S.v1, *v2 = S.v2;
     const ShaderVaryings *s0 = S.s0, *s1 = S.s1, *s2 = S.s2;
-    const int x0 = S.x0, x1 = S.x1, ditherCls = S.ditherCls;
+    const int ditherCls = S.ditherCls;
     const float invArea = S.invArea, dw0dx = S.dw0dx, dw1dx = S.dw1dx, dw2dx = S.dw2dx, dzdx = S.dzdx;
     const float iw0 = S.iw0, iw1 = S.iw1, iw2 = S.iw2;
     const bool simdSpan = S.simdSpan;
@@ -1111,10 +1111,35 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       }
     }
     int wxLo = INT32_MAX, wxHi = -1;  // Cortana 2026-10-15 1715: written x span (Hi-Z dirty)
-    const float px0 = x0 + 0.5f, py = y + 0.5f;
+    const float py = y + 0.5f;
+    float px0 = S.x0 + 0.5f;
     float sw0 = edgeFn(v1, v2, px0, py) * invArea;
     float sw1 = edgeFn(v2, v0, px0, py) * invArea;
     float sw2 = edgeFn(v0, v1, px0, py) * invArea;
+    // Cortana 2026-10-25 (box, Archie SW setup pass): kP2SpanClip solves each edge for the
+    // x-range where it is >= 0 on this row and walks only that (1 px margin each side),
+    // instead of the full bbox width. Opt-in: edge pixels may differ by float rounding.
+    int x1 = S.x1;
+    const int x0 = [&] {
+      if (!swP2(kP2SpanClip)) return S.x0;
+      float lo = float(S.x0), hi = float(S.x1);
+      const float sw[3] = {sw0, sw1, sw2}, dw[3] = {dw0dx, dw1dx, dw2dx};
+      for (int e = 0; e < 3; ++e) {
+        if (dw[e] > 0.f) lo = std::max(lo, float(S.x0) - sw[e] / dw[e]);
+        else if (dw[e] < 0.f) hi = std::min(hi, float(S.x0) + sw[e] / -dw[e]);
+        else if (sw[e] < 0.f) { hi = lo - 2.f; }
+      }
+      const int a = std::max(S.x0, int(std::floor(lo)) - 1), b = std::min(S.x1, int(std::ceil(hi)) + 1);
+      x1 = b;
+      return a;
+    }();
+    if (x1 < x0) continue;
+    if (x0 != S.x0) {
+      px0 = x0 + 0.5f;
+      sw0 = edgeFn(v1, v2, px0, py) * invArea;
+      sw1 = edgeFn(v2, v0, px0, py) * invArea;
+      sw2 = edgeFn(v0, v1, px0, py) * invArea;
+    }
     float sdepth = sw0*v0[2] + sw1*v1[2] + sw2*v2[2];
     size_t sidx = size_t(y) * fb_.width + size_t(x0);
     uint64_t lc = 0, ls = 0;
