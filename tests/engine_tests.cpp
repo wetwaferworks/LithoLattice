@@ -675,6 +675,20 @@ void testWorld() {
   const bool miss = !raycast(w, 5.5f, 40.5f, 5.5f, 0, 1, 0, 20, hit, prev);
   raycast(w, 5.5f, 40.5f, 5.5f, 0, -1, 0, 20, hit, prev);
   check(down && miss && hit[1] == 30 && prev[1] == 31 && hit[0] == 5 && hit[2] == 5, "raycast: first solid cell and the cell in front of it");
+  {  // 2026-10-25: model pick (look ray only): a cell with a pick shape is hit only through its boxes
+    setPickShapeFn([](const ChunkMap&, const cBlockReg&, int, int, int z, BlockId, PickBox* out, int) {
+      if (z != 5) return -1;
+      out[0] = PickBox{{0.f, 0.f, 0.f}, {1.f, 0.125f, 1.f}};  // a 2/16 slab
+      return 1;
+    });
+    w.set(5, 30, 8, kRock);  // a wall behind the "slab" at (5, 30, 5)
+    const bool past = raycast(w, 5.5f, 30.8f, 2.5f, 0, 0, 1, 20, hit, prev, &fixtureBlocks(), true) && hit[2] == 8;
+    const bool low = raycast(w, 5.5f, 30.05f, 2.5f, 0, 0, 1, 20, hit, prev, &fixtureBlocks(), true) && hit[2] == 5;
+    const bool cube = raycast(w, 5.5f, 30.8f, 2.5f, 0, 0, 1, 20, hit, prev, &fixtureBlocks()) && hit[2] == 5;
+    setPickShapeFn(nullptr);
+    w.set(5, 30, 8, kAir);
+    check(past && low && cube, "raycast: model pick aims past a partial cell's empty space (camera ray keeps the cube)");
+  }
   const auto snap = snapshotForMeshing(w, fixtureBlocks(), 1, 0, 0, 7, 9, kRock);
   const bool border = snap->id[meshPadIndex(2, 1, 2)] == kRock;   // (17, 0, 1) local (1, 0, 1)
   const bool below = snap->id[meshPadIndex(5, 0, 5)] == kRock;    // y = -1 reads as the fill block

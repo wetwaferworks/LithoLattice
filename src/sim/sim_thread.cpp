@@ -324,7 +324,7 @@ void cSimThread::flushDirty() {
 
 void cSimThread::castRay(const RayInput& ray) {
   ChunkMap& w = chunks_;
-  hit_ = raycast(w, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, kLookRange, hit_xyz_, prev_xyz_, &blocks_);
+  hit_ = raycast(w, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, kLookRange, hit_xyz_, prev_xyz_, &blocks_, /*modelPick=*/true);
   const float dx = hit_xyz_[0] + 0.5f - ray.ox, dy = hit_xyz_[1] + 0.5f - ray.oy, dz = hit_xyz_[2] + 0.5f - ray.oz;
   hitDist_ = hit_ ? std::sqrt(dx * dx + dy * dy + dz * dz) : 0.f;
 }

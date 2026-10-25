@@ -1,5 +1,6 @@
 #include "litholattice/world/raycast.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <utility>
 
@@ -23,8 +24,12 @@ static bool rayHitsBox(const float o[3], const float d[3], const float lo[3], co
   return true;
 }
 
+static std::atomic<PickShapeFn> gPickShape{nullptr};
+void setPickShapeFn(PickShapeFn fn) { gPickShape.store(fn, std::memory_order_release); }
+
 bool raycast(const ChunkMap& w, float ox, float oy, float oz, float dx, float dy, float dz,
-             float maxDist, int hit[3], int prev[3], const cBlockReg* blocks) {
+             float maxDist, int hit[3], int prev[3], const cBlockReg* blocks, bool modelPick) {
+  const PickShapeFn pickShape = (modelPick && blocks) ? gPickShape.load(std::memory_order_acquire) : nullptr;
   int c[3] = {int(std::floor(ox)), int(std::floor(oy)), int(std::floor(oz))};
   const float o[3] = {ox, oy, oz}, d[3] = {dx, dy, dz};
   int step[3]; float tMax[3], tDelta[3];
@@ -52,6 +57,19 @@ bool raycast(const ChunkMap& w, float ox, float oy, float oz, float dx, float dy
       flatPickRange(w, *blocks, c[0], c[1], c[2], y0, y1);
       const float lo[3] = {float(c[0]), y0, float(c[2])}, hi[3] = {float(c[0] + 1), y1, float(c[2] + 1)};
       if (!rayHitsBox(o, d, lo, hi, maxDist)) continue;  // looked through the air above / below the wire
+    } else if (b != kAir && pickShape) {
+      constexpr int kMaxBoxes = 16;
+      PickBox boxes[kMaxBoxes];
+      const int n = pickShape(w, *blocks, c[0], c[1], c[2], b, boxes, kMaxBoxes);
+      if (n >= 0) {
+        bool any = false;
+        for (int i = 0; i < n && !any; ++i) {
+          float lo[3], hi[3];
+          for (int k = 0; k < 3; ++k) { lo[k] = float(c[k]) + boxes[i].lo[k]; hi[k] = float(c[k]) + boxes[i].hi[k]; }
+          any = rayHitsBox(o, d, lo, hi, maxDist);
+        }
+        if (!any) continue;  // looked through the empty part of a partial block's cell
+      }
     }
     if (b != kAir) { hit[0] = c[0]; hit[1] = c[1]; hit[2] = c[2]; return true; }
   }
