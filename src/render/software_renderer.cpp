@@ -227,8 +227,9 @@ static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
 // default (e.g. LL_SW_P2=0 = the pre-Pass-2 renderer). LL_SW_AB=<frame> renders that frame
 // twice, Pass 2 off then on, and logs the pixel diff (A/B identity proof on real frames).
-enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
-static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull;  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
+enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
+static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo;  // Cortana 2026-10-25 box: +EmitMemo (bit-identical, LL_SW_AB 0 px)
+//  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
 static std::atomic<unsigned> g_p2{[] {
   const char* e = std::getenv("LL_SW_P2");
   return e && *e ? unsigned(std::strtoul(e, nullptr, 0)) : kP2Default;
@@ -237,6 +238,7 @@ static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_rela
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
+static std::atomic<uint64_t> g_emitMemoHits{0};  // Cortana 2026-10-25 box: kP2EmitMemo vertex reuses
 // Cortana 2026-10-25 (pass sw2, Archie): LL_SW_PROF extras - rows visited by the span loop
 // (Hi-Z rejected / total), SIMD-span vs scalar-span pixels, and per-thread strip time spread.
 static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
@@ -983,6 +985,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
   const bool hiz = hizFbW_ == fb_.width && hizFbH_ == fb_.height && !hizMax_.empty();
   SwTriSetup T[2];
   int nLive = 0, Y0 = INT32_MAX, Y1 = -1;
+  const ShaderVaryings* memoElV[6]; float memoEl[6][4]; int nMemoEl = 0;  // kP2EmitMemo (per call = per quad)
   for (int t = 0; t < nt; ++t) {
     const float *v0 = tv[t][0], *v1 = tv[t][1], *v2 = tv[t][2];
     const ShaderVaryings *s0 = ts[t][0], *s1 = ts[t][1], *s2 = ts[t][2];
@@ -1051,7 +1054,20 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     if (!frameEmit_.empty()) {  // Cortana 2026-10-16 (render.emissive_light): per-vertex point lights
       constexpr float kR = 6.0f, kStr = 0.9f;
       const ShaderVaryings* sv3e[3] = {s0, s1, s2};
+      const bool memoOn = swP2(kP2EmitMemo);
       for (int k = 0; k < 3; ++k) {
+        // Cortana 2026-10-25 box (Archie step 1): a quad's two triangles share v0/v2, so
+        // reuse the light already summed for that vertex in this call (same ops -> same bits).
+        if (memoOn) {
+          int hit = -1;
+          for (int m = 0; m < nMemoEl; ++m) if (memoElV[m] == sv3e[k]) { hit = m; break; }
+          if (hit >= 0) {
+            S.el[k][0] = memoEl[hit][0]; S.el[k][1] = memoEl[hit][1]; S.el[k][2] = memoEl[hit][2];
+            if (memoEl[hit][3] > 0.01f) S.hasEl = true;
+            if (g_swProfOn) g_emitMemoHits.fetch_add(1, std::memory_order_relaxed);
+            continue;
+          }
+        }
         const float wx = sv3e[k]->wx + meshOriginX_, wy = sv3e[k]->wy + meshOriginY_, wz = sv3e[k]->wz + meshOriginZ_;
         float lr = 0, lg = 0, lb = 0;
         for (size_t i = 0; i + 5 < frameEmit_.size(); i += 6) {
@@ -1063,6 +1079,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
         }
         S.el[k][0] = std::min(lr, 1.5f); S.el[k][1] = std::min(lg, 1.5f); S.el[k][2] = std::min(lb, 1.5f);
         if (lr + lg + lb > 0.01f) S.hasEl = true;
+        if (memoOn && nMemoEl < 6) { memoElV[nMemoEl] = sv3e[k]; memoEl[nMemoEl][0] = S.el[k][0]; memoEl[nMemoEl][1] = S.el[k][1]; memoEl[nMemoEl][2] = S.el[k][2]; memoEl[nMemoEl][3] = lr + lg + lb; ++nMemoEl; }
       }
       if (S.hasEl) S.simdSpan = false;  // lit triangles shade scalar
     }
@@ -2348,6 +2365,7 @@ struct SwProf {
       std::fprintf(stderr, "swprof strip thread ms/frame min=%.2f max=%.2f\n", g_thrMinAcc / frames, g_thrMaxAcc / frames);
       g_thrMinAcc = g_thrMaxAcc = 0;
     }
+    std::fprintf(stderr, "swprof emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
@@ -2434,7 +2452,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // pixels before they are shaded. Ties keep key order (stable sort), so
   // the result is reproducible frame to frame.
   frameEmit_.clear();
-  if (emissiveLightOn_) {  // Cortana 2026-10-16 (render.emissive_light): 32 nearest emitters within 32 blocks
+  static const bool emitForce = [] { const char* e = std::getenv("LL_SW_EMIT"); return e && *e == '1'; }();  // Cortana 2026-10-25 box: test/profiling override, settings untouched
+  if (emissiveLightOn_ || emitForce) {  // Cortana 2026-10-16 (render.emissive_light): 32 nearest emitters within 32 blocks
     // CREW TILE (shake 2026-10-18): member scratches, cleared per frame
     // (were fresh allocations every frame this block ran).
     std::vector<std::pair<float, size_t>>& cand = emitCandScratch_;
