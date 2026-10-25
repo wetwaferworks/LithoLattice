@@ -257,6 +257,8 @@ struct SwTlCounters { uint64_t pxScan = 0, pxCov = 0, pxShade = 0, tris = 0, hiz
 static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
+static std::atomic<uint64_t> g_ringTris[4]{};  // 2026-10-25 (Archie step 6): binned tris per far-LOD ring (LL_SW_PROF)
+static int g_ringEdge[3] = {2, 4, 8};  // = game LL_SW_LOD_RINGS default
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
@@ -2502,6 +2504,13 @@ struct SwProf {
     std::fprintf(stderr, "swprof thread-summed ms/frame: renderMesh=%.1f calls=%llu\n", g_meshUs.exchange(0) / 1000.0 / frames, (unsigned long long)(g_meshCalls.exchange(0) / frames));
     std::fprintf(stderr, "swprof quad centrecull=%llu /frame\n", (unsigned long long)(g_quadCentreCulled.exchange(0) / frames));
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
+    {
+      static const bool once = [] { if (const char* r = std::getenv("LL_SW_LOD_RINGS")) std::sscanf(r, "%d,%d,%d", &g_ringEdge[0], &g_ringEdge[1], &g_ringEdge[2]); return true; }();
+      (void)once;
+      const uint64_t r0 = g_ringTris[0].exchange(0) / frames, r1 = g_ringTris[1].exchange(0) / frames, r2 = g_ringTris[2].exchange(0) / frames, r3 = g_ringTris[3].exchange(0) / frames;
+      std::fprintf(stderr, "swprof ring tris (binned): near<=%d=%llu mid<=%d=%llu mid2<=%d(2x)=%llu far>%d(4x)=%llu /frame\n", g_ringEdge[0], (unsigned long long)r0,
+                   g_ringEdge[1], (unsigned long long)r1, g_ringEdge[2], (unsigned long long)r2, g_ringEdge[2], (unsigned long long)r3);
+    }
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
@@ -2822,6 +2831,12 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           auto& fill = p2par ? tlFill : binFill_[band];
           fill.assign(off.begin(), off.end() - 1);
           for (size_t q = 0; q < nqd; ++q) { if (qface && !((vis >> qface[q]) & 1u)) continue; int s0, s1; range(q, s0, s1); for (int s = s0; s <= s1; ++s) bins[fill[size_t(s)]++] = uint32_t(q); }
+          if (g_swProfOn && std::isfinite(eye[0]) && std::isfinite(eye[2])) {  // tris per ring: Chebyshev chunk distance from the eye's chunk
+            uint64_t nb = 0;
+            for (size_t q = 0; q < nqd; ++q) { if (qface && !((vis >> qface[q]) & 1u)) continue; int s0, s1; range(q, s0, s1); if (s0 <= s1) ++nb; }
+            const int d = std::max(std::abs(m.cx - int(std::floor(eye[0] / 16.0))), std::abs(m.cz - int(std::floor(eye[2] / 16.0))));
+            g_ringTris[d > g_ringEdge[2] ? 3 : d > g_ringEdge[1] ? 2 : d > g_ringEdge[0] ? 1 : 0].fetch_add(nb * 2, std::memory_order_relaxed);
+          }
         }
       }
     });
