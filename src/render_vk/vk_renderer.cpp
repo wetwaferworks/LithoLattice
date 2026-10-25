@@ -114,6 +114,8 @@ class cVulkanRenderer final : public IRenderer {
     // Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana. Buckets are the face-sorted ranges
     // built in buildPulled; adjacent visible buckets merge into one indirect command (all in the shared arena, MDI).
     if (const char* e = std::getenv("LL_VK_BUCKETS"); pull_ && e && std::atoi(e) == 1) buckets_ = true;
+    if (const char* e = std::getenv("LL_VK_BLENDSPLIT"); e && std::atoi(e) == 0) blendSplit_ = false;  // Phase 4 B
+    if (pull_) logInfo("vulkan: Phase 4 blend split %s", blendSplit_ ? "on" : "off (LL_VK_BLENDSPLIT=0)");
     if (buckets_) logInfo("vulkan: Mega-Pipeline Phase 3 camera-facing face buckets on");
     if (!pipelines_) return false;
     cVertexArena::Kind kind = cVertexArena::Kind::Device;
@@ -763,6 +765,7 @@ class cVulkanRenderer final : public IRenderer {
   std::atomic<uint64_t> packMisses_{0};
   std::vector<uint8_t> packScratch_;  ///< main thread only (device-arena staging path)
   bool pull_ = false;     ///< Mega-Pipeline Phase 2 (LL_VK_PULL=1)
+  bool blendSplit_ = true;  ///< Phase 4 B (Archie Q1): with pulling, blended meshes pull their opaque quads (LL_VK_BLENDSPLIT=0: off)
   std::atomic<uint64_t> pullWhy_[kPullReasons] = {};  ///< Phase 4.0: quads by pull outcome (cumulative; LL_VK_PULL=1 only)
   bool buckets_ = false;  ///< Mega-Pipeline Phase 3 (LL_VK_BUCKETS=1)
   std::vector<const Mesh*> megaMesh_;  ///< Phase 2: mesh per opaque record (pulled pass)
@@ -777,11 +780,11 @@ class cVulkanRenderer final : public IRenderer {
   std::optional<cVertexArena::Slice> allocateMesh(const ChunkMesh& m, bool hasBlend, PulledMesh& pm, VkDeviceSize& bytes) {
     pm.active = false;
 #if LL_STREAM_COUNTERS
-    if (pull_ && hasBlend) pullWhy_[kPullBlendMesh].fetch_add(uint32_t(m.verts.size() / 4), std::memory_order_relaxed);
+    if (pull_ && hasBlend && !blendSplit_) pullWhy_[kPullBlendMesh].fetch_add(uint32_t(m.verts.size() / 4), std::memory_order_relaxed);
 #endif
-    if (pull_ && !hasBlend) {
+    if (pull_ && (!hasBlend || blendSplit_)) {  // Phase 4 B: blended meshes split (LL_VK_BLENDSPLIT=0 opts out)
       uint32_t why[kPullReasons] = {};  // Phase 4.0 quad-rejection counter (for Archie)
-      buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr);
+      buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr, hasBlend ? int(kShadeAlphaBlend) : -1);
 #if LL_STREAM_COUNTERS
       for (uint32_t r = 1; r < kPullReasons; ++r)
         if (why[r]) pullWhy_[r].fetch_add(why[r], std::memory_order_relaxed);
@@ -1047,6 +1050,16 @@ class cVulkanRenderer final : public IRenderer {
             o += std::snprintf(buf + o, sizeof buf - size_t(o), "%s%s %llu", r ? ", " : "", pullReasonName(r),
                                (unsigned long long)pullWhy_[r].load(std::memory_order_relaxed));
           logInfo("vulkan pull reasons (quads, cumulative): %s", buf);
+          if (subCellCensusOn()) {  // Phase 4 C: sub-cell tuple census (how big a LUT would need to be)
+            SubCellCensus& sc = subCellCensus(); std::vector<uint64_t> cnt; size_t rawN = 0;
+            { std::lock_guard<std::mutex> lk(sc.mu); for (auto& kv : sc.tuples) cnt.push_back(kv.second); rawN = sc.raw.size(); }
+            std::sort(cnt.begin(), cnt.end(), std::greater<uint64_t>());
+            uint64_t tot = 0; for (uint64_t x : cnt) tot += x;
+            auto cov = [&](size_t k) { uint64_t s = 0; for (size_t i = 0; i < k && i < cnt.size(); ++i) s += cnt[i]; return tot ? 100.0 * double(s) / double(tot) : 0.0; };
+            size_t n90 = 0; { uint64_t s = 0; while (n90 < cnt.size() && double(s) < 0.9 * double(tot)) s += cnt[n90++]; }
+            logInfo("vulkan sub-cell census: quads %llu, unique tuples %zu (raw corner tuples %zu), top16 %.1f%%, top64 %.1f%%, top256 %.1f%%, tuples for 90%% %zu",
+                    (unsigned long long)tot, cnt.size(), rawN, cov(16), cov(64), cov(256), n90);
+          }
         }
       }
 #endif

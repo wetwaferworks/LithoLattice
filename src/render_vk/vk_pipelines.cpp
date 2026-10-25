@@ -1,5 +1,6 @@
 #include "vk_pipelines.h"
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <vector>
 #include "vk_frame_uniforms.h"
@@ -12,6 +13,7 @@
 #include "spv/chunk12_mega_vert.h"  // mega-draw V2
 #include "spv/chunk_mega_frag.h"    // mega-draw V2
 #include "spv/chunk_mega_vert.h"    // mega-draw V2
+#include "spv/chunk_ssbo_flat_frag.h"  // Phase 4 D: LL_VK_FLATFRAG=1 (bench-only)
 #include "spv/chunk_ssbo_frag.h"    // mega-draw V2b
 #include "spv/chunk_ssbo_vert.h"
 #include "spv/chunk_ssbovary_vert.h"
@@ -31,6 +33,8 @@
 
 namespace litholattice::vk {
 namespace {
+// Phase 4 D (fragment cost experiment; bench-only): LL_VK_FLATFRAG=1 swaps the mega/pull chunk fragment shader for a flat colour.
+bool flatFrag() { const char* e = std::getenv("LL_VK_FLATFRAG"); return e && std::atoi(e) == 1; }
 
 UniqueShaderModule shaderModule(const cVulkanDevice& dev, std::span<const uint32_t> code) {
   auto ci = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
@@ -403,7 +407,7 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
       s.fragmentCode = kSpvChunkMegaFrag;
     } else {
       s.vertexCode = packed12 ? std::span<const uint32_t>(kSpvChunk12SsboVert) : std::span<const uint32_t>(kSpvChunkSsboVert);
-      s.fragmentCode = kSpvChunkSsboFrag;
+      s.fragmentCode = flatFrag() ? std::span<const uint32_t>(kSpvChunkSsboFlatFrag) : std::span<const uint32_t>(kSpvChunkSsboFrag);
     }
     (vary ? p->chunkSsboVary_ : p->chunkSsbo_) = buildPipeline(dev, p->renderPass(), layout, s);
     s.depthWrite = false;
@@ -417,7 +421,7 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
   if (packed12) {
     PipelineDesc s = chunk;
     s.vertexCode = kSpvChunk12PullVert;
-    s.fragmentCode = kSpvChunkSsboFrag;
+    s.fragmentCode = flatFrag() ? std::span<const uint32_t>(kSpvChunkSsboFlatFrag) : std::span<const uint32_t>(kSpvChunkSsboFrag);
     s.stride = 0;
     s.attributes.clear();
     p->chunkPull_ = buildPipeline(dev, p->renderPass(), layout, s);

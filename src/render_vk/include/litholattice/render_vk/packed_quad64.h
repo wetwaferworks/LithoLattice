@@ -22,7 +22,9 @@
 //   y: U0 0-7 | V0 8-15 | UV map 16-23 (2-bit codes su_a, su_b, sv_a, sv_b: 0 = 0, 1 = +1, 2 = -1) | faceAo>>5 24-26
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include "litholattice/render_vk/packed_vertex12.h"
@@ -76,6 +78,27 @@ inline const char* pullReasonName(uint32_t r) {
   return r < kPullReasons ? n[r] : "?";
 }
 inline bool pullReject(uint32_t* why, uint32_t r) { if (why) ++why[r]; return false; }
+/// Phase 4 C (Archie Q3): unique sub-cell tuple census. Tuple = face | n-nibble | a-min/a-max | b-min/b-max nibbles
+/// (1/16-unit offsets inside the cell). Counted only when the reason counters are on (LL_STREAM_COUNTERS) and LL_VK_SUBCELL_CENSUS=1.
+struct SubCellCensus {
+  std::mutex mu;
+  std::unordered_map<uint32_t, uint64_t> tuples;
+  std::unordered_map<uint64_t, uint64_t> raw;
+};
+inline SubCellCensus& subCellCensus() { static SubCellCensus s; return s; }
+inline bool subCellCensusOn() { static const bool on = [] { const char* e = std::getenv("LL_VK_SUBCELL_CENSUS"); return e && *e == '1'; }(); return on; }
+inline void noteSubCell(const GpuVertex12* g) {
+  if (!subCellCensusOn()) return;
+  const uint32_t face = g[0].faceAo & 7u, n = face >> 1, a = (n + 1u) % 3u, b = (n + 2u) % 3u;
+  uint32_t mn[3] = {0xFFFFu, 0xFFFFu, 0xFFFFu}, mx[3] = {0, 0, 0}; uint64_t rw = 0;
+  for (int k = 0; k < 4; ++k) {
+    const uint32_t xyz[3] = {g[k].x, g[k].y, uint32_t(g[k].zl & kPacked12MaxZ)};
+    for (int i = 0; i < 3; ++i) { mn[i] = std::min(mn[i], xyz[i]); mx[i] = std::max(mx[i], xyz[i]); rw = (rw << 4) | (xyz[i] & 15u); }
+  }
+  const uint32_t t = face | ((mn[n] & 15u) << 3) | ((mn[a] & 15u) << 7) | ((mx[a] & 15u) << 11) | ((mn[b] & 15u) << 15) |
+                     ((mx[b] & 15u) << 19) | (uint32_t(mn[n] != mx[n]) << 23);
+  SubCellCensus& s = subCellCensus(); std::lock_guard<std::mutex> lk(s.mu); ++s.tuples[t]; ++s.raw[rw | (uint64_t(face) << 48)];
+}
 inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut, uint32_t* why = nullptr) {
   GpuVertex12 g[4];
   for (int k = 0; k < 4; ++k) packVertex12(v[k], g[k]);
@@ -85,7 +108,7 @@ inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut, 
   for (int k = 0; k < 4; ++k) {
     const uint32_t xyz[3] = {g[k].x, g[k].y, uint32_t(g[k].zl & kPacked12MaxZ)};
     for (int i = 0; i < 3; ++i) {
-      if (xyz[i] & 15u) return pullReject(why, 2);
+      if (xyz[i] & 15u) { if (why) noteSubCell(g); return pullReject(why, 2); }
       c[k][i] = xyz[i] >> 4;
       if (c[k][i] > 63u) return pullReject(why, 3);
     }
@@ -128,7 +151,9 @@ inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut, 
 
 /// Splits a mesh's first `maxQuads` quads into packed quads (by face bucket) and Packed12 fallback quads.
 inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuads, bool allow, PulledMesh& out,
-                        uint32_t* why = nullptr) {
+                        uint32_t* why = nullptr, int blendMode = -1) {
+  // Phase 4 B blend split (Archie Q1): blendMode >= 0 keeps quads of that shade mode (alpha-blend faces) on
+  // Packed12 so the rest of a blended mesh can still be pulled; the blend pass draws only the fallback range.
   out.fallback.clear(); out.palette.clear(); out.quads.clear(); out.quadMat.clear();
   const uint32_t nq = std::min<uint32_t>(uint32_t(verts.size() / 4), maxQuads);
   std::unordered_map<uint64_t, uint32_t> pal;
@@ -137,7 +162,9 @@ inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuad
   for (uint32_t i = 0; i < nq; ++i) {
     const PackedVertex* v = &verts[size_t(i) * 4];
     uint64_t q = 0, e = 0;
-    if (allow && encodePulled(v, q, e, why)) {
+    const bool blendQuad = blendMode >= 0 && (v[0].mode & 63) == uint32_t(blendMode);
+    if (blendQuad && why) ++why[kPullBlendMesh];
+    if (allow && !blendQuad && encodePulled(v, q, e, why)) {
       auto [it, added] = pal.try_emplace(e, uint32_t(out.palette.size()));
       if (added) out.palette.push_back(e);
       const uint32_t face = uint32_t((q >> 30) & 3u) | uint32_t(((q >> 32) & 1u) << 2);

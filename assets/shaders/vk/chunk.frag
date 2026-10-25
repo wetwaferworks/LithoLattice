@@ -44,5 +44,10 @@ layout(location = 4) flat in int vLayer; layout(location = 5) flat in int vVal;
 layout(location = 6) flat in int vMode; layout(location = 7) flat in int vRot;
 layout(location = 0) out vec4 frag;
 layout(location = 1) out vec4 fragGlow;  // JD Vulkan push: HDR glow target (bloom source)
+#ifdef LITHO_FLAT_STUB
+// Phase 4 D (fragment cost experiment, bench-only, LL_VK_FLATFRAG=1): flat colour, no texture/shading ALU.
+void main() { frag = vec4(0.55, 0.5, 0.62, 1.0); fragGlow = vec4(0.0); }
+#else
 #define LITHO_VK_FX 1
 #include "chunk_shading.glsl"
+#endif

@@ -62,6 +62,7 @@ endforeach()
 foreach(v chunk_ssbo_vert:kSpvChunkSsboVert:chunk.vert:LITHO_MEGA_SSBO
           chunk12_ssbo_vert:kSpvChunk12SsboVert:chunk12.vert:LITHO_MEGA_SSBO
           chunk_ssbo_frag:kSpvChunkSsboFrag:chunk.frag:LITHO_MEGA_SSBO
+          chunk_ssbo_flat_frag:kSpvChunkSsboFlatFrag:chunk.frag:LITHO_MEGA_SSBO+LITHO_FLAT_STUB
           chunk_ssbovary_vert:kSpvChunkSsboVaryVert:chunk.vert:LITHO_MEGA_SSBO+LITHO_MEGA_VARY
           chunk12_ssbovary_vert:kSpvChunk12SsboVaryVert:chunk12.vert:LITHO_MEGA_SSBO+LITHO_MEGA_VARY
           chunk12_pull_vert:kSpvChunk12PullVert:chunk12.vert:LITHO_MEGA_SSBO+LITHO_PULL)
