@@ -253,6 +253,10 @@ class cSoftwareRenderer : public IRenderer {
   /// down to a power of two and clamped to hardware threads; applied on the
   /// next frame. Engine-level so mods/options can set it.
   static void setRenderThreads(unsigned n);
+  /// Cortana 2026-10-25 (pass sw3, Archie): --sw-scale. The 3D world renders at
+  /// scale x the target size (0.5 / 0.75; 1.0 = off), is nearest-neighbour
+  /// upscaled, then overlays/HUD/console draw at native resolution. Ignored with SSAA.
+  static void setRenderScale(float s);
   /// Effective thread count after rounding/clamping.
   static unsigned renderThreads();
   /// Cortana 2026-10-15 1450: the auto rule, exposed for tests: pow2 <= (logical - 2), clamped 2..16.
@@ -334,6 +338,7 @@ class cSoftwareRenderer : public IRenderer {
   std::vector<float> frameEmit_;     ///< this frame's nearest emitters (6 floats each)        ///< Cortana 2026-10-16: render.mipmaps (distance LOD, BUG-0005)
   float shimmerTime_ = 0.f;  ///< render clock (s) for the shimmer wave
   std::unique_ptr<SoftwareAaScratch> aaScratch_;  ///< lazily built post-pass scratch
+  std::vector<uint32_t> swScaleX_;                ///< pass sw3: upscale column map
   SoftwareFramebuffer aaOut_;                     ///< SSAA resolve target (renderFrame)
   SoftwareAaScratch& ensureAaScratch();
   // ASCII state (JD 2026-10-13); see setAsciiMode / setAsciiValueSpan.

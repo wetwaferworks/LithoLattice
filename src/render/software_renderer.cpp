@@ -478,6 +478,8 @@ class cSwBandPool {
 }  // namespace
 
 void cSoftwareRenderer::setRenderThreads(unsigned n) { g_swRequestedThreads.store(n); }
+static std::atomic<float> g_swRenderScale{1.0f};  // pass sw3: --sw-scale
+void cSoftwareRenderer::setRenderScale(float s) { g_swRenderScale.store(std::clamp(s, 0.25f, 1.0f)); }
 unsigned cSoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
 
 // Design B Stage 2: forward declaration (defined with the store, below) +
@@ -2368,8 +2370,11 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // HUD and crosshair stay at native resolution (never supersampled).
   const bool ssaa = aaMode_ == SoftwareAaMode::Ssaa2x;
   const uint32_t targetW = uint32_t(p.width), targetH = uint32_t(p.height);
-  const uint32_t renderW = ssaa ? targetW * 2 : targetW;
-  const uint32_t renderH = ssaa ? targetH * 2 : targetH;
+  // Pass sw3 (--sw-scale): world stage at scale x target, nearest upscale before overlays.
+  const float rscale = ssaa ? 1.0f : g_swRenderScale.load(std::memory_order_relaxed);
+  const bool scaled = rscale < 0.999f;
+  const uint32_t renderW = ssaa ? targetW * 2 : scaled ? std::max(1u, uint32_t(float(targetW) * rscale + 0.5f)) : targetW;
+  const uint32_t renderH = ssaa ? targetH * 2 : scaled ? std::max(1u, uint32_t(float(targetH) * rscale + 0.5f)) : targetH;
   if (fb_.width != renderW || fb_.height != renderH) resize(renderW, renderH);
   // Ginny (Argon) 2026-10-16 Pass 2 step 2: with kP2Par the colour/depth clear moves into
   // the strip workers (each strip clears its own 32 rows right before drawing them: no
@@ -2714,7 +2719,37 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // SSAA resolves down to target size; fxaa/cmaa post-filter in place;
   // ASCII (when on) then converts the AA'd frame to its glyph
   // visualization. Overlays/HUD draw after, at native resolution.
-  if (ssaa) {
+  if (scaled) {
+    // Pass sw3: nearest-neighbour upscale of the scaled world frame to the target size,
+    // split across the band threads by row. Depth resets like the SSAA path.
+    aaOut_.resize(targetW, targetH);
+    swScaleX_.resize(targetW);
+    for (uint32_t x = 0; x < targetW; ++x) swScaleX_[x] = std::min(renderW - 1, uint32_t((uint64_t(x) * renderW) / targetW));
+    const uint32_t* src = fb_.pixels.data();
+    uint32_t* dstPx = aaOut_.pixels.data();
+    const uint32_t* xm = swScaleX_.data();
+    std::atomic<uint32_t> nextRow{0};
+    bandPool.run([&](unsigned) {
+      for (uint32_t y0; (y0 = nextRow.fetch_add(16, std::memory_order_relaxed)) < targetH;) {
+        for (uint32_t y = y0, ye = std::min(targetH, y0 + 16); y < ye; ++y) {
+          const uint32_t sy = std::min(renderH - 1, uint32_t((uint64_t(y) * renderH) / targetH));
+          const uint32_t* s = src + size_t(sy) * renderW;
+          uint32_t* d = dstPx + size_t(y) * targetW;
+          if (y > 0 && sy == std::min(renderH - 1, uint32_t((uint64_t(y - 1) * renderH) / targetH)) && y != y0) {
+            std::memcpy(d, d - targetW, size_t(targetW) * sizeof(uint32_t));  // repeated source row
+          } else {
+            for (uint32_t x = 0; x < targetW; ++x) d[x] = s[xm[x]];
+          }
+        }
+      }
+    });
+    fb_.width = targetW;
+    fb_.height = targetH;
+    fb_.pixels = std::move(aaOut_.pixels);
+    depth_.assign(size_t(targetW) * targetH, 1.0f);
+    hizFbW_ = 0;
+    applyAaPostPass();
+  } else if (ssaa) {
     aaOut_.resize(targetW, targetH);
     resolveSsaa2x(fb_, aaOut_);
     fb_.width = targetW;
