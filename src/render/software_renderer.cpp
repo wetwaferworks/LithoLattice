@@ -241,7 +241,8 @@ static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
-static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0};  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
+static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0}, g_quadCentreCulled{0};
+static thread_local uint64_t tlQuadCentreCulled = 0;  // 2026-10-25 step 2: flushed per band  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
 // Cortana 2026-10-25 (pass sw2, Archie): LL_SW_PROF extras - rows visited by the span loop
 // (Hi-Z rejected / total), SIMD-span vs scalar-span pixels, and per-thread strip time spread.
 static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
@@ -1519,10 +1520,22 @@ void cSoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
       const float qy0 = std::min(std::min(screen[i*4+1], screen[(i+1)*4+1]), std::min(screen[(i+2)*4+1], screen[(i+3)*4+1]));
       const float qy1 = std::max(std::max(screen[i*4+1], screen[(i+1)*4+1]), std::max(screen[(i+2)*4+1], screen[(i+3)*4+1]));
       if (qy1 < float(tlBandY0) - 1.0f || qy0 > float(tlBandY1) + 1.0f) continue;
+      const float qx0 = std::min(std::min(screen[i*4], screen[(i+1)*4]), std::min(screen[(i+2)*4], screen[(i+3)*4]));
+      const float qx1 = std::max(std::max(screen[i*4], screen[(i+1)*4]), std::max(screen[(i+2)*4], screen[(i+3)*4]));
       if (tlBandX1 < (1 << 30) || tlBandX0 > 0) {  // step 1 x tile reject (same +-1 slack)
-        const float qx0 = std::min(std::min(screen[i*4], screen[(i+1)*4]), std::min(screen[(i+2)*4], screen[(i+3)*4]));
-        const float qx1 = std::max(std::max(screen[i*4], screen[(i+1)*4]), std::max(screen[(i+2)*4], screen[(i+3)*4]));
         if (qx1 < float(tlBandX0) - 1.0f || qx0 > float(tlBandX1) + 1.0f) continue;
+      }
+      if (swP2(kP2CentreCull)) {
+        // 2026-10-25 (Archie step 2, sub-pixel diet): the per-triangle centre cull, hoisted to
+        // the quad: no pixel centre of this band/tile inside the quad's bbox means neither
+        // triangle can cover one, so skip the 4 varyings builds and both setups. Each
+        // triangle's bbox lies inside the quad's, so pixels are unchanged.
+        constexpr float kEps = 1e-3f;
+        const int cx0 = std::max({0, tlBandX0, int(std::ceil(qx0 - 0.5f - kEps))});
+        const int cx1 = std::min({int(fb_.width) - 1, tlBandX1 - 1, int(std::floor(qx1 - 0.5f + kEps))});
+        const int cy0 = std::max({0, tlBandY0, int(std::ceil(qy0 - 0.5f - kEps))});
+        const int cy1 = std::min({int(fb_.height) - 1, tlBandY1 - 1, int(std::floor(qy1 - 0.5f + kEps))});
+        if (cx0 > cx1 || cy0 > cy1) { ++tlQuadCentreCulled; continue; }
       }
     }
     for (int k = 0; k < 4; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
@@ -2469,6 +2482,7 @@ struct SwProf {
                    (unsigned long long)(g_hudFlat / frames), (unsigned long long)(g_hudBox / frames));
       g_hudMsAcc = 0; g_hudTris = 0; g_hudBuildMs = 0; g_hudFlat = 0; g_hudBox = 0;
     }
+    std::fprintf(stderr, "swprof quad centrecull=%llu /frame\n", (unsigned long long)(g_quadCentreCulled.exchange(0) / frames));
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
@@ -2886,6 +2900,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    tlBandY1 = 1 << 30;
    tlBandX0 = 0;
    tlBandX1 = 1 << 30;
+   if (g_swProfOn) g_quadCentreCulled.fetch_add(tlQuadCentreCulled, std::memory_order_relaxed);
+   tlQuadCentreCulled = 0;
    groundFx_ = GroundFx{};
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
