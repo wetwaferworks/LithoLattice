@@ -59,6 +59,9 @@ class IWorldSim {
   virtual void registerHandshake(cTimingHandshakeAuthority& /*authority*/) {}
   /// May the player place `block` into the empty cell (x, y, z)? Default: yes.
   virtual bool canPlace(const ChunkMap& /*world*/, int /*x*/, int /*y*/, int /*z*/, BlockId /*block*/) const { return true; }
+  /// 2026-10-25: the block actually placed (a variant of the held one), given the clicked face offset
+  /// (hit cell minus placed cell). Default: unchanged.
+  virtual BlockId placeVariant(const ChunkMap& /*world*/, BlockId block, int /*hdx*/, int /*hdy*/, int /*hdz*/) const { return block; }
   /// After a neighbour lost its solid block: may the (non-attachable) block at x, y, z stay? false pops it.
   /// One debug line about the cell (look-at inspector): ids, raw state, network, component memory.
   virtual std::string inspect(const ChunkMap&, int, int, int) const { return {}; }

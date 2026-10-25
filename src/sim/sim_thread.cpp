@@ -424,6 +424,7 @@ bool cSimThread::applyPlace(EditCmd& e) {
   if (!hit_ || hitDist_ > kReach + 0.5f) return false;
   const int x = prev_xyz_[0], y = prev_xyz_[1], z = prev_xyz_[2];
   if (w.get(x, y, z) != kAir) return false;
+  e.block = sim_->placeVariant(w, e.block, hit_xyz_[0] - x, hit_xyz_[1] - y, hit_xyz_[2] - z);  // e.g. a side-lying Via
   if (!sim_->canPlace(w, x, y, z, e.block)) return false;  // game placement rules
   int face = 0;
   if (reg.has(e.block, kAttachable)) {  // mounts on the clicked face of the hit block
