@@ -16,6 +16,9 @@
 #include <dwmapi.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+#include <cstdlib>
+#include <cstring>
+#include "dxgi_present.h"
 #endif
 #include <fstream>
 #include <sstream>
@@ -27,6 +30,10 @@ namespace litholattice {
 struct Window::Impl {
   GLFWwindow* win = nullptr;
   std::unique_ptr<cGlfwInputBackend> input;
+#ifdef _WIN32
+  std::unique_ptr<cDxgiPresenter> dxgi;  // LL_SW_PRESENT=dxgi (2026-10-25); GDI otherwise / on failure
+  bool dxgiTried = false;
+#endif
 };
 
 std::unique_ptr<Window> Window::create(const WindowDesc& d) {
@@ -176,6 +183,9 @@ bool Window::pollDisplayToggle() {
 
 Window::Window(Passkey) {}
 Window::~Window() {
+#ifdef _WIN32
+  if (impl_) impl_->dxgi.reset();
+#endif
   if (impl_) impl_->input.reset();  // unhooks its callbacks before the window goes
   if (impl_ && impl_->win) glfwDestroyWindow(impl_->win);
   glfwTerminate();
@@ -239,6 +249,18 @@ bool Window::presentPixels(const uint32_t* pixels, int w, int h) {
   if (!pixels || w <= 0 || h <= 0) return false;
   HWND hwnd = glfwGetWin32Window(impl_->win);
   if (!hwnd) return false;
+  if (!impl_->dxgiTried) {
+    impl_->dxgiTried = true;
+    const char* e = std::getenv("LL_SW_PRESENT");
+    if (e && std::strcmp(e, "dxgi") == 0) impl_->dxgi = cDxgiPresenter::create(hwnd);
+    if (!impl_->dxgi) logInfo("software present: GDI StretchDIBits");
+  }
+  if (impl_->dxgi) {
+    if (IsIconic(hwnd)) return true;
+    if (impl_->dxgi->present(pixels, w, h, vsync_)) return true;
+    logError("dxgi present failed; falling back to GDI");
+    impl_->dxgi.reset();
+  }
   RECT rc{};
   GetClientRect(hwnd, &rc);
   const int cw = rc.right - rc.left, ch = rc.bottom - rc.top;

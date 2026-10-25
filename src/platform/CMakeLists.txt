@@ -12,6 +12,8 @@ else()
   target_link_libraries(litholattice_platform PUBLIC litholattice_input litholattice_core PRIVATE glfw Vulkan::Headers)
   if(WIN32)
     target_link_libraries(litholattice_platform PRIVATE dwmapi)  # 2026-10-25: DwmFlush for the GDI software present
+    target_sources(litholattice_platform PRIVATE dxgi_present.cpp)  # 2026-10-25: LL_SW_PRESENT=dxgi
+    target_link_libraries(litholattice_platform PRIVATE d3d11 dxgi)
   endif()
   target_compile_definitions(litholattice_platform PRIVATE GLFW_INCLUDE_NONE)
 endif()
