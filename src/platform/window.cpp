@@ -101,10 +101,15 @@ void Window::setDisplay(const DisplayDesc& want) {
       glfwMaximizeWindow(win);
       break;
     case DisplayMode::Borderless:
-      glfwSetWindowAttrib(win, GLFW_DECORATED, GLFW_FALSE);
-      glfwSetWindowMonitor(win, nullptr, mx, my, desk->width, desk->height, 0);
+      // 2026-10-25 fix pass (JD J2a, option b): GLFW's windowed-full-screen idiom. Claiming the monitor at its
+      // own desktop mode gives a borderless window over the taskbar with no mode switch; the old frameless
+      // desktop-sized window could keep a frame and leave the taskbar on top. No auto-iconify, so Alt+Tab
+      // leaves it in place.
+      glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_FALSE);
+      glfwSetWindowMonitor(win, mon, 0, 0, desk->width, desk->height, desk->refreshRate);
       break;
     case DisplayMode::Fullscreen: {
+      glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_TRUE);  // GLFW default for exclusive full screen
       const int w = d.width > 0 ? d.width : desk->width, h = d.height > 0 ? d.height : desk->height;
       int n = 0, hz = 0;
       const GLFWvidmode* modes = glfwGetVideoModes(mon, &n);
