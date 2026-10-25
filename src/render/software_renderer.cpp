@@ -2866,9 +2866,9 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     for (uint32_t c : stripCost_) total += c;
     const uint64_t share = std::max<uint64_t>(1, total / (uint64_t(std::max(1u, bandPool.bands())) * 3));
     const int maxTiles = std::max(1, int(fb_.width / 64));
-    // 2026-10-25 (Archie): x tiles OFF by default; the 16-row strips (34 at 540p, 68 at 1080p)
-    // pulled from the atomic nextStrip counter balance the horizon. LL_SW_XTILES=1 re-enables.
-    static const bool noSplit = [] { const char* e = std::getenv("LL_SW_XTILES"); return !(e && *e == '1'); }();
+    // 2026-10-25 (Archie, re-measured at 127k tris): 64-px x tiles ON by default (19 vs 24 ms live);
+    // they split the heavy horizon strip across threads. LL_SW_XTILES=0 disables.
+    static const bool noSplit = [] { const char* e = std::getenv("LL_SW_XTILES"); return e && *e == '0'; }();
     for (int s2 = 0; s2 < nStrips; ++s2) {
       const uint64_t c = stripCost_[size_t(s2)];
       const int k = (perPixel_ && !noSplit) ? std::clamp(int((c + share - 1) / share), 1, maxTiles) : 1;
