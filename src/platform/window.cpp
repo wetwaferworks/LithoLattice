@@ -5,6 +5,15 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include <fstream>
 #include <sstream>
 #include "glfw_input_backend.h"
@@ -106,7 +115,18 @@ void Window::setDisplay(const DisplayDesc& want) {
       // desktop-sized window could keep a frame and leave the taskbar on top. No auto-iconify, so Alt+Tab
       // leaves it in place.
       glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_FALSE);
-      glfwSetWindowMonitor(win, mon, 0, 0, desk->width, desk->height, desk->refreshRate);
+      if (api_ == GraphicsApi::OpenGL33) {
+        // 2026-10-25 (JD, capture fix): a monitor-owned GL window is presented by the driver
+        // outside DWM composition (exclusive flip), so Print Screen, Snipping Tool and every
+        // OBS capture mode see a blank surface on the software / gl33 path. Use an undecorated,
+        // monitor-sized, non-monitor-owned window instead: same look, composited by DWM, capturable.
+        // Vulkan keeps the monitor idiom (its swapchain stays capturable).
+        if (glfwGetWindowMonitor(win)) glfwSetWindowMonitor(win, nullptr, mx, my, desk->width, desk->height, 0);
+        glfwSetWindowAttrib(win, GLFW_DECORATED, GLFW_FALSE);
+        glfwSetWindowMonitor(win, nullptr, mx, my, desk->width, desk->height, 0);
+      } else {
+        glfwSetWindowMonitor(win, mon, 0, 0, desk->width, desk->height, desk->refreshRate);
+      }
       break;
     case DisplayMode::Fullscreen: {
       glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_TRUE);  // GLFW default for exclusive full screen
@@ -203,6 +223,19 @@ void Window::setCursorCaptured(bool c) {
   captured_ = c;
   impl_->input->resetMouseBaseline();
   glfwSetInputMode(impl_->win, GLFW_CURSOR, c ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+  if (!c) showCursorNow();
+}
+// 2026-10-25 (JD, alt-tab cursor): after an Alt+Tab round trip GLFW can return to
+// NORMAL mode without re-setting the arrow (its "cursor in content area" flag is
+// stale), leaving an invisible cursor over the menus. Re-assert the default arrow
+// and, on Windows, the ShowCursor display count. Shared by every renderer.
+void Window::showCursorNow() {
+  glfwSetCursor(impl_->win, nullptr);
+#ifdef _WIN32
+  for (int i = 0; i < 16 && ShowCursor(TRUE) < 0; ++i) {}
+  POINT pt;
+  if (GetCursorPos(&pt)) SetCursorPos(pt.x, pt.y);  // a synthetic move makes Windows re-run WM_SETCURSOR
+#endif
 }
 void Window::framebufferSize(int& w, int& h) const { glfwGetFramebufferSize(impl_->win, &w, &h); }
 void* Window::glProcAddress(const char* name) { return reinterpret_cast<void*>(glfwGetProcAddress(name)); }

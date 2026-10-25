@@ -63,6 +63,8 @@ class Window {
   GraphicsApi api() const { return api_; }
   void setTitle(const std::string& t);
   void setCursorCaptured(bool captured);
+  /// Re-shows the arrow cursor (focus / menu edges; see window.cpp).
+  void showCursorNow();
   bool cursorCaptured() const { return captured_; }
   /// GLFW's actual cursor mode is DISABLED (the OS may drop capture behind our back).
   bool cursorReallyCaptured() const;

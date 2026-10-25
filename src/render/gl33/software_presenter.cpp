@@ -37,7 +37,10 @@ in vec2 vUv;
 uniform sampler2D uTex;
 out vec4 oColor;
 void main() {
-  oColor = texture(uTex, vec2(vUv.x, 1.0 - vUv.y));
+  // 2026-10-25 (JD): force opaque alpha. The CPU framebuffer's alpha byte is not
+  // guaranteed 0xFF; a non-opaque back buffer reads as blank/white to Print Screen,
+  // Snipping Tool and OBS Window Capture (DWM composites the GL surface with its alpha).
+  oColor = vec4(texture(uTex, vec2(vUv.x, 1.0 - vUv.y)).rgb, 1.0);
 }
 )";
 
