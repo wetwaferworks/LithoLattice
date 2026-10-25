@@ -34,7 +34,11 @@
 namespace litholattice::vk {
 namespace {
 // Phase 4 D (fragment cost experiment; bench-only): LL_VK_FLATFRAG=1 swaps the mega/pull chunk fragment shader for a flat colour.
-bool flatFrag() { const char* e = std::getenv("LL_VK_FLATFRAG"); return e && std::atoi(e) == 1; }
+// Review C1 (fix pass 2026-10-25): read once. Full dev-only CMake gating of the flat SPIR-V is deferred.
+bool flatFrag() {
+  static const bool on = [] { const char* e = std::getenv("LL_VK_FLATFRAG"); return e && std::atoi(e) == 1; }();
+  return on;
+}
 
 UniqueShaderModule shaderModule(const cVulkanDevice& dev, std::span<const uint32_t> code) {
   auto ci = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
