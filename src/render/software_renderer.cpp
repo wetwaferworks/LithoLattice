@@ -241,11 +241,19 @@ static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
-static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0}, g_quadCentreCulled{0};
-static thread_local uint64_t tlQuadCentreCulled = 0;  // 2026-10-25 step 2: flushed per band  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
+static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0}, g_quadCentreCulled{0};  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
+static thread_local uint64_t tlQuadCentreCulled = 0, tlEmitMemoHits = 0;  // 2026-10-25 step 2: flushed per band
+static size_t g_lastEmitN = 0;
+static thread_local double tlMeshMs = 0; static thread_local uint64_t tlMeshCalls = 0;
+static std::atomic<uint64_t> g_meshUs{0}, g_meshCalls{0};  // 2026-10-25 thread-summed renderMesh time (LL_SW_PROF)
 // Cortana 2026-10-25 (pass sw2, Archie): LL_SW_PROF extras - rows visited by the span loop
 // (Hi-Z rejected / total), SIMD-span vs scalar-span pixels, and per-thread strip time spread.
 static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
+// 2026-10-25: LL_SW_PROF per-row/per-tri counters are thread-local and flushed once per band
+// (were contended atomics bumped ~6x per row by every band thread, which inflated the very
+// strip times they measured).
+struct SwTlCounters { uint64_t pxScan = 0, pxCov = 0, pxShade = 0, tris = 0, hizRows = 0, rowsTotal = 0, pxSimd = 0, pxScalar = 0, centreCulled = 0; };
+static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
@@ -986,7 +994,8 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
   // fragment's CHUNK (sin + pow per pixel before); memoize the last chunk.
   int memoCx = INT32_MIN, memoCz = INT32_MIN;
   std::array<float, 3> memoE{0.f, 0.f, 0.f};
-  const bool hiz = hizFbW_ == fb_.width && hizFbH_ == fb_.height && !hizMax_.empty();
+  static const bool noHiz = std::getenv("LL_SW_NO_HIZ") != nullptr;  // 2026-10-25 profiling A/B
+  const bool hiz = !noHiz && hizFbW_ == fb_.width && hizFbH_ == fb_.height && !hizMax_.empty();
   SwTriSetup T[2];
   int nLive = 0, Y0 = INT32_MAX, Y1 = -1;
   const ShaderVaryings* memoElV[6]; float memoEl[6][4]; int nMemoEl = 0;  // kP2EmitMemo (per call = per quad)
@@ -1010,7 +1019,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       const int cx1 = std::min(x1, int(std::floor(std::max({v0[0], v1[0], v2[0]}) - 0.5f + kEps)));
       const int cy0 = std::max(y0, int(std::ceil(std::min({v0[1], v1[1], v2[1]}) - 0.5f - kEps)));
       const int cy1 = std::min(y1, int(std::floor(std::max({v0[1], v1[1], v2[1]}) - 0.5f + kEps)));
-      if (cx0 > cx1 || cy0 > cy1) { if (g_swProfOn) g_centreCulled.fetch_add(1, std::memory_order_relaxed); continue; }
+      if (cx0 > cx1 || cy0 > cy1) { if (g_swProfOn) ++tlC.centreCulled; continue; }
     }
     const float area = edgeFn(v0, v1, v2[0], v2[1]);
     if (std::abs(area) < 1e-9f) continue;
@@ -1077,7 +1086,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           if (hit >= 0) {
             S.el[k][0] = memoEl[hit][0]; S.el[k][1] = memoEl[hit][1]; S.el[k][2] = memoEl[hit][2];
             if (memoEl[hit][3] > 0.01f) S.hasEl = true;
-            if (g_swProfOn) g_emitMemoHits.fetch_add(1, std::memory_order_relaxed);
+            if (g_swProfOn) ++tlEmitMemoHits;
             continue;
           }
         }
@@ -1129,13 +1138,13 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     const float iw0 = S.iw0, iw1 = S.iw1, iw2 = S.iw2;
     const bool simdSpan = S.simdSpan;
     swsimd::ShadeSpanBasic& span = S.span;
-    if (g_swProfOn) ++g_rowsTotal;
+    if (g_swProfOn) ++tlC.rowsTotal;
     if (hiz && (y == S.y0 || y % kHizTile == 0)) {
       bool occluded = true;
       for (int tx = S.htx0; tx <= S.htx1 && occluded; ++tx) occluded = hizTileMax(tx, y / kHizTile) + S.hizMargin < S.triMinZ;
       if (occluded) {
         const int last = std::min(S.y1, y | (kHizTile - 1));
-        if (g_swProfOn) { g_hizRows += uint64_t(last - y + 1); g_rowsTotal += uint64_t(last - y); }  // pass sw2: rows skipped past count in the total
+        if (g_swProfOn) { tlC.hizRows += uint64_t(last - y + 1); tlC.rowsTotal += uint64_t(last - y); }  // pass sw2: rows skipped past count in the total
         S.skipTo = last + 1;
         continue;
       }
@@ -1311,12 +1320,12 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       for (int tx = wxLo / kHizTile; tx <= wxHi / kHizTile; ++tx) d[tx] = 1;
     }
     if (g_swProfOn) {
-      if (x1 >= x0) { g_pxScan += uint64_t(x1 - x0 + 1); (simdSpan ? g_pxSimd : g_pxScalar) += uint64_t(x1 - x0 + 1); }
-      g_pxCov += lc; g_pxShade += ls;
+      if (x1 >= x0) { tlC.pxScan += uint64_t(x1 - x0 + 1); (simdSpan ? tlC.pxSimd : tlC.pxScalar) += uint64_t(x1 - x0 + 1); }
+      tlC.pxCov += lc; tlC.pxShade += ls;
     }
    }
   }
-  if (g_swProfOn) g_tris += uint64_t(nLive);
+  if (g_swProfOn) tlC.tris += uint64_t(nLive);
 }
 
 // Build software-vertex-stage varyings from a packed mesh vertex.
@@ -2482,6 +2491,8 @@ struct SwProf {
                    (unsigned long long)(g_hudFlat / frames), (unsigned long long)(g_hudBox / frames));
       g_hudMsAcc = 0; g_hudTris = 0; g_hudBuildMs = 0; g_hudFlat = 0; g_hudBox = 0;
     }
+    std::fprintf(stderr, "swprof emit lights=%zu\n", g_lastEmitN);
+    std::fprintf(stderr, "swprof thread-summed ms/frame: renderMesh=%.1f calls=%llu\n", g_meshUs.exchange(0) / 1000.0 / frames, (unsigned long long)(g_meshCalls.exchange(0) / frames));
     std::fprintf(stderr, "swprof quad centrecull=%llu /frame\n", (unsigned long long)(g_quadCentreCulled.exchange(0) / frames));
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
@@ -2888,7 +2899,10 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     tlPreScreen = frameScreen_.data() + meshScreenOff_[di];
     tlCullBack = true;
     tlBlendPass = (perPixel_ && m.hasBlend) ? int8_t(pass) : int8_t(-1);
+    const auto tm0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (g_swProfOn) ++tlMeshCalls;
     renderMesh(frameVerts_.data() + meshVertOff_[di], drawVertsOf(m), mvp.m);  // Elfie 2026-10-17: far LOD prefix bound; 2026-10-18 phase B: frame scratch
+    if (g_swProfOn) tlMeshMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm0).count();
     tlBlendPass = -1;
     tlCullBack = false;
     tlPreScreen = nullptr;
@@ -2900,12 +2914,20 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    tlBandY1 = 1 << 30;
    tlBandX0 = 0;
    tlBandX1 = 1 << 30;
-   if (g_swProfOn) g_quadCentreCulled.fetch_add(tlQuadCentreCulled, std::memory_order_relaxed);
+   if (g_swProfOn) {
+     g_quadCentreCulled.fetch_add(tlQuadCentreCulled, std::memory_order_relaxed);
+     g_meshUs.fetch_add(uint64_t(tlMeshMs * 1000.0), std::memory_order_relaxed); g_emitMemoHits += tlEmitMemoHits; tlEmitMemoHits = 0;
+     g_meshCalls.fetch_add(tlMeshCalls, std::memory_order_relaxed);
+     g_pxScan += tlC.pxScan; g_pxCov += tlC.pxCov; g_pxShade += tlC.pxShade; g_tris += tlC.tris; g_hizRows += tlC.hizRows;
+     g_rowsTotal += tlC.rowsTotal; g_pxSimd += tlC.pxSimd; g_pxScalar += tlC.pxScalar; g_centreCulled += tlC.centreCulled;
+     tlC = SwTlCounters{};
+   }
+   tlMeshMs = 0; tlMeshCalls = 0;
    tlQuadCentreCulled = 0;
    groundFx_ = GroundFx{};
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
-  if (g_swProfOn) for (double& b : g_bandMs) b = 0;
+  if (g_swProfOn) { for (double& b : g_bandMs) b = 0; g_lastEmitN = frameEmit_.size() / 6; }
   bandPool.run(drawBand);
   if (g_swProfOn) {
     const unsigned nb = std::min(64u, std::max(1u, bandPool.bands()));
