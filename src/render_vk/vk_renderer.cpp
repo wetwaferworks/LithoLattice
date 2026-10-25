@@ -544,7 +544,7 @@ class cVulkanRenderer final : public IRenderer {
       {  // 0.0.1.52 [A52-3]: GPU frame timer (optional: a failed pool just disables it)
         auto qi = make<VkQueryPoolCreateInfo>(VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO);
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = 2;
+        qi.queryCount = 4;  // V2b: + chunk pass begin/end
         if (vkCreateQueryPool(d, &qi, nullptr, &f.timer) != VK_SUCCESS) f.timer = VK_NULL_HANDLE;
       }
       if (!createSemaphore(sem)) return false;
@@ -568,7 +568,8 @@ class cVulkanRenderer final : public IRenderer {
   bool createDescriptors() {
     const VkDevice d = dev_->device();
     const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
-                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kFramesInFlight}};
+                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kFramesInFlight},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight}};  // mega-draw V2b
     auto ci = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     ci.maxSets = kFramesInFlight;
     ci.poolSizeCount = uint32_t(std::size(sizes));
@@ -713,9 +714,15 @@ class cVulkanRenderer final : public IRenderer {
     const char* e = std::getenv("LL_VK_MEGA");
     if (!e || !*e) return 0;
     const int v = std::atoi(e);
-    if (v < 0 || v > 2) { logWarn("vulkan: LL_VK_MEGA='%s' not understood (use 0/1/2); keeping 0", e); return 0; }
+    if (v < 0 || v > 3) { logWarn("vulkan: LL_VK_MEGA='%s' not understood (use 0/1/2/3); keeping 0", e); return 0; }
     return v;
   }();
+  // Mega-draw V2b (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=3 = V3 indirect draws + records
+  // read from a storage buffer by draw index. LL_VK_MEGA_PROBE=1 (profiling only) swaps in the variant that reads
+  // the storage buffer in the vertex stage and passes flat vec4 varyings. LL_VK_FREEZE_TIME=<s> pins the shader
+  // clocks (screenshot diffs); render-only, unset = live clocks.
+  const bool megaProbe_ = [] { const char* e = std::getenv("LL_VK_MEGA_PROBE"); return e && std::atoi(e) == 1; }();
+  const float freezeTime_ = [] { const char* e = std::getenv("LL_VK_FREEZE_TIME"); return e && *e ? float(std::atof(e)) : -1.f; }();
   const VkDeviceSize vertexStride_ = packed12_ ? sizeof(GpuVertex12) : sizeof(PackedVertex);
   std::atomic<uint64_t> packMisses_{0};
   std::vector<uint8_t> packScratch_;  ///< main thread only (device-arena staging path)
@@ -830,17 +837,19 @@ class cVulkanRenderer final : public IRenderer {
     u.fxP[1] = std::max(0.f, p.vkFogDensity);
     u.fxP[2] = p.groundPulseTimeSec;
     u.fxP[3] = 0.5f;
+    if (freezeTime_ >= 0.f) u.time = u.pulseTime = u.traceTime = u.fxP[2] = freezeTime_;  // V2b: LL_VK_FREEZE_TIME
     std::memcpy(f.uniforms->mapped(), &u, sizeof u);
   }
 
   void record(FrameSlot& f, uint32_t image, const FrameParams& p) {
     writeUniforms(f, p);
+    if (megaMode_ > 0) ensureMega(f, meshes_.size() * 2);  // mega-draw V2b: grow (and rewrite binding 5) before the set is bound
     const VkCommandBuffer cmd = f.cmd;
     auto bi = make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
     if (f.timer) {  // [A52-3]
-      vkCmdResetQueryPool(cmd, f.timer, 0, 2);
+      vkCmdResetQueryPool(cmd, f.timer, 0, 4);
       vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, f.timer, 0);
     }
     recordCopies(cmd, f);  // this frame's vertex uploads land before any draw reads them
@@ -863,7 +872,9 @@ class cVulkanRenderer final : public IRenderer {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_->layout(), 0, 1, &f.set, 0, nullptr);
     {
       const auto t0 = std::chrono::steady_clock::now();
+      if (f.timer) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.timer, 2);  // V2b profiling
       drawChunks(cmd, f, p);
+      if (f.timer) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.timer, 3);
       perf_.chunkCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     drawEntities(cmd, f);  // Cortana 2026-10-16: after the world, before sprites (GL33 order)
@@ -905,8 +916,9 @@ class cVulkanRenderer final : public IRenderer {
   // 0.0.1.52 [A52-3]: after the slot's fence: read its GPU time; log the counters every 120 frames.
   void readPerf(FrameSlot& f) {
     if (f.timer && f.timerWritten) {
-      uint64_t ts[2] = {0, 0};
-      if (vkGetQueryPoolResults(dev_->device(), f.timer, 0, 2, sizeof ts, ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && ts[1] > ts[0]) {
+      uint64_t ts[4] = {0, 0, 0, 0};
+      if (vkGetQueryPoolResults(dev_->device(), f.timer, 0, 4, sizeof ts, ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && ts[1] > ts[0]) {
+        if (ts[3] > ts[2]) perf_.chunkGpuMs += double(ts[3] - ts[2]) * timestampPeriodNs_ * 1e-6;  // V2b
         const double ms = double(ts[1] - ts[0]) * timestampPeriodNs_ * 1e-6;
         perf_.gpuMs += ms; perf_.gpuMaxMs = std::max(perf_.gpuMaxMs, ms); ++perf_.gpuFrames;
         lastGpuMs_ = lastGpuMs_ < 0.f ? float(ms) : lastGpuMs_ * 0.9f + float(ms) * 0.1f;  // F56-4 (smoothed)
@@ -921,8 +933,9 @@ class cVulkanRenderer final : public IRenderer {
               (unsigned long long)(arena_->deviceBytes() >> 20), (unsigned long long)(arena_->hostBytes() >> 20),
               double(arena_->usedBytes()) / 1048576.0, packed12_ ? "packed12" : "packed16",
               (unsigned long long)packMisses_.load(std::memory_order_relaxed));  // 0.0.1.59 [P59-1]
-      logInfo("vulkan mega: mode %d, logical chunk draws/frame %.0f, draw API calls/frame %.0f, chunk record cpu ms/frame %.3f",
-              megaMode_, double(perf_.draws) / n, double(perf_.apiCalls) / n, perf_.chunkCpuMs / n);  // mega-draw V2
+      logInfo("vulkan mega: mode %d%s, logical chunk draws/frame %.0f, draw API calls/frame %.0f, chunk record cpu ms/frame %.3f, chunk gpu ms %.3f",
+              megaMode_, megaProbe_ ? " (probe)" : "", double(perf_.draws) / n, double(perf_.apiCalls) / n, perf_.chunkCpuMs / n,
+              perf_.gpuFrames ? perf_.chunkGpuMs / double(perf_.gpuFrames) : 0.0);  // mega-draw V2
       logInfo("vulkan upload split: %.1f meshes/frame %.2f MB/frame: arena alloc %.3f ms/frame, copy %.3f ms/frame (%s), blocks %zu; "
               "worker-direct published %.1f/frame (prepared total %llu)",
               double(perf_.uploads) / n, double(perf_.uploadBytes) / n / 1048576.0, perf_.allocMs / n, perf_.copyMs / n,
@@ -1074,7 +1087,7 @@ class cVulkanRenderer final : public IRenderer {
   bool ensureMega(FrameSlot& f, size_t n) {
     if (f.megaDraws && f.megaCmds && f.megaCapacity >= n) return true;
     const VkDeviceSize cap = std::max<VkDeviceSize>(VkDeviceSize(n) * 2, 4096);
-    auto d = Buffer::create(*dev_, cap * sizeof(ChunkPush), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    auto d = Buffer::create(*dev_, cap * sizeof(ChunkPush), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     auto c = Buffer::create(*dev_, cap * sizeof(VkDrawIndexedIndirectCommand), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -1086,6 +1099,15 @@ class cVulkanRenderer final : public IRenderer {
     f.megaDraws = std::move(d);
     f.megaCmds = std::move(c);
     f.megaCapacity = cap;
+    // V2b: point binding 5 at the new record buffer. Called before this slot's set is bound (record()).
+    const VkDescriptorBufferInfo info{f.megaDraws->handle(), 0, VK_WHOLE_SIZE};
+    auto w = make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+    w.dstSet = f.set;
+    w.dstBinding = kBindingMegaDraws;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w.pBufferInfo = &info;
+    vkUpdateDescriptorSets(dev_->device(), 1, &w, 0, nullptr);
     return true;
   }
 
@@ -1123,7 +1145,7 @@ class cVulkanRenderer final : public IRenderer {
       // Mega-draw V3 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=2 issues the run as one
       // vkCmdDrawIndexedIndirect (multiDrawIndirect) or one single-command indirect call per draw without it.
       // Needs drawIndirectFirstInstance (the record index rides in firstInstance); otherwise V2 direct draws.
-      if (megaMode_ == 2 && dev_->drawIndirectFirstInstance()) {
+      if (megaMode_ >= 2 && dev_->drawIndirectFirstInstance()) {
         constexpr uint32_t kStride = sizeof(VkDrawIndexedIndirectCommand);
         if (dev_->multiDrawIndirect()) {
           for (uint32_t k = i; k < j; k += 65535u) {
@@ -1171,12 +1193,18 @@ class cVulkanRenderer final : public IRenderer {
     });
     // Mega-draw V2 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=1 moves the per-draw values
     // into the slot's instance buffer; the same order, culling and blend pass as below.
-    if (megaMode_ > 0 && pipelines_->chunkMega() && pipelines_->chunkBlendMega() && ensureMega(f, visible_.size() * 2)) {
+    // V2b (LL_VK_MEGA=3): the storage-buffer pipelines; needs drawIndirectFirstInstance (index in firstInstance).
+    const bool ssbo = megaMode_ == 3 && dev_->drawIndirectFirstInstance();
+    const VkPipeline megaOpaque = ssbo ? pipelines_->chunkSsbo(megaProbe_) : pipelines_->chunkMega();
+    const VkPipeline megaBlend = ssbo ? pipelines_->chunkBlendSsbo(megaProbe_) : pipelines_->chunkBlendMega();
+    if (megaMode_ > 0 && megaOpaque && megaBlend && f.megaDraws && f.megaCmds && f.megaCapacity >= visible_.size() * 2) {
       megaBuf_.clear();
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_->chunkMega());
-      const VkBuffer draws = f.megaDraws->handle();
-      const VkDeviceSize zero = 0;
-      vkCmdBindVertexBuffers(cmd, 1, 1, &draws, &zero);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, megaOpaque);
+      if (!ssbo) {
+        const VkBuffer draws = f.megaDraws->handle();
+        const VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(cmd, 1, 1, &draws, &zero);
+      }
       for (const auto& [buffer, mp] : visible_) {
         const Mesh& mesh = *mp;
         megaPut(f, buffer, mesh, 0.f);
@@ -1193,7 +1221,7 @@ class cVulkanRenderer final : public IRenderer {
       if ((p.vkFx & FrameParams::kVkFxBulbBlend) && !blendQueue_.empty()) {
         std::sort(blendQueue_.begin(), blendQueue_.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
         for (const auto& [d2, mp] : blendQueue_) megaPut(f, arena_->buffer(mp->slice), *mp, 1.f);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_->chunkBlendMega());
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, megaBlend);
         megaDraw(cmd, f, opaque, uint32_t(megaBuf_.size()), bound);
       }
       blendQueue_.clear();
@@ -1477,7 +1505,8 @@ class cVulkanRenderer final : public IRenderer {
     uint64_t published = 0;  // [C53-2]
     double gpuMs = 0, gpuMaxMs = 0;
     uint64_t apiCalls = 0;   ///< mega-draw V2: chunk draw API calls (vkCmdDrawIndexed / vkCmdDrawIndexedIndirect)
-    double chunkCpuMs = 0;   ///< mega-draw V2: CPU time recording the chunk passes
+    double chunkCpuMs = 0;
+    double chunkGpuMs = 0;   ///< V2b: GPU time between the chunk-pass timestamps   ///< mega-draw V2: CPU time recording the chunk passes
   } perf_;
   float timestampPeriodNs_ = 1.f;
 };

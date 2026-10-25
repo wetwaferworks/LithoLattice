@@ -16,7 +16,17 @@
 #define uGroundTraceTime uTrace.x
 #define uGroundTraceOn uTrace.y
 #define HEARTBEAT_GLOW_GAIN uPulse.z  // 0.0.1.53 [C53-3] (Proposed by JD, Built by Cortana)
-#ifdef LITHO_MEGA
+#if defined(LITHO_MEGA_SSBO)
+// Mega-draw V2b (Direction JD, design Archie, implementation Cortana): one flat draw index; the per-draw values
+// are read from the storage buffer (set 0, binding 5) where the shading uses them.
+layout(std430, set = 0, binding = 5) readonly buffer MegaDraws { vec4 uMegaD[]; };
+layout(location = 8) flat in uint vDraw;
+#define uPass uMegaD[vDraw * 5u].w
+#define uPulseP0 uMegaD[vDraw * 5u + 1u]
+#define uPulseP1 uMegaD[vDraw * 5u + 2u]
+#define uTraceP0 uMegaD[vDraw * 5u + 3u]
+#define uTraceP1 uMegaD[vDraw * 5u + 4u]
+#elif defined(LITHO_MEGA)
 // Mega-draw V2 (Direction JD, design Archie, implementation Cortana): per-draw values arrive as flat varyings
 // from the instance buffer (see chunk_vert_body.glsl) instead of the push block.
 layout(location = 8) flat in vec4 vDrawOP;

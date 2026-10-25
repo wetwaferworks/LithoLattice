@@ -58,6 +58,29 @@ foreach(mega chunk_mega_vert:kSpvChunkMegaVert:chunk.vert chunk12_mega_vert:kSpv
     VERBATIM)
   list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
 endforeach()
+# Mega-draw V2b (Direction JD, design Archie, implementation Cortana): storage-buffer variants (name:var:src:defines).
+foreach(v chunk_ssbo_vert:kSpvChunkSsboVert:chunk.vert:LITHO_MEGA_SSBO
+          chunk12_ssbo_vert:kSpvChunk12SsboVert:chunk12.vert:LITHO_MEGA_SSBO
+          chunk_ssbo_frag:kSpvChunkSsboFrag:chunk.frag:LITHO_MEGA_SSBO
+          chunk_ssbovary_vert:kSpvChunkSsboVaryVert:chunk.vert:LITHO_MEGA_SSBO+LITHO_MEGA_VARY
+          chunk12_ssbovary_vert:kSpvChunk12SsboVaryVert:chunk12.vert:LITHO_MEGA_SSBO+LITHO_MEGA_VARY)
+  string(REPLACE ":" ";" parts ${v})
+  list(GET parts 0 name)
+  list(GET parts 1 var)
+  list(GET parts 2 src)
+  list(GET parts 3 defs)
+  string(REPLACE "+" ";" defs ${defs})
+  list(TRANSFORM defs PREPEND "-D")
+  set(out ${LITHOLATTICE_SPV_DIR}/${name}.h)
+  add_custom_command(OUTPUT ${out}
+    COMMAND glslang-standalone -V --target-env vulkan1.0 --quiet ${defs} -I${LithoLattice_SOURCE_DIR}/assets/shaders
+            --vn ${var} -o ${out} ${LITHOLATTICE_VK_SHADER_DIR}/${src}
+    DEPENDS glslang-standalone ${LITHOLATTICE_VK_SHADER_DIR}/${src} ${LITHOLATTICE_VK_SHADER_DIR}/chunk_vert_body.glsl
+            ${LITHOLATTICE_VK_SHADER_DIR}/frame.glsl ${LithoLattice_SOURCE_DIR}/assets/shaders/chunk_shading.glsl
+    COMMENT "SPIR-V: vk/${src} (${name})"
+    VERBATIM)
+  list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
+endforeach()
 
 add_library(litholattice_render_vk STATIC vk_loader.cpp vk_handles.cpp vk_device.cpp vk_resources.cpp vk_vertex_arena.cpp
             vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp ${LITHOLATTICE_SPV_HEADERS})

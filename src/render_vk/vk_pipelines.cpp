@@ -12,6 +12,11 @@
 #include "spv/chunk12_mega_vert.h"  // mega-draw V2
 #include "spv/chunk_mega_frag.h"    // mega-draw V2
 #include "spv/chunk_mega_vert.h"    // mega-draw V2
+#include "spv/chunk_ssbo_frag.h"    // mega-draw V2b
+#include "spv/chunk_ssbo_vert.h"
+#include "spv/chunk_ssbovary_vert.h"
+#include "spv/chunk12_ssbo_vert.h"
+#include "spv/chunk12_ssbovary_vert.h"
 #include "spv/hud_frag.h"
 #include "spv/hud_vert.h"
 #include "spv/line_frag.h"
@@ -311,7 +316,8 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
       {kBindingTextureArray, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
       {kBindingPalette, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
       {kBindingFont, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-      {kBindingSpriteAtlas, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+      {kBindingSpriteAtlas, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+      {kBindingMegaDraws, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, both, nullptr}};  // mega-draw V2b (unused unless LL_VK_MEGA=3)
   auto li = make<VkDescriptorSetLayoutCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
   li.bindingCount = uint32_t(std::size(bindings));
   li.pBindings = bindings;
@@ -385,6 +391,24 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
     mega.alphaBlend = true;
     mega.glow = 2;
     p->chunkBlendMega_ = buildPipeline(dev, p->renderPass(), layout, mega);
+  }
+  // Mega-draw V2b (Direction JD, design Archie, implementation Cortana): no instance binding; the shaders read the
+  // record from binding 5 by gl_InstanceIndex. "Vary" = profiling variant (vertex reads, flat vec4 varyings).
+  for (int vary = 0; vary < 2; ++vary) {
+    PipelineDesc s = chunk;
+    if (vary) {
+      s.vertexCode = packed12 ? std::span<const uint32_t>(kSpvChunk12SsboVaryVert) : std::span<const uint32_t>(kSpvChunkSsboVaryVert);
+      s.fragmentCode = kSpvChunkMegaFrag;
+    } else {
+      s.vertexCode = packed12 ? std::span<const uint32_t>(kSpvChunk12SsboVert) : std::span<const uint32_t>(kSpvChunkSsboVert);
+      s.fragmentCode = kSpvChunkSsboFrag;
+    }
+    (vary ? p->chunkSsboVary_ : p->chunkSsbo_) = buildPipeline(dev, p->renderPass(), layout, s);
+    s.depthWrite = false;
+    s.cullBack = true;
+    s.alphaBlend = true;
+    s.glow = 2;
+    (vary ? p->chunkBlendSsboVary_ : p->chunkBlendSsbo_) = buildPipeline(dev, p->renderPass(), layout, s);
   }
   // JD Vulkan push: procedural sparks (no vertex buffer), additive into frame and glow.
   {

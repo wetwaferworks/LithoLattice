@@ -12,7 +12,7 @@ namespace litholattice::vk {
 
 /// Descriptor bindings of set 0 (see assets/shaders/vk/*).
 enum Binding : uint32_t { kBindingFrame = 0, kBindingTextureArray = 1, kBindingPalette = 2, kBindingFont = 3,
-                          kBindingSpriteAtlas = 4 };
+                          kBindingSpriteAtlas = 4, kBindingMegaDraws = 5 /* mega-draw V2b */ };
 
 class RenderPipelines {
  public:
@@ -50,6 +50,8 @@ class RenderPipelines {
   VkPipelineLayout postLayout() const { return postLayout_.get(); }
   VkPipeline chunkMega() const { return chunkMega_.get(); }            ///< mega-draw V2 (may be null)
   VkPipeline chunkBlendMega() const { return chunkBlendMega_.get(); }  ///< mega-draw V2 (may be null)
+  VkPipeline chunkSsbo(bool vary) const { return (vary ? chunkSsboVary_ : chunkSsbo_).get(); }            ///< mega-draw V2b
+  VkPipeline chunkBlendSsbo(bool vary) const { return (vary ? chunkBlendSsboVary_ : chunkBlendSsbo_).get(); }  ///< mega-draw V2b
   VkPipeline chunkBlend() const { return chunkBlend_.get(); }   ///< sorted alpha-blend bulb pass
   VkPipeline particles() const { return particles_.get(); }    ///< procedural GPU sparks
   VkPipeline blur() const { return blur_.get(); }              ///< separable Gaussian (blurPass)
@@ -67,6 +69,7 @@ class RenderPipelines {
   UniquePipelineLayout postLayout_;
   UniquePipeline chunkBlend_, particles_, blur_, composite_;
   UniquePipeline chunkMega_, chunkBlendMega_;  // mega-draw V2
+  UniquePipeline chunkSsbo_, chunkBlendSsbo_, chunkSsboVary_, chunkBlendSsboVary_;  // mega-draw V2b
 };
 
 }  // namespace litholattice::vk

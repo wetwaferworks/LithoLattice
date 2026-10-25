@@ -7,7 +7,20 @@
 // The 16-bit position is read as xy + z (R16G16 + R16 are guaranteed vertex formats; R16G16B16
 // is optional in Vulkan).
 #include "frame.glsl"
-#ifdef LITHO_MEGA
+#if defined(LITHO_MEGA_SSBO)
+// Mega-draw V2b (Direction JD, design Archie, implementation Cortana): per-draw records (5 vec4 each) in a storage
+// buffer (set 0, binding 5) indexed by gl_InstanceIndex (= the indirect command's firstInstance). Only the draw
+// index goes to the fragment stage; LITHO_MEGA_VARY (profiling variant) passes the 5 vec4s as flat varyings instead.
+layout(std430, set = 0, binding = 5) readonly buffer MegaDraws { vec4 uMegaD[]; };
+#define uOffset uMegaD[uint(gl_InstanceIndex) * 5u].xyz
+#if defined(LITHO_MEGA_VARY)
+layout(location = 8) flat out vec4 vDrawOP;
+layout(location = 9) flat out vec4 vPulseP0; layout(location = 10) flat out vec4 vPulseP1;
+layout(location = 11) flat out vec4 vTraceP0; layout(location = 12) flat out vec4 vTraceP1;
+#else
+layout(location = 8) flat out uint vDraw;
+#endif
+#elif defined(LITHO_MEGA)
 // Mega-draw V2 (Direction JD, design Archie, implementation Cortana): the per-draw values come from the
 // per-frame instance buffer (binding 1, one 80-byte record per draw, firstInstance = draw index) instead of
 // push constants, and go on to the fragment stage as flat varyings (locations 8..12).
@@ -38,7 +51,15 @@ layout(location = 4) flat out int vLayer; layout(location = 5) flat out int vVal
 layout(location = 6) flat out int vMode; layout(location = 7) flat out int vRot;
 const vec3 N[6] = vec3[6](vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1));
 void main() {
-#ifdef LITHO_MEGA
+#if defined(LITHO_MEGA_SSBO) && defined(LITHO_MEGA_VARY)
+  {
+    const uint d5 = uint(gl_InstanceIndex) * 5u;
+    vDrawOP = uMegaD[d5]; vPulseP0 = uMegaD[d5 + 1u]; vPulseP1 = uMegaD[d5 + 2u];
+    vTraceP0 = uMegaD[d5 + 3u]; vTraceP1 = uMegaD[d5 + 4u];
+  }
+#elif defined(LITHO_MEGA_SSBO)
+  vDraw = uint(gl_InstanceIndex);
+#elif defined(LITHO_MEGA)
   vDrawOP = aDrawOP; vPulseP0 = aPulseP0; vPulseP1 = aPulseP1; vTraceP0 = aTraceP0; vTraceP1 = aTraceP1;
 #endif
 #ifdef LITHO_PACKED12
