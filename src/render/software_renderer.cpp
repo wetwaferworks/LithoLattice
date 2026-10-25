@@ -2790,12 +2790,23 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           auto& off = meshBinOff_[di];
           auto& bins = meshBins_[di];
           off.assign(size_t(nStripsF) + 1, 0u);
+          const bool cullBin = swP2(kP2CentreCull);
           auto range = [&](size_t q, int& s0, int& s1) {
             const float* s = dst + q * 16;
             if (!(s[3] > 0 && s[7] > 0 && s[11] > 0 && s[15] > 0)) { s0 = 0; s1 = nStripsF - 1; return; }
             const float y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
             const float y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
             if (!(y1 >= -1.f) || !(y0 <= float(fb_.height) + 1.f)) { s0 = 1; s1 = 0; return; }
+            if (cullBin) {  // 2026-10-25 (Archie step 4): no pixel centre in the quad bbox -> never binned
+              constexpr float kEps = 1e-3f;  // same conservative test as the per-strip quad cull
+              const float x0 = std::min(std::min(s[0], s[4]), std::min(s[8], s[12]));
+              const float x1 = std::max(std::max(s[0], s[4]), std::max(s[8], s[12]));
+              const int cx0 = std::max(0, int(std::ceil(x0 - 0.5f - kEps)));
+              const int cx1 = std::min(int(fb_.width) - 1, int(std::floor(x1 - 0.5f + kEps)));
+              const int cy0 = std::max(0, int(std::ceil(y0 - 0.5f - kEps)));
+              const int cy1 = std::min(int(fb_.height) - 1, int(std::floor(y1 - 0.5f + kEps)));
+              if (cx0 > cx1 || cy0 > cy1) { s0 = 1; s1 = 0; return; }
+            }
             s0 = std::max(0, int(std::floor(y0)) - 1) / kStripHF;
             s1 = std::min(int(fb_.height) - 1, int(std::ceil(y1)) + 1) / kStripHF;
           };
