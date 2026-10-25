@@ -305,7 +305,8 @@ class cSoftwareRenderer : public IRenderer {
                                           ///< packed StoredQuad store (drawn meshes only, indexed
                                           ///< parallel to frameScreen_ via meshVertOff_)
   std::vector<size_t> meshVertOff_;
-  std::vector<int> stripOrder_; std::vector<uint32_t> stripCost_;  ///< 2026-10-25 step 1: heaviest-first strips
+  struct StripWork { int strip, x0, x1; uint32_t cost; };
+  std::vector<StripWork> stripWork_; std::vector<uint32_t> stripCost_;  ///< 2026-10-25 step 1: heaviest-first strips
   std::vector<std::vector<uint32_t>> meshBins_, meshBinOff_;  ///< Cortana 2026-10-15 1255: per-mesh strip bins (CSR)
   std::vector<std::vector<uint32_t>> binFill_;  ///< per band-thread fill cursors
   std::vector<float> depth_;  ///< depth buffer

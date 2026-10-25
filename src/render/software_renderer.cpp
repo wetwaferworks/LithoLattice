@@ -201,6 +201,8 @@ thread_local float cSoftwareRenderer::meshOriginZ_ = 0.f;
 // frame by default; the chunk pass narrows it per band thread.
 static thread_local int tlBandY0 = 0;
 static thread_local int tlBandY1 = 1 << 30;
+static thread_local int tlBandX0 = 0;        // 2026-10-25 step 1: heavy strips split into x tiles
+static thread_local int tlBandX1 = 1 << 30;
 // Cortana 2026-10-15 1112: pre-transformed screen verts for the mesh the
 // band thread is drawing (set by the chunk pass; null = transform here).
 static thread_local const float* tlPreScreen = nullptr;
@@ -744,7 +746,8 @@ void cSoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
   int y1 = std::min(int(fb_.height)-1, int(std::ceil(std::max({v0[1], v1[1], v2[1]}))));
   y0 = std::max(y0, tlBandY0);  // RND-H3 band
   y1 = std::min(y1, tlBandY1 - 1);
-  if (y0 > y1) return;
+  x0 = std::max(x0, tlBandX0); x1 = std::min(x1, tlBandX1 - 1);  // step 1 x tile
+  if (y0 > y1 || x0 > x1) return;
 
   // Edge function setup
   auto edgeFn = [](const float* a, const float* b, float x, float y) {
@@ -998,7 +1001,8 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     int y1 = std::min(int(fb_.height)-1, int(std::ceil(std::max({v0[1], v1[1], v2[1]}))));
     y0 = std::max(y0, tlBandY0);  // RND-H3 band
     y1 = std::min(y1, tlBandY1 - 1);
-    if (y0 > y1) continue;
+    x0 = std::max(x0, tlBandX0); x1 = std::min(x1, tlBandX1 - 1);  // step 1 x tile
+    if (y0 > y1 || x0 > x1) continue;
     if (swP2(kP2CentreCull)) {  // Cortana 2026-10-25 box (Archie step 3): no pixel centre in the bbox -> no sample can pass
       constexpr float kEps = 1e-3f;  // conservative vs edge-function rounding at the bbox edge
       const int cx0 = std::max(x0, int(std::ceil(std::min({v0[0], v1[0], v2[0]}) - 0.5f - kEps)));
@@ -1515,6 +1519,11 @@ void cSoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
       const float qy0 = std::min(std::min(screen[i*4+1], screen[(i+1)*4+1]), std::min(screen[(i+2)*4+1], screen[(i+3)*4+1]));
       const float qy1 = std::max(std::max(screen[i*4+1], screen[(i+1)*4+1]), std::max(screen[(i+2)*4+1], screen[(i+3)*4+1]));
       if (qy1 < float(tlBandY0) - 1.0f || qy0 > float(tlBandY1) + 1.0f) continue;
+      if (tlBandX1 < (1 << 30) || tlBandX0 > 0) {  // step 1 x tile reject (same +-1 slack)
+        const float qx0 = std::min(std::min(screen[i*4], screen[(i+1)*4]), std::min(screen[(i+2)*4], screen[(i+3)*4]));
+        const float qx1 = std::max(std::max(screen[i*4], screen[(i+1)*4]), std::max(screen[(i+2)*4], screen[(i+3)*4]));
+        if (qx1 < float(tlBandX0) - 1.0f || qx0 > float(tlBandX1) + 1.0f) continue;
+      }
     }
     for (int k = 0; k < 4; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
     // Ground pulse/traces tag: only kShadeGroundPulse quads of a mesh whose
@@ -2784,31 +2793,51 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // 2026-10-25 (Archie step 1): strips are handed out heaviest-first (binned quad count,
   // longest-processing-time order), so the dense horizon strips start early and no thread is
   // left finishing one alone. Strips own disjoint rows, so pixels do not depend on the order.
-  stripOrder_.resize(size_t(nStrips));
-  for (int s2 = 0; s2 < nStrips; ++s2) stripOrder_[size_t(s2)] = s2;
-  if (perPixel_) {
-    stripCost_.assign(size_t(nStrips), 0u);
-    for (size_t di = 0; di < drawOrder_.size(); ++di) {
-      const auto& off = meshBinOff_[di];
-      if (off.size() < size_t(nStrips) + 1) continue;
-      for (int s2 = 0; s2 < nStrips; ++s2) stripCost_[size_t(s2)] += off[size_t(s2) + 1] - off[size_t(s2)];
+  // A strip far heavier than a thread's fair share (the horizon rows) is split into 64-px-
+  // multiple x tiles (Hi-Z tiles never straddle two), each its own work item.
+  stripWork_.clear();
+  {
+    stripCost_.assign(size_t(nStrips), 1u);
+    if (perPixel_)
+      for (size_t di = 0; di < drawOrder_.size(); ++di) {
+        const auto& off = meshBinOff_[di];
+        if (off.size() < size_t(nStrips) + 1) continue;
+        for (int s2 = 0; s2 < nStrips; ++s2) stripCost_[size_t(s2)] += off[size_t(s2) + 1] - off[size_t(s2)];
+      }
+    uint64_t total = 0;
+    for (uint32_t c : stripCost_) total += c;
+    const uint64_t share = std::max<uint64_t>(1, total / (uint64_t(std::max(1u, bandPool.bands())) * 3));
+    const int maxTiles = std::max(1, int(fb_.width / 64));
+    static const bool noSplit = std::getenv("LL_SW_NO_XTILES") != nullptr;
+    for (int s2 = 0; s2 < nStrips; ++s2) {
+      const uint64_t c = stripCost_[size_t(s2)];
+      const int k = (perPixel_ && !noSplit) ? std::clamp(int((c + share - 1) / share), 1, maxTiles) : 1;
+      const int tw = k == 1 ? int(fb_.width) : ((int(fb_.width) + k - 1) / k + 63) / 64 * 64;
+      for (int x = 0; x < int(fb_.width); x += tw)
+        stripWork_.push_back({s2, x, std::min(int(fb_.width), x + tw), uint32_t(c / uint64_t(k))});
     }
-    std::stable_sort(stripOrder_.begin(), stripOrder_.end(), [&](int a, int b) { return stripCost_[size_t(a)] > stripCost_[size_t(b)]; });
+    std::stable_sort(stripWork_.begin(), stripWork_.end(), [](const StripWork& a, const StripWork& b) { return a.cost > b.cost; });
   }
+  const int nWork = int(stripWork_.size());
   const auto drawBand = [&](unsigned bandIdx) {
    const auto tBand0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
    struct BandTimer {  // pass sw2: per-thread strip time (LL_SW_PROF)
      unsigned i; std::chrono::steady_clock::time_point t0;
      ~BandTimer() { if (g_swProfOn && i < 64) g_bandMs[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
    } bandTimer{bandIdx, tBand0};
-   for (int stripK; (stripK = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nStrips;) {
-   const int strip = stripOrder_[size_t(stripK)];
+   for (int stripK; (stripK = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nWork;) {
+   const int strip = stripWork_[size_t(stripK)].strip;
+   tlBandX0 = stripWork_[size_t(stripK)].x0;
+   tlBandX1 = stripWork_[size_t(stripK)].x1 >= int(fb_.width) ? (1 << 30) : stripWork_[size_t(stripK)].x1;
    tlBandY0 = strip * kStripH;
    tlBandY1 = std::min(int(fb_.height), tlBandY0 + kStripH);
    if (p2par) {  // Pass 2 step 2: this strip's share of the frame clear
-     const size_t o = size_t(tlBandY0) * fb_.width, n = size_t(tlBandY1 - tlBandY0) * fb_.width;
-     swsimd::fill32(fb_.pixels.data() + o, n, skyColor);
-     swsimd::fillF(depth_.data() + o, n, 1.0f);
+     const int cx0 = tlBandX0, cx1 = std::min(int(fb_.width), tlBandX1);
+     for (int y = tlBandY0; y < tlBandY1; ++y) {  // this work item's rect only (x tiles)
+       const size_t o = size_t(y) * fb_.width + size_t(cx0), n = size_t(cx1 - cx0);
+       swsimd::fill32(fb_.pixels.data() + o, n, skyColor);
+       swsimd::fillF(depth_.data() + o, n, 1.0f);
+     }
    }
    // Cortana 2026-10-15 1755 [ENGINE]: pass 0 = opaque front-to-back (as before); pass 1 =
    // the strip's kShadeAlphaBlend quads far-to-near over meshes that have any (per-pixel
@@ -2855,6 +2884,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    }
    tlBandY0 = 0;
    tlBandY1 = 1 << 30;
+   tlBandX0 = 0;
+   tlBandX1 = 1 << 30;
    groundFx_ = GroundFx{};
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
