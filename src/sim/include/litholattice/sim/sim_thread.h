@@ -109,6 +109,9 @@ struct SimStats {              // sim -> render, every wake-up (lock-free triple
   bool hit = false, inReach = false; float hitDist = 0;  // looked-at block (up to kLookRange)
   int hx = 0, hy = 0, hz = 0; BlockId hitBlock = 0; CellState hitState = 0;
   char hitInfo[256] = {};  ///< look-at inspector line from IWorldSim::inspect
+  /// 2026-10-25 (JD, Post viewer): per-cell text of the looked-at cell (or of the cell above when
+  /// that is the same block, e.g. a two-high post's panel); empty when none. Up to 256 chars.
+  char hitText[260] = {};
 };
 
 class cSimThread {

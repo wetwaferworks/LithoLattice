@@ -783,8 +783,14 @@ void cSimThread::run() {
         hitInfoValid_ = true;
       }
       std::snprintf(s.hitInfo, sizeof s.hitInfo, "%s", hitInfoCache_.c_str());
+      {  // 2026-10-25 (JD, Post viewer): cell text for the HUD overlay
+        const std::string* t = chunks_.cellText(s.hx, s.hy, s.hz);
+        if (!t && chunks_.get(s.hx, s.hy + 1, s.hz) == s.hitBlock) t = chunks_.cellText(s.hx, s.hy + 1, s.hz);
+        std::snprintf(s.hitText, sizeof s.hitText, "%s", t ? t->c_str() : "");
+      }
     } else {
       s.hitInfo[0] = 0;
+      s.hitText[0] = 0;
       hitInfoValid_ = false;
     }
     stats_.publish();
