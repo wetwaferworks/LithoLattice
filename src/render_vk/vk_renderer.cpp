@@ -103,6 +103,8 @@ class cVulkanRenderer final : public IRenderer {
     pipelines_ = RenderPipelines::create(*dev_, surface_.color.format, surface_.depth, error, packed12_);
     // Mega-Pipeline Phase 2 (Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana): LL_VK_PULL=1
     // turns on vertex pulling (64-bit packed quads). Needs V2b, Packed12, firstInstance, dynamic storage-array indexing.
+    // Phase 4.2a (Direction JD, LithoPipeline designed by Archie, implemented by Cortana): LL_VK_FASTCULL=1.
+    if (const char* e = std::getenv("LL_VK_FASTCULL"); e && std::atoi(e) == 1) { fastCull_ = true; logInfo("vulkan: Phase 4.2a compact cull list on"); }
     if (const char* e = std::getenv("LL_VK_PULL"); e && std::atoi(e) == 1) {
       pull_ = pipelines_ && pipelines_->chunkPull() && packed12_ && megaMode_ == 3 && dev_->drawIndirectFirstInstance() &&
               dev_->storageArrayDynamicIndexing();
@@ -206,6 +208,7 @@ class cVulkanRenderer final : public IRenderer {
     const auto it = meshes_.find(key);
     if (it != meshes_.end()) {
       retire(it->second.slice);
+      cullRemove(it->second);  // Phase 4.2a compact cull list
       meshes_.erase(it);
 #if LL_STREAM_COUNTERS
       if (m.verts.empty()) ++perf_.evictions; else ++perf_.remeshes;  // Phase 4.0
@@ -240,7 +243,7 @@ class cVulkanRenderer final : public IRenderer {
     // JD Vulkan push: meshes with alpha-blend faces (bulb glass rims) join the sorted blend pass.
     gm.blend = hasBlend;
     for (int i = 0; i < 4; ++i) { gm.pulseP0[i] = m.pulseP0[i]; gm.pulseP1[i] = m.pulseP1[i]; gm.traceP0[i] = m.traceP0[i]; gm.traceP1[i] = m.traceP1[i]; }
-    meshes_[key] = gm;
+    cullAdd(meshes_[key] = gm);  // Phase 4.2a
   }
 
   // 0.0.1.53 [C53-2] (Proposed by JD, Built by Cortana): worker-thread direct upload. With a ReBAR (or host)
@@ -297,6 +300,7 @@ class cVulkanRenderer final : public IRenderer {
     const auto it = meshes_.find(key);
     if (it != meshes_.end()) {
       retire(it->second.slice);
+      cullRemove(it->second);  // Phase 4.2a compact cull list
       meshes_.erase(it);
     }
     Mesh gm{cVertexArena::Slice{p.block, p.offset, p.size}, p.indexCount, p.cx, p.sy, p.cz};
@@ -304,7 +308,7 @@ class cVulkanRenderer final : public IRenderer {
     gm.pullFirst = p.pullFirst;  // Mega-Pipeline Phase 2
     for (int i = 0; i < 7; ++i) gm.pullBucket[i] = p.pullBucket[i];
     for (int i = 0; i < 4; ++i) { gm.pulseP0[i] = p.pulseP0[i]; gm.pulseP1[i] = p.pulseP1[i]; gm.traceP0[i] = p.traceP0[i]; gm.traceP1[i] = p.traceP1[i]; }
-    meshes_[key] = gm;
+    cullAdd(meshes_[key] = gm);  // Phase 4.2a
     perf_.published += 1;
   }
   void discardChunkMesh(const PreparedChunkMesh& p) override {
@@ -330,6 +334,7 @@ class cVulkanRenderer final : public IRenderer {
     for (const auto& [k, mesh] : meshes_) arena_->free(mesh.slice);
     for (const Retired& r : retired_) arena_->free(r.slice);
     meshes_.clear();
+    cullList_.clear();  // Phase 4.2a
     retired_.clear();
     meshEpoch_.fetch_add(1, std::memory_order_acq_rel);  // F56-2: in-flight worker meshes are now stale
   }
@@ -502,6 +507,7 @@ class cVulkanRenderer final : public IRenderer {
     bool blend = false;  ///< JD Vulkan push: has kShadeAlphaBlend faces
     uint32_t pullFirst = 0;   ///< Mega-Pipeline Phase 2: first packed quad (8-byte index in the arena block)
     uint32_t pullBucket[7]{};  ///< Mega-Pipeline Phase 2/3: packed quads by face; pullBucket[6] = packed quad count
+    uint32_t cullIdx = UINT32_MAX;  ///< Phase 4.2a: slot in cullList_ (last member: keeps the aggregate inits)
   };
   struct Retired {
     uint64_t retiredAt = 0;  ///< frameNumber_ when replaced: frames before it may still read it
@@ -1033,6 +1039,8 @@ class cVulkanRenderer final : public IRenderer {
                 double(perf_.uploads) / n, double(perf_.published) / n, double(perf_.uploadBytes) / n / 1048576.0, double(perf_.evictions) / n,
                 double(perf_.remeshes) / n, double(perf_.cullTested) / n, double(perf_.cullFrustum) / n, double(arena_->usedBytes()) / 1048576.0, cap,
                 cap > 0 ? 100.0 * double(arena_->usedBytes()) / 1048576.0 / cap : 0.0);
+        logInfo("vulkan record split (ms/frame): cull %.3f, sort %.3f, opaque put+draw %.3f, blend sort+put+draw %.3f (blend draws/frame %.0f)",
+                perf_.cullMs / n, perf_.sortMs / n, perf_.opaqueMs / n, perf_.blendMs / n, double(perf_.blendDraws) / n);
         if (pull_) {
           char buf[512]; int o = 0;
           for (uint32_t r = 0; r < kPullReasons && o < int(sizeof buf) - 48; ++r)
@@ -1359,7 +1367,26 @@ class cVulkanRenderer final : public IRenderer {
     vkCmdBindIndexBuffer(cmd, quadIndices_->handle(), 0, VK_INDEX_TYPE_UINT16);  // 0.0.1.52 [A52-2]: uint16 quad indices
     stats_.drawn = 0;
     stats_.meshes = uint32_t(meshes_.size());
+#if LL_STREAM_COUNTERS
+    const auto tCull0 = std::chrono::steady_clock::now();  // Phase 4: cull / sort / record split
+#endif
+    if (fastCull_) {  // Phase 4.2a
+      for (const CullEnt& e : cullList_) {
+        const Vec3 mn{e.x, e.y, e.z};
+#if LL_STREAM_COUNTERS
+        ++perf_.cullTested;
+#endif
+        if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) {
+#if LL_STREAM_COUNTERS
+          ++perf_.cullFrustum;
+#endif
+          continue;
+        }
+        visible_.push_back({arena_->buffer(e.m->slice), e.m});
+      }
+    }
     for (const auto& [k, mesh] : meshes_) {
+      if (fastCull_) break;
       const Vec3 mn{mesh.cx * 16.f, mesh.sy * 16.f, mesh.cz * 16.f};
       // Prototype pipeline: Full draws; MeshOnly/Cull skip (mesh stays uploaded).
 #if LL_STREAM_COUNTERS
@@ -1379,11 +1406,19 @@ class cVulkanRenderer final : public IRenderer {
     // each draw passes baseVertex = slice.offset / sizeof(PackedVertex) (slices are 64-byte
     // aligned since A54-3a, a multiple of 16; Cortana 2026-10-16 2335 F55-4). The 64-byte column payload (pulse/trace) is pushed only when it
     // differs from the last draw's; otherwise only offset + pass (16 bytes) goes out.
+#if LL_STREAM_COUNTERS
+    const auto tCull1 = std::chrono::steady_clock::now();
+#endif
     std::sort(visible_.begin(), visible_.end(), [](const auto& a, const auto& b) {
       if (a.first != b.first) return a.first < b.first;
       if (a.second->cx != b.second->cx) return a.second->cx < b.second->cx;
       return a.second->cz < b.second->cz;
     });
+#if LL_STREAM_COUNTERS
+    const auto tCull2 = std::chrono::steady_clock::now();
+    perf_.cullMs += std::chrono::duration<double, std::milli>(tCull1 - tCull0).count();
+    perf_.sortMs += std::chrono::duration<double, std::milli>(tCull2 - tCull1).count();
+#endif
     // Mega-draw V2 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=1 moves the per-draw values
     // into the slot's instance buffer; the same order, culling and blend pass as below.
     // V2b (LL_VK_MEGA=3): the storage-buffer pipelines; needs drawIndirectFirstInstance (index in firstInstance).
@@ -1416,6 +1451,11 @@ class cVulkanRenderer final : public IRenderer {
       megaDraw(cmd, f, 0, opaque, bound);
       pullCmds_ = 0;
       if (pulling) pullDraw(cmd, f, opaque, p.camPos);  // Phase 2/3: packed quads, same records (pass 0)
+#if LL_STREAM_COUNTERS
+      const auto tB0 = std::chrono::steady_clock::now();
+      perf_.opaqueMs += std::chrono::duration<double, std::milli>(tB0 - tCull2).count();
+      perf_.blendDraws += blendQueue_.size();
+#endif
       if ((p.vkFx & FrameParams::kVkFxBulbBlend) && !blendQueue_.empty()) {
         std::sort(blendQueue_.begin(), blendQueue_.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
         // Phase 2: blend records start after the pulled commands (slots [opaque, opaque + pullCmds_) are taken).
@@ -1427,6 +1467,9 @@ class cVulkanRenderer final : public IRenderer {
         megaDraw(cmd, f, blendBegin, uint32_t(megaBuf_.size()), bound);
       }
       blendQueue_.clear();
+#if LL_STREAM_COUNTERS
+      perf_.blendMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tB0).count();
+#endif
       return;
     }
     DrawState ds;
@@ -1676,6 +1719,21 @@ class cVulkanRenderer final : public IRenderer {
   float frustumMarginDeg_ = 5.f;  ///< FOV culling margin, degrees (JD 2026-10-11); game sets it
   CullProtoState cullProto_;  ///< culling-cache prototypes (JD 2026-10-11); all default off
   std::unordered_map<int64_t, Mesh> meshes_;
+  // Phase 4.2a (LL_VK_FASTCULL=1; Direction JD, LithoPipeline designed by Archie, implemented by Cortana): a compact
+  // array of chunk origins + mesh pointers (map nodes are pointer-stable), so the per-frame frustum loop walks
+  // 16-byte entries instead of hash-map nodes. Same decide() call, same decisions; maintained always, used on the flag.
+  struct CullEnt { float x, y, z; Mesh* m; };
+  std::vector<CullEnt> cullList_;
+  bool fastCull_ = false;
+  void cullAdd(Mesh& m) { m.cullIdx = uint32_t(cullList_.size()); cullList_.push_back({m.cx * 16.f, m.sy * 16.f, m.cz * 16.f, &m}); }
+  void cullRemove(Mesh& m) {
+    if (m.cullIdx >= cullList_.size()) return;
+    const uint32_t i = m.cullIdx;
+    cullList_[i] = cullList_.back();
+    cullList_[i].m->cullIdx = i;
+    cullList_.pop_back();
+    m.cullIdx = UINT32_MAX;
+  }
   std::vector<std::pair<float, const Mesh*>> blendQueue_;  ///< JD Vulkan push: this frame's blend meshes
   UniqueDescriptorPool postPool_;                          ///< JD Vulkan push: bloom sets
   VkDescriptorSet postSets_[3]{};                          ///< glow, blur A, blur B
@@ -1707,6 +1765,8 @@ class cVulkanRenderer final : public IRenderer {
     uint64_t published = 0;  // [C53-2]
     double gpuMs = 0, gpuMaxMs = 0;
     uint64_t evictions = 0, remeshes = 0, cullTested = 0, cullFrustum = 0;  ///< Phase 4.0 (LL_STREAM_COUNTERS)
+    double cullMs = 0, sortMs = 0, opaqueMs = 0, blendMs = 0;  ///< Phase 4: chunk-pass CPU split (mega path)
+    uint64_t blendDraws = 0;
     uint64_t pulledQuads = 0, fallbackQuads = 0, culledQuads = 0;  ///< Mega-Pipeline Phase 2/3 (quads drawn / culled per log window)
     uint64_t apiCalls = 0;   ///< mega-draw V2: chunk draw API calls (vkCmdDrawIndexed / vkCmdDrawIndexedIndirect)
     double chunkCpuMs = 0;
