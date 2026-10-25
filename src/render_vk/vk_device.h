@@ -35,6 +35,7 @@ class cVulkanDevice {
   float maxAnisotropy() const { return anisotropy_; }
   bool multiDrawIndirect() const { return multiDrawIndirect_; }            // mega-draw V1
   bool drawIndirectFirstInstance() const { return drawIndirectFirstInstance_; }  // mega-draw V1
+  bool storageArrayDynamicIndexing() const { return storageArrayDynamicIndexing_; }  // Mega-Pipeline Phase 2
 
   /// Index of a memory type allowed by `typeBits` with all of `required` (and, if possible, all of
   /// `preferred` too). UINT32_MAX if none.
@@ -65,6 +66,7 @@ class cVulkanDevice {
   float anisotropy_ = 1.f;  // [C52-5]
   bool multiDrawIndirect_ = false;          // mega-draw V1
   bool drawIndirectFirstInstance_ = false;  // mega-draw V1
+  bool storageArrayDynamicIndexing_ = false;  // Mega-Pipeline Phase 2
 };
 
 /// Instance-level version string "1.4.309" from a packed VK_MAKE_API_VERSION value.

@@ -55,7 +55,8 @@ cVertexArena::cVertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blo
 
 bool cVertexArena::addBlock(VkDeviceSize size) {
   constexpr auto kHost = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-  const VkBufferUsageFlags usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  const VkBufferUsageFlags usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;  // Mega-Pipeline Phase 2: vertex pulling reads blocks
   if (count_.load() >= kMaxBlocks) return false;  // [C53-2]
   std::optional<Buffer> buf;
   // 0.0.1.52 [A52-4] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): ReBAR blocks count against the device budget too.

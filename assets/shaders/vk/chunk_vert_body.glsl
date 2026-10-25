@@ -34,10 +34,39 @@ layout(location = 11) flat out vec4 vTraceP0; layout(location = 12) flat out vec
 #else
 layout(push_constant) uniform PulsePush { vec3 uOffset; float uPass; vec4 uPulseP0; vec4 uPulseP1; vec4 uTraceP0; vec4 uTraceP1; };
 #endif
+#if defined(LITHO_PULL)
+// Mega-Pipeline Phase 2 (Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana): vertex pulling.
+// No vertex attributes: quad gl_VertexIndex >> 2, corner gl_VertexIndex & 3, read from the arena block (binding 6,
+// picked by the push constant) as 64-bit packed quads; decoded into the same values the Packed12 attributes carry
+// (render_vk/packed_quad64.h is the CPU mirror and the bit-exact check).
+layout(std430, set = 0, binding = 6) readonly buffer ArenaQuads { uvec2 q[]; } uArena[64];
+layout(push_constant) uniform PullPush { uint uBlock; };
+uvec2 aPosXY; uvec4 aInfo; uvec2 aShade; uint aPosZ; uint aLayerHi;
+int pullSign(uint c) { return c == 1u ? 1 : (c == 2u ? -1 : 0); }
+void pullDecode() {
+  const uint qi = uint(gl_VertexIndex) >> 2u, k = uint(gl_VertexIndex) & 3u;
+  const uvec2 q = uArena[uBlock].q[qi];
+  const uvec2 e = uArena[uBlock].q[qi - (q.y >> 17u)];
+  uvec3 p = uvec3(q.x & 63u, (q.x >> 6u) & 63u, (q.x >> 12u) & 63u);
+  const uint W = (q.x >> 18u) & 63u, H = (q.x >> 24u) & 63u, face = (q.x >> 30u) | ((q.y & 1u) << 2u);
+  const uint ca = (q.y >> (1u + 2u * k)) & 1u, cb = (q.y >> (2u + 2u * k)) & 1u, ao = (q.y >> (9u + 2u * k)) & 3u;
+  const uint n = face >> 1u, a = (n + 1u) % 3u, b = (n + 2u) % 3u;
+  p[a] += ca * W; p[b] += cb * H;
+  const uint m = e.y >> 16u;
+  const int du = (pullSign(m & 3u) * int(ca * W) + pullSign((m >> 2u) & 3u) * int(cb * H)) * 16;
+  const int dv = (pullSign((m >> 4u) & 3u) * int(ca * W) + pullSign((m >> 6u) & 3u) * int(cb * H)) * 16;
+  aPosXY = p.xy * 16u; aPosZ = p.z * 16u;
+  aInfo = uvec4(uint(int(e.y & 255u) + du) & 255u, uint(int((e.y >> 8u) & 255u) + dv) & 255u,
+                face | (ao << 3u) | (((e.y >> 24u) & 7u) << 5u), e.x & 255u);
+  aLayerHi = (e.x >> 8u) & 255u;
+  aShade = uvec2((e.x >> 16u) & 255u, e.x >> 24u);
+}
+#else
 layout(location = 0) in uvec2 aPosXY;  // 1/16 block units, local to the sub-chunk
 layout(location = 1) in uvec4 aInfo;   // u, v (1/16), face | ao<<3 | rot<<5, layer (bits 0..7)
 layout(location = 2) in uvec2 aShade;  // value, mode
-#ifdef LITHO_PACKED12
+#if defined(LITHO_PULL)
+#elif defined(LITHO_PACKED12)
 // 0.0.1.59 [P59-1] Packed12 (stride 12; Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization
 // Operand, the Bitmaster and the Bitmasker; layout correction and build by Cortana): z[0..8] | layer[8..14] << 9.
 layout(location = 3) in uint aPosZL;
@@ -45,6 +74,7 @@ layout(location = 3) in uint aPosZL;
 layout(location = 3) in uint aPosZ;
 layout(location = 4) in uint aLayerHi;  // Cortana 2026-10-15 1628: CA-03 high layer byte (PackedVertex byte 15)
 #endif
+#endif  // LITHO_PULL
 layout(location = 0) out vec3 vWorld; layout(location = 1) out vec3 vNormal;
 layout(location = 2) out float vAO; layout(location = 3) out vec2 vUV;
 layout(location = 4) flat out int vLayer; layout(location = 5) flat out int vVal;
@@ -62,7 +92,9 @@ void main() {
 #elif defined(LITHO_MEGA)
   vDrawOP = aDrawOP; vPulseP0 = aPulseP0; vPulseP1 = aPulseP1; vTraceP0 = aTraceP0; vTraceP1 = aTraceP1;
 #endif
-#ifdef LITHO_PACKED12
+#if defined(LITHO_PULL)
+  pullDecode();
+#elif defined(LITHO_PACKED12)
   uint aPosZ = aPosZL & 511u;
   uint aLayerHi = aPosZL >> 9u;
 #endif

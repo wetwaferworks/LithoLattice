@@ -17,6 +17,7 @@
 #include "spv/chunk_ssbovary_vert.h"
 #include "spv/chunk12_ssbo_vert.h"
 #include "spv/chunk12_ssbovary_vert.h"
+#include "spv/chunk12_pull_vert.h"  // Mega-Pipeline Phase 2
 #include "spv/hud_frag.h"
 #include "spv/hud_vert.h"
 #include "spv/line_frag.h"
@@ -317,7 +318,8 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
       {kBindingPalette, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
       {kBindingFont, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
       {kBindingSpriteAtlas, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-      {kBindingMegaDraws, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, both, nullptr}};  // mega-draw V2b (unused unless LL_VK_MEGA=3)
+      {kBindingMegaDraws, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, both, nullptr},  // mega-draw V2b (unused unless LL_VK_MEGA=3)
+      {kBindingArenaQuads, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxPullBlocks, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};  // Mega-Pipeline Phase 2
   auto li = make<VkDescriptorSetLayoutCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
   li.bindingCount = uint32_t(std::size(bindings));
   li.pBindings = bindings;
@@ -409,6 +411,16 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
     s.alphaBlend = true;
     s.glow = 2;
     (vary ? p->chunkBlendSsboVary_ : p->chunkBlendSsbo_) = buildPipeline(dev, p->renderPass(), layout, s);
+  }
+  // Mega-Pipeline Phase 2 (Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana): vertex pulling.
+  // No vertex input; the shader reads 64-bit packed quads from the arena block (binding 6). Packed12 only.
+  if (packed12) {
+    PipelineDesc s = chunk;
+    s.vertexCode = kSpvChunk12PullVert;
+    s.fragmentCode = kSpvChunkSsboFrag;
+    s.stride = 0;
+    s.attributes.clear();
+    p->chunkPull_ = buildPipeline(dev, p->renderPass(), layout, s);
   }
   // JD Vulkan push: procedural sparks (no vertex buffer), additive into frame and glow.
   {

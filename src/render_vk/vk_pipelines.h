@@ -12,7 +12,8 @@ namespace litholattice::vk {
 
 /// Descriptor bindings of set 0 (see assets/shaders/vk/*).
 enum Binding : uint32_t { kBindingFrame = 0, kBindingTextureArray = 1, kBindingPalette = 2, kBindingFont = 3,
-                          kBindingSpriteAtlas = 4, kBindingMegaDraws = 5 /* mega-draw V2b */ };
+                          kBindingSpriteAtlas = 4, kBindingMegaDraws = 5 /* mega-draw V2b */, kBindingArenaQuads = 6 /* Mega-Pipeline Phase 2 */ };
+constexpr uint32_t kMaxPullBlocks = 64;  ///< Mega-Pipeline Phase 2: arena blocks reachable by vertex pulling (binding 6 array)
 
 class RenderPipelines {
  public:
@@ -50,6 +51,7 @@ class RenderPipelines {
   VkPipelineLayout postLayout() const { return postLayout_.get(); }
   VkPipeline chunkMega() const { return chunkMega_.get(); }            ///< mega-draw V2 (may be null)
   VkPipeline chunkBlendMega() const { return chunkBlendMega_.get(); }  ///< mega-draw V2 (may be null)
+  VkPipeline chunkPull() const { return chunkPull_.get(); }  ///< Mega-Pipeline Phase 2 (vertex pulling)
   VkPipeline chunkSsbo(bool vary) const { return (vary ? chunkSsboVary_ : chunkSsbo_).get(); }            ///< mega-draw V2b
   VkPipeline chunkBlendSsbo(bool vary) const { return (vary ? chunkBlendSsboVary_ : chunkBlendSsbo_).get(); }  ///< mega-draw V2b
   VkPipeline chunkBlend() const { return chunkBlend_.get(); }   ///< sorted alpha-blend bulb pass
@@ -70,6 +72,7 @@ class RenderPipelines {
   UniquePipeline chunkBlend_, particles_, blur_, composite_;
   UniquePipeline chunkMega_, chunkBlendMega_;  // mega-draw V2
   UniquePipeline chunkSsbo_, chunkBlendSsbo_, chunkSsboVary_, chunkBlendSsboVary_;  // mega-draw V2b
+  UniquePipeline chunkPull_;  // Mega-Pipeline Phase 2
 };
 
 }  // namespace litholattice::vk

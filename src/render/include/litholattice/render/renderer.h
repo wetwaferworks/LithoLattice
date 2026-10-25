@@ -249,6 +249,8 @@ struct PreparedChunkMesh {
   uint32_t block = 0;
   uint64_t offset = 0, size = 0;
   float pulseP0[4]{}, pulseP1[4]{}, traceP0[4]{}, traceP1[4]{};
+  uint32_t pullFirst = 0;   ///< Mega-Pipeline Phase 2 (Vulkan): first packed quad (8-byte index in the block)
+  uint32_t pullBucket[7]{};  ///< Mega-Pipeline Phase 2/3 (Vulkan): packed quads by face, [b[f], b[f+1]); b[6] = count
   uint64_t epoch = 0;  ///< F56-2 (Cortana 2026-10-17): renderer mesh epoch at prepare time; stale -> freed on publish
 };
 

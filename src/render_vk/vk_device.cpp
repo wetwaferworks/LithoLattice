@@ -219,6 +219,10 @@ bool cVulkanDevice::createDevice(std::string* error) {
   want.drawIndirectFirstInstance = have.drawIndirectFirstInstance;
   multiDrawIndirect_ = have.multiDrawIndirect == VK_TRUE;
   drawIndirectFirstInstance_ = have.drawIndirectFirstInstance == VK_TRUE;
+  // Mega-Pipeline Phase 2: the vertex-pulling shader indexes the arena-block array by a push constant.
+  want.shaderStorageBufferArrayDynamicIndexing = have.shaderStorageBufferArrayDynamicIndexing;
+  storageArrayDynamicIndexing_ = have.shaderStorageBufferArrayDynamicIndexing == VK_TRUE &&
+                                 properties_.limits.maxPerStageDescriptorStorageBuffers >= 72;
   ci.pEnabledFeatures = &want;
   anisotropy_ = have.samplerAnisotropy ? std::max(1.f, properties_.limits.maxSamplerAnisotropy) : 1.f;
   const VkResult r = vkCreateDevice(physical_, &ci, nullptr, &device_);

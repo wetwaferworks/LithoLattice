@@ -50,6 +50,8 @@ class cVertexArena {
     uint8_t* m = blocks_[s.block].buffer.mapped();
     return m ? m + s.offset : nullptr;
   }
+  /// Mega-Pipeline Phase 2: the buffer of block i (i < blockCount()).
+  VkBuffer blockBuffer(uint32_t i) const { return blocks_[i].buffer.handle(); }
   size_t blockCount() const { return count_.load(std::memory_order_relaxed); }
   /// 0.0.1.51: bytes in device-local blocks / in host-visible spill blocks.
   VkDeviceSize deviceBytes() const { return deviceBytes_.load(std::memory_order_relaxed); }
