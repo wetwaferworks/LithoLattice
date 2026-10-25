@@ -164,6 +164,8 @@ class cSlot : public cWidget {
   const std::string& icon() const { return icon_; }
   cSlot& setCaption(std::string c) { caption_ = std::move(c); return *this; }
   cSlot& setSelected(bool s) { selected_ = s; return *this; }
+  /// 2026-10-25 (JD): scales the selection frame and the caption text with the slot (1 = as before).
+  cSlot& setScale(float k) { scale_ = k; return *this; }
   bool selected() const { return selected_; }
   /// Any per-slot payload (block id, item index); not interpreted by the UI.
   cSlot& setData(int d) { data_ = d; return *this; }
@@ -181,6 +183,7 @@ class cSlot : public cWidget {
   Color tint_;
   bool selected_ = false;
   int data_ = 0;
+  float scale_ = 1.f;
 };
 
 /// Thin separator line (horizontal or vertical) drawn in the style's accent color.

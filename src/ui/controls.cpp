@@ -340,10 +340,10 @@ bool cSlot::onKey(const UiEvent& e) {
 void cSlot::paint(Painter& p) const {
   const Style& s = style();
   const float pad = std::max(2.f, size_.x * 0.15f);
-  if (selected_) p.fill(rect().inset(Edges::all(-3)), s.accent);
+  if (selected_) p.fill(rect().inset(Edges::all(-3 * scale_)), s.accent);
   p.fill(rect(), hovered() ? s.hover : s.background);
   if (!icon_.empty()) p.image(rect().inset(Edges::all(pad)), icon_, tint_);
-  if (!caption_.empty()) p.text({rect().x + 2, rect().y + 1}, caption_, s.text, s.textScale);
+  if (!caption_.empty()) p.text({rect().x + 2 * scale_, rect().y + scale_}, caption_, s.text, s.textScale * scale_);
 }
 
 cDivider::cDivider(Orientation o, float thickness) : cWidget("divider"), orientation_(o), thickness_(std::max(1.f, thickness)) {}
