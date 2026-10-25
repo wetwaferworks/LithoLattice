@@ -237,6 +237,11 @@ static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_rela
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
+// Cortana 2026-10-25 (pass sw2, Archie): LL_SW_PROF extras - rows visited by the span loop
+// (Hi-Z rejected / total), SIMD-span vs scalar-span pixels, and per-thread strip time spread.
+static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
+static double g_bandMs[64] = {};
+static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
@@ -1092,12 +1097,13 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     const float iw0 = S.iw0, iw1 = S.iw1, iw2 = S.iw2;
     const bool simdSpan = S.simdSpan;
     swsimd::ShadeSpanBasic& span = S.span;
+    if (g_swProfOn) ++g_rowsTotal;
     if (hiz && (y == S.y0 || y % kHizTile == 0)) {
       bool occluded = true;
       for (int tx = S.htx0; tx <= S.htx1 && occluded; ++tx) occluded = hizTileMax(tx, y / kHizTile) + S.hizMargin < S.triMinZ;
       if (occluded) {
         const int last = std::min(S.y1, y | (kHizTile - 1));
-        if (g_swProfOn) g_hizRows += uint64_t(last - y + 1);
+        if (g_swProfOn) { g_hizRows += uint64_t(last - y + 1); g_rowsTotal += uint64_t(last - y); }  // pass sw2: rows skipped past count in the total
         S.skipTo = last + 1;
         continue;
       }
@@ -1247,7 +1253,10 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       uint8_t* d = hizDirty_.data() + size_t(y / kHizTile) * hizTilesX_;
       for (int tx = wxLo / kHizTile; tx <= wxHi / kHizTile; ++tx) d[tx] = 1;
     }
-    if (g_swProfOn) { if (x1 >= x0) g_pxScan += uint64_t(x1 - x0 + 1); g_pxCov += lc; g_pxShade += ls; }
+    if (g_swProfOn) {
+      if (x1 >= x0) { g_pxScan += uint64_t(x1 - x0 + 1); (simdSpan ? g_pxSimd : g_pxScalar) += uint64_t(x1 - x0 + 1); }
+      g_pxCov += lc; g_pxShade += ls;
+    }
    }
   }
   if (g_swProfOn) g_tris += uint64_t(nLive);
@@ -2304,7 +2313,14 @@ struct SwProf {
   void end() {
     if (!on || ++frames < 60) return;
     std::fprintf(stderr, "swprof tris=%llu scan=%llu cov=%llu shade=%llu /frame\n", (unsigned long long)(g_tris.exchange(0)/frames), (unsigned long long)(g_pxScan.exchange(0)/frames), (unsigned long long)(g_pxCov.exchange(0)/frames), (unsigned long long)(g_pxShade.exchange(0)/frames));
-    std::fprintf(stderr, "swprof hiz_rows_skipped=%llu /frame\n", (unsigned long long)(g_hizRows.exchange(0)/frames));  // Cortana 2026-10-15 1715
+    {  // Cortana 2026-10-25 (pass sw2): Hi-Z rejected rows of total rows visited
+      const unsigned long long hz = g_hizRows.exchange(0) / frames, rt = g_rowsTotal.exchange(0) / frames;
+      std::fprintf(stderr, "swprof hiz_rows_skipped=%llu of %llu rows (%.1f%%) /frame\n", hz, rt, rt ? 100.0 * double(hz) / double(rt) : 0.0);
+      const unsigned long long ps = g_pxSimd.exchange(0) / frames, pc = g_pxScalar.exchange(0) / frames;
+      std::fprintf(stderr, "swprof span px simd(avx2/sse)=%llu scalar=%llu (simd %.1f%%) /frame\n", ps, pc, ps + pc ? 100.0 * double(ps) / double(ps + pc) : 0.0);
+      std::fprintf(stderr, "swprof strip thread ms/frame min=%.2f max=%.2f\n", g_thrMinAcc / frames, g_thrMaxAcc / frames);
+      g_thrMinAcc = g_thrMaxAcc = 0;
+    }
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
@@ -2475,7 +2491,9 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   for (size_t di = 0; di < drawOrder_.size(); ++di)
     meshVertOff_[di + 1] = meshVertOff_[di] + drawOrder_[di].second->storedVerts();
   if (frameVerts_.size() < meshVertOff_.back()) frameVerts_.resize(meshVertOff_.back());
-  constexpr int kStripHF = 32;
+  // Cortana 2026-10-25 (pass sw2, Archie): 16-row strips (were 32), pulled dynamically from
+  // the atomic strip counter below; must equal kStripH. Hi-Z tiles (8 rows) never straddle.
+  constexpr int kStripHF = 16;
   const int nStripsF = int((fb_.height + kStripHF - 1) / kStripHF);
   if (meshBins_.size() < drawOrder_.size()) { meshBins_.resize(drawOrder_.size()); meshBinOff_.resize(drawOrder_.size()); }
   if (binFill_.size() < 64) binFill_.resize(64);
@@ -2604,10 +2622,15 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // Cortana 2026-10-15 1116: 32-row strips (power of two; colour+depth of a
   // 1280-wide strip is ~320 KB, inside one i5-12450H core's L2) handed out
   // dynamically, so the dense horizon strips don't leave threads idle.
-  constexpr int kStripH = 32;
+  constexpr int kStripH = 16;  // pass sw2: = kStripHF (bins are per strip)
   const int nStrips = int((fb_.height + kStripH - 1) / kStripH);
   std::atomic<int> nextStrip{0};
-  const auto drawBand = [&](unsigned) {
+  const auto drawBand = [&](unsigned bandIdx) {
+   const auto tBand0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+   struct BandTimer {  // pass sw2: per-thread strip time (LL_SW_PROF)
+     unsigned i; std::chrono::steady_clock::time_point t0;
+     ~BandTimer() { if (g_swProfOn && i < 64) g_bandMs[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
+   } bandTimer{bandIdx, tBand0};
    for (int strip; (strip = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nStrips;) {
    tlBandY0 = strip * kStripH;
    tlBandY1 = std::min(int(fb_.height), tlBandY0 + kStripH);
@@ -2664,7 +2687,14 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    groundFx_ = GroundFx{};
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
+  if (g_swProfOn) for (double& b : g_bandMs) b = 0;
   bandPool.run(drawBand);
+  if (g_swProfOn) {
+    const unsigned nb = std::min(64u, std::max(1u, bandPool.bands()));
+    double mn = 1e30, mx = 0;
+    for (unsigned b = 0; b < nb; ++b) { mn = std::min(mn, g_bandMs[b]); mx = std::max(mx, g_bandMs[b]); }
+    g_thrMinAcc += mn; g_thrMaxAcc += mx;
+  }
   g_swProf.mark(2);
   stats_.drawn += uint32_t(drawOrder_.size());
   groundFx_ = GroundFx{};
