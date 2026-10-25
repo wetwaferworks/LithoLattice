@@ -296,6 +296,9 @@ class IRenderer {
   /// drain (Stage 2 ring): the game's upload phase then takes no
   /// RendererGuard — nothing waits in line behind the in-flight render.
   virtual bool meshUploadsQueued() const { return false; }
+  /// 2026-10-25 stutter pass: mesh pool fill in [0, 1] (live mesh bytes / device-local budget), or -1
+  /// when the backend has no bounded pool. The game stops admitting far columns above 0.9.
+  virtual float meshPoolFill() const { return -1.f; }
   /// 0.0.1.53 [C53-2] (Proposed by JD, Built by Cortana): ANY thread. Writes a non-empty mesh straight into
   /// mapped GPU memory (Vulkan ReBAR / host arena) and fills `out`. false = not supported
   /// here (no mapped memory, opted out, out of memory): use uploadChunkMesh on the main thread.

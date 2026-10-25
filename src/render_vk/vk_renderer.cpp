@@ -212,6 +212,10 @@ class cVulkanRenderer final : public IRenderer {
   void uploadEntityMesh(const std::vector<PackedVertex>& verts) override {
     entityVerts_.assign(verts.begin(), verts.begin() + std::ptrdiff_t(verts.size() / 3 * 3));
   }
+  float meshPoolFill() const override {  // 2026-10-25 stutter pass
+    if (!arena_ || arena_->deviceBudget() == 0) return -1.f;
+    return float(double(arena_->usedBytes()) / double(arena_->deviceBudget()));
+  }
   void uploadChunkMesh(const ChunkMesh& m) override {
     const int64_t key = meshKey(m.cx, m.sy, m.cz);
     const auto it = meshes_.find(key);

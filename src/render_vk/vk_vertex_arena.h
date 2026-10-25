@@ -64,6 +64,8 @@ class cVertexArena {
   /// 0.0.1.59 [P59-1]: bytes in live slices (mesh memory incl. alignment padding), and the alignment.
   VkDeviceSize usedBytes() const { return usedBytes_.load(std::memory_order_relaxed); }
   VkDeviceSize alignment() const { return alignment_; }
+  /// 2026-10-25 stutter pass: the device-local budget (0 = none).
+  VkDeviceSize deviceBudget() const { return deviceBudget_; }
 
  private:
   struct Block {
