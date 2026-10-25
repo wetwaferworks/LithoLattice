@@ -227,8 +227,8 @@ static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
 // default (e.g. LL_SW_P2=0 = the pre-Pass-2 renderer). LL_SW_AB=<frame> renders that frame
 // twice, Pass 2 off then on, and logs the pixel diff (A/B identity proof on real frames).
-enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
-static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo;  // Cortana 2026-10-25 box: +EmitMemo (bit-identical, LL_SW_AB 0 px)
+enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u, kP2CentreCull = 128u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
+static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo | kP2CentreCull;  // Cortana 2026-10-25 box: +EmitMemo, +CentreCull (bit-identical, LL_SW_AB 0 px)
 //  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
 static std::atomic<unsigned> g_p2{[] {
   const char* e = std::getenv("LL_SW_P2");
@@ -238,7 +238,7 @@ static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_rela
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
-static std::atomic<uint64_t> g_emitMemoHits{0};  // Cortana 2026-10-25 box: kP2EmitMemo vertex reuses
+static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0};  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
 // Cortana 2026-10-25 (pass sw2, Archie): LL_SW_PROF extras - rows visited by the span loop
 // (Hi-Z rejected / total), SIMD-span vs scalar-span pixels, and per-thread strip time spread.
 static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
@@ -999,6 +999,14 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     y0 = std::max(y0, tlBandY0);  // RND-H3 band
     y1 = std::min(y1, tlBandY1 - 1);
     if (y0 > y1) continue;
+    if (swP2(kP2CentreCull)) {  // Cortana 2026-10-25 box (Archie step 3): no pixel centre in the bbox -> no sample can pass
+      constexpr float kEps = 1e-3f;  // conservative vs edge-function rounding at the bbox edge
+      const int cx0 = std::max(x0, int(std::ceil(std::min({v0[0], v1[0], v2[0]}) - 0.5f - kEps)));
+      const int cx1 = std::min(x1, int(std::floor(std::max({v0[0], v1[0], v2[0]}) - 0.5f + kEps)));
+      const int cy0 = std::max(y0, int(std::ceil(std::min({v0[1], v1[1], v2[1]}) - 0.5f - kEps)));
+      const int cy1 = std::min(y1, int(std::floor(std::max({v0[1], v1[1], v2[1]}) - 0.5f + kEps)));
+      if (cx0 > cx1 || cy0 > cy1) { if (g_swProfOn) g_centreCulled.fetch_add(1, std::memory_order_relaxed); continue; }
+    }
     const float area = edgeFn(v0, v1, v2[0], v2[1]);
     if (std::abs(area) < 1e-9f) continue;
     if (!finReady) {
@@ -2365,7 +2373,7 @@ struct SwProf {
       std::fprintf(stderr, "swprof strip thread ms/frame min=%.2f max=%.2f\n", g_thrMinAcc / frames, g_thrMaxAcc / frames);
       g_thrMinAcc = g_thrMaxAcc = 0;
     }
-    std::fprintf(stderr, "swprof emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
+    std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
