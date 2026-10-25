@@ -38,7 +38,9 @@ class cVertexArena {
   Kind kind() const { return kind_.load(std::memory_order_relaxed); }
 
   /// Reserves `bytes` (a new block is added when none has room). nullopt if out of memory.
-  std::optional<Slice> allocate(VkDeviceSize bytes);
+  /// 2026-10-25 fix pass (review P3): `maxBlock` limits the search and growth to blocks [0, maxBlock), so the
+  /// pulled path (binding 6 holds kMaxPullBlocks blocks) never lands past it and has to free and redo.
+  std::optional<Slice> allocate(VkDeviceSize bytes, uint32_t maxBlock = UINT32_MAX);
   /// Returns a slice; the caller guarantees the GPU no longer reads it.
   void free(const Slice& s);
   /// Drops every block (the caller guarantees the GPU is idle).
@@ -52,7 +54,10 @@ class cVertexArena {
   }
   /// Mega-Pipeline Phase 2: the buffer of block i (i < blockCount()).
   VkBuffer blockBuffer(uint32_t i) const { return blocks_[i].buffer.handle(); }
-  size_t blockCount() const { return count_.load(std::memory_order_relaxed); }
+  /// Acquire (review R5): pairs with the release in addBlock, so a reader never sees a count without its block.
+  size_t blockCount() const { return count_.load(std::memory_order_acquire); }
+  /// Nominal block size (review R3/R6). A single slice larger than this gets a block of its own size.
+  VkDeviceSize blockSize() const { return blockSize_; }
   /// 0.0.1.51: bytes in device-local blocks / in host-visible spill blocks.
   VkDeviceSize deviceBytes() const { return deviceBytes_.load(std::memory_order_relaxed); }
   VkDeviceSize hostBytes() const { return hostBytes_.load(std::memory_order_relaxed); }

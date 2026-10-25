@@ -86,15 +86,15 @@ bool cVertexArena::addBlock(VkDeviceSize size) {
   b.buffer = std::move(*buf);
   b.freeRanges.emplace(0, size);
   blocks_[count_.load()] = std::move(b);  // [C53-2] then publish the count
-  count_.fetch_add(1);
+  count_.fetch_add(1, std::memory_order_release);  // review R5: pairs with the acquire in blockCount()
   return true;
 }
 
-std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes) {
+std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes, uint32_t maxBlock) {
   const VkDeviceSize size = alignUp(std::max<VkDeviceSize>(bytes, 1), alignment_);
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   for (int attempt = 0; attempt < 2; ++attempt) {
-    for (uint32_t i = 0, n = count_.load(); i < n; ++i) {
+    for (uint32_t i = 0, n = std::min(count_.load(), maxBlock); i < n; ++i) {
       auto& ranges = blocks_[i].freeRanges;
       for (auto it = ranges.begin(); it != ranges.end(); ++it) {
         if (it->second < size) continue;
@@ -106,7 +106,7 @@ std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes) {
         return s;
       }
     }
-    if (attempt == 0 && !addBlock(std::max(blockSize_, size))) return std::nullopt;
+    if (attempt == 0 && (count_.load() >= maxBlock || !addBlock(std::max(blockSize_, size)))) return std::nullopt;  // P3
   }
   return std::nullopt;
 }
