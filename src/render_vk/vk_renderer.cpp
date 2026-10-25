@@ -1120,9 +1120,27 @@ class cVulkanRenderer final : public IRenderer {
         bound = megaBuf_[i];
         ++perf_.binds;
       }
-      for (uint32_t k = i; k < j; ++k) {
-        vkCmdDrawIndexed(cmd, ic[k].indexCount, 1, 0, ic[k].vertexOffset, ic[k].firstInstance);
-        ++perf_.apiCalls;
+      // Mega-draw V3 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA=2 issues the run as one
+      // vkCmdDrawIndexedIndirect (multiDrawIndirect) or one single-command indirect call per draw without it.
+      // Needs drawIndirectFirstInstance (the record index rides in firstInstance); otherwise V2 direct draws.
+      if (megaMode_ == 2 && dev_->drawIndirectFirstInstance()) {
+        constexpr uint32_t kStride = sizeof(VkDrawIndexedIndirectCommand);
+        if (dev_->multiDrawIndirect()) {
+          for (uint32_t k = i; k < j; k += 65535u) {
+            vkCmdDrawIndexedIndirect(cmd, f.megaCmds->handle(), VkDeviceSize(k) * kStride, std::min(j - k, 65535u), kStride);
+            ++perf_.apiCalls;
+          }
+        } else {
+          for (uint32_t k = i; k < j; ++k) {
+            vkCmdDrawIndexedIndirect(cmd, f.megaCmds->handle(), VkDeviceSize(k) * kStride, 1, kStride);
+            ++perf_.apiCalls;
+          }
+        }
+      } else {
+        for (uint32_t k = i; k < j; ++k) {
+          vkCmdDrawIndexed(cmd, ic[k].indexCount, 1, 0, ic[k].vertexOffset, ic[k].firstInstance);
+          ++perf_.apiCalls;
+        }
       }
       i = j;
     }
