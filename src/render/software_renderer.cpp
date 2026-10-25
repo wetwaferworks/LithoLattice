@@ -261,10 +261,9 @@ constexpr unsigned kSwMaxRenderThreads = 64;
 // and main threads), clamped to 2..16. i5-12450H (12 logical) gives 8.
 // An explicit request (CLI / settings renderThreads != 0) still overrides.
 unsigned swAutoRenderThreads(unsigned logical) {
-  const unsigned avail = logical > 2 ? logical - 2 : 1;
-  unsigned b = 1;
-  while (b * 2 <= avail) b *= 2;
-  return std::min(16u, std::max(2u, b));
+  // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
+  // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
+  return std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
 }
 unsigned swResolveThreads(unsigned req) {
   const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -2782,13 +2781,28 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   constexpr int kStripH = 16;  // pass sw2: = kStripHF (bins are per strip)
   const int nStrips = int((fb_.height + kStripH - 1) / kStripH);
   std::atomic<int> nextStrip{0};
+  // 2026-10-25 (Archie step 1): strips are handed out heaviest-first (binned quad count,
+  // longest-processing-time order), so the dense horizon strips start early and no thread is
+  // left finishing one alone. Strips own disjoint rows, so pixels do not depend on the order.
+  stripOrder_.resize(size_t(nStrips));
+  for (int s2 = 0; s2 < nStrips; ++s2) stripOrder_[size_t(s2)] = s2;
+  if (perPixel_) {
+    stripCost_.assign(size_t(nStrips), 0u);
+    for (size_t di = 0; di < drawOrder_.size(); ++di) {
+      const auto& off = meshBinOff_[di];
+      if (off.size() < size_t(nStrips) + 1) continue;
+      for (int s2 = 0; s2 < nStrips; ++s2) stripCost_[size_t(s2)] += off[size_t(s2) + 1] - off[size_t(s2)];
+    }
+    std::stable_sort(stripOrder_.begin(), stripOrder_.end(), [&](int a, int b) { return stripCost_[size_t(a)] > stripCost_[size_t(b)]; });
+  }
   const auto drawBand = [&](unsigned bandIdx) {
    const auto tBand0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
    struct BandTimer {  // pass sw2: per-thread strip time (LL_SW_PROF)
      unsigned i; std::chrono::steady_clock::time_point t0;
      ~BandTimer() { if (g_swProfOn && i < 64) g_bandMs[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
    } bandTimer{bandIdx, tBand0};
-   for (int strip; (strip = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nStrips;) {
+   for (int stripK; (stripK = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nStrips;) {
+   const int strip = stripOrder_[size_t(stripK)];
    tlBandY0 = strip * kStripH;
    tlBandY1 = std::min(int(fb_.height), tlBandY0 + kStripH);
    if (p2par) {  // Pass 2 step 2: this strip's share of the frame clear
