@@ -33,6 +33,8 @@ class cVulkanDevice {
   const VkPhysicalDeviceProperties& properties() const { return properties_; }
   /// 0.0.1.52 [C52-5]: anisotropic filtering cap enabled at device creation (1 = unsupported / off).
   float maxAnisotropy() const { return anisotropy_; }
+  bool multiDrawIndirect() const { return multiDrawIndirect_; }            // mega-draw V1
+  bool drawIndirectFirstInstance() const { return drawIndirectFirstInstance_; }  // mega-draw V1
 
   /// Index of a memory type allowed by `typeBits` with all of `required` (and, if possible, all of
   /// `preferred` too). UINT32_MAX if none.
@@ -61,6 +63,8 @@ class cVulkanDevice {
   VkPhysicalDeviceProperties properties_{};
   VkPhysicalDeviceMemoryProperties memory_{};
   float anisotropy_ = 1.f;  // [C52-5]
+  bool multiDrawIndirect_ = false;          // mega-draw V1
+  bool drawIndirectFirstInstance_ = false;  // mega-draw V1
 };
 
 /// Instance-level version string "1.4.309" from a packed VK_MAKE_API_VERSION value.

@@ -126,6 +126,8 @@ class cVulkanRenderer final : public IRenderer {
     textures_ = std::make_unique<cVkTextureArray>(*dev_, pool_.get(), [this] { writeDescriptors(); });
     if (!textures_->upload(cTextureReg{})) return fail(error, "initial texture upload");
     logInfo("vulkan: using %s", dev_->description().c_str());
+    logInfo("vulkan: mega-draw mode %d (LL_VK_MEGA; multiDrawIndirect %s, drawIndirectFirstInstance %s)", megaMode_,
+            dev_->multiDrawIndirect() ? "yes" : "no", dev_->drawIndirectFirstInstance() ? "yes" : "no");
     return true;
   }
 
@@ -700,6 +702,15 @@ class cVulkanRenderer final : public IRenderer {
     if (v == "1" || v == "on" || v == "true" || v == "yes") return true;
     logWarn("vulkan: LL_VK_PACKED12='%s' not understood (use 1/0); keeping the default (%s)", e, kPacked12Default ? "on" : "off");
     return kPacked12Default;
+  }();
+  // Mega-draw V1 (Direction JD, design Archie, implementation Cortana): LL_VK_MEGA selects the chunk draw path.
+  // 0 = per-draw push constants (default), 1 = per-draw instance buffer (V2), 2 = indirect draws per arena block (V3).
+  const int megaMode_ = [] {
+    const char* e = std::getenv("LL_VK_MEGA");
+    if (!e || !*e) return 0;
+    const int v = std::atoi(e);
+    if (v < 0 || v > 2) { logWarn("vulkan: LL_VK_MEGA='%s' not understood (use 0/1/2); keeping 0", e); return 0; }
+    return v;
   }();
   const VkDeviceSize vertexStride_ = packed12_ ? sizeof(GpuVertex12) : sizeof(PackedVertex);
   std::atomic<uint64_t> packMisses_{0};

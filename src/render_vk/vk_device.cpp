@@ -214,6 +214,11 @@ bool cVulkanDevice::createDevice(std::string* error) {
   VkPhysicalDeviceFeatures have{}, want{};
   vkGetPhysicalDeviceFeatures(physical_, &have);
   want.samplerAnisotropy = have.samplerAnisotropy;
+  // Mega-draw V1 (Direction JD, design Archie, implementation Cortana): indirect multi-draw features when offered.
+  want.multiDrawIndirect = have.multiDrawIndirect;
+  want.drawIndirectFirstInstance = have.drawIndirectFirstInstance;
+  multiDrawIndirect_ = have.multiDrawIndirect == VK_TRUE;
+  drawIndirectFirstInstance_ = have.drawIndirectFirstInstance == VK_TRUE;
   ci.pEnabledFeatures = &want;
   anisotropy_ = have.samplerAnisotropy ? std::max(1.f, properties_.limits.maxSamplerAnisotropy) : 1.f;
   const VkResult r = vkCreateDevice(physical_, &ci, nullptr, &device_);
