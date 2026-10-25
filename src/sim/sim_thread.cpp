@@ -324,6 +324,7 @@ void cSimThread::flushDirty() {
 
 void cSimThread::castRay(const RayInput& ray) {
   ChunkMap& w = chunks_;
+  rayEye_[0] = ray.ox; rayEye_[1] = ray.oy; rayEye_[2] = ray.oz;
   hit_ = raycast(w, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, kLookRange, hit_xyz_, prev_xyz_, &blocks_, /*modelPick=*/true);
   const float dx = hit_xyz_[0] + 0.5f - ray.ox, dy = hit_xyz_[1] + 0.5f - ray.oy, dz = hit_xyz_[2] + 0.5f - ray.oz;
   hitDist_ = hit_ ? std::sqrt(dx * dx + dy * dy + dz * dz) : 0.f;
@@ -426,6 +427,7 @@ bool cSimThread::applyPlace(EditCmd& e) {
   if (w.get(x, y, z) != kAir) return false;
   e.block = sim_->placeVariant(w, e.block, hit_xyz_[0] - x, hit_xyz_[1] - y, hit_xyz_[2] - z);  // e.g. a side-lying Via
   if (!sim_->canPlace(w, x, y, z, e.block)) return false;  // game placement rules
+  if (reg.has(e.block, kSolid) && placeOverlapsPlayer(x, y, z, rayEye_[0], rayEye_[1], rayEye_[2])) return false;  // 2026-10-25 (JD): no shove
   int face = 0;
   if (reg.has(e.block, kAttachable)) {  // mounts on the clicked face of the hit block
     face = attachFaceFor(hit_xyz_[0] - x, hit_xyz_[1] - y, hit_xyz_[2] - z);

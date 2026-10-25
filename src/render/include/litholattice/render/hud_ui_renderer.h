@@ -40,5 +40,7 @@ class cHudUiRenderer final : public ui::IUiRenderer {
 
 /// Box-filters `src` down to `size` x `size` (alpha-weighted colour), for HUD icons.
 Image downsampleIcon(const Image& src, int size = 16);
+/// Drops the fitted-size icon copies (call when the icon images are reloaded).
+void invalidateHudIconCache();
 
 }  // namespace litholattice

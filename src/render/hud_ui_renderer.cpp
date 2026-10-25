@@ -39,8 +39,51 @@ void cHudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, 
   layer_.draws.push_back(std::move(d));
 }
 
+// 2026-10-25 (JD, crisp hotbar icons): a source icon larger than its on-screen rect is
+// box-filtered once to the rect's exact whole-pixel size (cached), then drawn 1 cell = 1
+// screen pixel, run-length merged per row, with alpha kept (smooth edges, no 50% cut).
+// Never magnifies a high-res source; small sources keep the old pixel-art cell path.
+namespace {
+struct IconFit { const Image* src; int w, h; uint64_t gen; Image img; };
+std::vector<IconFit>& iconFitCache() { static std::vector<IconFit> c; return c; }
+uint64_t g_iconGen = 1;
+const Image& fittedIcon(const Image& src, int w, int h) {
+  auto& c = iconFitCache();
+  for (const IconFit& f : c) if (f.src == &src && f.w == w && f.h == h && f.gen == g_iconGen) return f.img;
+  if (c.size() > 512) c.clear();
+  Image sq = downsampleIcon(src, std::max(w, h));  // icons are square; slots are square
+  c.push_back({&src, w, h, g_iconGen, std::move(sq)});
+  return c.back().img;
+}
+}  // namespace
+void invalidateHudIconCache() { ++g_iconGen; iconFitCache().clear(); }
+
 void cHudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Color tint) {
-  if (const Image* icon = icons_ ? icons_(image) : nullptr; icon && !icon->empty()) {
+  const Image* icon0 = icons_ ? icons_(image) : nullptr;
+  if (icon0 && !icon0->empty()) {
+    const float x0 = snapPx(r.x), y0 = snapPx(r.y);
+    const int pw = int(snapPx(r.x + r.w) - x0), ph = int(snapPx(r.y + r.h) - y0);
+    if (pw > 0 && ph > 0 && icon0->width() >= pw && icon0->height() >= ph) {
+      const Image& fit = (icon0->width() == pw && icon0->height() == ph) ? *icon0 : fittedIcon(*icon0, pw, ph);
+      const int fw = std::min(pw, fit.width()), fh = std::min(ph, fit.height());
+      for (int y = 0; y < fh; ++y)
+        for (int x = 0; x < fw;) {
+          const uint8_t* p = fit.pixel(x, y);
+          if (p[3] < 8) { ++x; continue; }
+          int run = 1;
+          while (x + run < fw) {
+            const uint8_t* q = fit.pixel(x + run, y);
+            if (q[0] != p[0] || q[1] != p[1] || q[2] != p[2] || q[3] != p[3]) break;
+            ++run;
+          }
+          fillRect({x0 + float(x), y0 + float(y), float(run), 1.f},
+                   {p[0] / 255.f * tint.r, p[1] / 255.f * tint.g, p[2] / 255.f * tint.b, p[3] / 255.f * tint.a});
+          x += run;
+        }
+      return;
+    }
+  }
+  if (const Image* icon = icon0; icon && !icon->empty()) {
     const float cw = r.w / float(icon->width()), ch = r.h / float(icon->height());
     for (int y = 0; y < icon->height(); ++y)
       for (int x = 0; x < icon->width(); ++x) {

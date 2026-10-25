@@ -48,6 +48,15 @@ struct RayInput { float ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = 1; };  // r
 // Cortana 2026-10-15 2215 [ENGINE]: kReach is the sim's MAXIMUM edit reach (creative 16, JD D5);
 // games gate tighter per mode (LithoKraft survival 5) with SimStats::hitDist before sending edits.
 constexpr float kReach = 16.f, kLookRange = 64.f;
+/// 2026-10-25 (JD): would a solid block at cell (x, y, z) overlap the player whose eye is at
+/// (ox, oy, oz)? Player box: 0.6 wide, feet 1.62 below the eye, head 0.18 above (conservative
+/// for sneak / crawl). Such a place is refused, never resolved by pushing the player.
+inline bool placeOverlapsPlayer(int x, int y, int z, float ox, float oy, float oz) {
+  constexpr float kHalfW = 0.3f, kBelow = 1.62f, kAbove = 0.18f, kEps = 1e-3f;
+  return float(x) < ox + kHalfW - kEps && float(x + 1) > ox - kHalfW + kEps &&
+         float(z) < oz + kHalfW - kEps && float(z + 1) > oz - kHalfW + kEps &&
+         float(y) < oy + kAbove - kEps && float(y + 1) > oy - kBelow + kEps;
+}
 struct EditCmd {
   enum class Kind : uint8_t { Break, Place, Use, Command } kind = Kind::Break;
   BlockId block = 0; uint8_t facing = 0;   // Place
@@ -369,6 +378,7 @@ class cSimThread {
   std::thread thread_;
   TripleBuffer<SimStats> stats_;
   std::atomic<std::thread::id> statsReader_{};  // Cortana 2026-10-15 1658: F-2 (checked in Debug only)
+  float rayEye_[3] = {0.f, -1e9f, 0.f};  ///< 2026-10-25: eye of the last cast ray (placement overlap check)
   TripleBuffer<RayInput> ray_;  // presentation only (HUD look-at); edit resolution uses stampedRay_
   // The serialized control stream: every sim-affecting control input
   // crosses here (edits, the stamped ray, the player chunk). Constructed

@@ -13,6 +13,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <dwmapi.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 #endif
 #include <fstream>
 #include <sstream>
@@ -33,6 +36,8 @@ std::unique_ptr<Window> Window::create(const WindowDesc& d) {
   if (vulkan) {
     if (!glfwVulkanSupported()) { logError("GLFW: no Vulkan loader / ICD found"); glfwTerminate(); return nullptr; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  } else if (d.api == GraphicsApi::None) {
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   } else {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -45,7 +50,7 @@ std::unique_ptr<Window> Window::create(const WindowDesc& d) {
     glfwTerminate();
     return nullptr;
   }
-  if (!vulkan) {
+  if (d.api == GraphicsApi::OpenGL33) {
     glfwMakeContextCurrent(gw);
     glfwSwapInterval(d.vsync ? 1 : 0);
   }
@@ -115,7 +120,7 @@ void Window::setDisplay(const DisplayDesc& want) {
       // desktop-sized window could keep a frame and leave the taskbar on top. No auto-iconify, so Alt+Tab
       // leaves it in place.
       glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_FALSE);
-      if (api_ == GraphicsApi::OpenGL33) {
+      if (api_ != GraphicsApi::Vulkan) {
         // 2026-10-25 (JD, capture fix): a monitor-owned GL window is presented by the driver
         // outside DWM composition (exclusive flip), so Print Screen, Snipping Tool and every
         // OBS capture mode see a blank surface on the software / gl33 path. Use an undecorated,
@@ -229,6 +234,35 @@ void Window::setCursorCaptured(bool c) {
 // NORMAL mode without re-setting the arrow (its "cursor in content area" flag is
 // stale), leaving an invisible cursor over the menus. Re-assert the default arrow
 // and, on Windows, the ShowCursor display count. Shared by every renderer.
+bool Window::presentPixels(const uint32_t* pixels, int w, int h) {
+#ifdef _WIN32
+  if (!pixels || w <= 0 || h <= 0) return false;
+  HWND hwnd = glfwGetWin32Window(impl_->win);
+  if (!hwnd) return false;
+  RECT rc{};
+  GetClientRect(hwnd, &rc);
+  const int cw = rc.right - rc.left, ch = rc.bottom - rc.top;
+  if (cw <= 0 || ch <= 0) return true;  // minimised
+  BITMAPINFO bi{};
+  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bi.bmiHeader.biWidth = w;
+  bi.bmiHeader.biHeight = -h;  // top row first
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;  // 0xAARRGGBB little-endian = B,G,R,A bytes = GDI's 32bpp BI_RGB
+  bi.bmiHeader.biCompression = BI_RGB;
+  HDC dc = GetDC(hwnd);
+  if (!dc) return false;
+  SetStretchBltMode(dc, COLORONCOLOR);
+  const int rows = StretchDIBits(dc, 0, 0, cw, ch, 0, 0, w, h, pixels, &bi, DIB_RGB_COLORS, SRCCOPY);
+  ReleaseDC(hwnd, dc);
+  ValidateRect(hwnd, nullptr);  // the frame is the paint; no WM_PAINT erase over it
+  if (vsync_) DwmFlush();       // pace to the compositor (GDI has no swap interval)
+  return rows != 0;
+#else
+  (void)pixels; (void)w; (void)h;
+  return false;
+#endif
+}
 void Window::showCursorNow() {
   glfwSetCursor(impl_->win, nullptr);
 #ifdef _WIN32

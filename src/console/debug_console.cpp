@@ -177,11 +177,11 @@ bool cDebugConsole::handleKeyPreFilter(const ui::UiEvent& e) {
         ++historyPos_;
         if (historyPos_ >= int(history_.size())) {
           historyPos_ = -1;  // back past the newest: restore the pending line
-          input_->setText(pendingInput_);
+          input_->setText(pendingInput_); input_->buffer().moveDocEnd(false);  // 2026-10-25 (JD): caret to the end of the recalled / completed line
           return true;
         }
       }
-      input_->setText(history_[size_t(historyPos_)]);
+      input_->setText(history_[size_t(historyPos_)]); input_->buffer().moveDocEnd(false);  // 2026-10-25 (JD): caret to the end of the recalled / completed line
       return true;
     }
     case ui::Key::PageUp:
@@ -314,7 +314,7 @@ void cDebugConsole::tabComplete() {
   if (r.matches.empty()) return;  // no matches: no-op
   std::string line = r.completedLine;
   if (r.matches.size() == 1) line += " ";  // unique match: done, add the trailing space
-  input_->setText(line);
+  input_->setText(line); input_->buffer().moveDocEnd(false);  // 2026-10-25 (JD): caret to the end of the recalled / completed line
   if (r.matches.size() > 1) {
     // HL1 lists the matches in the console.
     std::string names;
@@ -345,7 +345,7 @@ void cDebugConsole::acceptCompletion() {
   } else {
     next = c.name;
   }
-  input_->setText(next + " ");
+  input_->setText(next + " "); input_->buffer().moveDocEnd(false);  // 2026-10-25 (JD): caret to the end of the recalled / completed line
   hideCompletion();
 }
 

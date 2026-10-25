@@ -12,7 +12,7 @@ namespace litholattice {
 
 /// Which graphics API the window is created for: OpenGL gets a GL 3.3 core context; Vulkan gets
 /// no context (the renderer creates a surface through createVulkanSurface()).
-enum class GraphicsApi { OpenGL33, Vulkan };
+enum class GraphicsApi { OpenGL33, Vulkan, None /* 2026-10-25: no client API (software GDI present) */ };
 
 /// Windowed (decorated, sized), Maximized (decorated, maximized), Borderless (undecorated
 /// window covering the monitor at its desktop mode), Fullscreen (exclusive, a chosen video mode).
@@ -65,6 +65,10 @@ class Window {
   void setCursorCaptured(bool captured);
   /// Re-shows the arrow cursor (focus / menu edges; see window.cpp).
   void showCursorNow();
+  /// 2026-10-25 (JD, capture fix): blits 0xAARRGGBB top-row-first pixels (w x h) over
+  /// the client area with GDI (StretchDIBits into the redirected window), so Print
+  /// Screen and every OBS capture mode see the frame. Win32 only; false elsewhere.
+  bool presentPixels(const uint32_t* pixels, int w, int h);
   bool cursorCaptured() const { return captured_; }
   /// GLFW's actual cursor mode is DISABLED (the OS may drop capture behind our back).
   bool cursorReallyCaptured() const;
