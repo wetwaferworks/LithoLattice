@@ -665,7 +665,10 @@ cConsoleReg::ExecResult cConsoleReg::executeTokens(const std::vector<std::string
           " commands); script terminated");
     return ExecResult::Aborted;
   }
-  const std::string& name = argv[0];
+  // JD 2026-10-25: chat-style "/tp ..." -> "tp ...". One leading '/' is
+  // stripped from the command word (never from a bare "/").
+  const std::string name =
+      (argv[0].size() > 1 && argv[0][0] == '/') ? argv[0].substr(1) : argv[0];
 
   // ++/-- shorthand: `<cvar>++` / `<cvar>--` (±1; int/float cvars only).
   // '+'/'-' are not valid name characters, so this cannot collide with a

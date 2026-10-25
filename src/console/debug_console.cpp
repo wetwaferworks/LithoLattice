@@ -91,6 +91,10 @@ void cDebugConsole::attach(ui::cUiRoot& ui) {
 void cDebugConsole::open() {
   if (open_ || !ui_) return;
   open_ = true;
+  // JD 2026-10-25: draw over everything. The panel was attached early, so
+  // later root children (HUD, debug overlays, menus, editor) painted on top;
+  // move it to the end of the root's children so it paints last.
+  if (auto owned = ui_->root().removeChild(*panel_)) panel_ = &ui_->root().addChild(std::move(owned));
   panel_->setVisible(true);
   ui_->setFocus(input_);
   historyPos_ = -1;
