@@ -48,6 +48,8 @@ class RenderPipelines {
   VkRenderPass blurPass() const { return blurPass_.get(); }
   VkDescriptorSetLayout postSetLayout() const { return postSetLayout_.get(); }
   VkPipelineLayout postLayout() const { return postLayout_.get(); }
+  VkPipeline chunkMega() const { return chunkMega_.get(); }            ///< mega-draw V2 (may be null)
+  VkPipeline chunkBlendMega() const { return chunkBlendMega_.get(); }  ///< mega-draw V2 (may be null)
   VkPipeline chunkBlend() const { return chunkBlend_.get(); }   ///< sorted alpha-blend bulb pass
   VkPipeline particles() const { return particles_.get(); }    ///< procedural GPU sparks
   VkPipeline blur() const { return blur_.get(); }              ///< separable Gaussian (blurPass)
@@ -64,6 +66,7 @@ class RenderPipelines {
   UniqueDescriptorSetLayout postSetLayout_;
   UniquePipelineLayout postLayout_;
   UniquePipeline chunkBlend_, particles_, blur_, composite_;
+  UniquePipeline chunkMega_, chunkBlendMega_;  // mega-draw V2
 };
 
 }  // namespace litholattice::vk

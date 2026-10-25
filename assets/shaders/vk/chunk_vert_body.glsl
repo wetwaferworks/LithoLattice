@@ -7,7 +7,20 @@
 // The 16-bit position is read as xy + z (R16G16 + R16 are guaranteed vertex formats; R16G16B16
 // is optional in Vulkan).
 #include "frame.glsl"
+#ifdef LITHO_MEGA
+// Mega-draw V2 (Direction JD, design Archie, implementation Cortana): the per-draw values come from the
+// per-frame instance buffer (binding 1, one 80-byte record per draw, firstInstance = draw index) instead of
+// push constants, and go on to the fragment stage as flat varyings (locations 8..12).
+layout(location = 8) in vec4 aDrawOP;  // xyz offset, w pass
+layout(location = 9) in vec4 aPulseP0; layout(location = 10) in vec4 aPulseP1;
+layout(location = 11) in vec4 aTraceP0; layout(location = 12) in vec4 aTraceP1;
+layout(location = 8) flat out vec4 vDrawOP;
+layout(location = 9) flat out vec4 vPulseP0; layout(location = 10) flat out vec4 vPulseP1;
+layout(location = 11) flat out vec4 vTraceP0; layout(location = 12) flat out vec4 vTraceP1;
+#define uOffset aDrawOP.xyz
+#else
 layout(push_constant) uniform PulsePush { vec3 uOffset; float uPass; vec4 uPulseP0; vec4 uPulseP1; vec4 uTraceP0; vec4 uTraceP1; };
+#endif
 layout(location = 0) in uvec2 aPosXY;  // 1/16 block units, local to the sub-chunk
 layout(location = 1) in uvec4 aInfo;   // u, v (1/16), face | ao<<3 | rot<<5, layer (bits 0..7)
 layout(location = 2) in uvec2 aShade;  // value, mode
@@ -25,6 +38,9 @@ layout(location = 4) flat out int vLayer; layout(location = 5) flat out int vVal
 layout(location = 6) flat out int vMode; layout(location = 7) flat out int vRot;
 const vec3 N[6] = vec3[6](vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1));
 void main() {
+#ifdef LITHO_MEGA
+  vDrawOP = aDrawOP; vPulseP0 = aPulseP0; vPulseP1 = aPulseP1; vTraceP0 = aTraceP0; vTraceP1 = aTraceP1;
+#endif
 #ifdef LITHO_PACKED12
   uint aPosZ = aPosZL & 511u;
   uint aLayerHi = aPosZL >> 9u;

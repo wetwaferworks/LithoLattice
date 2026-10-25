@@ -9,6 +9,9 @@
 #include "spv/chunk_frag.h"
 #include "spv/chunk_vert.h"
 #include "spv/chunk12_vert.h"  // 0.0.1.59 [P59-1]
+#include "spv/chunk12_mega_vert.h"  // mega-draw V2
+#include "spv/chunk_mega_frag.h"    // mega-draw V2
+#include "spv/chunk_mega_vert.h"    // mega-draw V2
 #include "spv/hud_frag.h"
 #include "spv/hud_vert.h"
 #include "spv/line_frag.h"
@@ -36,6 +39,7 @@ UniqueShaderModule shaderModule(const cVulkanDevice& dev, std::span<const uint32
 struct PipelineDesc {
   std::span<const uint32_t> vertexCode, fragmentCode;
   uint32_t stride = 0;
+  uint32_t instanceStride = 0;  ///< mega-draw V2: >0 adds binding 1 at INSTANCE rate
   std::vector<VkVertexInputAttributeDescription> attributes;
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   bool depthTest = true, depthWrite = true, cullBack = false, alphaBlend = false;
@@ -57,10 +61,11 @@ UniquePipeline buildPipeline(const cVulkanDevice& dev, VkRenderPass pass, VkPipe
   stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs.get(), "main", nullptr};
   stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs.get(), "main", nullptr};
 
-  const VkVertexInputBindingDescription binding{0, d.stride, VK_VERTEX_INPUT_RATE_VERTEX};
+  const VkVertexInputBindingDescription bindings[2] = {{0, d.stride, VK_VERTEX_INPUT_RATE_VERTEX},
+                                                       {1, d.instanceStride, VK_VERTEX_INPUT_RATE_INSTANCE}};
   auto vi = make<VkPipelineVertexInputStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-  vi.vertexBindingDescriptionCount = d.stride ? 1 : 0;  // JD Vulkan push: procedural passes
-  vi.pVertexBindingDescriptions = &binding;
+  vi.vertexBindingDescriptionCount = d.stride ? (d.instanceStride ? 2 : 1) : 0;  // JD Vulkan push: procedural passes
+  vi.pVertexBindingDescriptions = bindings;
   vi.vertexAttributeDescriptionCount = uint32_t(d.attributes.size());
   vi.pVertexAttributeDescriptions = d.attributes.data();
   auto ia = make<VkPipelineInputAssemblyStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
@@ -364,6 +369,22 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
     blend.alphaBlend = true;
     blend.glow = 2;
     p->chunkBlend_ = buildPipeline(dev, p->renderPass(), layout, blend);
+  }
+  // Mega-draw V2 (Direction JD, design Archie, implementation Cortana): chunk + blend pipelines that read the
+  // per-draw record (offset|pass, pulse P0/P1, trace P0/P1) from binding 1 at instance rate. Optional: the
+  // renderer falls back to the push-constant path when they are missing.
+  {
+    PipelineDesc mega = chunk;
+    mega.vertexCode = packed12 ? std::span<const uint32_t>(kSpvChunk12MegaVert) : std::span<const uint32_t>(kSpvChunkMegaVert);
+    mega.fragmentCode = kSpvChunkMegaFrag;
+    mega.instanceStride = 80;
+    for (uint32_t i = 0; i < 5; ++i) mega.attributes.push_back({8 + i, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 * i});
+    p->chunkMega_ = buildPipeline(dev, p->renderPass(), layout, mega);
+    mega.depthWrite = false;
+    mega.cullBack = true;
+    mega.alphaBlend = true;
+    mega.glow = 2;
+    p->chunkBlendMega_ = buildPipeline(dev, p->renderPass(), layout, mega);
   }
   // JD Vulkan push: procedural sparks (no vertex buffer), additive into frame and glow.
   {

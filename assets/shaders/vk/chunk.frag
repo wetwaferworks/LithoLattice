@@ -16,7 +16,16 @@
 #define uGroundTraceTime uTrace.x
 #define uGroundTraceOn uTrace.y
 #define HEARTBEAT_GLOW_GAIN uPulse.z  // 0.0.1.53 [C53-3] (Proposed by JD, Built by Cortana)
+#ifdef LITHO_MEGA
+// Mega-draw V2 (Direction JD, design Archie, implementation Cortana): per-draw values arrive as flat varyings
+// from the instance buffer (see chunk_vert_body.glsl) instead of the push block.
+layout(location = 8) flat in vec4 vDrawOP;
+layout(location = 9) flat in vec4 uPulseP0; layout(location = 10) flat in vec4 uPulseP1;
+layout(location = 11) flat in vec4 uTraceP0; layout(location = 12) flat in vec4 uTraceP1;
+#define uPass vDrawOP.w
+#else
 layout(push_constant) uniform PulsePush { vec3 uOffset; float uPass; vec4 uPulseP0; vec4 uPulseP1; vec4 uTraceP0; vec4 uTraceP1; };
+#endif
 layout(set = 0, binding = 1) uniform sampler2DArray uTex;
 layout(set = 0, binding = 2) uniform sampler2D uPal;
 layout(location = 0) in vec3 vWorld; layout(location = 1) in vec3 vNormal;
