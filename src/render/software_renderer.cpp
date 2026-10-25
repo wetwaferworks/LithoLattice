@@ -230,7 +230,8 @@ static constexpr float g_backSign = 1.0f;
 // default (e.g. LL_SW_P2=0 = the pre-Pass-2 renderer). LL_SW_AB=<frame> renders that frame
 // twice, Pass 2 off then on, and logs the pixel diff (A/B identity proof on real frames).
 enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u, kP2CentreCull = 128u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
-static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo | kP2CentreCull;  // Cortana 2026-10-25 box: +EmitMemo, +CentreCull (bit-identical, LL_SW_AB 0 px)
+static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo | kP2CentreCull | kP2Morton | kP2Dispatch | kP2SpanClip;  // 2026-10-25 (Archie): SIMD spans, Morton, span-clip on by default (= LL_SW_P2=255)
+// (previous default: Quad|Par|FaceCull|EmitMemo|CentreCull; Cortana 2026-10-25 box, bit-identical, LL_SW_AB 0 px)
 //  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
 static std::atomic<unsigned> g_p2{[] {
   const char* e = std::getenv("LL_SW_P2");
