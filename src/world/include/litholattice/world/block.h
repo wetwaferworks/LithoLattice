@@ -3,6 +3,7 @@
 // materials). The engine knows exactly one block, kAir (id 0, always present); every other block,
 // its id, its game-specific role and its flags above kFirstGameFlag belong to the game.
 #pragma once
+#include <cmath>
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
@@ -72,6 +73,10 @@ enum BlockFlags : uint32_t {
   kFlatPick    = 1u << 9,  // picked (raycast / selection) as a 1/16 plate: on the floor, or under the ceiling when hanging  // mounts on a neighbour's face (attach face in the cell state); pops off with it
   kLeaves      = 1u << 10,  // 2026-10-16 (JD leaf pass): cutout foliage; render.leaves fancy/fast decides culling
   kShell       = 1u << 11,  // 2026-10-16 1551 (JD): see-through shell (Trace Bulb); render.bulb_shell Solid makes it opaque + emissive (render-only)
+  // 2026-10-25 (JD, Posts): 8 facings. Placement snaps the placer's yaw to the nearest 45 degrees and
+  // stores the octant (0 N, 1 NE, 2 E, 3 SE, 4 S, 5 SW, 6 W, 7 NW): quarter turn in the facing
+  // bits 7-8 (so stFacing still reads the nearest-clockwise cardinal), half step in aux bit 0.
+  kFacing8     = 1u << 12,
   kFirstGameFlag = 1u << 16,
 };
 
@@ -88,6 +93,23 @@ constexpr int stValue(CellState s) { return s & 0x7f; }
 constexpr int stFacing(CellState s) { return (s >> 7) & 3; }
 constexpr int stAux(CellState s) { return (s >> 9) & 7; }
 constexpr bool stOn(CellState s) { return (s >> 12) & 1; }
+/// kFacing8 blocks: the octant 0..7 (see kFacing8). withFacing8 keeps every other bit.
+constexpr int stFacing8(CellState s) { return (stFacing(s) << 1) | (stAux(s) & 1); }
+constexpr CellState withFacing8(CellState s, int octant) {
+  return CellState((s & ~CellState((3u << 7) | (1u << 9))) | (((octant >> 1) & 3) << 7) | ((octant & 1) << 9));
+}
+/// Nearest octant of a horizontal look direction (fx, fz); -Z is north, +X east (yaw snapped to 45 deg).
+inline int facing8FromLook(float fx, float fz) {
+  if (fx == 0.f && fz == 0.f) return 0;
+  const float a = std::atan2(fx, -fz);            // 0 at north, +pi/2 at east (clockwise from above)
+  int o = int(std::lround(a / 0.78539816339f));    // nearest 45 degrees
+  return ((o % 8) + 8) % 8;
+}
+/// The octant as an integer direction (dx, dz): unit for even octants, (+-1, +-1) for the diagonals.
+constexpr void facing8Dir(int octant, int& dx, int& dz) {
+  constexpr int kx[8] = {0, 1, 1, 1, 0, -1, -1, -1}, kz[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
+  dx = kx[octant & 7]; dz = kz[octant & 7];
+}
 /// Attach face (bits 13-15): the side the support block is on. 0 none (legacy / free-standing),
 /// 1 below (-Y), 2 above (+Y), 3 -Z, 4 +Z, 5 -X, 6 +X.
 constexpr int stAttach(CellState s) { return (s >> 13) & 7; }

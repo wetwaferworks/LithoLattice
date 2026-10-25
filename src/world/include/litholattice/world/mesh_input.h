@@ -3,6 +3,9 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 #include "litholattice/world/chunk_map.h"
 
 namespace litholattice {
@@ -31,6 +34,14 @@ struct MeshInput {
   // matPaletteSize == 0 (old save, no MATS payload) means every byte resolves to ID 0.
   uint16_t matPalette[256]{};
   size_t matPaletteSize = 0;
+  // 2026-10-25 (JD, Posts): text of this sub-chunk's own cells (SubChunk::index -> text), copied
+  // at snapshot time like the palette. Empty for almost every sub-chunk.
+  std::vector<std::pair<uint16_t, std::string>> text;
+  const std::string* textAt(int x, int y, int z) const {
+    const uint16_t k = uint16_t(SubChunk::index(x, y, z));
+    for (const auto& t : text) if (t.first == k) return &t.second;
+    return nullptr;
+  }
 };
 
 /// Fill `out` with the snapshot (out-param form, for pooled callers that recycle the

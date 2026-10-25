@@ -434,6 +434,7 @@ bool cSimThread::applyPlace(EditCmd& e) {
   if (!w.set(x, y, z, e.block)) return false;
   if (reg.has(e.block, kDirectional) || face) w.setState(x, y, z, makeState(0, e.facing));  // 2026-10-24: attachables keep a facing (floor / ceiling)
   if (face) w.setState(x, y, z, withAttach(w.getState(x, y, z), face));
+  if (reg.has(e.block, kFacing8)) w.setState(x, y, z, withFacing8(0, e.facing & 7));  // 2026-10-25 Posts: octant 0..7
   sim_->onBlockChanged(w, x, y, z, e.block);
   markDirty(x, y, z);
   return true;

@@ -14,6 +14,12 @@ void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int
     for (size_t i = 0; i < col->materialPalette.size() && i < 256; ++i)  // path can resolve
       in->matPalette[i] = col->materialPalette[i];  // material bytes without the live map
   }
+  in->text.clear();  // Posts (2026-10-25): this sub-chunk's cell text rides the snapshot too
+  if (const ChunkColumn* col = w.column(cx, cz))
+    for (const auto& [k, t] : col->cellText) {
+      const int y = int(k >> 8);
+      if ((y >> 4) == sy) in->text.emplace_back(uint16_t(SubChunk::index(int(k & 15), y & 15, int((k >> 4) & 15))), t);
+    }
   for (int dy = -1; dy <= 1; ++dy)
     for (int dz = -1; dz <= 1; ++dz)
       for (int dx = -1; dx <= 1; ++dx) {

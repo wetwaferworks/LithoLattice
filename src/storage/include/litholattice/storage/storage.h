@@ -71,6 +71,9 @@ struct PayloadType {
   std::function<Bytes(const ChunkColumn&)> save;
   std::function<bool(const Bytes&, ChunkColumn&)> load;
   std::map<uint16_t, std::function<std::optional<Bytes>(const Bytes&)>> migrate;
+  /// 2026-10-25 (Posts): an optional payload. When save() returns no bytes the payload is left
+  /// out of the record entirely, so columns that never use it encode byte-identical to before.
+  bool omitEmpty = false;
 };
 constexpr uint32_t fourcc(const char (&s)[5]) { return uint32_t(s[0]) | uint32_t(s[1]) << 8 | uint32_t(s[2]) << 16 | uint32_t(s[3]) << 24; }
 

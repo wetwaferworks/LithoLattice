@@ -78,6 +78,7 @@ class ChunkMap {
     if (!s) { if (b == kAir) return true; s = std::make_unique<SubChunk>(); }
     assert(registry_ && "ChunkMap::set without setRegistry()");
     s->set(x & 15, y & 15, z & 15, registry_->stableIdOf(b));
+    if (!c->cellText.empty()) c->cellText.erase(ChunkColumn::cellTextKey(x, y, z));  // Posts: text dies with its block
     c->markDirty();  // A2/B-M1: resident-column mutation (eviction save-first)
     if (editListener_) editListener_(x >> 4, z >> 4);
     return true;
@@ -89,6 +90,23 @@ class ChunkMap {
       CellState& cell = c->subs[y >> 4]->state[SubChunk::index(x & 15, y & 15, z & 15)];
       if (cell != v) { cell = v; c->markDirty(); }  // A2/B-M1: state mutation (eviction save-first)
     }
+  }
+  /// 2026-10-25 (JD, Posts): per-cell text. Null when the cell has none (or its column is absent).
+  const std::string* cellText(int x, int y, int z) const {
+    const ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c || c->cellText.empty() || y < 0 || y >= kWorldHeight) return nullptr;
+    auto it = c->cellText.find(ChunkColumn::cellTextKey(x, y, z));
+    return it == c->cellText.end() ? nullptr : &it->second;
+  }
+  /// Sets (empty erases) a cell's text; marks the column dirty. False outside resident columns.
+  bool setCellText(int x, int y, int z, std::string text) {
+    if (y < 0 || y >= kWorldHeight) return false;
+    ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c) return false;
+    const uint32_t k = ChunkColumn::cellTextKey(x, y, z);
+    if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); }
+    else { c->cellText[k] = std::move(text); c->markDirty(); }
+    return true;
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;

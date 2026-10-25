@@ -2,6 +2,8 @@
 // (all-air sub-chunks are null and skipped by worldgen, meshing and the sim).
 #pragma once
 #include <array>
+#include <map>
+#include <string>
 #include <cstdint>
 #include <memory>
 #include "litholattice/world/block.h"
@@ -306,6 +308,11 @@ struct ChunkColumn {
   // default. The palette is interned (audit F5): see MaterialPalette above -- this member
   // is a 16 B handle where phase 2 paid a 512 B inline array plus a size word per column.
   MaterialPalette materialPalette;
+  // 2026-10-25 (JD, Posts): per-cell text (Post panels), keyed by cellTextKey. Empty for nearly
+  // every column; saved as the optional "PTXT" payload. ChunkMap::set drops a cell's text when
+  // its block changes, so text never outlives the block that owns it.
+  std::map<uint32_t, std::string> cellText;
+  static constexpr uint32_t cellTextKey(int lx, int y, int lz) { return (uint32_t(y) << 8) | (uint32_t(lz & 15) << 4) | uint32_t(lx & 15); }
 };
 
 struct ChunkKey {

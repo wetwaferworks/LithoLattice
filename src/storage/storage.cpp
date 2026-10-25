@@ -198,8 +198,15 @@ Bytes cPayloadReg::encode(const ChunkColumn& c) const {
   ByteWriter w;
   w.u16(kRecordVersion);
   w.u32(uint32_t(c.cx)); w.u32(uint32_t(c.cz));
-  w.u16(uint16_t(types_.size()));
-  for (const auto& [tag, t] : types_) { w.u32(tag); w.u16(t.version); w.bytes(t.save(c)); }
+  std::vector<std::pair<const PayloadType*, Bytes>> parts;
+  parts.reserve(types_.size());
+  for (const auto& [tag, t] : types_) {
+    Bytes b = t.save(c);
+    if (t.omitEmpty && b.empty()) continue;  // optional payload with nothing to say
+    parts.emplace_back(&t, std::move(b));
+  }
+  w.u16(uint16_t(parts.size()));
+  for (const auto& [t, b] : parts) { w.u32(t->tag); w.u16(t->version); w.bytes(b); }
   return w.out;
 }
 
