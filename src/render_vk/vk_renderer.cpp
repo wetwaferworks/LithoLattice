@@ -47,6 +47,7 @@ using namespace vk;
 
 constexpr uint32_t kFramesInFlight = 2;
 constexpr uint32_t kMaxQuads = kMaxQuadsPerMesh;  // shared quad index buffer size (renderer.h)
+constexpr VkDeviceSize kArenaBlockBytes = VkDeviceSize(32) << 20;  ///< vertex arena block size (review R3/R6)
 constexpr VkDeviceSize kOverlayBytes = 4 << 20;  // per frame: lines + HUD vertices (~130k: a full-screen editor)
 // 0.0.1.52 [A52-4] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): 32 MB per slot (was 8). A full ring no longer
 // flushes with a queue-wait-idle submit: it grows by a temporary overflow buffer that dies with the
@@ -108,6 +109,12 @@ class cVulkanRenderer final : public IRenderer {
     if (const char* e = std::getenv("LL_VK_PULL"); e && std::atoi(e) == 1) {
       pull_ = pipelines_ && pipelines_->chunkPull() && packed12_ && megaMode_ == 3 && dev_->drawIndirectFirstInstance() &&
               dev_->storageArrayDynamicIndexing();
+      // 2026-10-25 fix pass (review R3): arena blocks are bound whole (VK_WHOLE_SIZE) as storage buffers.
+      if (pull_ && dev_->properties().limits.maxStorageBufferRange < kArenaBlockBytes) {
+        logInfo("vulkan: maxStorageBufferRange %u < arena block %llu bytes; vertex pulling off",
+                unsigned(dev_->properties().limits.maxStorageBufferRange), (unsigned long long)kArenaBlockBytes);
+        pull_ = false;
+      }
       logInfo("vulkan: Mega-Pipeline Phase 2 vertex pulling %s", pull_ ? "on" : "requested but unavailable (needs LL_VK_MEGA=3, packed12, firstInstance, dynamic storage indexing); off");
     }
     // Mega-Pipeline Phase 3: LL_VK_BUCKETS=1 (with pulling) draws only the face buckets that can face the camera.
@@ -137,7 +144,7 @@ class cVulkanRenderer final : public IRenderer {
         logInfo("vulkan: vertex arena auto-upgraded to rebar");
       }
     }
-    arena_ = std::make_unique<cVertexArena>(*dev_, kind, VkDeviceSize(32) << 20, packed12_ ? VkDeviceSize(192) : VkDeviceSize(64));
+    arena_ = std::make_unique<cVertexArena>(*dev_, kind, kArenaBlockBytes, packed12_ ? VkDeviceSize(192) : VkDeviceSize(64));
     // 0.0.1.59 [P59-1] Packed12 (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the
     // Bitmaster and the Bitmasker; layout correction and build by Cortana).
     logInfo("vulkan: chunk vertex format %s (%u bytes, arena alignment %llu; LL_VK_PACKED12=%d to switch)",
@@ -280,7 +287,10 @@ class cVulkanRenderer final : public IRenderer {
     const auto slice = allocateMesh(m, out.blend, pm, bytes);
     if (!slice) return false;
     uint8_t* dst = arena_->data(*slice);
-    if (!dst) { arena_->free(*slice); return false; }  // device-only block: stage on the main thread
+    if (!dst) {  // device-only block (review P1, fix pass 2026-10-25): pack here, publish only stages the bytes
+      out.staged.resize(size_t(bytes));
+      dst = out.staged.data();
+    }
     writeMesh(m, &pm, dst);  // 0.0.1.59 [P59-1] (worker thread: pure packing; the miss counter is atomic)
     out.cx = m.cx; out.sy = m.sy; out.cz = m.cz;
     out.block = slice->block; out.offset = slice->offset; out.size = slice->size;
@@ -306,6 +316,10 @@ class cVulkanRenderer final : public IRenderer {
       meshes_.erase(it);
     }
     Mesh gm{cVertexArena::Slice{p.block, p.offset, p.size}, p.indexCount, p.cx, p.sy, p.cz};
+    if (!p.staged.empty()) {  // review P1: worker-packed bytes for a device-only block
+      stage(arena_->buffer(gm.slice), p.offset, p.staged.data(), VkDeviceSize(p.staged.size()));
+      perf_.uploads += 1; perf_.uploadBytes += p.staged.size();
+    }
     gm.blend = p.blend;
     gm.pullFirst = p.pullFirst;  // Mega-Pipeline Phase 2
     for (int i = 0; i < 7; ++i) gm.pullBucket[i] = p.pullBucket[i];
@@ -775,8 +789,10 @@ class cVulkanRenderer final : public IRenderer {
       if ((v.mode & 63) == kShadeAlphaBlend) return true;
     return false;
   }
-  // Phase 2: allocates the slice. With pulling on (and no blend faces) the mesh is split into packed quads +
-  // Packed12 fallback (pm.active); a slice landing on block >= kMaxPullBlocks is redone on the plain layout.
+  // Phase 2: allocates the slice. With pulling on the mesh is split into packed quads + Packed12 fallback
+  // (pm.active); blend faces stay in the fallback (Phase 4 B blend split; LL_VK_BLENDSPLIT=0 keeps blended
+  // meshes whole). Pulled slices only come from blocks < kMaxPullBlocks (review P3, fix pass 2026-10-25):
+  // when those are full the mesh goes straight to the plain layout, no allocate/free/reallocate.
   std::optional<cVertexArena::Slice> allocateMesh(const ChunkMesh& m, bool hasBlend, PulledMesh& pm, VkDeviceSize& bytes) {
     pm.active = false;
 #if LL_STREAM_COUNTERS
@@ -792,15 +808,11 @@ class cVulkanRenderer final : public IRenderer {
 #endif
       if (!pm.quads.empty()) {
         bytes = VkDeviceSize(pulledBytes(pm));
-        auto s = arena_->allocate(bytes);
-        if (s && s->block < kMaxPullBlocks) { pm.active = true; return s; }
+        if (auto s = arena_->allocate(bytes, kMaxPullBlocks)) { pm.active = true; return s; }
 #if LL_STREAM_COUNTERS
-        if (s) {
-          pullWhy_[kPullBlock].fetch_add(uint32_t(pm.quads.size()), std::memory_order_relaxed);
-          pullWhy_[kPullOk].fetch_sub(uint32_t(pm.quads.size()), std::memory_order_relaxed);
-        }
+        pullWhy_[kPullBlock].fetch_add(uint32_t(pm.quads.size()), std::memory_order_relaxed);
+        pullWhy_[kPullOk].fetch_sub(uint32_t(pm.quads.size()), std::memory_order_relaxed);
 #endif
-        if (s) arena_->free(*s);
       }
     }
     bytes = m.verts.size() * vertexStride_;  // 0.0.1.59 [P59-1]: 12 (Packed12) or 16
@@ -1036,7 +1048,7 @@ class cVulkanRenderer final : public IRenderer {
               perf_.gpuFrames ? perf_.chunkGpuMs / double(perf_.gpuFrames) : 0.0);  // mega-draw V2
 #if LL_STREAM_COUNTERS
       {  // Phase 4.0 (Direction JD, research Elfie, implementation Cortana)
-        const double cap = double(arena_->blockCount()) * 32.0;
+        const double cap = double(arena_->deviceBytes() + arena_->hostBytes()) / 1048576.0;  // review R6: real block bytes
         logInfo("vulkan stream: uploads/frame %.2f (worker-published %.2f), upload MB/frame %.3f, evictions/frame %.2f, remeshes/frame %.2f, "
                 "chunks tested/frame %.0f, frustum-culled %.0f, occlusion-culled 0 (no occlusion pass), arena %.1f MB used of %.0f MB reserved (%.1f%%)",
                 double(perf_.uploads) / n, double(perf_.published) / n, double(perf_.uploadBytes) / n / 1048576.0, double(perf_.evictions) / n,
@@ -1278,6 +1290,7 @@ class cVulkanRenderer final : public IRenderer {
       if (!total) continue;
       if (runBlock.empty() || runBlock.back() != m.slice.block) { runBlock.push_back(m.slice.block); runStart.push_back(c); }
       if (!buckets_) {
+        assert(m.pullFirst < (1u << 29) && "pullFirst * 4 must fit vertexOffset (review R4)");
         ic[c++] = VkDrawIndexedIndirectCommand{total * 6, 1, 0, int32_t(m.pullFirst * 4), r};
         perf_.pulledQuads += total;
         continue;
@@ -1287,6 +1300,8 @@ class cVulkanRenderer final : public IRenderer {
       uint32_t open = UINT32_MAX;  // merges adjacent visible buckets into one command
       for (uint32_t face = 0; face < 6; ++face) {
         const uint32_t ax = face >> 1;
+        // Review R1 (verified 2026-10-25): face 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z, i.e. odd = minus side, matching
+        // chunk_vert_body.glsl, software_renderer.cpp and light_engine.cpp. Change all of them together.
         const bool vis = (face & 1u) ? cp[ax] < mn[ax] + 16.f : cp[ax] > mn[ax];  // +face needs cam > min, -face cam < max
         const uint32_t b0 = m.pullBucket[face], b1 = face < 5 ? m.pullBucket[face + 1] : total;
         if (vis && b1 > b0) {
@@ -1398,8 +1413,7 @@ class cVulkanRenderer final : public IRenderer {
         visible_.push_back({arena_->buffer(e.m->slice), e.m});
       }
     }
-    for (const auto& [k, mesh] : meshes_) {
-      if (fastCull_) break;
+    if (!fastCull_) for (const auto& [k, mesh] : meshes_) {  // review C6: map walk only when 4.2a is off
       const Vec3 mn{mesh.cx * 16.f, mesh.sy * 16.f, mesh.cz * 16.f};
       // Prototype pipeline: Full draws; MeshOnly/Cull skip (mesh stays uploaded).
 #if LL_STREAM_COUNTERS
@@ -1451,7 +1465,7 @@ class cVulkanRenderer final : public IRenderer {
       for (const auto& [buffer, mp] : visible_) {
         const Mesh& mesh = *mp;
         megaPut(f, buffer, mesh, 0.f);
-        if (pulling) { megaMesh_.push_back(&mesh); perf_.fallbackQuads += mesh.indexCount / 6; }
+        if (pulling) { megaMesh_.push_back(&mesh); if (mesh.pullBucket[6] > 0) perf_.fallbackQuads += mesh.indexCount / 6; }  // review C2: pulled meshes only
         if (mesh.blend) {
           const float dx = mesh.cx * 16.f + 8.f - p.camPos.x, dy = mesh.sy * 16.f + 8.f - p.camPos.y,
                       dz = mesh.cz * 16.f + 8.f - p.camPos.z;
@@ -1782,8 +1796,8 @@ class cVulkanRenderer final : public IRenderer {
     uint64_t blendDraws = 0;
     uint64_t pulledQuads = 0, fallbackQuads = 0, culledQuads = 0;  ///< Mega-Pipeline Phase 2/3 (quads drawn / culled per log window)
     uint64_t apiCalls = 0;   ///< mega-draw V2: chunk draw API calls (vkCmdDrawIndexed / vkCmdDrawIndexedIndirect)
-    double chunkCpuMs = 0;
-    double chunkGpuMs = 0;   ///< V2b: GPU time between the chunk-pass timestamps   ///< mega-draw V2: CPU time recording the chunk passes
+    double chunkCpuMs = 0;   ///< mega-draw V2: CPU time recording the chunk passes
+    double chunkGpuMs = 0;   ///< V2b: GPU time between the chunk-pass timestamps
   } perf_;
   float timestampPeriodNs_ = 1.f;
 };
