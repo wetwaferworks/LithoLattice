@@ -229,8 +229,8 @@ static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
 // default (e.g. LL_SW_P2=0 = the pre-Pass-2 renderer). LL_SW_AB=<frame> renders that frame
 // twice, Pass 2 off then on, and logs the pixel diff (A/B identity proof on real frames).
-enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u, kP2CentreCull = 128u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
-static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo | kP2CentreCull | kP2Morton | kP2Dispatch | kP2SpanClip;  // 2026-10-25 (Archie): SIMD spans, Morton, span-clip on by default (= LL_SW_P2=255)
+enum : unsigned { kP2Quad = 1u, kP2Par = 2u, kP2FaceCull = 4u, kP2Morton = 8u, kP2Dispatch = 16u, kP2SpanClip = 32u, kP2EmitMemo = 64u, kP2CentreCull = 128u, kP2QuadPlane = 256u };  // kP2SpanClip: Cortana 2026-10-25 box prototype, opt-in
+static constexpr unsigned kP2Default = kP2Quad | kP2Par | kP2FaceCull | kP2EmitMemo | kP2CentreCull | kP2Morton | kP2Dispatch | kP2SpanClip | kP2QuadPlane;  // 2026-10-25 (Archie): SIMD spans, Morton, span-clip on by default (LL_SW_P2=0x1FF; QuadPlane = shared per-quad setup, LL_SW_P2=0xFF reverts it)
 // (previous default: Quad|Par|FaceCull|EmitMemo|CentreCull; Cortana 2026-10-25 box, bit-identical, LL_SW_AB 0 px)
 //  // kP2Morton (16x16 tiles already sit in L1) and kP2Dispatch: opt-in, byte-identical, no measurable gain
 static std::atomic<unsigned> g_p2{[] {
@@ -1038,7 +1038,11 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     }
     SwTriSetup& S = T[nLive++];
     S.mip = 0;
-    if (mipOn_ && textures_.mipLevels() > 1) {  // Cortana 2026-10-16 (BUG-0005): texel/pixel ratio LOD
+    // 2026-10-25 (Archie step 5): a voxel face is one plane, so triangle B of a quad split reuses
+    // triangle A's per-quad setup (dZ/dx, texture LOD) instead of recomputing it.
+    const bool quadShare = nt == 2 && t == 1 && nLive == 2 && swP2(kP2QuadPlane);
+    if (quadShare) S.mip = T[0].mip;
+    else if (mipOn_ && textures_.mipLevels() > 1) {  // Cortana 2026-10-16 (BUG-0005): texel/pixel ratio LOD
       const float du1 = s1->u - s0->u, dv1 = s1->v - s0->v, du2 = s2->u - s0->u, dv2 = s2->v - s0->v;
       const float uvA = std::fabs(du1 * dv2 - du2 * dv1) * float(baseTile) * float(baseTile);
       const float ratio = uvA / std::max(std::fabs(area), 1e-6f);
@@ -1050,8 +1054,10 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     // PERSPECTIVE-CORRECT varyings (one reciprocal per SHADED pixel).
     S.invArea = 1.0f / area;
     S.dw0dx = -(v2[1] - v1[1]) * S.invArea; S.dw1dx = -(v0[1] - v2[1]) * S.invArea; S.dw2dx = -(v1[1] - v0[1]) * S.invArea;
-    S.dzdx = S.dw0dx * v0[2] + S.dw1dx * v1[2] + S.dw2dx * v2[2];
-    S.iw0 = 1.0f / v0[3]; S.iw1 = 1.0f / v1[3]; S.iw2 = 1.0f / v2[3];
+    S.dzdx = quadShare ? T[0].dzdx : S.dw0dx * v0[2] + S.dw1dx * v1[2] + S.dw2dx * v2[2];
+    if (nt == 2 && t == 1 && nLive == 2) { S.iw0 = T[0].iw0; S.iw1 = T[0].iw2; }  // shared v0, v2 (same bits)
+    else { S.iw0 = 1.0f / v0[3]; S.iw1 = 1.0f / v1[3]; }
+    S.iw2 = 1.0f / v2[3];
     // Cortana 2026-10-15 1715: hierarchical-Z early reject [ENGINE] (exact: rows
     // restart from exact edge functions, so drawn rows produce the same bits).
     S.triMinZ = std::min({v0[2], v1[2], v2[2]});
