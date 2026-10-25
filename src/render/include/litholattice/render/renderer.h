@@ -110,6 +110,8 @@ struct PbrChunkMesh;  // pbr_quad_mesh.h (forward: only used as a const ref here
 /// both backends size their shared quad index buffer from it, so they can trust every mesh.
 constexpr uint32_t kMaxQuadsPerMesh = 16384;
 
+struct PreparedChunkMeshHandle;  // below IRenderer (Cortana 2026-10-25 upload pass)
+
 struct ChunkMesh {
   int cx = 0, sy = 0, cz = 0;
   uint32_t epoch = 0;
@@ -135,6 +137,10 @@ struct ChunkMesh {
   /// all-zero = no traces. Composes additively with the pulse.
   float traceP0[4] = {0.f, 0.f, 0.f, 0.f};
   float traceP1[4] = {0.f, 0.f, 0.f, 0.f};
+  /// Cortana 2026-10-25 (box, upload pass): set by a mesh worker when the backend packed this mesh
+  /// into GPU memory off the main thread (LL_ASYNC_CHUNK_UPLOAD). Null = upload on the main thread.
+  /// Dropping the last owner without publishing hands the slice back (see the handle's destructor).
+  std::shared_ptr<PreparedChunkMeshHandle> prepared;
 };
 
 // 2D overlay in pixels (origin top-left). Generic: the renderer knows nothing about the game.
@@ -440,5 +446,19 @@ using GLProcLoader = void* (*)(const char* name);
 /// `arena`: chunk meshes share one growable VBO + one VAO (glBufferSubData, base-vertex
 /// draws); false = one VBO + VAO per sub-chunk (the old path, kept for A/B benches).
 std::unique_ptr<IRenderer> createGL33Renderer(GLProcLoader loader, bool arena = true);
+
+/// Cortana 2026-10-25 (box, upload pass): owns a worker-prepared mesh until the main thread publishes it.
+/// Destroyed unpublished (coalesced by a newer mesh, stale epoch/seq, dimension switch) -> discarded,
+/// so no arena slice leaks. Created on a mesh worker; destroyed/published on the main thread.
+struct PreparedChunkMeshHandle {
+  IRenderer* owner = nullptr;
+  PreparedChunkMesh mesh;
+  PreparedChunkMeshHandle() = default;
+  PreparedChunkMeshHandle(const PreparedChunkMeshHandle&) = delete;
+  PreparedChunkMeshHandle& operator=(const PreparedChunkMeshHandle&) = delete;
+  ~PreparedChunkMeshHandle() { if (owner && mesh.ready) owner->discardChunkMesh(mesh); }
+  /// Main thread: make it live; afterwards the destructor does nothing.
+  void publish() { if (owner && mesh.ready) { owner->publishChunkMesh(mesh); mesh.ready = false; } }
+};
 
 }  // namespace litholattice
