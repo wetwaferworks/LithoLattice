@@ -589,6 +589,7 @@ class cSoftwareRenderer : public IRenderer {
   /// One HUD triangle: barycentric blend over fb_ with interpolated
   /// uv/color; coverage from the font atlas for glyph triangles.
   void rasterizeHudTriangle(const HudVertex& a, const HudVertex& b, const HudVertex& c);
+  void fillHudRectSpan(const HudVertex& c, int x0, int y0, int x1, int y1);  // 2026-10-25 HUD diet
   /// Block highlight outline (depth-tested) + crosshair (on top), drawn as
   /// CPU line segments through the same projections the GPU backends use.
   void drawOverlayLines(const FrameParams& p);
