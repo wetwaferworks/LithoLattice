@@ -1,5 +1,5 @@
 // 2026-10-25 (box, DXGI present): minimal D3D11 + DXGI flip-model present for the software
-// renderer's BGRA frame (opt-in LL_SW_PRESENT=dxgi; GDI StretchDIBits stays the default/fallback).
+// renderer's BGRA frame (default since 2026-10-25; LL_SW_PRESENT=gdi forces GDI StretchDIBits, which is also the automatic fallback).
 #pragma once
 #include <cstdint>
 #include <memory>

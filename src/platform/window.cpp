@@ -252,7 +252,9 @@ bool Window::presentPixels(const uint32_t* pixels, int w, int h) {
   if (!impl_->dxgiTried) {
     impl_->dxgiTried = true;
     const char* e = std::getenv("LL_SW_PRESENT");
-    if (e && std::strcmp(e, "dxgi") == 0) impl_->dxgi = cDxgiPresenter::create(hwnd);
+    // 2026-10-25: DXGI flip-discard is the default; LL_SW_PRESENT=gdi forces GDI (and any DXGI
+    // failure falls back to GDI automatically).
+    if (!(e && std::strcmp(e, "gdi") == 0)) impl_->dxgi = cDxgiPresenter::create(hwnd);
     if (!impl_->dxgi) logInfo("software present: GDI StretchDIBits");
   }
   if (impl_->dxgi) {
