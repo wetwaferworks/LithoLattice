@@ -141,6 +141,9 @@ struct ChunkMesh {
   /// into GPU memory off the main thread (LL_ASYNC_CHUNK_UPLOAD). Null = upload on the main thread.
   /// Dropping the last owner without publishing hands the slice back (see the handle's destructor).
   std::shared_ptr<PreparedChunkMeshHandle> prepared;
+  /// 2026-10-25 (box): far-LOD scale this mesh was built at (1, 2 or 4); the software renderer
+  /// flat-shades / height-culls >= 4x meshes. Other backends ignore it.
+  uint8_t lodScale = 1;
 };
 
 // 2D overlay in pixels (origin top-left). Generic: the renderer knows nothing about the game.

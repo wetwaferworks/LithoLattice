@@ -224,6 +224,7 @@ static thread_local uint8_t tlQuadValue = 0;
 // Cortana 2026-10-15 1755 [ENGINE]: blended chunk pass filter for renderMesh's per-pixel
 // path: -1 every quad, 0 opaque quads only, 1 kShadeAlphaBlend quads only.
 static thread_local int8_t tlBlendPass = -1;
+static thread_local bool tlFlatLod = false;  // 2026-10-25: this mesh is >= 4x far LOD (flat shade)
 // Cortana 2026-10-15 1345: sign verified on real walk frames (no holes vs cull-off).
 static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
@@ -239,6 +240,10 @@ static std::atomic<unsigned> g_p2{[] {
 }()};
 static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_relaxed) & bit) != 0; }
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
+// 2026-10-25 (Archie): far-LOD (>= 4x) meshes flat-shade with the layer's average colour
+// (LL_SW_FLAT_LOD=0 off) and drop quads under LL_SW_LOD4_MINH px tall (default 0 = off).
+static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD"); return !(e && *e == '0'); }();
+static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 0.f; }();
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
@@ -1556,6 +1561,23 @@ void cSoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
         if (cx0 > cx1 || cy0 > cy1) { ++tlQuadCentreCulled; continue; }
       }
     }
+    if (tlFlatLod) {
+      const uint8_t md = verts[i].mode;
+      if ((md == kShadeTex || md == kShadeGroundPulse || md == kShadeCutout || md == kShadeLeaf) && tlBlendPass <= 0) {
+        // 2026-10-25 (Archie): >= 4x far LOD: average layer colour x face light x mean AO; no UV
+        // setup, no texture fetch. Same light model as basicFragmentShader (0.35 + 0.65 N.L).
+        static constexpr float kFaceLight[6] = {0.35f + 0.65f * 0.44f, 0.35f, 0.35f + 0.65f * 0.88f, 0.35f, 0.35f + 0.65f * 0.26f, 0.35f};
+        const uint32_t layer = verts[i].layerIndex();
+        const uint32_t avg = layer < layerAvg_.size() ? layerAvg_[layer] : 0xFF808080u;
+        float ao = 1.f;
+        if (g_swAo) ao = 0.25f * (kSwAoLut[(verts[i].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 1].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 2].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 3].faceAo >> 3) & 3]);
+        const float l = kFaceLight[std::min(5, verts[i].faceAo & 7)] * ao;
+        const uint32_t col = 0xFF000000u | (uint32_t(float((avg >> 16) & 0xFF) * l) << 16) | (uint32_t(float((avg >> 8) & 0xFF) * l) << 8) | uint32_t(float(avg & 0xFF) * l);
+        rasterizeTriangle(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4], col);
+        rasterizeTriangle(&screen[i*4], &screen[(i+2)*4], &screen[(i+3)*4], col);
+        continue;
+      }
+    }
     for (int k = 0; k < 4; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
     // Ground pulse/traces tag: only kShadeGroundPulse quads of a mesh whose
     // baked params renderFrame supplied (direct renderMesh callers leave
@@ -1600,6 +1622,27 @@ void cSoftwareRenderer::renderEntityVerts(const float* viewProj) {
     if (!triVisible(i)) continue;
     const uint32_t color = faceColor(verts[i].faceAo & 0x7, verts[i].value, verts[i].mode);
     rasterizeTriangle(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4], color);
+  }
+}
+
+void cSoftwareRenderer::refreshLayerAvg() {
+  // 2026-10-25 (Archie): average colour per layer of the base texture array (opaque texels only),
+  // recomputed when the pack changes (data pointer / layer count).
+  const uint32_t* d = textures_.data();
+  const uint32_t n = textures_.layers();
+  if (d == layerAvgSrc_ && n == layerAvgN_) return;
+  layerAvgSrc_ = d; layerAvgN_ = n;
+  layerAvg_.assign(n, 0xFF808080u);
+  if (!d) return;
+  const size_t area = size_t(textures_.tileSize()) * size_t(textures_.tileSize());
+  for (uint32_t l = 0; l < n; ++l) {
+    uint64_t r = 0, g = 0, b = 0, c = 0;
+    for (size_t k = 0; k < area; ++k) {
+      const uint32_t t = d[size_t(l) * area + k];
+      if ((t >> 24) < 128) continue;
+      r += (t >> 16) & 0xFF; g += (t >> 8) & 0xFF; b += t & 0xFF; ++c;
+    }
+    if (c) layerAvg_[l] = 0xFF000000u | uint32_t(r / c) << 16 | uint32_t(g / c) << 8 | uint32_t(b / c);
   }
 }
 
@@ -1858,6 +1901,7 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
     if (s.hasLod) s.verts = std::move(uploadOrderedScratch_);
     else s.verts = mesh.verts;
   }
+  s.lodScale = mesh.lodScale;
   for (int i = 0; i < 4; ++i) {
     s.pulseP0[i] = mesh.pulseP0[i];
     s.pulseP1[i] = mesh.pulseP1[i];
@@ -2806,12 +2850,14 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           auto& bins = meshBins_[di];
           off.assign(size_t(nStripsF) + 1, 0u);
           const bool cullBin = swP2(kP2CentreCull);
+          const float minH = (perPixel_ && m.lodScale >= 4) ? g_swLod4MinH : 0.f;
           auto range = [&](size_t q, int& s0, int& s1) {
             const float* s = dst + q * 16;
             if (!(s[3] > 0 && s[7] > 0 && s[11] > 0 && s[15] > 0)) { s0 = 0; s1 = nStripsF - 1; return; }
             const float y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
             const float y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
             if (!(y1 >= -1.f) || !(y0 <= float(fb_.height) + 1.f)) { s0 = 1; s1 = 0; return; }
+            if (minH > 0.f && y1 - y0 < minH) { s0 = 1; s1 = 0; return; }  // 2026-10-25: thin 4x-LOD faces
             if (cullBin) {  // 2026-10-25 (Archie step 4): no pixel centre in the quad bbox -> never binned
               constexpr float kEps = 1e-3f;  // same conservative test as the per-strip quad cull
               const float x0 = std::min(std::min(s[0], s[4]), std::min(s[8], s[12]));
@@ -2853,6 +2899,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // left finishing one alone. Strips own disjoint rows, so pixels do not depend on the order.
   // A strip far heavier than a thread's fair share (the horizon rows) is split into 64-px-
   // multiple x tiles (Hi-Z tiles never straddle two), each its own work item.
+  if (perPixel_ && g_swFlatLod) refreshLayerAvg();
   stripWork_.clear();
   {
     stripCost_.assign(size_t(nStrips), 1u);
@@ -2936,6 +2983,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     tlBlendPass = (perPixel_ && m.hasBlend) ? int8_t(pass) : int8_t(-1);
     const auto tm0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (g_swProfOn) ++tlMeshCalls;
+    tlFlatLod = perPixel_ && m.lodScale >= 4 && g_swFlatLod;
     renderMesh(frameVerts_.data() + meshVertOff_[di], drawVertsOf(m), mvp.m);  // Elfie 2026-10-17: far LOD prefix bound; 2026-10-18 phase B: frame scratch
     if (g_swProfOn) tlMeshMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm0).count();
     tlBlendPass = -1;

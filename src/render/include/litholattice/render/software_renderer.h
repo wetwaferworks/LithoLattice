@@ -340,6 +340,9 @@ class cSoftwareRenderer : public IRenderer {
   std::vector<float> frameEmit_;     ///< this frame's nearest emitters (6 floats each)        ///< Cortana 2026-10-16: render.mipmaps (distance LOD, BUG-0005)
   float shimmerTime_ = 0.f;  ///< render clock (s) for the shimmer wave
   std::unique_ptr<SoftwareAaScratch> aaScratch_;  ///< lazily built post-pass scratch
+  std::vector<uint32_t> layerAvg_;  ///< 2026-10-25: per texture layer average colour (far-LOD flat shading)
+  const uint32_t* layerAvgSrc_ = nullptr; uint32_t layerAvgN_ = 0;
+  void refreshLayerAvg();
   std::vector<uint32_t> swScaleX_;                ///< pass sw3: upscale column map
   SoftwareFramebuffer aaOut_;                     ///< SSAA resolve target (renderFrame)
   SoftwareAaScratch& ensureAaScratch();
@@ -398,6 +401,7 @@ class cSoftwareRenderer : public IRenderer {
     float pulseP1[4] = {0.f, 0.f, 0.f, 0.f};
     float traceP0[4] = {0.f, 0.f, 0.f, 0.f};
     float traceP1[4] = {0.f, 0.f, 0.f, 0.f};
+    uint8_t lodScale = 1;   // 2026-10-25: ChunkMesh::lodScale (>= 4: flat shade + height cull)
     bool hasBlend = false;  // Cortana 2026-10-15 1755: has kShadeAlphaBlend quads (second, blended pass)
     // Cortana 2026-10-16 (JD foliage LOD) / Elfie 2026-10-17 (Argon counsel pt 1, phase A):
     // ONE stored set, reordered at upload: untagged quads first (original relative order),
