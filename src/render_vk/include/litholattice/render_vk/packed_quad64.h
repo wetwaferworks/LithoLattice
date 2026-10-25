@@ -65,18 +65,29 @@ inline GpuVertex12 decodePulled(uint64_t q, uint64_t e, uint32_t k) {
 }
 
 /// Tries to pack one quad. Returns false (leave it on Packed12) unless the decode is bit-identical.
-inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut) {
+/// Phase 4.0 quad-rejection counter (for Archie): why a quad stayed on Packed12. Indexes into a
+/// kPullReasons array; render-side statistics only.
+enum PullReason : uint32_t { kPullOk = 0, kPullBadFace = 1, kPullSubCell = 2, kPullOutOfRange = 3, kPullDegenerate = 4,
+                             kPullNoOrigin = 5, kPullUvMismatch = 6, kPullBlendMesh = 7, kPullDistance = 8, kPullBlock = 9,
+                             kPullReasons = 10 };
+inline const char* pullReasonName(uint32_t r) {
+  static const char* n[kPullReasons] = {"ok", "bad-face", "sub-cell", "out-of-range", "degenerate", "no-origin",
+                                        "uv-or-bit-mismatch", "blend-mesh", "distance-overflow", "block>=64"};
+  return r < kPullReasons ? n[r] : "?";
+}
+inline bool pullReject(uint32_t* why, uint32_t r) { if (why) ++why[r]; return false; }
+inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut, uint32_t* why = nullptr) {
   GpuVertex12 g[4];
   for (int k = 0; k < 4; ++k) packVertex12(v[k], g[k]);
   const uint32_t face = g[0].faceAo & 7u;
-  if (face > 5u) return false;
+  if (face > 5u) return pullReject(why, 1);
   uint32_t c[4][3];
   for (int k = 0; k < 4; ++k) {
     const uint32_t xyz[3] = {g[k].x, g[k].y, uint32_t(g[k].zl & kPacked12MaxZ)};
     for (int i = 0; i < 3; ++i) {
-      if (xyz[i] & 15u) return false;
+      if (xyz[i] & 15u) return pullReject(why, 2);
       c[k][i] = xyz[i] >> 4;
-      if (c[k][i] > 63u) return false;
+      if (c[k][i] > 63u) return pullReject(why, 3);
     }
   }
   const uint32_t n = face >> 1, a = (n + 1u) % 3u, b = (n + 2u) % 3u;
@@ -86,7 +97,7 @@ inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut) 
     minb = std::min(minb, c[k][b]); maxb = std::max(maxb, c[k][b]);
   }
   const uint32_t W = maxa - mina, H = maxb - minb;
-  if (W == 0 || H == 0 || W > 63 || H > 63) return false;
+  if (W == 0 || H == 0 || W > 63 || H > 63) return pullReject(why, 4);
   uint32_t o[3]; o[n] = c[0][n]; o[a] = mina; o[b] = minb;
   uint32_t pat = 0, ao = 0, k0 = 4;
   for (uint32_t k = 0; k < 4; ++k) {
@@ -95,7 +106,7 @@ inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut) 
     ao |= ((g[k].faceAo >> 3) & 3u) << (2 * k);
     if (!ca && !cb) k0 = k;
   }
-  if (k0 == 4) return false;
+  if (k0 == 4) return pullReject(why, 5);
   const uint32_t layer = uint32_t(g[0].layerLo) | (uint32_t(g[0].zl >> 9) << 8);
   const uint32_t ex = layer | (uint32_t(g[0].value) << 16) | (uint32_t(g[0].mode) << 24);
   const uint64_t q = uint64_t(o[0] | (o[1] << 6) | (o[2] << 12) | (W << 18) | (H << 24) | ((face & 3u) << 30)) |
@@ -112,11 +123,12 @@ inline bool encodePulled(const PackedVertex* v, uint64_t& qOut, uint64_t& eOut) 
     }
     if (ok) { qOut = q; eOut = e; return true; }
   }
-  return false;
+  return pullReject(why, 6);
 }
 
 /// Splits a mesh's first `maxQuads` quads into packed quads (by face bucket) and Packed12 fallback quads.
-inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuads, bool allow, PulledMesh& out) {
+inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuads, bool allow, PulledMesh& out,
+                        uint32_t* why = nullptr) {
   out.fallback.clear(); out.palette.clear(); out.quads.clear(); out.quadMat.clear();
   const uint32_t nq = std::min<uint32_t>(uint32_t(verts.size() / 4), maxQuads);
   std::unordered_map<uint64_t, uint32_t> pal;
@@ -125,7 +137,7 @@ inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuad
   for (uint32_t i = 0; i < nq; ++i) {
     const PackedVertex* v = &verts[size_t(i) * 4];
     uint64_t q = 0, e = 0;
-    if (allow && encodePulled(v, q, e)) {
+    if (allow && encodePulled(v, q, e, why)) {
       auto [it, added] = pal.try_emplace(e, uint32_t(out.palette.size()));
       if (added) out.palette.push_back(e);
       const uint32_t face = uint32_t((q >> 30) & 3u) | uint32_t(((q >> 32) & 1u) << 2);
@@ -141,6 +153,7 @@ inline void buildPulled(const std::vector<PackedVertex>& verts, uint32_t maxQuad
   }
   out.bucket[6] = uint32_t(out.quads.size());
   if (out.palette.size() + out.quads.size() > 32767u) {  // distance field is 15 bits: keep everything on Packed12
+    if (why) why[kPullDistance] += uint32_t(out.quads.size());
     out.fallback.assign(verts.begin(), verts.begin() + std::ptrdiff_t(nq) * 4);
     out.palette.clear(); out.quads.clear(); out.quadMat.clear();
     for (uint32_t& b : out.bucket) b = 0;

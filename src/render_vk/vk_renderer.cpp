@@ -34,6 +34,11 @@
 #include <cstddef>
 #include <thread>  // 0.0.1.56 F56-8
 #include "litholattice/render_vk/packed_quad64.h"  // Mega-Pipeline Phase 2
+// Phase 4.0 (Direction JD, research Elfie, implementation Cortana): streaming / culling counters. Logging only,
+// zero behavior change. CMake option LITHO_STREAM_COUNTERS (default ON) sets this; OFF compiles them out.
+#ifndef LL_STREAM_COUNTERS
+#define LL_STREAM_COUNTERS 1
+#endif
 
 namespace litholattice {
 namespace {
@@ -202,6 +207,9 @@ class cVulkanRenderer final : public IRenderer {
     if (it != meshes_.end()) {
       retire(it->second.slice);
       meshes_.erase(it);
+#if LL_STREAM_COUNTERS
+      if (m.verts.empty()) ++perf_.evictions; else ++perf_.remeshes;  // Phase 4.0
+#endif
     }
     if (m.verts.empty()) return;
     const auto tA = std::chrono::steady_clock::now();  // [C53-1] upload split
@@ -749,6 +757,7 @@ class cVulkanRenderer final : public IRenderer {
   std::atomic<uint64_t> packMisses_{0};
   std::vector<uint8_t> packScratch_;  ///< main thread only (device-arena staging path)
   bool pull_ = false;     ///< Mega-Pipeline Phase 2 (LL_VK_PULL=1)
+  std::atomic<uint64_t> pullWhy_[kPullReasons] = {};  ///< Phase 4.0: quads by pull outcome (cumulative; LL_VK_PULL=1 only)
   bool buckets_ = false;  ///< Mega-Pipeline Phase 3 (LL_VK_BUCKETS=1)
   std::vector<const Mesh*> megaMesh_;  ///< Phase 2: mesh per opaque record (pulled pass)
   static PulledMesh& pulledScratch() { thread_local PulledMesh pm; return pm; }
@@ -761,12 +770,27 @@ class cVulkanRenderer final : public IRenderer {
   // Packed12 fallback (pm.active); a slice landing on block >= kMaxPullBlocks is redone on the plain layout.
   std::optional<cVertexArena::Slice> allocateMesh(const ChunkMesh& m, bool hasBlend, PulledMesh& pm, VkDeviceSize& bytes) {
     pm.active = false;
+#if LL_STREAM_COUNTERS
+    if (pull_ && hasBlend) pullWhy_[kPullBlendMesh].fetch_add(uint32_t(m.verts.size() / 4), std::memory_order_relaxed);
+#endif
     if (pull_ && !hasBlend) {
-      buildPulled(m.verts, kMaxQuads, true, pm);
+      uint32_t why[kPullReasons] = {};  // Phase 4.0 quad-rejection counter (for Archie)
+      buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr);
+#if LL_STREAM_COUNTERS
+      for (uint32_t r = 1; r < kPullReasons; ++r)
+        if (why[r]) pullWhy_[r].fetch_add(why[r], std::memory_order_relaxed);
+      pullWhy_[kPullOk].fetch_add(uint32_t(pm.quads.size()), std::memory_order_relaxed);
+#endif
       if (!pm.quads.empty()) {
         bytes = VkDeviceSize(pulledBytes(pm));
         auto s = arena_->allocate(bytes);
         if (s && s->block < kMaxPullBlocks) { pm.active = true; return s; }
+#if LL_STREAM_COUNTERS
+        if (s) {
+          pullWhy_[kPullBlock].fetch_add(uint32_t(pm.quads.size()), std::memory_order_relaxed);
+          pullWhy_[kPullOk].fetch_sub(uint32_t(pm.quads.size()), std::memory_order_relaxed);
+        }
+#endif
         if (s) arena_->free(*s);
       }
     }
@@ -1001,6 +1025,23 @@ class cVulkanRenderer final : public IRenderer {
       logInfo("vulkan mega: mode %d%s, logical chunk draws/frame %.0f, draw API calls/frame %.0f, chunk record cpu ms/frame %.3f, chunk gpu ms %.3f",
               megaMode_, megaProbe_ ? " (probe)" : "", double(perf_.draws) / n, double(perf_.apiCalls) / n, perf_.chunkCpuMs / n,
               perf_.gpuFrames ? perf_.chunkGpuMs / double(perf_.gpuFrames) : 0.0);  // mega-draw V2
+#if LL_STREAM_COUNTERS
+      {  // Phase 4.0 (Direction JD, research Elfie, implementation Cortana)
+        const double cap = double(arena_->blockCount()) * 32.0;
+        logInfo("vulkan stream: uploads/frame %.2f (worker-published %.2f), upload MB/frame %.3f, evictions/frame %.2f, remeshes/frame %.2f, "
+                "chunks tested/frame %.0f, frustum-culled %.0f, occlusion-culled 0 (no occlusion pass), arena %.1f MB used of %.0f MB reserved (%.1f%%)",
+                double(perf_.uploads) / n, double(perf_.published) / n, double(perf_.uploadBytes) / n / 1048576.0, double(perf_.evictions) / n,
+                double(perf_.remeshes) / n, double(perf_.cullTested) / n, double(perf_.cullFrustum) / n, double(arena_->usedBytes()) / 1048576.0, cap,
+                cap > 0 ? 100.0 * double(arena_->usedBytes()) / 1048576.0 / cap : 0.0);
+        if (pull_) {
+          char buf[512]; int o = 0;
+          for (uint32_t r = 0; r < kPullReasons && o < int(sizeof buf) - 48; ++r)
+            o += std::snprintf(buf + o, sizeof buf - size_t(o), "%s%s %llu", r ? ", " : "", pullReasonName(r),
+                               (unsigned long long)pullWhy_[r].load(std::memory_order_relaxed));
+          logInfo("vulkan pull reasons (quads, cumulative): %s", buf);
+        }
+      }
+#endif
       if (pull_) logInfo("vulkan pull: pulled quads/frame %.0f, packed12 fallback quads/frame %.0f, bucket-culled quads/frame %.0f (%s)",
                          double(perf_.pulledQuads) / n, double(perf_.fallbackQuads) / n, double(perf_.culledQuads) / n,
                          buckets_ ? "Phase 3 buckets on" : "buckets off");  // Mega-Pipeline Phase 2/3
@@ -1321,9 +1362,16 @@ class cVulkanRenderer final : public IRenderer {
     for (const auto& [k, mesh] : meshes_) {
       const Vec3 mn{mesh.cx * 16.f, mesh.sy * 16.f, mesh.cz * 16.f};
       // Prototype pipeline: Full draws; MeshOnly/Cull skip (mesh stays uploaded).
+#if LL_STREAM_COUNTERS
+      ++perf_.cullTested;  // Phase 4.0: frustum only; this renderer has no occlusion pass (occlusion culled = 0)
+#endif
       if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) !=
-          CullDecision::Full)
+          CullDecision::Full) {
+#if LL_STREAM_COUNTERS
+        ++perf_.cullFrustum;
+#endif
         continue;
+      }
       visible_.push_back({arena_->buffer(mesh.slice), &mesh});
     }
     // 0.0.1.52 [A52-3] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): draw compaction. Visible meshes are grouped
@@ -1658,6 +1706,7 @@ class cVulkanRenderer final : public IRenderer {
     double allocMs = 0, copyMs = 0;  // [C53-1]
     uint64_t published = 0;  // [C53-2]
     double gpuMs = 0, gpuMaxMs = 0;
+    uint64_t evictions = 0, remeshes = 0, cullTested = 0, cullFrustum = 0;  ///< Phase 4.0 (LL_STREAM_COUNTERS)
     uint64_t pulledQuads = 0, fallbackQuads = 0, culledQuads = 0;  ///< Mega-Pipeline Phase 2/3 (quads drawn / culled per log window)
     uint64_t apiCalls = 0;   ///< mega-draw V2: chunk draw API calls (vkCmdDrawIndexed / vkCmdDrawIndexedIndirect)
     double chunkCpuMs = 0;

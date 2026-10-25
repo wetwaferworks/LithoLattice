@@ -87,4 +87,7 @@ add_library(litholattice_render_vk STATIC vk_loader.cpp vk_handles.cpp vk_device
             vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp ${LITHOLATTICE_SPV_HEADERS})
 target_include_directories(litholattice_render_vk PUBLIC include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(litholattice_render_vk PUBLIC litholattice_render PRIVATE litholattice_core Vulkan::Headers ${CMAKE_DL_LIBS})
+# Phase 4.0 (Direction JD, research Elfie, implementation Cortana): streaming / culling counters (logging only).
+option(LITHO_STREAM_COUNTERS "Phase 4.0 streaming / culling counters in the Vulkan perf log" ON)
+target_compile_definitions(litholattice_render_vk PRIVATE LL_STREAM_COUNTERS=$<BOOL:${LITHO_STREAM_COUNTERS}>)
 litholattice_module_options(litholattice_render_vk)
