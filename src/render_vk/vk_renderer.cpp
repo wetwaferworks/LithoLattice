@@ -104,7 +104,10 @@ class cVulkanRenderer final : public IRenderer {
       logInfo("vulkan: Mega-Pipeline Phase 2 vertex pulling %s", pull_ ? "on" : "requested but unavailable (needs LL_VK_MEGA=3, packed12, firstInstance, dynamic storage indexing); off");
     }
     // Mega-Pipeline Phase 3: LL_VK_BUCKETS=1 (with pulling) draws only the face buckets that can face the camera.
-    // (Phase 3 switch lands in its own commit.)
+    // Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana. Buckets are the face-sorted ranges
+    // built in buildPulled; adjacent visible buckets merge into one indirect command (all in the shared arena, MDI).
+    if (const char* e = std::getenv("LL_VK_BUCKETS"); pull_ && e && std::atoi(e) == 1) buckets_ = true;
+    if (buckets_) logInfo("vulkan: Mega-Pipeline Phase 3 camera-facing face buckets on");
     if (!pipelines_) return false;
     cVertexArena::Kind kind = cVertexArena::Kind::Device;
     if (!cVertexArena::parseKind(desc.vertexArena, kind)) logError("vulkan: unknown vertex arena '%s'; using device", desc.vertexArena.c_str());
