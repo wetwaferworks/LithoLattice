@@ -236,6 +236,7 @@ static std::atomic<unsigned> g_p2{[] {
 }()};
 static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_relaxed) & bit) != 0; }
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
+static double g_hudMsAcc = 0; static uint64_t g_hudTris = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
 static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0};  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
@@ -2245,21 +2246,53 @@ void cSoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, floa
 
 void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex& B,
                                             const HudVertex& C) {
+  // 2026-10-25 (JD/Archie HUD diet): same coverage rule as before (all three barycentrics >= 0
+  // at the pixel centre), but the edge signs are tested without per-pixel divides, the row's
+  // covered x-range is skipped to directly, and flat-colour triangles (every HUD rect and
+  // icon run) blend one precomputed colour per pixel.
   const float area = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
   if (std::abs(area) < 1e-9f) return;
   const int x0 = std::max(0, int(std::floor(std::min({A.x, B.x, C.x}))));
   const int x1 = std::min(int(fb_.width) - 1, int(std::ceil(std::max({A.x, B.x, C.x}))));
   const int y0 = std::max(0, int(std::floor(std::min({A.y, B.y, C.y}))));
   const int y1 = std::min(int(fb_.height) - 1, int(std::ceil(std::max({A.y, B.y, C.y}))));
+  if (x0 > x1 || y0 > y1) return;
   auto edge = [](const HudVertex& a, const HudVertex& b, float x, float y) {
     return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
   };
+  const bool flat = A.r == B.r && A.r == C.r && A.g == B.g && A.g == C.g && A.b == B.b && A.b == C.b &&
+                    A.a == B.a && A.a == C.a && A.u < 0.f && B.u < 0.f && C.u < 0.f;
+  const float inv = 1.f / area;
+  if (flat) {
+    const float a = A.a;
+    if (a <= 0.f) return;
+    const bool opaque = a >= 1.f;
+    const uint32_t solid = 0xFF000000u | (uint32_t(std::lround(std::clamp(A.r, 0.f, 1.f) * 255.f)) << 16) |
+                           (uint32_t(std::lround(std::clamp(A.g, 0.f, 1.f) * 255.f)) << 8) |
+                           uint32_t(std::lround(std::clamp(A.b, 0.f, 1.f) * 255.f));
+    const float ra = A.r * a, ga = A.g * a, ba = A.b * a, ia = 1.f - a;
+    for (int y = y0; y <= y1; ++y) {
+      const float py = y + 0.5f;
+      uint32_t* row = fb_.pixels.data() + size_t(y) * fb_.width;
+      for (int x = x0; x <= x1; ++x) {
+        const float px = x + 0.5f;
+        if (edge(B, C, px, py) * inv < 0.f || edge(C, A, px, py) * inv < 0.f || edge(A, B, px, py) * inv < 0.f) continue;
+        uint32_t& dst = row[x];
+        if (opaque) { dst = solid; continue; }
+        const float dr = float((dst >> 16) & 0xFF) / 255.f, dg = float((dst >> 8) & 0xFF) / 255.f, db = float(dst & 0xFF) / 255.f;
+        dst = 0xFF000000u | (uint32_t(std::lround(std::clamp(ra + dr * ia, 0.f, 1.f) * 255.f)) << 16) |
+              (uint32_t(std::lround(std::clamp(ga + dg * ia, 0.f, 1.f) * 255.f)) << 8) |
+              uint32_t(std::lround(std::clamp(ba + db * ia, 0.f, 1.f) * 255.f));
+      }
+    }
+    return;
+  }
   for (int y = y0; y <= y1; ++y) {
     for (int x = x0; x <= x1; ++x) {
       const float px = x + 0.5f, py = y + 0.5f;
-      const float w0 = edge(B, C, px, py) / area;
-      const float w1 = edge(C, A, px, py) / area;
-      const float w2 = edge(A, B, px, py) / area;
+      const float w0 = edge(B, C, px, py) * inv;
+      const float w1 = edge(C, A, px, py) * inv;
+      const float w2 = edge(A, B, px, py) * inv;
       if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
       const float u = w0 * A.u + w1 * B.u + w2 * C.u;
       const float v = w0 * A.v + w1 * B.v + w2 * C.v;
@@ -2372,6 +2405,8 @@ struct SwProf {
       std::fprintf(stderr, "swprof span px simd(avx2/sse)=%llu scalar=%llu (simd %.1f%%) /frame\n", ps, pc, ps + pc ? 100.0 * double(ps) / double(ps + pc) : 0.0);
       std::fprintf(stderr, "swprof strip thread ms/frame min=%.2f max=%.2f\n", g_thrMinAcc / frames, g_thrMaxAcc / frames);
       g_thrMinAcc = g_thrMaxAcc = 0;
+      std::fprintf(stderr, "swprof hud ms/frame=%.2f hud tris=%llu /frame\n", g_hudMsAcc / frames, (unsigned long long)(g_hudTris / frames));
+      g_hudMsAcc = 0; g_hudTris = 0;
     }
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
@@ -2427,6 +2462,18 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   const uint32_t renderW = ssaa ? targetW * 2 : scaled ? std::max(1u, uint32_t(float(targetW) * rscale + 0.5f)) : targetW;
   const uint32_t renderH = ssaa ? targetH * 2 : scaled ? std::max(1u, uint32_t(float(targetH) * rscale + 0.5f)) : targetH;
   if (fb_.width != renderW || fb_.height != renderH) resize(renderW, renderH);
+  {  // 2026-10-25 (Archie step 0): LL_SW_BLANK=1 skips the scene and HUD; the frame is a solid
+     // colour cycling every frame, so present/blit cost can be measured alone. Off unless set.
+    static const bool blank = std::getenv("LL_SW_BLANK") != nullptr;
+    if (blank) {
+      static uint32_t k = 0;
+      ++k;
+      if (fb_.width != targetW || fb_.height != targetH) resize(targetW, targetH);
+      swsimd::fill32(fb_.pixels.data(), fb_.pixels.size(), 0xFF000000u | ((k * 5u) & 0xFF) << 16 | ((k * 3u) & 0xFF) << 8 | ((k * 7u) & 0xFF));
+      g_swProf.end();
+      return;
+    }
+  }
   // Ginny (Argon) 2026-10-16 Pass 2 step 2: with kP2Par the colour/depth clear moves into
   // the strip workers (each strip clears its own 32 rows right before drawing them: no
   // serial 7 MB fill on the calling thread, and the rows are hot in that core's cache).
@@ -2817,7 +2864,11 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // Overlays (H3): highlight + crosshair lines, then the HUD layer — the
   // same order the GPU backends draw them (lines before HUD).
   drawOverlayLines(p);
-  drawHud(p);
+  {  // 2026-10-25 (Archie bucket 5): HUD alone, split out of post+hud (LL_SW_PROF)
+    const auto th = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    drawHud(p);
+    if (g_swProfOn) { g_hudMsAcc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count(); g_hudTris += hudVerts_.size() / 3; }
+  }
   if (grabArmed_) {
     grabArmed_ = false;
     grabW_ = int(fb_.width);
