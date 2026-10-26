@@ -259,6 +259,11 @@ class cSoftwareRenderer : public IRenderer {
   static void setRenderScale(float s);
   /// Effective thread count after rounding/clamping.
   static unsigned renderThreads();
+  /// Cortana 2026-10-26 (item 5): while held, LL_SW_SHOT does not count frames (the game holds
+  /// it until its mesh queue has drained, so pinned shots see the same geometry every run).
+  static void setShotHold(bool hold);
+  /// True once the LL_SW_SHOT frame has been written.
+  static bool shotTaken();
   /// Cortana 2026-10-15 1450: the auto rule, exposed for tests: pow2 <= (logical - 2), clamped 2..16.
   static unsigned autoRenderThreads(unsigned logicalCores);
   // Cortana 2026-10-15 1610 (ENGINE): Debug Overlay support. Meshes that

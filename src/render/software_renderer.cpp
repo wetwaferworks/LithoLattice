@@ -521,6 +521,10 @@ class cSwBandPool {
 void cSoftwareRenderer::setRenderThreads(unsigned n) { g_swRequestedThreads.store(n); }
 static std::atomic<float> g_swRenderScale{1.0f};  // pass sw3: --sw-scale
 void cSoftwareRenderer::setRenderScale(float s) { g_swRenderScale.store(std::clamp(s, 0.25f, 1.0f)); }
+static std::atomic<bool> g_swShotHold{false};
+void cSoftwareRenderer::setShotHold(bool hold) { g_swShotHold.store(hold, std::memory_order_relaxed); }
+static std::atomic<bool> g_swShotTaken{false};
+bool cSoftwareRenderer::shotTaken() { return g_swShotTaken.load(std::memory_order_acquire); }
 unsigned cSoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
 
 // Design B Stage 2: forward declaration (defined with the store, below) +
@@ -3290,12 +3294,13 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     static const char* shot = std::getenv("LL_SW_SHOT");
     static const int shotAt = std::getenv("LL_SW_SHOT_FRAME") ? std::atoi(std::getenv("LL_SW_SHOT_FRAME")) : 300;
     static int frameNo = 0;
-    if (shot && ++frameNo == shotAt) {
+    if (shot && !g_swShotHold.load(std::memory_order_relaxed) && ++frameNo == shotAt) {
       if (FILE* f = std::fopen(shot, "wb")) {
         std::fprintf(f, "P6\n%u %u\n255\n", fb_.width, fb_.height);
         for (uint32_t px : fb_.pixels) { const uint8_t rgb[3] = {uint8_t(px >> 16), uint8_t(px >> 8), uint8_t(px)}; std::fwrite(rgb, 1, 3, f); }
         std::fclose(f);
       }
+      g_swShotTaken.store(true, std::memory_order_release);
     }
   }}
 
