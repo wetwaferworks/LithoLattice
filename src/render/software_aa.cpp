@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <string_view>
 
 namespace litholattice {
@@ -79,6 +80,10 @@ bool softwareAaModeFromName(const char* name, SoftwareAaMode& out) {
 // until its average luma breaks), blend offset from the distance to the
 // nearer end + the subpixel term. Operates on LDR framebuffer values.
 // ---------------------------------------------------------------------------
+// Float NDC-z threshold t -> smallest uint16 step that exceeds it: |a-b|/65535 > t
+// <=> |a-b| > t*65535 <=> |a-b| >= floor(t*65535)+1 (t*65535 is non-integral here).
+static constexpr int depthEdgeQ(float t) { return int(double(t) * 65535.0) + 1; }
+
 void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const uint16_t* depth) {
   const int w = int(fb.width), h = int(fb.height);
   if (w < 3 || h < 3) return;
@@ -94,6 +99,7 @@ void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const uint16_t
   constexpr float kEdgeRel = 0.125f;   // FXAA quality edge threshold (relative)
   constexpr float kEdgeAbs = 0.0625f;  // FXAA quality edge threshold (absolute floor)
   constexpr int kSearch = 12;          // endpoint search radius (steps of 1 px)
+  constexpr int kDepthEdgeQ = depthEdgeQ(0.0025f);  // quantized geometry-edge depth step
 
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
@@ -110,14 +116,19 @@ void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const uint16_t
       const float range = rMax - rMin;
       if (range < std::max(kEdgeAbs, kEdgeRel * rMax)) continue;  // not an edge
       if (depth) {  // Cortana 2026-10-16: texture-preserving - geometry (depth) edges only
-        float dMin = 2.f, dMax = -2.f;
-        for (int dy = -1; dy <= 1; ++dy)
+        // 2026-10-26 (Archie triage step 2): compare raw uint16 depth against the
+        // threshold pre-quantized once (0.0025 * 65535 = 163.84 -> diff >= 164 is
+        // a geometry edge), instead of dequantizing every tap to float.
+        int dMin = 0xFFFF, dMax = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+          const uint16_t* row = depth + size_t(std::clamp(y + dy, 0, h - 1)) * size_t(w);
           for (int dx = -1; dx <= 1; ++dx) {
-            const float d = depth[size_t(std::clamp(y + dy, 0, h - 1)) * size_t(w) + size_t(std::clamp(x + dx, 0, w - 1))] * (1.0f / 65535.0f);  // PT4-A: dequantize
+            const int d = row[std::clamp(x + dx, 0, w - 1)];
             dMin = std::min(dMin, d);
             dMax = std::max(dMax, d);
           }
-        if (dMax - dMin <= 0.0025f) continue;  // same surface: texture detail, keep it sharp
+        }
+        if (dMax - dMin <= kDepthEdgeQ - 1) continue;  // same surface: texture detail, keep it sharp
       }
 
       // Subpixel term: how far the cross average sits from the center,
@@ -207,13 +218,13 @@ void applyCmaaPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScr
     y = std::clamp(y, 0, h - 1);
     return L[size_t(y) * size_t(w) + size_t(x)];
   };
-  auto dep = [&](int x, int y) {
-    x = std::clamp(x, 0, w - 1);
-    y = std::clamp(y, 0, h - 1);
-    return depth[size_t(y) * size_t(w) + size_t(x)] * (1.0f / 65535.0f);  // PT4-A: dequantize
-  };
   constexpr float kLumaEdge = 0.08f;    // luma step that counts as an edge
-  constexpr float kDepthEdge = 0.0025f; // NDC-z step that counts as geometry
+  constexpr int kDepthEdgeQ = depthEdgeQ(0.0025f); // NDC-z step that counts as geometry (uint16 domain)
+  // 2026-10-26 (Archie triage step 2): neighbours are always in-bounds here, so
+  // compare raw uint16 depths directly (no per-tap clamp or float dequantize).
+  auto dStep = [&](size_t a, size_t b) {
+    return std::abs(int(depth[a]) - int(depth[b])) >= kDepthEdgeQ;
+  };
   // A monotone ramp on BOTH sides of a boundary = texture gradient, not a
   // geometry step (CMAA2's conservatism): steps continue in the same
   // direction with comparable size on both columns/rows.
@@ -230,14 +241,14 @@ void applyCmaaPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScr
       const size_t i = size_t(y) * size_t(w) + size_t(x);
       if (x + 1 < w) {
         const float dL = std::fabs(L[i + 1] - L[i]);
-        const bool dEdge = depth && std::fabs(dep(x + 1, y) - dep(x, y)) > kDepthEdge;
+        const bool dEdge = depth && dStep(i + 1, i);
         bool e = depth ? dEdge : dL > kLumaEdge;  // Cortana 2026-10-16: with depth, geometry edges only
         if (e && !dEdge && rampV(x, y, dL) && rampV(x + 1, y, dL)) e = false;
         s.edgeR[i] = e ? 1 : 0;
       }
       if (y + 1 < h) {
         const float dL = std::fabs(L[i + size_t(w)] - L[i]);
-        const bool dEdge = depth && std::fabs(dep(x, y + 1) - dep(x, y)) > kDepthEdge;
+        const bool dEdge = depth && dStep(i + size_t(w), i);
         bool e = depth ? dEdge : dL > kLumaEdge;  // Cortana 2026-10-16: with depth, geometry edges only
         if (e && !dEdge && rampH(x, y, dL) && rampH(x, y + 1, dL)) e = false;
         s.edgeB[i] = e ? 1 : 0;

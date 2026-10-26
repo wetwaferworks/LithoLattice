@@ -6,6 +6,8 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include <array>
+#include <vector>
 #include "litholattice/core/bitops.h"
 #include "litholattice/core/threeway.h"  // Design B Stage 1: detached renderFrame runs under RendererGuard, like RenderWorker::loop
 #include "font_data.h"  // Cortana 2026-10-15 1610: Debug Overlay strip glyphs
@@ -2563,8 +2565,41 @@ struct SwProf {
   std::chrono::steady_clock::time_point t;
   void mark(int i) { if (!on) return; auto n = std::chrono::steady_clock::now(); acc[i] += std::chrono::duration<double, std::milli>(n - t).count(); t = n; }
   void start() { if (on) t = std::chrono::steady_clock::now(); }
+  // 2026-10-26 (Archie triage step 1): LL_SW_PROF_CAPTURE="skip,count" records `count`
+  // per-frame stage times after `skip` frames and prints one mean/p99 summary (parked
+  // baselines). Off unless set; the 60-frame window lines below are unchanged.
+  int capSkip = -1, capCount = 0, capSeen = 0;
+  std::vector<std::array<double, 5>> cap;
+  double frameAcc[5] = {};
+  void capture() {
+    if (capSkip < 0) {
+      capSkip = 0;
+      if (const char* e = std::getenv("LL_SW_PROF_CAPTURE")) std::sscanf(e, "%d,%d", &capSkip, &capCount);
+      if (capCount > 0) cap.reserve(size_t(capCount));
+    }
+    std::array<double, 5> f{};
+    for (int i = 0; i < 5; ++i) { f[size_t(i)] = acc[i] - frameAcc[i]; frameAcc[i] = acc[i]; }
+    if (capCount <= 0 || int(cap.size()) >= capCount) return;
+    if (capSeen++ < capSkip) return;
+    cap.push_back(f);
+    if (int(cap.size()) == capCount) {
+      static const char* const kN[5] = {"clear+cull", "transform+bin", "strips", "pbr+ent+sprites", "post+hud"};
+      char buf[512]; int n = 0;
+      for (int i = 0; i < 5; ++i) {
+        std::vector<double> v; v.reserve(cap.size()); double sum = 0;
+        for (const auto& c : cap) { v.push_back(c[size_t(i)]); sum += c[size_t(i)]; }
+        std::sort(v.begin(), v.end());
+        const double p99 = v[std::min(v.size() - 1, size_t(double(v.size()) * 0.99))];
+        n += std::snprintf(buf + n, sizeof buf - size_t(n), " %s=%.3f/%.3f", kN[i], sum / double(v.size()), p99);
+      }
+      std::fprintf(stderr, "swprof capture %d frames (after %d) mean/p99 ms:%s\n", capCount, capSkip, buf);
+      std::fflush(stderr);
+    }
+  }
   void end() {
-    if (!on || ++frames < 60) return;
+    if (!on) return;
+    capture();
+    if (++frames < 60) return;
     std::fprintf(stderr, "swprof tris=%llu scan=%llu cov=%llu shade=%llu /frame\n", (unsigned long long)(g_tris.exchange(0)/frames), (unsigned long long)(g_pxScan.exchange(0)/frames), (unsigned long long)(g_pxCov.exchange(0)/frames), (unsigned long long)(g_pxShade.exchange(0)/frames));
     {  // Cortana 2026-10-25 (pass sw2): Hi-Z rejected rows of total rows visited
       const unsigned long long hz = g_hizRows.exchange(0) / frames, rt = g_rowsTotal.exchange(0) / frames;
@@ -2595,7 +2630,7 @@ struct SwProf {
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
-    for (double& a : acc) a = 0; frames = 0;
+    for (double& a : acc) a = 0; for (double& a : frameAcc) a = 0; frames = 0;
   }
 };
 SwProf g_swProf;
