@@ -7,6 +7,7 @@
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/core/threading.h"
+#include "litholattice/core/f3_trace.h"
 #include <array>
 #include <vector>
 #include "litholattice/core/bitops.h"
@@ -2450,6 +2451,17 @@ void cSoftwareRenderer::drawHud(const FrameParams& p) {
   if (p.hud.rects.empty() && p.hud.texts.empty() && p.hud.draws.empty()) return;
   const auto tb = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
   buildHudVertices(p.hud, hudVerts_);
+  if (litholattice::f3trace::on()) {  // LL_TRACE_F3: the XYZ line exactly as this frame rasterizes it
+    for (const HudDraw& d : p.hud.draws) {
+      const size_t at = d.text.find("XYZ ");
+      if (at == std::string::npos) continue;
+      const size_t ls = d.text.rfind('\n', at), le = d.text.find('\n', at);
+      const size_t b0 = ls == std::string::npos ? 0 : ls + 1;
+      litholattice::f3trace::noteDrawn(std::string_view(d.text).substr(b0, le == std::string::npos ? std::string::npos : le - b0),
+                                       hudVerts_.size());
+      break;
+    }
+  }
   if (g_swProfOn) g_hudBuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count();
   const HudVertex* v = hudVerts_.data();
   const size_t n = hudVerts_.size();
