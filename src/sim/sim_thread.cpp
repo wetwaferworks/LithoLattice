@@ -631,6 +631,7 @@ void cSimThread::run() {
     // no writer ever took it). Uncontended for the sim thread.
     bool editsApplied = false;
     bool raycastDone = false;
+    bool passCut = false;
     {
       std::lock_guard l(blockMutex_);
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
@@ -697,7 +698,14 @@ void cSimThread::run() {
         int steps = 0;
         const uint64_t burstFrom = worldTickN_;  // LL_SIM_STALL_MS (measure only; Proposed by Herominde; implemented by Cortana)
         inBurst_ = true;
-        while (acc_ >= stepDur_ && steps < 16) {
+        // 2026-10-25 (JD, Debug stall): one pass holds blockMutex_ for at most kPassTicks ticks or
+        // kPassBudget of work; the lock is then released before the next pass, so a too-slow sim
+        // (Debug) runs slow via the 100 ms lag cap instead of starving the main thread (getBlock / holdBetweenTicks) of the lock.
+        // At Release tick costs (<1 ms) a pass never hits the time budget.
+        constexpr int kPassTicks = 4;
+        const auto passStart = Clock::now();
+        const Ns kPassBudget = std::chrono::milliseconds(6);
+        while (acc_ >= stepDur_ && steps < kPassTicks && (steps == 0 || Clock::now() - passStart < kPassBudget)) {
           if (!stepMasterOnce(true)) {
             // Frozen step (A-M5): not consumed — masterStep_ unchanged and
             // the step re-runs on resume. Charge the pacing slot anyway
@@ -710,6 +718,7 @@ void cSimThread::run() {
           if (threewayYield_ && pointReaders_.load(std::memory_order_acquire) > 0) handoffYield();  // LL_THREEWAY handshake (Proposed by JD; co-implemented by JD and Cortana)
         }
         inBurst_ = false;
+        passCut = acc_ >= stepDur_;  // backlog left: yield the lock to the main thread before the next pass
         if (steps > 2 && stallLogWindow()) logInfo("sim-stall: burst world ticks %llu..%llu (%d master steps)", (unsigned long long)burstFrom, (unsigned long long)worldTickN_, steps);
         if (::litholattice::tickprof::enabled()) ::litholattice::tickprof::ticks().noteBurst(steps);  // LL_TICK_PROFILE (measure only)
         editsApplied |= stepEditsApplied_;
@@ -818,6 +827,10 @@ void cSimThread::run() {
                stepRequested_.load(std::memory_order_relaxed) != 0 ||
                wakeEpoch_.load(std::memory_order_relaxed) != e;
       });
+    } else if (passCut) {
+      // backlog beyond one pass: the 100 ms lag cap above drops what can't be caught up,
+      // so a too-slow (Debug) sim runs slow; give lock waiters a turn instead of re-locking at once
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
     } else {
       waitUntil(last + (stepDur_ - acc_));
     }
