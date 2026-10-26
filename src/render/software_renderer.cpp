@@ -250,6 +250,7 @@ static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD
 // Strike 2 (Elfie bench, 2026-10-26, Archie battle plan): extend the flat-LOD path to
 // 2x meshes (the largest tri ring). Opt-in LL_SW_FLAT_LOD2=1 until the picture and the
 // counts are judged; the >= 4x path above stays as shipped.
+static const bool g_swNearBinOld = std::getenv("LL_SW_NEARBIN_OLD") != nullptr;  // Cortana 2026-10-26: A/B the near-plane quad binning
 static const float g_swMipBias = [] { const char* e = std::getenv("LL_SW_MIP_BIAS"); return e ? float(std::atof(e)) : 0.0f; }();  // Cortana 2026-10-26: distant moire A/B (mip levels added to the per-triangle pick)
 static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
 static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 1.5f; }();
@@ -2996,9 +2997,41 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           const float minH = (perPixel_ && m.lodScale >= 4) ? g_swLod4MinH : 0.f;
           auto range = [&](size_t q, int& s0, int& s1) {
             const float* s = dst + q * 16;
-            if (!(s[3] > 0 && s[7] > 0 && s[11] > 0 && s[15] > 0)) { s0 = 0; s1 = nStripsF - 1; return; }
-            const float y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
-            const float y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
+            float y0, y1;
+            if (!(s[3] > 0 && s[7] > 0 && s[11] > 0 && s[15] > 0)) {
+              // Cortana 2026-10-26 (Archie near-wall item): a quad crossing the near plane used to
+              // go to EVERY strip (and one wholly behind the camera too, only to be rejected per
+              // strip). Rebuild clip (y, w) from the screen y (exact up to rounding: y_clip =
+              // (1 - 2*sy/H) * w), clip the polygon against the raster's w >= 1/128 and bin by the
+              // clipped y range, padded 2 rows. The per-strip near-clip path stays the authority.
+              if (g_swNearBinOld) { s0 = 0; s1 = nStripsF - 1; return; }
+              constexpr float kNearW = 1.0f / 128.0f;
+              const float H = float(fb_.height);
+              float cy[4], cw[4];
+              bool anyFront = false;
+              for (int k = 0; k < 4; ++k) {
+                cw[k] = s[k * 4 + 3];
+                cy[k] = (1.0f - 2.0f * s[k * 4 + 1] / H) * cw[k];
+                anyFront |= cw[k] >= kNearW;
+              }
+              if (!anyFront) { s0 = 1; s1 = 0; return; }  // wholly behind: the raster draws nothing
+              y0 = 1e30f; y1 = -1e30f;
+              auto addPt = [&](float yc, float w) { const float sy = (1.0f - yc / w) * 0.5f * H; y0 = std::min(y0, sy); y1 = std::max(y1, sy); };
+              for (int k = 0; k < 4; ++k) {
+                const int n = (k + 1) & 3;
+                const bool ain = cw[k] >= kNearW, bin = cw[n] >= kNearW;
+                if (ain) addPt(cy[k], cw[k]);
+                if (ain != bin) { const float t = (kNearW - cw[k]) / (cw[n] - cw[k]); addPt(cy[k] + t * (cy[n] - cy[k]), kNearW); }
+              }
+              if (!std::isfinite(y0) || !std::isfinite(y1)) { s0 = 0; s1 = nStripsF - 1; return; }
+              y0 = std::max(y0 - 2.f, -4.f); y1 = std::min(y1 + 2.f, float(fb_.height) + 4.f);
+              if (!(y1 >= -1.f) || !(y0 <= H + 1.f)) { s0 = 1; s1 = 0; return; }
+              s0 = std::max(0, int(std::floor(y0)) - 1) / kStripHF;
+              s1 = std::max(0, std::min(int(fb_.height) - 1, int(std::ceil(y1)) + 1)) / kStripHF;
+              return;
+            }
+            y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
+            y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
             if (!(y1 >= -1.f) || !(y0 <= float(fb_.height) + 1.f)) { s0 = 1; s1 = 0; return; }
             if (minH > 0.f && y1 - y0 < minH) { s0 = 1; s1 = 0; return; }  // 2026-10-25: thin 4x-LOD faces
             if (cullBin) {  // 2026-10-25 (Archie step 4): no pixel centre in the quad bbox -> never binned
