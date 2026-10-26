@@ -181,14 +181,14 @@ void cCpuTextureArray::setRaw(const uint32_t* data, uint32_t layers) {
 
 cSoftwareRenderer::cSoftwareRenderer() {
   fb_.resize(800, 600);
-  depth_.resize(size_t(800) * 600, 1.0f);
+  depth_.resize(size_t(800) * 600, 0xFFFF);
 }
 
 cSoftwareRenderer::~cSoftwareRenderer() = default;
 
 void cSoftwareRenderer::resize(uint32_t w, uint32_t h) {
   fb_.resize(w, h);
-  depth_.assign(size_t(w) * h, 1.0f);
+  depth_.assign(size_t(w) * h, 0xFFFF);
   hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z off until the next clear()
 }
 
@@ -243,10 +243,15 @@ static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
 // 2026-10-25 (Archie): far-LOD (>= 4x) meshes flat-shade with the layer's average colour
 // (LL_SW_FLAT_LOD=0 off) and drop quads under LL_SW_LOD4_MINH px tall (default 1.5; 0 = off).
 static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD"); return !(e && *e == '0'); }();
+// Strike 2 (Elfie bench, 2026-10-26, Archie battle plan): extend the flat-LOD path to
+// 2x meshes (the largest tri ring). Opt-in LL_SW_FLAT_LOD2=1 until the picture and the
+// counts are judged; the >= 4x path above stays as shipped.
+static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
 static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 1.5f; }();
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
+static std::atomic<uint64_t> g_hizTested{0}, g_hizPartial{0}, g_hizTilesTot{0}, g_hizTilesOcc{0};  // Strike 3 sizing
 static std::atomic<uint64_t> g_centreCulled{0}, g_emitMemoHits{0}, g_quadCentreCulled{0};  // Cortana 2026-10-25 box: tris dropped by kP2CentreCull
 static thread_local uint64_t tlQuadCentreCulled = 0, tlEmitMemoHits = 0;  // 2026-10-25 step 2: flushed per band
 static size_t g_lastEmitN = 0;
@@ -258,7 +263,8 @@ static std::atomic<uint64_t> g_rowsTotal{0}, g_pxSimd{0}, g_pxScalar{0};
 // 2026-10-25: LL_SW_PROF per-row/per-tri counters are thread-local and flushed once per band
 // (were contended atomics bumped ~6x per row by every band thread, which inflated the very
 // strip times they measured).
-struct SwTlCounters { uint64_t pxScan = 0, pxCov = 0, pxShade = 0, tris = 0, hizRows = 0, rowsTotal = 0, pxSimd = 0, pxScalar = 0, centreCulled = 0; };
+struct SwTlCounters { uint64_t pxScan = 0, pxCov = 0, pxShade = 0, tris = 0, hizRows = 0, rowsTotal = 0, pxSimd = 0, pxScalar = 0, centreCulled = 0;
+                      uint64_t hizTested = 0, hizPartial = 0, hizTilesTot = 0, hizTilesOcc = 0; };  // Strike 3 sizing (Elfie bench, 2026-10-26)
 static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
@@ -669,7 +675,7 @@ void cSoftwareRenderer::setDetachedPoolMode(bool on) { cSwBandPool::get().setDet
 void cSoftwareRenderer::clear(uint32_t color) {
   // Cortana 2026-10-15 1455: runtime-dispatched fill (AVX2 or baseline; identical bytes).
   swsimd::fill32(fb_.pixels.data(), fb_.pixels.size(), color);
-  swsimd::fillF(depth_.data(), depth_.size(), 1.0f);
+  swsimd::fill16(depth_.data(), depth_.size(), 0xFFFF);
   hizReset();  // Cortana 2026-10-15 1715: Hi-Z
 }
 
@@ -679,20 +685,20 @@ void cSoftwareRenderer::hizReset() {
   hizFbH_ = fb_.height;
   hizTilesX_ = (fb_.width + kHizTile - 1) / kHizTile;
   const size_t n = size_t(hizTilesX_) * ((fb_.height + kHizTile - 1) / kHizTile);
-  hizMax_.assign(n, std::numeric_limits<float>::infinity());
+  hizMax_.assign(n, uint16_t(0xFFFF));
   hizDirty_.assign(n, uint8_t(0));
   if (depth_.size() != size_t(fb_.width) * fb_.height) hizFbW_ = 0;  // unpaired: stay off
 }
 
-float cSoftwareRenderer::hizTileMax(int tx, int ty) {
+uint16_t cSoftwareRenderer::hizTileMax(int tx, int ty) {
   const size_t i = size_t(ty) * hizTilesX_ + size_t(tx);
   if (hizDirty_[i]) {
     hizDirty_[i] = 0;
     const int xa = tx * kHizTile, ya = ty * kHizTile;
     const int xb = std::min(int(fb_.width), xa + kHizTile), yb = std::min(int(fb_.height), ya + kHizTile);
-    float m = -std::numeric_limits<float>::infinity();
+    uint16_t m = 0;
     for (int y = ya; y < yb; ++y) {
-      const float* row = depth_.data() + size_t(y) * fb_.width;
+      const uint16_t* row = depth_.data() + size_t(y) * fb_.width;
       for (int x = xa; x < xb; ++x) m = std::max(m, row[x]);
     }
     hizMax_[i] = m;
@@ -789,12 +795,13 @@ void cSoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
     size_t idx = size_t(y) * fb_.width + size_t(x0);
     for (int x = x0; x <= x1; ++x, ++idx, w0 += dw0dx, w1 += dw1dx, w2 += dw2dx, depth += dzdx) {
       if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-      if (!(depth < depth_[idx])) continue;
+      const uint16_t q = swsimd::depthQ(depth);
+      if (!(q < depth_[idx])) continue;
       if (ditherCls == 2) {
         const float viewDepth = 1.0f / (w0 / v0[3] + w1 / v1[3] + w2 / v2[3]);
         if (!modelDitherKeep(x, y, viewDepth, ditherNear_, ditherFar_)) continue;
       }
-      depth_[idx] = depth;
+      depth_[idx] = q;
       fb_.pixels[idx] = color;
     }
   }
@@ -874,17 +881,32 @@ void cSoftwareRenderer::rasterizeTriangleShaded(const float* v0, const float* v1
 }
 
 namespace {
-struct SwTriSetup {
-  const float *v0, *v1, *v2;
-  const ShaderVaryings *s0, *s1, *s2;
-  int ditherCls, x0, x1, y0, y1, htx0, htx1, skipTo;
-  float invArea, dw0dx, dw1dx, dw2dx, dzdx, iw0, iw1, iw2, triMinZ, hizMargin;
-  int mip = 0;  // Cortana 2026-10-16 (BUG-0005): per-triangle texture LOD
+// PT4 Target B (2026-10-26, Archie memory-wall brief; Cortana's render-path
+// note converges): the fields a strip visit touches are packed into the
+// first two 64-byte lines and the struct is cache-line aligned; the
+// emissive block is COLD (read only when frameEmit_ is non-empty) and is
+// evicted to the tail, so the inner loop never pulls it in.
+struct SwTriCold {
   bool hasEl = false;  // Cortana 2026-10-16 (render.emissive_light)
   float el[3][3];      // per-vertex emitted light (rgb)
-  bool simdSpan;
-  swsimd::ShadeSpanBasic span;
 };
+struct alignas(64) SwTriSetup {
+  // line 1 (64 B): row geometry, read on every strip visit
+  const float *v0, *v1, *v2;
+  float invArea, dw0dx, dw1dx, dw2dx, dzdx, iw0, iw1, iw2;
+  int x0, x1;
+  // line 2 (64 B): row window + scalar-shading varyings
+  const ShaderVaryings *s0, *s1, *s2;
+  int ditherCls, y0, y1, htx0, htx1, skipTo;
+  float triMinZ, hizMargin;
+  int mip = 0;  // Cortana 2026-10-16 (BUG-0005): per-triangle texture LOD
+  bool simdSpan;
+  // kernel payload: filled once per tri, consumed by the span kernels
+  swsimd::ShadeSpanBasic span;
+  // cold tail: emissive only, touched when frameEmit_ is non-empty
+  SwTriCold cold;
+};
+static_assert(offsetof(SwTriSetup, s0) == 64, "PT4-B: hot line 1 must stay exactly 64 B");
 }  // namespace
 
 void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
@@ -1086,7 +1108,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     // Argon point 3 (2026-10-18): AO tris no longer excluded — the span kernels
     // interpolate AO with the scalar loop's exact op order and apply its
     // post-shader channel scale, so AO shading is bit-identical in-kernel.
-    S.hasEl = false;
+    S.cold.hasEl = false;
     if (!frameEmit_.empty()) {  // Cortana 2026-10-16 (render.emissive_light): per-vertex point lights
       constexpr float kR = 6.0f, kStr = 0.9f;
       const ShaderVaryings* sv3e[3] = {s0, s1, s2};
@@ -1098,8 +1120,8 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           int hit = -1;
           for (int m = 0; m < nMemoEl; ++m) if (memoElV[m] == sv3e[k]) { hit = m; break; }
           if (hit >= 0) {
-            S.el[k][0] = memoEl[hit][0]; S.el[k][1] = memoEl[hit][1]; S.el[k][2] = memoEl[hit][2];
-            if (memoEl[hit][3] > 0.01f) S.hasEl = true;
+            S.cold.el[k][0] = memoEl[hit][0]; S.cold.el[k][1] = memoEl[hit][1]; S.cold.el[k][2] = memoEl[hit][2];
+            if (memoEl[hit][3] > 0.01f) S.cold.hasEl = true;
             if (g_swProfOn) ++tlEmitMemoHits;
             continue;
           }
@@ -1113,11 +1135,11 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           const float f = 1.0f - sqrtFast(d2) / kR, a = kStr * f * f;  // Carmack sqrt (per-pixel falloff)
           lr += frameEmit_[i + 3] * a; lg += frameEmit_[i + 4] * a; lb += frameEmit_[i + 5] * a;
         }
-        S.el[k][0] = std::min(lr, 1.5f); S.el[k][1] = std::min(lg, 1.5f); S.el[k][2] = std::min(lb, 1.5f);
-        if (lr + lg + lb > 0.01f) S.hasEl = true;
-        if (memoOn && nMemoEl < 6) { memoElV[nMemoEl] = sv3e[k]; memoEl[nMemoEl][0] = S.el[k][0]; memoEl[nMemoEl][1] = S.el[k][1]; memoEl[nMemoEl][2] = S.el[k][2]; memoEl[nMemoEl][3] = lr + lg + lb; ++nMemoEl; }
+        S.cold.el[k][0] = std::min(lr, 1.5f); S.cold.el[k][1] = std::min(lg, 1.5f); S.cold.el[k][2] = std::min(lb, 1.5f);
+        if (lr + lg + lb > 0.01f) S.cold.hasEl = true;
+        if (memoOn && nMemoEl < 6) { memoElV[nMemoEl] = sv3e[k]; memoEl[nMemoEl][0] = S.cold.el[k][0]; memoEl[nMemoEl][1] = S.cold.el[k][1]; memoEl[nMemoEl][2] = S.cold.el[k][2]; memoEl[nMemoEl][3] = lr + lg + lb; ++nMemoEl; }
       }
-      if (S.hasEl) S.simdSpan = false;  // lit triangles shade scalar
+      if (S.cold.hasEl) S.simdSpan = false;  // lit triangles shade scalar
     }
     S.span = swsimd::ShadeSpanBasic{};
     if (S.simdSpan) {
@@ -1154,8 +1176,19 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     swsimd::ShadeSpanBasic& span = S.span;
     if (g_swProfOn) ++tlC.rowsTotal;
     if (hiz && (y == S.y0 || y % kHizTile == 0)) {
+      // PT4-A: the skip test runs in the quantized domain — the tile max
+      // is an exact integer; the margin rounds up and triMinZ rounds
+      // down, so the integer test fires only when the float test would.
+      const uint32_t triMinQ = swsimd::depthQFloor(S.triMinZ);
+      const uint32_t marginQ = swsimd::depthQCeil(S.hizMargin);
       bool occluded = true;
-      for (int tx = S.htx0; tx <= S.htx1 && occluded; ++tx) occluded = hizTileMax(tx, y / kHizTile) + S.hizMargin < S.triMinZ;
+      for (int tx = S.htx0; tx <= S.htx1 && occluded; ++tx) occluded = uint32_t(hizTileMax(tx, y / kHizTile)) + marginQ < triMinQ;
+      if (g_swProfOn) {  // Strike 3 sizing: count tested rows, partially-occluded rows, and occluded tile share
+        int tot = 0, occ = 0;
+        for (int tx = S.htx0; tx <= S.htx1; ++tx) { ++tot; if (uint32_t(hizTileMax(tx, y / kHizTile)) + marginQ < triMinQ) ++occ; }
+        tlC.hizTested += 1; tlC.hizTilesTot += uint64_t(tot); tlC.hizTilesOcc += uint64_t(occ);
+        if (occ > 0 && occ < tot) tlC.hizPartial += 1;
+      }
       if (occluded) {
         const int last = std::min(S.y1, y | (kHizTile - 1));
         if (g_swProfOn) { tlC.hizRows += uint64_t(last - y + 1); tlC.rowsTotal += uint64_t(last - y); }  // pass sw2: rows skipped past count in the total
@@ -1208,7 +1241,8 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
         const float depth = sdepth;
         const size_t idx = sidx;
         ++lc;
-        if (depth < depth_[idx]) {
+        const uint16_t q = swsimd::depthQ(depth);
+        if (q < depth_[idx]) {
           ++ls;
           const float pw0 = sw0 * iw0, pw1 = sw1 * iw1, pw2 = sw2 * iw2;
           const float viewDepth = 1.0f / (pw0 + pw1 + pw2);
@@ -1251,9 +1285,9 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
             auto sc = [k](uint32_t c) { const float o = float(c) * k; return o > 255.f ? 255u : uint32_t(o); };
             color = (color & 0xFF000000u) | (sc((color >> 16) & 0xFF) << 16) | (sc((color >> 8) & 0xFF) << 8) | sc(color & 0xFF);
           }
-          if (S.hasEl) {  // Cortana 2026-10-16 (render.emissive_light): coloured local light, render-only
+          if (S.cold.hasEl) {  // Cortana 2026-10-16 (render.emissive_light): coloured local light, render-only
             float L[3];
-            for (int k = 0; k < 3; ++k) L[k] = w0 * S.el[0][k] + w1 * S.el[1][k] + w2 * S.el[2][k];
+            for (int k = 0; k < 3; ++k) L[k] = w0 * S.cold.el[0][k] + w1 * S.cold.el[1][k] + w2 * S.cold.el[2][k];
             auto li = [](uint32_t c, float l) { const float o = float(c) * (1.0f + l) + 48.f * l; return o > 255.f ? 255u : uint32_t(o); };
             color = (color & 0xFF000000u) | (li((color >> 16) & 0xFF, L[0]) << 16) | (li((color >> 8) & 0xFF, L[1]) << 8) | li(color & 0xFF, L[2]);
           }
@@ -1322,7 +1356,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
             fb_.pixels[idx] = 0xFF000000u | (r << 16) | (g << 8) | b;
             continue;
           }
-          depth_[idx] = depth;
+          depth_[idx] = q;
           fb_.pixels[idx] = color;
           if (x < wxLo) wxLo = x;
           wxHi = x;
@@ -1978,7 +2012,7 @@ void cSoftwareRenderer::applyAaPostPass() {
   } else if (aaMode_ == SoftwareAaMode::Cmaa) {
     // depth_ matches fb_ on the direct surface (resize keeps them paired);
     // pass it only when the pairing holds, else run luma-only.
-    const float* depth =
+    const uint16_t* depth =
         (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr;
     applyCmaaPost(fb_, depth, ensureAaScratch());
   }
@@ -2077,7 +2111,7 @@ void cSoftwareRenderer::rasterizeBlendSprite(const BlendSprite& s) {
         if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
         const float depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2];
         const size_t idx = size_t(y) * fb_.width + size_t(x);
-        if (!(depth < depth_[idx])) continue;  // test only; depth_ untouched
+        if (!(swsimd::depthQ(depth) < depth_[idx])) continue;  // test only; depth_ untouched
         const uint32_t dst = fb_.pixels[idx];
         const float dr = float((dst >> 16) & 0xFF), dg = float((dst >> 8) & 0xFF),
                     db = float(dst & 0xFF);
@@ -2487,7 +2521,7 @@ void cSoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const
       const int x = int(std::lround(cur[0] - 0.5f)), y = int(std::lround(cur[1] - 0.5f));
       if (x >= 0 && y >= 0 && x < int(fb_.width) && y < int(fb_.height)) {
         const size_t idx = size_t(y) * fb_.width + size_t(x);
-        if (cur[2] < depth_[idx]) fb_.pixels[idx] = color;
+        if (swsimd::depthQ(cur[2]) < depth_[idx]) fb_.pixels[idx] = color;
       }
     }
     if (ok) std::memcpy(prev, cur, sizeof prev);
@@ -2535,6 +2569,9 @@ struct SwProf {
     {  // Cortana 2026-10-25 (pass sw2): Hi-Z rejected rows of total rows visited
       const unsigned long long hz = g_hizRows.exchange(0) / frames, rt = g_rowsTotal.exchange(0) / frames;
       std::fprintf(stderr, "swprof hiz_rows_skipped=%llu of %llu rows (%.1f%%) /frame\n", hz, rt, rt ? 100.0 * double(hz) / double(rt) : 0.0);
+      { const unsigned long long ht = g_hizTested.exchange(0) / frames, hp = g_hizPartial.exchange(0) / frames,
+          htt = g_hizTilesTot.exchange(0) / frames, hto = g_hizTilesOcc.exchange(0) / frames;
+        std::fprintf(stderr, "swprof hiz tested rows=%llu partial=%llu (%.1f%%) tiles occluded=%llu of %llu (%.1f%%) /frame\n", ht, hp, ht ? 100.0 * double(hp) / double(ht) : 0.0, hto, htt, htt ? 100.0 * double(hto) / double(htt) : 0.0); }  // Strike 3 sizing
       const unsigned long long ps = g_pxSimd.exchange(0) / frames, pc = g_pxScalar.exchange(0) / frames;
       std::fprintf(stderr, "swprof span px simd(avx2/sse)=%llu scalar=%llu (simd %.1f%%) /frame\n", ps, pc, ps + pc ? 100.0 * double(ps) / double(ps + pc) : 0.0);
       std::fprintf(stderr, "swprof strip thread ms/frame min=%.2f max=%.2f\n", g_thrMinAcc / frames, g_thrMaxAcc / frames);
@@ -2943,7 +2980,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
      for (int y = tlBandY0; y < tlBandY1; ++y) {  // this work item's rect only (x tiles)
        const size_t o = size_t(y) * fb_.width + size_t(cx0), n = size_t(cx1 - cx0);
        swsimd::fill32(fb_.pixels.data() + o, n, skyColor);
-       swsimd::fillF(depth_.data() + o, n, 1.0f);
+       swsimd::fill16(depth_.data() + o, n, 0xFFFF);
      }
    }
    // Cortana 2026-10-15 1755 [ENGINE]: pass 0 = opaque front-to-back (as before); pass 1 =
@@ -2983,7 +3020,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     tlBlendPass = (perPixel_ && m.hasBlend) ? int8_t(pass) : int8_t(-1);
     const auto tm0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (g_swProfOn) ++tlMeshCalls;
-    tlFlatLod = perPixel_ && m.lodScale >= 4 && g_swFlatLod;
+    tlFlatLod = perPixel_ && g_swFlatLod && (m.lodScale >= 4 || (g_swFlatLod2 && m.lodScale >= 2));
     renderMesh(frameVerts_.data() + meshVertOff_[di], drawVertsOf(m), mvp.m);  // Elfie 2026-10-17: far LOD prefix bound; 2026-10-18 phase B: frame scratch
     if (g_swProfOn) tlMeshMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm0).count();
     tlBlendPass = -1;
@@ -3002,6 +3039,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
      g_meshUs.fetch_add(uint64_t(tlMeshMs * 1000.0), std::memory_order_relaxed); g_emitMemoHits += tlEmitMemoHits; tlEmitMemoHits = 0;
      g_meshCalls.fetch_add(tlMeshCalls, std::memory_order_relaxed);
      g_pxScan += tlC.pxScan; g_pxCov += tlC.pxCov; g_pxShade += tlC.pxShade; g_tris += tlC.tris; g_hizRows += tlC.hizRows;
+     g_hizTested += tlC.hizTested; g_hizPartial += tlC.hizPartial; g_hizTilesTot += tlC.hizTilesTot; g_hizTilesOcc += tlC.hizTilesOcc; tlC.hizTested = tlC.hizPartial = tlC.hizTilesTot = tlC.hizTilesOcc = 0;
      g_rowsTotal += tlC.rowsTotal; g_pxSimd += tlC.pxSimd; g_pxScalar += tlC.pxScalar; g_centreCulled += tlC.centreCulled;
      tlC = SwTlCounters{};
    }
@@ -3064,7 +3102,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     fb_.width = targetW;
     fb_.height = targetH;
     fb_.pixels = std::move(aaOut_.pixels);
-    depth_.assign(size_t(targetW) * targetH, 1.0f);
+    depth_.assign(size_t(targetW) * targetH, 0xFFFF);
     hizFbW_ = 0;
     applyAaPostPass();
   } else if (ssaa) {
@@ -3073,7 +3111,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     fb_.width = targetW;
     fb_.height = targetH;
     fb_.pixels = std::move(aaOut_.pixels);
-    depth_.assign(size_t(targetW) * targetH, 1.0f);  // overlay depth tests start fresh
+    depth_.assign(size_t(targetW) * targetH, 0xFFFF);  // overlay depth tests start fresh
     hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z bounds no longer valid (depth went UP)
   } else {
     applyAaPostPass();

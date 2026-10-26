@@ -309,20 +309,20 @@ class cSoftwareRenderer : public IRenderer {
   std::vector<StripWork> stripWork_; std::vector<uint32_t> stripCost_;  ///< 2026-10-25 step 1: heaviest-first strips
   std::vector<std::vector<uint32_t>> meshBins_, meshBinOff_;  ///< Cortana 2026-10-15 1255: per-mesh strip bins (CSR)
   std::vector<std::vector<uint32_t>> binFill_;  ///< per band-thread fill cursors
-  std::vector<float> depth_;  ///< depth buffer
+  std::vector<uint16_t> depth_;  ///< PT4-A (2026-10-26): depth buffer, uint16-quantized [0,1] z/w domain (swsimd::depthQ); 0xFFFF = far/clear
   // Cortana 2026-10-15 1715: hierarchical-Z [ENGINE]. One entry per 8x8 tile:
-  // an UPPER BOUND on depth_ inside the tile (+inf = not yet tightened). Depth
+  // an UPPER BOUND on depth_ inside the tile (0xFFFF = not yet tightened). Depth
   // only ever decreases between clears, so a stale entry stays a valid bound;
   // writers mark the tile dirty and the next query re-tightens it. Tiles are
   // 8-row aligned inside the 32-row band strips, so each tile is touched by
   // exactly one band thread per frame (no sharing). Any depth_ re-fill that is
   // not clear() disables it until the next clear() (hizFbW_ = 0).
   static constexpr int kHizTile = 8;
-  std::vector<float> hizMax_;
+  std::vector<uint16_t> hizMax_;
   std::vector<uint8_t> hizDirty_;
   uint32_t hizFbW_ = 0, hizFbH_ = 0, hizTilesX_ = 0;
-  void hizReset();                    ///< after clear(): every tile +inf, clean
-  float hizTileMax(int tx, int ty);   ///< tightened upper bound of the tile's depth
+  void hizReset();                    ///< after clear(): every tile 0xFFFF, clean
+  uint16_t hizTileMax(int tx, int ty);   ///< tightened upper bound of the tile's depth
   std::vector<float> screen_;  ///< reusable vertex transform scratch (fix 2026-10-11:
                                ///< was allocated per renderMesh call)
   std::vector<uint32_t> fxaaSrc_;  ///< reusable applyFXAA source copy (fix 2026-10-11:

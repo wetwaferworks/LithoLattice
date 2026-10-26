@@ -10,6 +10,7 @@
 #include "litholattice/render/software_aa.h"
 #include "litholattice/render/software_ascii.h"
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/render/software_simd.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -195,10 +196,13 @@ int testSoftwareRenderer() {
         f.pixels[size_t(y) * 32 + size_t(x)] = white ? 0xFFFFFFFFu : 0xFF000000u;
         if (!white) depth[size_t(y) * 32 + size_t(x)] = 0.6f;
       }
+    // 2026-10-26: depth API is uint16 (PT4-A); quantize with the shared rule.
+    std::vector<uint16_t> depthQv(depth.size());
+    for (size_t i = 0; i < depth.size(); ++i) depthQv[i] = swsimd::depthQ(depth[i]);
     const auto before = f.pixels;
     SoftwareAaScratch scratch;
     if (useCmaa)
-      applyCmaaPost(f, depth.data(), scratch);
+      applyCmaaPost(f, depthQv.data(), scratch);
     else
       applyFxaaPost(f, scratch);
     // Flat interiors untouched (columns far from the boundary).
@@ -225,7 +229,7 @@ int testSoftwareRenderer() {
     SoftwareFramebuffer f = edgeScene();
     const auto before = f.pixels;
     SoftwareAaScratch scratch;
-    std::vector<float> depth(size_t(32) * 16, 0.5f);
+    std::vector<uint16_t> depth(size_t(32) * 16, swsimd::depthQ(0.5f));  // 2026-10-26: uint16 depth API
     applyCmaaPost(f, depth.data(), scratch);
     if (f.pixels != before) {
       std::printf("FAIL: cmaa blended an exactly-aligned edge (not conservative)\n");

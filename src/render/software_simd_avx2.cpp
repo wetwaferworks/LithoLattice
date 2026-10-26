@@ -83,9 +83,34 @@ LL_TARGET_AVX2 void shadeSpanBasicAvx2(ShadeSpanBasic& s) {
     const int covBits = _mm256_movemask_ps(cov);
     if (!covBits) continue;
     lc += uint64_t(llPopc(covBits));
-    float* drow = s.depth + base;
-    const __m256 dold = _mm256_maskload_ps(drow, _mm256_castps_si256(cov));
-    const __m256 pass = _mm256_and_ps(cov, _mm256_cmp_ps(z, dold, _CMP_LT_OQ));
+    uint16_t* drow = s.depth + base;
+    // PT4-A: the depth row is uint16 (quantized). Pixels are paired into
+    // 32-bit lanes; a pair is loaded/stored wide ONLY when both of its pixels
+    // lie inside this span (lane < cnt), so a wide access never touches x1+1
+    // (another strip/tile's pixel, possibly another thread's) or the end of
+    // depth_. An odd last pixel (cnt odd) is read and written as a single
+    // uint16. Within a full pair, an uncovered/failed pixel is written back
+    // with its own just-loaded value; that pixel belongs to this span, so
+    // only this thread touches it. Test in the integer domain with the shared
+    // quantizer's rounding (cvtps == nearbyintf), bit-for-bit with scalar/span4.
+    // (Cortana 2026-10-26, JD 12:03 PM: fixed the odd-pixel spill.)
+    const int fullPairs = cnt >> 1;           // pairs wholly inside the span
+    const int tail = (cnt & 1) ? cnt - 1 : -1; // odd last pixel, scalar
+    auto pairMask = [fullPairs](int bits) {
+      return _mm_setr_epi32((fullPairs > 0 && (bits & 0x03)) ? -1 : 0, (fullPairs > 1 && (bits & 0x0C)) ? -1 : 0,
+                            (fullPairs > 2 && (bits & 0x30)) ? -1 : 0, (fullPairs > 3 && (bits & 0xC0)) ? -1 : 0);
+    };
+    __m128i draw = _mm_maskload_epi32(reinterpret_cast<const int*>(drow), pairMask(covBits));
+    if (tail >= 0 && ((covBits >> tail) & 1)) {
+      alignas(16) uint16_t dq[8];
+      _mm_store_si128(reinterpret_cast<__m128i*>(dq), draw);
+      dq[tail] = drow[tail];
+      draw = _mm_load_si128(reinterpret_cast<const __m128i*>(dq));
+    }
+    const __m256i dstored = _mm256_cvtepu16_epi32(draw);
+    const __m256 zc = _mm256_min_ps(_mm256_max_ps(z, zero), one);
+    const __m256i zq = _mm256_cvtps_epi32(_mm256_mul_ps(zc, _mm256_set1_ps(65535.0f)));
+    const __m256 pass = _mm256_and_ps(cov, _mm256_castsi256_ps(_mm256_cmpgt_epi32(dstored, zq)));
     const int passBits = _mm256_movemask_ps(pass);
     if (!passBits) continue;
     ls += uint64_t(llPopc(passBits));
@@ -119,7 +144,17 @@ LL_TARGET_AVX2 void shadeSpanBasicAvx2(ShadeSpanBasic& s) {
     const __m256i color = _mm256_or_si256(_mm256_or_si256(alpha, _mm256_slli_epi32(chR, 16)),
                                           _mm256_or_si256(_mm256_slli_epi32(chG, 8), chB));
     const __m256i pm = _mm256_castps_si256(pass);
-    _mm256_maskstore_ps(drow, pm, z);
+    // PT4-A: merged depths: pass lanes take zq, the rest keep the stored
+    // value; packed to 8x u16. Full in-span pairs are stored wide; the odd
+    // last pixel is stored as one uint16 (see the load above).
+    const __m256i dmerged = _mm256_blendv_epi8(dstored, zq, pm);
+    const __m128i dpack = _mm_packus_epi32(_mm256_castsi256_si128(dmerged), _mm256_extracti128_si256(dmerged, 1));
+    _mm_maskstore_epi32(reinterpret_cast<int*>(drow), pairMask(passBits), dpack);
+    if (tail >= 0 && ((passBits >> tail) & 1)) {
+      alignas(16) uint16_t dq[8];
+      _mm_store_si128(reinterpret_cast<__m128i*>(dq), dpack);
+      drow[tail] = dq[tail];
+    }
     _mm256_maskstore_epi32(reinterpret_cast<int*>(s.pixels + base), pm, color);
     int lo = 0; while (!((passBits >> lo) & 1)) ++lo;
     int hi = 7; while (!((passBits >> hi) & 1)) --hi;

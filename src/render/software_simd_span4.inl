@@ -25,7 +25,8 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
   const __m128i m33 = _mm_set1_epi32(0x33), m55 = _mm_set1_epi32(0x55);
   int wxLo = 1 << 30, wxHi = -1;
   uint64_t lc = 0, ls = 0;
-  alignas(16) float L0[4], L1[4], L2[4], LZ[4], D[4];
+  alignas(16) float L0[4], L1[4], L2[4], LZ[4];
+  alignas(16) uint16_t DQ[4];  // PT4-A: gathered stored depths (quantized)
   alignas(16) uint32_t C[4];
   for (int base = 0; base < s.n; base += 4) {
     const int cnt = s.n - base < 4 ? s.n - base : 4;
@@ -38,10 +39,13 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
     const int covBits = _mm_movemask_ps(cov4) & ((1 << cnt) - 1);
     if (!covBits) continue;
     lc += kSpan4Pop[covBits];
-    float* drow = s.depth + base;
-    for (int j = 0; j < 4; ++j) D[j] = ((covBits >> j) & 1) ? drow[j] : 0.0f;
-    const __m128 dold = _mm_load_ps(D);
-    const int passBits = _mm_movemask_ps(_mm_cmplt_ps(z, dold)) & covBits;
+    uint16_t* drow = s.depth + base;
+    for (int j = 0; j < 4; ++j) DQ[j] = ((covBits >> j) & 1) ? drow[j] : uint16_t(0);
+    // PT4-A: widen the stored depths, quantize the fragment depths with
+    // the shared rule (cvtps == nearbyintf), test in the integer domain.
+    const __m128i dstored = _mm_unpacklo_epi16(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(DQ)), _mm_setzero_si128());
+    const __m128i zq = _mm_cvtps_epi32(_mm_mul_ps(_mm_min_ps(_mm_max_ps(z, zero), one), _mm_set1_ps(65535.0f)));
+    const int passBits = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(dstored, zq))) & covBits;
     if (!passBits) continue;
     ls += kSpan4Pop[passBits];
     const __m128 pw0 = _mm_mul_ps(w0, iw0), pw1 = _mm_mul_ps(w1, iw1), pw2 = _mm_mul_ps(w2, iw2);
@@ -90,7 +94,13 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
     }
     const __m128i color = _mm_or_si128(_mm_or_si128(alpha, _mm_slli_epi32(r, 16)), _mm_or_si128(_mm_slli_epi32(g, 8), bch));
     if (passBits == 0xF) {  // Argon point 3 (trap B): every lane passed (implies
-      _mm_storeu_ps(drow, z);  // cnt == 4) — one wide store each, no stack round
+      {  // PT4-A: 4x u16 store of the quantized depths. Scalar extract:
+         // _mm_packus_epi32 (PACKUSDW) is SSE4.1-only and this body is
+         // shared with the SSE2 TU; the colour store below stays wide.
+        alignas(16) int32_t zqArr[4];
+        _mm_store_si128(reinterpret_cast<__m128i*>(zqArr), zq);
+        for (int j = 0; j < 4; ++j) drow[j] = uint16_t(zqArr[j]);
+      }
       _mm_storeu_si128(reinterpret_cast<__m128i*>(s.pixels + base), color);  // trip, no scalar scatter
       if (base < wxLo) wxLo = base;
       wxHi = base + 3;
@@ -98,7 +108,7 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
       _mm_store_si128(reinterpret_cast<__m128i*>(C), color);
       _mm_store_ps(LZ, z);
       for (int j = 0; j < 4; ++j)
-        if ((passBits >> j) & 1) { drow[j] = LZ[j]; s.pixels[base + j] = C[j]; }
+        if ((passBits >> j) & 1) { drow[j] = depthQ(LZ[j]); s.pixels[base + j] = C[j]; }
       int lo = 0; while (!((passBits >> lo) & 1)) ++lo;
       int hi = 3; while (!((passBits >> hi) & 1)) --hi;
       if (base + lo < wxLo) wxLo = base + lo;

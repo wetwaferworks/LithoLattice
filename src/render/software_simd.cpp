@@ -130,10 +130,23 @@ void fillF(float* p, size_t n, float v) {
 #endif
   for (size_t i = 0; i < n; ++i) p[i] = v;
 }
+/// PT4-A: 16-bit fill built on the 32-bit pattern fill (two pixels per
+/// word) plus a scalar tail for odd counts.
+void fill16(uint16_t* p, size_t n, uint16_t v) {
+  const uint32_t pat = uint32_t(v) | (uint32_t(v) << 16);
+  fill32(reinterpret_cast<uint32_t*>(p), n / 2, pat);
+  if (n & 1) p[n - 1] = v;
+}
+
 bool shadeSpanEnabled() {
   static const bool on = [] {
+    // Strike 1 (Elfie bench, 2026-10-26, Archie battle plan): SIMD span shading is
+    // DEFAULT ON when the CPU has a SIMD ISA; LL_SW_SIMD_SHADE=0 is the explicit
+    // opt-out (A/B proof path). Previously opt-in via LL_SW_SIMD_SHADE=1, which no
+    // default run ever set — the profiler read SIMD 0.0% of span pixels.
     const char* f = std::getenv("LL_SW_SIMD_SHADE");
-    return f && *f && *f != '0' && activeIsa() != Isa::Scalar;
+    if (f && *f == '0') return false;
+    return activeIsa() != Isa::Scalar;
   }();
   return on;
 }

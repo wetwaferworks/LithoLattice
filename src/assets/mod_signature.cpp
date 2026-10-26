@@ -116,17 +116,72 @@ SignatureStatus verifyModSignature(const std::filesystem::path& modDir, std::str
   return verifyAgainstKey(modDir, jdPub, "JD's baked-in key", err);
 }
 
-// The throwaway test key's public half (hex). Anyone holding the matching private
-// seed from the old selftest could mint "Verified" mods, so a shipping build must
-// never carry this key. The comparison is against the PUBLIC key (not secret).
-bool bakedKeyIsTestKey() {
-  std::array<uint8_t, 32> jdPub;
+// ============================================================================
+// BAKED-KEY REGISTRY (M3 — code review 2026-10-26, JD ruling 2)
+// ============================================================================
+// The guard used to recognize only the retired test key, so when the
+// workstation dev key was baked in (2026-10-15) the release guard stopped
+// tripping — a shipping build would have carried the dev key silently, and
+// "Verified" would have meant "signed by a development workstation." The
+// guard is now a registry: every key that has ever been baked in is known
+// by role, and a baked key is a SHIPPING key only when it matches
+// kShippingPublicKeyHex below — JD's real master key, installed by the
+// documented procedure in mod_signature.h. Until JD installs it, that
+// constant is empty, NO baked key is a shipping key, and release builds
+// fail closed at boot. That is deliberate: the 2-minute key install is
+// JD's hand on the crown jewels, not something a build can wave through.
+// ============================================================================
+
+namespace {
+
+// JD's designated shipping public key (hex). EMPTY until JD installs his
+// master key (see mod_signature.h). The private half never ships, never
+// commits, and is not recorded here or anywhere in the tree.
+constexpr char kShippingPublicKeyHex[] = "";
+
+struct KnownBakedKey {
+  const char* hex;
+  const char* description;
+};
+
+// Every public key that has ever been baked into mod_signature.h, by role.
+// Public keys only — public by design, safe to commit.
+constexpr KnownBakedKey kKnownBakedKeys[] = {
+    {"3bb44b55eabf04186da2ba95b8d93459eadc59d397815487ac45a27d8a9bb787",
+     "retired test key (throwaway; its private seed was public in selftests)"},
+    {"04c1766ef29e93b7d36fdf185f64ee958e9dded4c8c82f0dca03029e8a30011c",
+     "workstation dev key 2026-10-15 (development signing only)"},
+};
+
+bool bakedKeyEqualsHex(const char* hex) {
+  std::array<uint8_t, 32> jdPub, other{};
   if (!bakedKey(jdPub)) return false;
-  std::array<uint8_t, 32> testPub{};
-  // This is the public half of the retired test keypair. Public by design.
-  crypto::fromHex("3bb44b55eabf04186da2ba95b8d93459eadc59d397815487ac45a27d8a9bb787",
-                  testPub.data(), testPub.size());
-  return std::memcmp(jdPub.data(), testPub.data(), 32) == 0;
+  if (!crypto::fromHex(hex, other.data(), other.size())) return false;
+  return std::memcmp(jdPub.data(), other.data(), 32) == 0;
 }
+
+}  // namespace
+
+/// True only when the baked-in key is JD's designated shipping key.
+bool bakedKeyIsShippingKey() {
+  if (kShippingPublicKeyHex[0] == '\0') return false;  // not yet installed
+  return bakedKeyEqualsHex(kShippingPublicKeyHex);
+}
+
+/// Human-readable role of the baked-in key, for boot logs.
+const char* bakedKeyDescription() {
+  if (bakedKeyIsShippingKey()) return "JD shipping key";
+  for (const KnownBakedKey& k : kKnownBakedKeys)
+    if (bakedKeyEqualsHex(k.hex)) return k.description;
+  return "unknown key (not in the baked-key registry)";
+}
+
+// Historical name, GENERALIZED semantics (M3): true when the baked-in key
+// is anything other than JD's designated shipping key — the retired test
+// key, the workstation dev key, or an unknown key. The boot guard in
+// main.cpp calls this and fails closed in release builds, so no
+// non-shipping key can reach players silently. (Before M3 this compared
+// against the retired test key only, which the dev key slipped past.)
+bool bakedKeyIsTestKey() { return !bakedKeyIsShippingKey(); }
 
 }  // namespace litholattice::assets

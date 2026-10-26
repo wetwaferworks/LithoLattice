@@ -79,7 +79,7 @@ bool softwareAaModeFromName(const char* name, SoftwareAaMode& out) {
 // until its average luma breaks), blend offset from the distance to the
 // nearer end + the subpixel term. Operates on LDR framebuffer values.
 // ---------------------------------------------------------------------------
-void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const float* depth) {
+void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const uint16_t* depth) {
   const int w = int(fb.width), h = int(fb.height);
   if (w < 3 || h < 3) return;
   s.src = fb.pixels;
@@ -113,7 +113,7 @@ void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const float* d
         float dMin = 2.f, dMax = -2.f;
         for (int dy = -1; dy <= 1; ++dy)
           for (int dx = -1; dx <= 1; ++dx) {
-            const float d = depth[size_t(std::clamp(y + dy, 0, h - 1)) * size_t(w) + size_t(std::clamp(x + dx, 0, w - 1))];
+            const float d = depth[size_t(std::clamp(y + dy, 0, h - 1)) * size_t(w) + size_t(std::clamp(x + dx, 0, w - 1))] * (1.0f / 65535.0f);  // PT4-A: dequantize
             dMin = std::min(dMin, d);
             dMax = std::max(dMax, d);
           }
@@ -193,7 +193,7 @@ void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const float* d
 // library is reduced to long-edge runs + end turns (no Z-pattern special
 // cases), and weights are analytic instead of SMAA's area texture.
 // ---------------------------------------------------------------------------
-void applyCmaaPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratch& s) {
+void applyCmaaPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScratch& s) {
   const int w = int(fb.width), h = int(fb.height);
   if (w < 2 || h < 2) return;
   const size_t n = size_t(w) * size_t(h);
@@ -210,7 +210,7 @@ void applyCmaaPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratc
   auto dep = [&](int x, int y) {
     x = std::clamp(x, 0, w - 1);
     y = std::clamp(y, 0, h - 1);
-    return depth[size_t(y) * size_t(w) + size_t(x)];
+    return depth[size_t(y) * size_t(w) + size_t(x)] * (1.0f / 65535.0f);  // PT4-A: dequantize
   };
   constexpr float kLumaEdge = 0.08f;    // luma step that counts as an edge
   constexpr float kDepthEdge = 0.0025f; // NDC-z step that counts as geometry
@@ -364,7 +364,7 @@ void applyCmaaPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratc
 // additive composite with bilinear upsampling. Reads only the finished frame, so it
 // is presentational: the sim and its determinism hash never see it.
 // ---------------------------------------------------------------------------
-void applyBloomPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratch& s) {
+void applyBloomPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScratch& s) {
   const int w = int(fb.width), h = int(fb.height);
   if (w < 16 || h < 16) return;
   constexpr int kDiv = 4;
@@ -381,7 +381,7 @@ void applyBloomPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScrat
       for (int y = by * kDiv; y < std::min(h, by * kDiv + kDiv); ++y)
         for (int x = bx * kDiv; x < std::min(w, bx * kDiv + kDiv); ++x, ++n) {
           const size_t i = size_t(y) * size_t(w) + size_t(x);
-          if (depth && depth[i] >= 0.99999f) continue;  // sky / clear
+          if (depth && depth[i] >= 65534) continue;  // sky / clear (PT4-A: quantized domain, was >= 0.99999f)
           const uint32_t p = fb.pixels[i];
           const float l = lumaOf(p);
           if (l <= kThresh) continue;

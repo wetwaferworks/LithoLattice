@@ -60,7 +60,7 @@ void cProjectileMgr::requestColumn(int cx, int cz) {
   if (requestedChunks_.insert(chunkKey(cx, cz)).second) chunkReq_(cx, cz);
 }
 
-void cProjectileMgr::loadChunksAhead(double x, double y, double z, double dx, double dy, double dz,
+void cProjectileMgr::loadChunksAhead(double x, double /*y*/, double z, double dx, double dy, double dz,
                                         uint32_t distance) {
   if (!chunkReq_ || distance == 0) return;
   const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -150,26 +150,41 @@ void cProjectileMgr::tick() {
 
     // -- Behavior --------------------------------------------------------
     bool keep = true;
-    if (e.behavior) keep = e.behavior->onTick(p, hitBlock, hitEntity);
+    IProjectileBehavior* const beh = e.behavior;
+    if (beh) keep = beh->onTick(p, hitBlock, hitEntity);
+
+    // UAF fix (code review 2026-10-26 HIGH-1, JD ruling 1): onTick may
+    // despawn THIS projectile — the module contract above says behaviors
+    // spawn/despawn during onTick (a splitter despawns itself), and a
+    // despawn frees the Entry node, so the `e`/`p` references bound at the
+    // top of this iteration dangle the moment the callback returns. Never
+    // write through them again: re-lookup by id and rebind. A missing
+    // entry (despawned) or a re-owned id (despawned, then the id reused)
+    // ends this projectile's tick here — the behavior has had its say.
+    const auto it1 = entries_.find(id);
+    if (it1 == entries_.end()) continue;
+    Entry& e2 = it1->second;
+    if (e2.behavior != beh) continue;
+    Projectile& p2 = e2.p;
 
     // -- Despawn / turn-around rules -------------------------------------
     bool dead = !keep;
-    if (!dead && stopped && !p.returning && p.returnsToOwner) {
+    if (!dead && stopped && !p2.returning && p2.returnsToOwner) {
       // Boomerang bounce: a kept-alive projectile that hit something on
       // its outbound leg turns around instead of dying in the wall.
-      p.returning = true;
-      p.vx = -p.vx; p.vy = -p.vy; p.vz = -p.vz;
-      e.traveledExact = 0;
-      p.traveled = 0;
+      p2.returning = true;
+      p2.vx = -p2.vx; p2.vy = -p2.vy; p2.vz = -p2.vz;
+      e2.traveledExact = 0;
+      p2.traveled = 0;
     } else if (!dead && stopped) {
       dead = true;  // unpierced hit, no (living) boomerang turn
     }
-    if (!dead && speed > 0.0 && p.maxRange > 0 && e.traveledExact >= double(p.maxRange)) {
-      if (p.returnsToOwner && !p.returning) {
-        p.returning = true;
-        p.vx = -p.vx; p.vy = -p.vy; p.vz = -p.vz;
-        e.traveledExact = 0;
-        p.traveled = 0;
+    if (!dead && speed > 0.0 && p2.maxRange > 0 && e2.traveledExact >= double(p2.maxRange)) {
+      if (p2.returnsToOwner && !p2.returning) {
+        p2.returning = true;
+        p2.vx = -p2.vx; p2.vy = -p2.vy; p2.vz = -p2.vz;
+        e2.traveledExact = 0;
+        p2.traveled = 0;
       } else {
         dead = true;  // range exhausted (on the return leg too)
       }

@@ -7,6 +7,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 namespace litholattice::swsimd {
 /// True when the AVX2 path is compiled in, supported by CPU+OS, and not
 /// disabled by LL_SW_FORCE_SCALAR.
@@ -27,6 +28,36 @@ TransformQuadFn transformQuadFn();
 void fill32(uint32_t* p, size_t n, uint32_t v);
 /// p[0..n) = v (float; depth clears). Bit-identical on both paths.
 void fillF(float* p, size_t n, float v);
+/// p[0..n) = v (16-bit pattern; depth clears). Bit-identical on both paths.
+void fill16(uint16_t* p, size_t n, uint16_t v);
+
+/// PT4 Target A (Elfie, 2026-10-26 — Archie PT4 brief): the depth buffer
+/// is uint16_t, quantized from the [0,1]-domain float depth (0 = near,
+/// 0xFFFF = far/clear). ONE quantizer for every path — renderer scalar
+/// loops, the span4 kernels, the AVX2 kernel — so all tiers test
+/// identically: a fragment passes iff depthQ(frag) < stored, and a write
+/// stores depthQ(frag). Interpolation stays float end to end; the
+/// quantization happens once per pixel, at the test/write. Rounding is
+/// round-to-nearest-even: nearbyintf here, cvtps in the kernels — the
+/// same rule by design.
+inline uint16_t depthQ(float d) {
+  d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+  return uint16_t(std::nearbyintf(d * 65535.0f));
+}
+/// Conservative bounds for integer-domain comparisons (Hi-Z skip test):
+/// depthQFloor never overstates a minimum, depthQCeil never understates
+/// a slack, so a quantized skip test fires only when the float test
+/// would have fired too.
+inline uint16_t depthQFloor(float d) {
+  d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+  return uint16_t(std::floor(d * 65535.0f));
+}
+inline uint16_t depthQCeil(float d) {
+  d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+  const float q = d * 65535.0f;
+  const float f = std::floor(q);
+  return uint16_t(f == q ? q : f + 1.0f);
+}
 
 /// Ginny 2026-10-16 (perf list, Cortana): one row span of the per-pixel chunk raster for
 /// the common case (basic diffuse shading, plain texture, no normal/height map, no dither,
@@ -42,7 +73,7 @@ struct ShadeSpanBasic {
   bool hasAo = false;                   ///< any ao[k] < 1.0f: kernels apply the scalar
                                         ///< loop's post-shader AO scale, bit-identically
   const uint32_t* tex;                  ///< 16x16 texel layer (texData + layer*256)
-  float* depth;                         ///< depth row at x0
+  uint16_t* depth;                         ///< depth row at x0
   uint32_t* pixels;                     ///< colour row at x0
   int n;                                ///< pixels in the span (x1 - x0 + 1)
   bool morton;                          ///< Pass 2 step 4: tex layer is Morton-swizzled (16x16 only)

@@ -53,16 +53,16 @@ struct SoftwareAaScratch {
 /// FXAA-class post filter, in place on fb (gathers from a scratch copy).
 /// Cortana 2026-10-16 (texture-preserving AA): with a depth buffer, only pixels whose 3x3
 /// neighbourhood straddles a depth step (a geometry edge) are filtered; texture interiors pass.
-void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& scratch, const float* depth = nullptr);
+void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& scratch, const uint16_t* depth = nullptr);
 
 /// Cortana 2026-10-16 (render.bloom): bright-pass (luma threshold, sky excluded via depth) at
 /// quarter resolution, separable 9-tap blur, additive composite. Presentational only.
-void applyBloomPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratch& scratch);
+void applyBloomPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScratch& scratch);
 
 /// Conservative morphological coverage AA, in place on fb. `depth` is the
 /// renderer's NDC-z depth buffer at fb resolution (may be null: luma-only
 /// edge detection, weaker on same-color geometry steps).
-void applyCmaaPost(SoftwareFramebuffer& fb, const float* depth, SoftwareAaScratch& scratch);
+void applyCmaaPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScratch& scratch);
 
 /// 2x box resolve: hi (2W x 2H) -> out (W x H), exact 2x2 average.
 void resolveSsaa2x(const SoftwareFramebuffer& hi, SoftwareFramebuffer& out);

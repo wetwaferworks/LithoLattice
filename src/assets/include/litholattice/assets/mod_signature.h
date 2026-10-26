@@ -1,4 +1,7 @@
 // Cortana 2026-10-15 0733: SIGNING new dev public key (fatal-exit check intact)
+// Elfie 2026-10-26 (M3, JD ruling 2): the guard is generalized — it now fails
+// closed on ANY baked key that is not JD's designated shipping key (retired
+// test, workstation dev, or unknown). See the registry in mod_signature.cpp.
 // Engine-side mod signature verification (Worker B).
 //
 // Trust model (JD 2026-10-12, locked): certificates answer WHO vouches for the
@@ -9,8 +12,11 @@
 //   - Invalid: signature.json exists but is malformed, names a different key,
 //     or the signature doesn't verify. REFUSED in all builds (fail closed).
 //
-// The baked-in public key below is a THROWAWAY TEST KEY. JD must replace it
-// with his real key before beta (see the marker). The private key never ships.
+// The baked-in public key below is currently the WORKSTATION DEV KEY
+// (2026-10-15, JD's workstation — development signing only). It is NOT JD's
+// real shipping key: JD must install his master key before beta (see the
+// marker). Until he does, release builds fail closed at boot (M3 registry
+// in mod_signature.cpp). The private key never ships.
 #pragma once
 #include <array>
 
@@ -28,7 +34,7 @@ const char* signatureStatusName(SignatureStatus s);
 // ============================================================================
 // BAKED-IN PUBLIC KEY
 // ============================================================================
-// REPLACE BEFORE BETA — this is a throwaway test key, NOT JD's real key.
+// REPLACE BEFORE BETA — this is the workstation DEV key, NOT JD's real key.
 //
 // To install the real key (2-minute operation for JD):
 //   1. On JD's OFFLINE machine:  ./litho_sign keygen --out jd_master
@@ -57,8 +63,20 @@ SignatureStatus verifyModSignatureAgainstKey(const std::filesystem::path& modDir
                                              const std::array<uint8_t, 32>& trustedPub,
                                              std::string* err = nullptr);
 
-/// True when the baked-in key is the retired throwaway test key. Shipping builds
-/// must fail closed on this (see main.cpp boot guard). Public-key comparison only.
+/// True when the baked-in key is JD's designated shipping key (installed by
+/// the procedure above). False for every other key — and for now false
+/// always, because the shipping key is not yet installed.
+bool bakedKeyIsShippingKey();
+
+/// Human-readable role of the baked-in key ("JD shipping key", the retired
+/// test key, the workstation dev key, or "unknown key"), for boot logs.
+const char* bakedKeyDescription();
+
+/// True when the baked-in key is NOT JD's designated shipping key.
+/// Historical name, generalized semantics (M3, 2026-10-26): before M3 this
+/// recognized only the retired test key, and the workstation dev key
+/// slipped past the release guard. Shipping builds must fail closed on
+/// this (see main.cpp boot guard). Public-key comparison only.
 ///
 /// GUARD SCOPE (P3-3, Appendix E L3 — read before relying on the guard):
 /// the ONLY enforcement point today is the game's main() boot sequence
@@ -67,9 +85,10 @@ SignatureStatus verifyModSignatureAgainstKey(const std::filesystem::path& modDir
 /// Nothing in the engine library, the litho_sign tool, or any other entry
 /// point performs this check. Any FUTURE executable that links
 /// litholattice_assets and calls verifyModSignature() must call
-/// bakedKeyIsTestKey() itself at startup, or it will silently trust the
-/// test key. The check is deliberately a library FUNCTION, not a library
-/// side effect, so tools and tests can verify test-signed mods on purpose.
+/// bakedKeyIsTestKey() itself at startup, or it will silently trust a
+/// non-shipping key. The check is deliberately a library FUNCTION, not a
+/// library side effect, so tools and tests can verify dev-signed mods on
+/// purpose.
 bool bakedKeyIsTestKey();
 
 }  // namespace litholattice::assets
