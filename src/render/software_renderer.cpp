@@ -250,6 +250,7 @@ static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD
 // Strike 2 (Elfie bench, 2026-10-26, Archie battle plan): extend the flat-LOD path to
 // 2x meshes (the largest tri ring). Opt-in LL_SW_FLAT_LOD2=1 until the picture and the
 // counts are judged; the >= 4x path above stays as shipped.
+static const float g_swMipBias = [] { const char* e = std::getenv("LL_SW_MIP_BIAS"); return e ? float(std::atof(e)) : 0.0f; }();  // Cortana 2026-10-26: distant moire A/B (mip levels added to the per-triangle pick)
 static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
 static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 1.5f; }();
 // 2026-10-26 (Archie triage, HUD fill): the HUD is drawn in parallel row chunks. Each chunk walks
@@ -1087,7 +1088,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       const float du1 = s1->u - s0->u, dv1 = s1->v - s0->v, du2 = s2->u - s0->u, dv2 = s2->v - s0->v;
       const float uvA = std::fabs(du1 * dv2 - du2 * dv1) * float(baseTile) * float(baseTile);
       const float ratio = uvA / std::max(std::fabs(area), 1e-6f);
-      if (ratio > 1.0f) S.mip = std::min(textures_.mipLevels() - 1, int(std::floor(0.5f * std::log2(ratio) + 0.5f)));
+      if (ratio > 1.0f) S.mip = std::min(textures_.mipLevels() - 1, std::max(0, int(std::floor(0.5f * std::log2(ratio) + 0.5f + g_swMipBias))));
     }
     S.v0 = v0; S.v1 = v1; S.v2 = v2; S.s0 = s0; S.s1 = s1; S.s2 = s2;
     S.ditherCls = ditherCls; S.x0 = x0; S.x1 = x1; S.y0 = y0; S.y1 = y1; S.skipTo = y0;
@@ -1191,8 +1192,10 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       // PT4-A: the skip test runs in the quantized domain — the tile max
       // is an exact integer; the margin rounds up and triMinZ rounds
       // down, so the integer test fires only when the float test would.
-      const uint32_t triMinQ = swsimd::depthQFloor(S.triMinZ);
-      const uint32_t marginQ = swsimd::depthQCeil(S.hizMargin);
+      // LL_SW_DEPTH_REMAP: a slack is not remappable on its own, so fold
+      // it into the minimum before quantizing (floor of a smaller value).
+      const uint32_t triMinQ = swsimd::g_depthRemap ? swsimd::depthQFloor(S.triMinZ - S.hizMargin) : swsimd::depthQFloor(S.triMinZ);
+      const uint32_t marginQ = swsimd::g_depthRemap ? 1u : swsimd::depthQCeil(S.hizMargin);
       bool occluded = true;
       for (int tx = S.htx0; tx <= S.htx1 && occluded; ++tx) occluded = uint32_t(hizTileMax(tx, y / kHizTile)) + marginQ < triMinQ;
       if (g_swProfOn) {  // Strike 3 sizing: count tested rows, partially-occluded rows, and occluded tile share

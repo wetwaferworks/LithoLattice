@@ -7,6 +7,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cmath>
 namespace litholattice::swsimd {
 /// True when the AVX2 path is compiled in, supported by CPU+OS, and not
@@ -40,8 +41,17 @@ void fill16(uint16_t* p, size_t n, uint16_t v);
 /// quantization happens once per pixel, at the test/write. Rounding is
 /// round-to-nearest-even: nearbyintf here, cvtps in the kernels — the
 /// same rule by design.
+/// Cortana 2026-10-26 (JD distant banding): LL_SW_DEPTH_REMAP=1 stores
+/// 1 - sqrt(1 - d) instead of d. NDC depth with near 0.05 / far 1000 has
+/// a 16-bit step of ~1.25 blocks at 64, ~5 at 128 and ~20 at 256, so far
+/// faces one block apart quantize equal and z-fight (banding, rail moire).
+/// The remap is monotonic (ordering kept) and spends codes on the far end:
+/// ~0.07 blocks at 64, ~0.2 at 128, ~0.56 at 256. Opt-in for A/B.
+inline const bool g_depthRemap = [] { const char* e = std::getenv("LL_SW_DEPTH_REMAP"); return e && *e == '1'; }();
+inline float depthRemap(float d) { return g_depthRemap ? 1.0f - std::sqrt(1.0f - d) : d; }
 inline uint16_t depthQ(float d) {
   d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+  d = depthRemap(d);
   return uint16_t(std::nearbyintf(d * 65535.0f));
 }
 /// Conservative bounds for integer-domain comparisons (Hi-Z skip test):
@@ -50,6 +60,7 @@ inline uint16_t depthQ(float d) {
 /// would have fired too.
 inline uint16_t depthQFloor(float d) {
   d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+  d = depthRemap(d);
   return uint16_t(std::floor(d * 65535.0f));
 }
 inline uint16_t depthQCeil(float d) {

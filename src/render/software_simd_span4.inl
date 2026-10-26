@@ -44,7 +44,9 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
     // PT4-A: widen the stored depths, quantize the fragment depths with
     // the shared rule (cvtps == nearbyintf), test in the integer domain.
     const __m128i dstored = _mm_unpacklo_epi16(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(DQ)), _mm_setzero_si128());
-    const __m128i zq = _mm_cvtps_epi32(_mm_mul_ps(_mm_min_ps(_mm_max_ps(z, zero), one), _mm_set1_ps(65535.0f)));
+    __m128 zc4 = _mm_min_ps(_mm_max_ps(z, zero), one);
+    if (swsimd::g_depthRemap) zc4 = _mm_sub_ps(one, _mm_sqrt_ps(_mm_sub_ps(one, zc4)));  // LL_SW_DEPTH_REMAP
+    const __m128i zq = _mm_cvtps_epi32(_mm_mul_ps(zc4, _mm_set1_ps(65535.0f)));
     const int passBits = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(dstored, zq))) & covBits;
     if (!passBits) continue;
     ls += kSpan4Pop[passBits];
