@@ -194,6 +194,15 @@ class cSimThread {
   /// Measure-only windowed determinism probe (LL_HASH_AT_TICK; Proposed by JD; co-implemented by JD and Cortana): called on the sim thread right
   /// after each completed world tick, inside the mutation window. Set before start(); empty = never called.
   void setTickHook(std::function<void(uint64_t)> fn) { tickHook_ = std::move(fn); }
+  /// Cortana 2026-10-26 (Archie camera-jump decision): runs on the sim thread
+  /// at the end of every COMPLETED world tick, inside the tick's block-mutex
+  /// window (getBlock from the hook is the sim thread's own recursive hold).
+  /// Set before start(); the game steps the player body here.
+  void setPlayerHook(std::function<void(uint64_t)> fn) { playerHook_ = std::move(fn); }
+  /// True from start() until stop() returns (the thread is joined after).
+  bool running() const { return running_.load(std::memory_order_acquire); }
+  /// World TPS in force for the current tick. SIM THREAD ONLY (the player hook).
+  int simThreadWorldTps() const { return cfgWorldTps_; }
   /// LL_HANDOFF_COUNT probe (measure only): handoffs fired, reads and inserts served by them so far.
   void handoffStats(uint64_t& handoffs, uint64_t& reads, uint64_t& inserts) const { handoffs = handoffs_.load(); reads = servedReads_.load(); inserts = servedInserts_.load(); }
   /// Single-block read for threads other than the sim thread (game thread entity
@@ -338,7 +347,8 @@ class cSimThread {
   const bool handoffCount_ = [] { const char* e = std::getenv("LL_HANDOFF_COUNT"); return e && e[0] == '1'; }();
   std::atomic<int> readWaiting_{0}, insertWaiting_{0};
   std::atomic<uint64_t> handoffs_{0}, servedReads_{0}, servedInserts_{0};
-  std::function<void(uint64_t)> tickHook_;  // LL_HASH_AT_TICK probe (measure only)
+  std::function<void(uint64_t)> tickHook_;
+  std::function<void(uint64_t)> playerHook_;  // player body step (see setPlayerHook)  // LL_HASH_AT_TICK probe (measure only)
   // LL_SIM_STALL_MS=<ms>@<tick>[x<n>] (measure only, default OFF; Proposed by Herominde; implemented by Cortana). At world tick <tick> (then every
   // 128 ticks, n times) the sim thread sleeps <ms> while holding blockMutex_, so streaming inserts and point reads queue up
   // and the catch-up burst that follows serves them. Logs the world tick every insert lands on near the stalls. No sim logic changes.

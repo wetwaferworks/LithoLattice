@@ -608,6 +608,7 @@ void cSimThread::run() {
                        &randomTickCache_, round_, diamond_);  // F56-7 + diamond
         if (tpOn) tpA[5] = ::litholattice::tickprof::nowNs();
         ++worldTickN_; ++windowWorldTicks_;
+        if (playerHook_) playerHook_(worldTickN_);  // player body step, after the world tick (Archie 2026-10-26)
         if (tickHook_) tickHook_(worldTickN_);  // LL_HASH_AT_TICK probe (measure only; Proposed by JD; co-implemented by JD and Cortana)
         if (tpOn) {  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
           const auto& ws = ::litholattice::tickprof::worldSub();
