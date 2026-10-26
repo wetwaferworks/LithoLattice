@@ -111,6 +111,11 @@ class cJobPool {
     cv_.notify_all();
   }
   int maxActive() const { std::lock_guard l(m_); return maxActive_; }
+  /// 2026-10-26 (Archie item 4): runtime yield-render (adaptive policy). LL_BG_YIELD_RENDER=1 forces it on.
+  void setYieldRender(bool on) {
+    { std::lock_guard l(m_); yieldRender_ = on; }
+    cv_.notify_all();
+  }
   /// Blocks (no polling) until every job submitted so far has finished.
   void waitIdle() const {
     std::unique_lock l(m_);
@@ -126,13 +131,14 @@ class cJobPool {
       {
         std::unique_lock l(m_);
         const BgThrottle& bt = BgThrottle::get();
-        if (maxActive_ <= 0 && !bt.yieldRender) {
-          cv_.wait(l, [this] { return stop_ || !jobs_.empty() || maxActive_ > 0; });
-          if (!stop_ && maxActive_ > 0) continue;  // a cap was set while waiting: honour it
+        const bool yieldR = bt.yieldRender || yieldRender_;
+        if (maxActive_ <= 0 && !yieldR) {
+          cv_.wait(l, [this] { return stop_ || !jobs_.empty() || maxActive_ > 0 || yieldRender_; });
+          if (!stop_ && (maxActive_ > 0 || yieldRender_)) continue;  // throttle set while waiting: honour it
         } else {  // opt-in throttle: renderBusy() changes outside m_, so re-check every 1 ms
           auto ready = [&] {
             return stop_ || (!jobs_.empty() && (maxActive_ <= 0 || active_ < maxActive_) &&
-                             !(bt.yieldRender && renderBusy().load(std::memory_order_relaxed) > 0));
+                             !((bt.yieldRender || yieldRender_) && renderBusy().load(std::memory_order_relaxed) > 0));
           };
           while (!ready()) cv_.wait_for(l, std::chrono::milliseconds(1));
         }
@@ -167,6 +173,7 @@ class cJobPool {
   int inFlight_ = 0;  // guarded by m_
   int active_ = 0;    // jobs running now, guarded by m_ (BgThrottle cap)
   int maxActive_ = BgThrottle::get().maxActive;  // guarded by m_; 0 = uncapped
+  bool yieldRender_ = false;                     // guarded by m_ (setYieldRender)
   std::atomic<uint64_t> failed_{0};
 };
 
