@@ -172,6 +172,10 @@ class cSimThread {
   /// columns. Returns false (nothing held) when the timing handshake is
   /// frozen or has an outstanding worker; callers then fall back to stop().
   bool holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold);
+  /// 2026-10-25 (JD hitch): non-blocking form for the frame thread. Returns false with *busy = true
+  /// when the sim is mid-tick (blockMutex_ taken) instead of waiting the tick out; false with
+  /// *busy = false is the same refusal as holdBetweenTicks (frozen / workers outstanding).
+  bool tryHoldBetweenTicks(std::unique_lock<std::recursive_mutex>& hold, bool* busy);
   /// Ticks stepped so far (for test verification).
   uint64_t ticksStepped() const { return ticksStepped_.load(std::memory_order_acquire); }
   /// Flips clock domain `index` on / off (SimConfig::domains order).

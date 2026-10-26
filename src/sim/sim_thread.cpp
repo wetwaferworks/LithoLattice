@@ -214,6 +214,15 @@ void cSimThread::runBetweenTicks(std::function<void()> fn) {
   { locktiming::TimedGuard l(blockMutex_, locktiming::kBlock); fn(); }  // 0.0.1.60 timing (diagnostic)
 }
 
+bool cSimThread::tryHoldBetweenTicks(std::unique_lock<std::recursive_mutex>& hold, bool* busy) {
+  if (busy) *busy = false;
+  std::unique_lock<std::recursive_mutex> l(blockMutex_, std::try_to_lock);
+  if (!l.owns_lock()) { if (busy) *busy = true; return false; }
+  if (handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())) return false;
+  hold = std::move(l);
+  return true;
+}
+
 bool cSimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) {
   // Waits out any in-flight iteration (ticks + post-tick flush both hold
   // blockMutex_). The sim thread keeps running; it simply cannot start its
