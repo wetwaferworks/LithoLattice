@@ -6,6 +6,7 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/core/threading.h"
 #include <array>
 #include <vector>
 #include "litholattice/core/bitops.h"
@@ -3084,7 +3085,10 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
   if (g_swProfOn) { for (double& b : g_bandMs) b = 0; g_lastEmitN = frameEmit_.size() / 6; }
-  bandPool.run(drawBand);
+  {
+    litholattice::RenderBusyScope busy;  // 2026-10-26: LL_BG_YIELD_RENDER holds off new background jobs
+    bandPool.run(drawBand);
+  }
   if (g_swProfOn) {
     const unsigned nb = std::min(64u, std::max(1u, bandPool.bands()));
     double mn = 1e30, mx = 0;

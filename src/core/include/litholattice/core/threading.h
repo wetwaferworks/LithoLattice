@@ -1,9 +1,11 @@
 // Threading primitives: lock-free triple buffer for snapshots, and a small job pool.
 #pragma once
 #include "litholattice/core/lock_timing.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <deque>
@@ -52,6 +54,34 @@ class TripleBuffer {
   std::atomic<unsigned> middle_{2};
 };
 
+/// 2026-10-26 (Archie triage, streaming hitches): opt-in background-worker throttle, read once
+/// from the environment. LL_BG_MAX_ACTIVE=N caps concurrently running pool jobs per pool (0 =
+/// no cap); LL_BG_YIELD_RENDER=1 makes idle workers hold off starting a NEW job while the
+/// software rasterizer's band passes are in flight (renderBusy() > 0). Running jobs are never
+/// interrupted. Both default off for every pool; the game's main pool opts in to a cap of 2
+/// via cJobPool::setDefaultMaxActive (LL_BG_MAX_ACTIVE, when set, wins; 0 = uncapped).
+struct BgThrottle {
+  int maxActive = 0;
+  bool maxActiveSet = false;  // LL_BG_MAX_ACTIVE present in the environment
+  bool yieldRender = false;
+  bool on() const { return maxActive > 0 || yieldRender; }
+  static const BgThrottle& get() {
+    static const BgThrottle t = [] {
+      BgThrottle b;
+      if (const char* e = std::getenv("LL_BG_MAX_ACTIVE")) { b.maxActive = std::max(0, std::atoi(e)); b.maxActiveSet = true; }
+      if (const char* e = std::getenv("LL_BG_YIELD_RENDER")) b.yieldRender = e[0] == '1';
+      return b;
+    }();
+    return t;
+  }
+};
+inline std::atomic<int>& renderBusy() { static std::atomic<int> n{0}; return n; }
+/// RAII mark around a render-critical parallel section (see BgThrottle).
+struct RenderBusyScope {
+  RenderBusyScope() { renderBusy().fetch_add(1, std::memory_order_relaxed); }
+  ~RenderBusyScope() { renderBusy().fetch_sub(1, std::memory_order_relaxed); }
+};
+
 /// Fixed set of worker threads draining one FIFO of jobs. Exception-safe: a job that throws is
 /// logged and counted (failedJobs()) instead of terminating the process, and the in-flight count
 /// is always released, so waitIdle() and JobBatch::wait() can never hang on a failed job.
@@ -74,6 +104,13 @@ class cJobPool {
     cv_.notify_one();
   }
   unsigned size() const { return unsigned(workers_.size()); }
+  /// Cap on concurrently running jobs for THIS pool unless LL_BG_MAX_ACTIVE overrides it.
+  void setDefaultMaxActive(int n) {
+    if (BgThrottle::get().maxActiveSet) return;
+    { std::lock_guard l(m_); maxActive_ = std::max(0, n); }
+    cv_.notify_all();
+  }
+  int maxActive() const { std::lock_guard l(m_); return maxActive_; }
   /// Blocks (no polling) until every job submitted so far has finished.
   void waitIdle() const {
     std::unique_lock l(m_);
@@ -88,10 +125,22 @@ class cJobPool {
       std::function<void()> job;
       {
         std::unique_lock l(m_);
-        cv_.wait(l, [this] { return stop_ || !jobs_.empty(); });
+        const BgThrottle& bt = BgThrottle::get();
+        if (maxActive_ <= 0 && !bt.yieldRender) {
+          cv_.wait(l, [this] { return stop_ || !jobs_.empty() || maxActive_ > 0; });
+          if (!stop_ && maxActive_ > 0) continue;  // a cap was set while waiting: honour it
+        } else {  // opt-in throttle: renderBusy() changes outside m_, so re-check every 1 ms
+          auto ready = [&] {
+            return stop_ || (!jobs_.empty() && (maxActive_ <= 0 || active_ < maxActive_) &&
+                             !(bt.yieldRender && renderBusy().load(std::memory_order_relaxed) > 0));
+          };
+          while (!ready()) cv_.wait_for(l, std::chrono::milliseconds(1));
+        }
         if (stop_ && jobs_.empty()) return;
+        if (jobs_.empty()) continue;
         job = std::move(jobs_.front());
         jobs_.pop_front();
+        ++active_;
       }
       try {
         job();
@@ -103,8 +152,10 @@ class cJobPool {
         logError("job pool: job threw a non-std exception");
       }
       bool idle;
-      { std::lock_guard l(m_); idle = --inFlight_ == 0; }
+      bool capped;
+      { std::lock_guard l(m_); idle = --inFlight_ == 0; --active_; capped = maxActive_ > 0; }
       if (idle) idle_.notify_all();
+      if (capped) cv_.notify_one();  // a capped slot freed
     }
   }
   std::vector<std::thread> workers_;
@@ -114,6 +165,8 @@ class cJobPool {
   mutable std::condition_variable idle_;
   bool stop_ = false;
   int inFlight_ = 0;  // guarded by m_
+  int active_ = 0;    // jobs running now, guarded by m_ (BgThrottle cap)
+  int maxActive_ = BgThrottle::get().maxActive;  // guarded by m_; 0 = uncapped
   std::atomic<uint64_t> failed_{0};
 };
 
