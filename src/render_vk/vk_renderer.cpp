@@ -1685,7 +1685,19 @@ class cVulkanRenderer final : public IRenderer {
 
   // Block outline (depth tested), crosshair (always on top), then the HUD, from this frame's
   // overlay buffer: lines at offset 0, HUD vertices at kHudOffset.
-  void drawOverlay(VkCommandBuffer cmd, const FrameSlot& f, const FrameParams& p) {
+  void drawOverlay(VkCommandBuffer cmd, FrameSlot& f, const FrameParams& p) {
+    // 2026-10-25 (JD: Vulkan console / pause menu / hotbar tail missing): the HUD is built first and
+    // this frame's overlay buffer grows to fit it (its fence was waited, so it is not in flight).
+    // The fixed 4 MB cap dropped the LAST vertices: the hotbar tail, then console and pause menu.
+    buildHudVertices(p.hud, hudVerts_);
+    if (const VkDeviceSize need = kHudOffset + VkDeviceSize(hudVerts_.size()) * sizeof(HudVertex); need > f.overlay->size()) {
+      const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      const VkDeviceSize grown = std::max<VkDeviceSize>(need + need / 2, f.overlay->size() * 2);
+      if (auto b = Buffer::create(*dev_, grown, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible)) {
+        logInfo("vulkan: HUD overlay buffer %llu -> %llu KB (%zu HUD vertices)", (unsigned long long)(f.overlay->size() >> 10), (unsigned long long)(grown >> 10), hudVerts_.size());
+        f.overlay = std::move(b);
+      }
+    }
     const VkBuffer buffer = f.overlay->handle();
     uint8_t* const base = f.overlay->mapped();
     VkDeviceSize offset = 0;
@@ -1704,8 +1716,7 @@ class cVulkanRenderer final : public IRenderer {
       drawLines(pipelines_->lineDepth(), blockOutlineLines(p.hx, p.hy, p.hz), p.viewProj, {0.05f, 0.05f, 0.08f});
     if (p.crosshair) drawLines(pipelines_->lineOverlay(), crosshairLines(p.width, p.height), Mat4::identity(), {1, 1, 1});
 
-    buildHudVertices(p.hud, hudVerts_);
-    const size_t maxVerts = size_t((kOverlayBytes - kHudOffset) / sizeof(HudVertex));
+    const size_t maxVerts = size_t((f.overlay->size() - kHudOffset) / sizeof(HudVertex));
     const size_t count = std::min(hudVerts_.size(), maxVerts / 6 * 6);
     // D-M6: the overlay buffer is fixed-size; excess HUD verts are dropped.
     // Loud once instead of silent truncation.
