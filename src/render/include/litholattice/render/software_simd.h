@@ -5,6 +5,7 @@
 // support. LL_SW_FORCE_SCALAR=1 forces the baseline path (identity proofs).
 // Every kernel has bit-identical output on both paths (pure stores).
 #pragma once
+#include <cstring>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -47,8 +48,25 @@ void fill16(uint16_t* p, size_t n, uint16_t v);
 /// faces one block apart quantize equal and z-fight (banding, rail moire).
 /// The remap is monotonic (ordering kept) and spends codes on the far end:
 /// ~0.07 blocks at 64, ~0.2 at 128, ~0.56 at 256. Opt-in for A/B.
-inline const bool g_depthRemap = [] { const char* e = std::getenv("LL_SW_DEPTH_REMAP"); return e && *e == '1'; }();
-inline float depthRemap(float d) { return g_depthRemap ? 1.0f - std::sqrt(1.0f - d) : d; }
+/// Cortana 2026-10-26 (Archie item 7): LL_SW_DEPTH_REMAP=2 = reciprocal ("log") depth. With
+/// a [0,1] NDC depth 1 - d ~ near/w, so the float BITS of u = 1 - d are a piecewise-linear
+/// log2(near/w): codes = (bits(1) - bits(max(u, 2^-15))) / (15 * 2^23), i.e. 15 octaves of
+/// w with ~4369 codes each = constant ~0.02% relative precision (0.06 blocks at 256, 0.23 at
+/// 1000) instead of d's step that grows with w^2. Monotonic, integer-cheap, all tiers.
+/// LL_RETRO_SHIMMER=1 (JD partly likes the Tron-like distant shimmer): keeps the original
+/// linear 16-bit depth, so far faces keep their banding/shimmer whatever LL_SW_DEPTH_REMAP says.
+inline const int g_depthRemapMode = [] {
+  const char* r = std::getenv("LL_RETRO_SHIMMER");
+  if (r && *r == '1') return 0;
+  const char* e = std::getenv("LL_SW_DEPTH_REMAP"); return (e && (*e == '1' || *e == '2')) ? *e - '0' : 0; }();
+inline const bool g_depthRemap = g_depthRemapMode != 0;
+inline float depthRecip(float d) {
+  float u = 1.0f - d;
+  u = u < 3.0517578125e-05f ? 3.0517578125e-05f : u;
+  uint32_t b; std::memcpy(&b, &u, 4);
+  return float(int32_t(0x3F800000u - b)) * (1.0f / (15.0f * 8388608.0f));
+}
+inline float depthRemap(float d) { return g_depthRemapMode == 1 ? 1.0f - std::sqrt(1.0f - d) : g_depthRemapMode == 2 ? depthRecip(d) : d; }
 inline uint16_t depthQ(float d) {
   d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
   d = depthRemap(d);

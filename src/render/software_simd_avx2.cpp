@@ -109,7 +109,11 @@ LL_TARGET_AVX2 void shadeSpanBasicAvx2(ShadeSpanBasic& s) {
     }
     const __m256i dstored = _mm256_cvtepu16_epi32(draw);
     __m256 zc = _mm256_min_ps(_mm256_max_ps(z, zero), one);
-    if (swsimd::g_depthRemap) zc = _mm256_sub_ps(one, _mm256_sqrt_ps(_mm256_sub_ps(one, zc)));  // LL_SW_DEPTH_REMAP
+    if (swsimd::g_depthRemapMode == 1) zc = _mm256_sub_ps(one, _mm256_sqrt_ps(_mm256_sub_ps(one, zc)));  // LL_SW_DEPTH_REMAP
+    else if (swsimd::g_depthRemapMode == 2) {  // item 7 reciprocal depth (= swsimd::depthRecip)
+      const __m256 u = _mm256_max_ps(_mm256_sub_ps(one, zc), _mm256_set1_ps(3.0517578125e-05f));
+      zc = _mm256_mul_ps(_mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_set1_epi32(0x3F800000), _mm256_castps_si256(u))), _mm256_set1_ps(1.0f / (15.0f * 8388608.0f)));
+    }
     const __m256i zq = _mm256_cvtps_epi32(_mm256_mul_ps(zc, _mm256_set1_ps(65535.0f)));
     const __m256 pass = _mm256_and_ps(cov, _mm256_castsi256_ps(_mm256_cmpgt_epi32(dstored, zq)));
     const int passBits = _mm256_movemask_ps(pass);
