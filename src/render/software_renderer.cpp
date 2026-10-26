@@ -251,6 +251,14 @@ static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD
 // counts are judged; the >= 4x path above stays as shipped.
 static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
 static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 1.5f; }();
+// 2026-10-26 (Archie triage, HUD fill): the HUD is drawn in parallel row chunks. Each chunk walks
+// the whole primitive list in order, clipped to its rows, so every pixel sees the same blend
+// sequence as the serial walk (bit-identical output). Stats count on the unclipped primitive,
+// once (chunk 0 only). LL_HUD_MT=0 restores the serial walk.
+static thread_local int tlHudY0 = 0, tlHudY1 = 1 << 30;
+static thread_local bool tlHudStats = true;
+struct HudBig { uint64_t area; int x0, y0, x1, y1; float r, g, b, a; };  // 2026-10-26 HUD fill diagnostic (LL_SW_PROF)
+static HudBig g_hudBig[4] = {}; static uint64_t g_hudBlendPx = 0;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
@@ -2374,8 +2382,8 @@ void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex
   if (std::abs(area) < 1e-9f) return;
   const int x0 = std::max(0, int(std::floor(std::min({A.x, B.x, C.x}))));
   const int x1 = std::min(int(fb_.width) - 1, int(std::ceil(std::max({A.x, B.x, C.x}))));
-  const int y0 = std::max(0, int(std::floor(std::min({A.y, B.y, C.y}))));
-  const int y1 = std::min(int(fb_.height) - 1, int(std::ceil(std::max({A.y, B.y, C.y}))));
+  int y0 = std::max(0, int(std::floor(std::min({A.y, B.y, C.y}))));
+  int y1 = std::min(int(fb_.height) - 1, int(std::ceil(std::max({A.y, B.y, C.y}))));
   if (x0 > x1 || y0 > y1) return;
   auto edge = [](const HudVertex& a, const HudVertex& b, float x, float y) {
     return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
@@ -2383,7 +2391,10 @@ void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex
   const bool flat = A.r == B.r && A.r == C.r && A.g == B.g && A.g == C.g && A.b == B.b && A.b == C.b &&
                     A.a == B.a && A.a == C.a && A.u < 0.f && B.u < 0.f && C.u < 0.f;
   const float inv = 1.f / area;
-  if (g_swProfOn) { g_hudFlat += flat; g_hudBox += uint64_t(x1 - x0 + 1) * uint64_t(y1 - y0 + 1); }
+  if (g_swProfOn && tlHudStats) { g_hudFlat += flat; g_hudBox += uint64_t(x1 - x0 + 1) * uint64_t(y1 - y0 + 1); }
+  y0 = std::max(y0, tlHudY0);
+  y1 = std::min(y1, tlHudY1 - 1);
+  if (y0 > y1) return;
   if (flat) {
     const float a = A.a;
     if (a <= 0.f) return;
@@ -2442,6 +2453,31 @@ void cSoftwareRenderer::drawHud(const FrameParams& p) {
   if (g_swProfOn) g_hudBuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count();
   const HudVertex* v = hudVerts_.data();
   const size_t n = hudVerts_.size();
+  if (!hudAtlasReady_) {  // built here, not lazily inside the (now parallel) glyph path
+    hudAtlas_ = buildHudFontAtlas();
+    hudAtlasReady_ = true;
+  }
+  static const bool kHudMt = [] { const char* e = std::getenv("LL_HUD_MT"); return !(e && e[0] == '0'); }();
+  cSwBandPool& pool = cSwBandPool::get();
+  if (kHudMt && pool.bands() > 1 && n >= 6 * 64) {
+    constexpr int kRows = 32;
+    const int H = int(fb_.height), chunks = (H + kRows - 1) / kRows;
+    std::atomic<int> next{0};
+    pool.run([&](unsigned) {
+      for (int c; (c = next.fetch_add(1, std::memory_order_relaxed)) < chunks;) {
+        tlHudY0 = c * kRows;
+        tlHudY1 = std::min(H, tlHudY0 + kRows);
+        tlHudStats = c == 0;
+        drawHudList(v, n);
+      }
+      tlHudY0 = 0; tlHudY1 = 1 << 30; tlHudStats = true;
+    });
+    return;
+  }
+  drawHudList(v, n);
+}
+
+void cSoftwareRenderer::drawHudList(const HudVertex* v, size_t n) {
   for (size_t i = 0; i + 2 < n;) {
     // 2026-10-25 (HUD diet): a flat, whole-pixel, axis-aligned quad (quad()'s 6-vertex layout:
     // every UI rect and crisp-icon run) is filled as one rect span per row instead of two
@@ -2465,7 +2501,20 @@ void cSoftwareRenderer::drawHud(const FrameParams& p) {
 void cSoftwareRenderer::fillHudRectSpan(const HudVertex& c, int x0, int y0, int x1, int y1) {
   const float a = c.a;
   if (a <= 0.f || x0 >= x1 || y0 >= y1) return;
-  if (g_swProfOn) { g_hudFlat += 2; g_hudBox += uint64_t(x1 - x0) * uint64_t(y1 - y0); }
+  if (g_swProfOn && tlHudStats) {
+    const uint64_t ar = uint64_t(x1 - x0) * uint64_t(y1 - y0);
+    g_hudFlat += 2; g_hudBox += ar;
+    if (a < 1.f) g_hudBlendPx += ar;
+    bool dup = false;
+    for (const HudBig& b : g_hudBig) dup |= b.area == ar && b.x0 == x0 && b.y0 == y0;
+    HudBig* mn = &g_hudBig[0];
+    for (HudBig& b : g_hudBig) if (b.area < mn->area) mn = &b;
+    if (!dup && ar > mn->area) *mn = HudBig{ar, x0, y0, x1, y1, c.r, c.g, c.b, a};
+  }
+  const uint64_t fullArea = uint64_t(x1 - x0) * uint64_t(y1 - y0);  // path choice on the unclipped rect
+  y0 = std::max(y0, tlHudY0);
+  y1 = std::min(y1, tlHudY1);
+  if (y0 >= y1) return;
   if (a >= 1.f) {
     const uint32_t solid = 0xFF000000u | (uint32_t(std::lround(std::clamp(c.r, 0.f, 1.f) * 255.f)) << 16) |
                            (uint32_t(std::lround(std::clamp(c.g, 0.f, 1.f) * 255.f)) << 8) |
@@ -2474,7 +2523,7 @@ void cSoftwareRenderer::fillHudRectSpan(const HudVertex& c, int x0, int y0, int 
     return;
   }
   const float ia = 1.f - a, ca[3] = {c.r * a, c.g * a, c.b * a};
-  if (uint64_t(x1 - x0) * uint64_t(y1 - y0) < 512) {  // small (icon runs): blendPixel's math directly
+  if (fullArea < 512) {  // small (icon runs): blendPixel's math directly
     for (int y = y0; y < y1; ++y)
       for (int x = x0; x < x1; ++x) blendPixel(x, y, c.r, c.g, c.b, a);
     return;
@@ -2615,6 +2664,12 @@ struct SwProf {
       std::fprintf(stderr, "swprof hud ms/frame=%.2f hud tris=%llu /frame\n", g_hudMsAcc / frames, (unsigned long long)(g_hudTris / frames));
       std::fprintf(stderr, "swprof hud build ms/frame=%.2f flat tris=%llu bbox px=%llu /frame\n", g_hudBuildMs / frames,
                    (unsigned long long)(g_hudFlat / frames), (unsigned long long)(g_hudBox / frames));
+      std::fprintf(stderr, "swprof hud blended px=%llu /frame; largest flat rects (window):", (unsigned long long)(g_hudBlendPx / frames));
+      for (const HudBig& b : g_hudBig)
+        if (b.area) std::fprintf(stderr, " [%d,%d %dx%d a=%.2f rgb=%.2f,%.2f,%.2f]", b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0, b.a, b.r, b.g, b.b);
+      std::fprintf(stderr, "\n");
+      for (HudBig& b : g_hudBig) b = HudBig{};
+      g_hudBlendPx = 0;
       g_hudMsAcc = 0; g_hudTris = 0; g_hudBuildMs = 0; g_hudFlat = 0; g_hudBox = 0;
     }
     std::fprintf(stderr, "swprof emit lights=%zu\n", g_lastEmitN);
