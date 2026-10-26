@@ -250,6 +250,8 @@ static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD
 // Strike 2 (Elfie bench, 2026-10-26, Archie battle plan): extend the flat-LOD path to
 // 2x meshes (the largest tri ring). Opt-in LL_SW_FLAT_LOD2=1 until the picture and the
 // counts are judged; the >= 4x path above stays as shipped.
+// Cortana 2026-10-26 (Archie item 6, Candidate D): LL_SW_TILE64=K (1-4) = 64x64 tiles, K per grab; 0/unset = strips.
+static std::atomic<int> g_swTile64{[] { const char* e = std::getenv("LL_SW_TILE64"); return e ? std::clamp(std::atoi(e), 0, 4) : 0; }()};
 static const bool g_swNearBinOld = std::getenv("LL_SW_NEARBIN_OLD") != nullptr;  // Cortana 2026-10-26: A/B the near-plane quad binning
 static const float g_swMipBias = [] { const char* e = std::getenv("LL_SW_MIP_BIAS"); return e ? float(std::atof(e)) : 0.0f; }();  // Cortana 2026-10-26: distant moire A/B (mip levels added to the per-triangle pick)
 static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
@@ -2724,14 +2726,19 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
       abIn = true;
       const unsigned cur = g_p2.load();
       const char* am = std::getenv("LL_SW_AB_A");
-      g_p2.store(am && *am ? unsigned(std::strtoul(am, nullptr, 0)) : 0u);
+      // item 6: LL_SW_AB_TILE=1 keeps the mask and A/Bs strips (A) vs LL_SW_TILE64 tiles (B).
+      const bool abTile = std::getenv("LL_SW_AB_TILE") != nullptr;
+      const int curTile = g_swTile64.load();
+      if (abTile) g_swTile64.store(0); else g_p2.store(am && *am ? unsigned(std::strtoul(am, nullptr, 0)) : 0u);
       renderFrame(p);
+      g_swTile64.store(curTile);
       const std::vector<uint32_t> a = fb_.pixels;
       g_p2.store(cur);
       renderFrame(p);
       size_t diff = 0; int maxd = 0;
       const size_t n = std::min(a.size(), fb_.pixels.size());
       for (size_t i = 0; i < n; ++i) if (a[i] != fb_.pixels[i]) {
+        if (std::getenv("LL_SW_AB_XY") && diff < 40) std::fprintf(stderr, "swabxy %zu,%zu\n", i % fb_.width, i / fb_.width);
         ++diff;
         for (int sh = 0; sh < 24; sh += 8) maxd = std::max(maxd, std::abs(int((a[i] >> sh) & 255) - int((fb_.pixels[i] >> sh) & 255)));
       }
@@ -3081,6 +3088,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // multiple x tiles (Hi-Z tiles never straddle two), each its own work item.
   if (perPixel_ && g_swFlatLod) refreshLayerAvg();
   stripWork_.clear();
+  const int tileK = g_swTile64.load(std::memory_order_relaxed);
+  int nTiles = 0;
   {
     stripCost_.assign(size_t(nStrips), 1u);
     if (perPixel_)
@@ -3103,7 +3112,27 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
       for (int x = 0; x < int(fb_.width); x += tw)
         stripWork_.push_back({s2, x, std::min(int(fb_.width), x + tw), uint32_t(c / uint64_t(k))});
     }
-    std::stable_sort(stripWork_.begin(), stripWork_.end(), [](const StripWork& a, const StripWork& b) { return a.cost > b.cost; });
+    if (tileK > 0) {
+      // Candidate D: replace the strip list with 64x64 tiles; stripWork_[t*4+j] is strip j of
+      // tile t (strips past the frame are padding and skipped). Tiles go heaviest-first.
+      stripWork_.clear();
+      const int tilesX = (int(fb_.width) + 63) / 64, tilesY = (int(fb_.height) + 63) / 64;
+      nTiles = tilesX * tilesY;
+      tileCost_.assign(size_t(nTiles), 0u);
+      for (int ty = 0; ty < tilesY; ++ty)
+        for (int tx = 0; tx < tilesX; ++tx)
+          for (int j = 0; j < 4; ++j) {
+            const int s2 = ty * 4 + j;
+            const uint32_t c = s2 < nStrips ? uint32_t(stripCost_[size_t(s2)] / uint64_t(tilesX)) : 0u;
+            stripWork_.push_back({s2, tx * 64, std::min(int(fb_.width), tx * 64 + 64), c});
+            tileCost_[size_t(ty * tilesX + tx)] += c;
+          }
+      tileOrder_.resize(size_t(nTiles));
+      for (int t = 0; t < nTiles; ++t) tileOrder_[size_t(t)] = t;
+      std::stable_sort(tileOrder_.begin(), tileOrder_.end(), [&](int a, int b) { return tileCost_[size_t(a)] > tileCost_[size_t(b)]; });
+    } else {
+      std::stable_sort(stripWork_.begin(), stripWork_.end(), [](const StripWork& a, const StripWork& b) { return a.cost > b.cost; });
+    }
   }
   const int nWork = int(stripWork_.size());
   const auto drawBand = [&](unsigned bandIdx) {
@@ -3112,7 +3141,23 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
      unsigned i; std::chrono::steady_clock::time_point t0;
      ~BandTimer() { if (g_swProfOn && i < 64) g_bandMs[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
    } bandTimer{bandIdx, tBand0};
-   for (int stripK; (stripK = nextStrip.fetch_add(1, std::memory_order_relaxed)) < nWork;) {
+   // Cortana 2026-10-26 (Archie item 6, Candidate D, LL_SW_TILE64=K opt-in): the work list is
+   // 64x64 tiles (4 bin strips x 64 px) over a framebuffer height padded up to a multiple of
+   // 64; each atomic grab takes K (2-4) consecutive tiles. Each tile draws its 4 strips in turn
+   // with the same per-strip bins and clip rects, so every pixel's draw order is unchanged.
+   int tileLeft = 0, tileAt = 0, subS = 4, curTile = -1;
+   for (;;) {
+   int stripK;
+   if (tileK > 0) {
+     if (++subS >= 4) {
+       subS = 0;
+       if (tileLeft == 0) { tileAt = nextStrip.fetch_add(tileK, std::memory_order_relaxed); tileLeft = tileK; }
+       curTile = tileAt++; --tileLeft;
+       if (curTile >= nTiles) break;
+     }
+     stripK = tileOrder_[size_t(curTile)] * 4 + subS;
+     if (stripWork_[size_t(stripK)].strip >= nStrips) continue;  // padded rows below the frame
+   } else if ((stripK = nextStrip.fetch_add(1, std::memory_order_relaxed)) >= nWork) break;
    const int strip = stripWork_[size_t(stripK)].strip;
    tlBandX0 = stripWork_[size_t(stripK)].x0;
    tlBandX1 = stripWork_[size_t(stripK)].x1 >= int(fb_.width) ? (1 << 30) : stripWork_[size_t(stripK)].x1;

@@ -312,6 +312,7 @@ class cSoftwareRenderer : public IRenderer {
   std::vector<size_t> meshVertOff_;
   struct StripWork { int strip, x0, x1; uint32_t cost; };
   std::vector<StripWork> stripWork_; std::vector<uint32_t> stripCost_;  ///< 2026-10-25 step 1: heaviest-first strips
+  std::vector<uint32_t> tileCost_; std::vector<int> tileOrder_;  ///< 2026-10-26 item 6 Candidate D (LL_SW_TILE64)
   std::vector<std::vector<uint32_t>> meshBins_, meshBinOff_;  ///< Cortana 2026-10-15 1255: per-mesh strip bins (CSR)
   std::vector<std::vector<uint32_t>> binFill_;  ///< per band-thread fill cursors
   std::vector<uint16_t> depth_;  ///< PT4-A (2026-10-26): depth buffer, uint16-quantized [0,1] z/w domain (swsimd::depthQ); 0xFFFF = far/clear
