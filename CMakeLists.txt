@@ -10,6 +10,26 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# 2026-10-25 (JD): DebugOpt = optimised code (/O2 /Ob2, -O2) with debug info and the release CRT,
+# but NDEBUG is NOT defined, so every debug log line, assert and diagnostic stays (Vulkan
+# validation included). Debug proper (/Od /RTC1 + debug CRT) is ~4 FPS on a full world; this one
+# is for playing with Debug's logs. LK_DEBUGOPT=1 marks it. Release / Debug are unchanged.
+if(CMAKE_CONFIGURATION_TYPES AND NOT "DebugOpt" IN_LIST CMAKE_CONFIGURATION_TYPES)
+  list(APPEND CMAKE_CONFIGURATION_TYPES DebugOpt)
+  set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}" CACHE STRING "Build configurations" FORCE)
+endif()
+if(MSVC)
+  set(_lk_dbgopt "/O2 /Ob2 /Zi")
+else()
+  set(_lk_dbgopt "-O2 -g")
+endif()
+set(CMAKE_C_FLAGS_DEBUGOPT "${_lk_dbgopt}" CACHE STRING "DebugOpt C flags (no NDEBUG)" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUGOPT "${_lk_dbgopt}" CACHE STRING "DebugOpt C++ flags (no NDEBUG)" FORCE)
+foreach(_k EXE SHARED MODULE STATIC)
+  set(CMAKE_${_k}_LINKER_FLAGS_DEBUGOPT "${CMAKE_${_k}_LINKER_FLAGS_RELWITHDEBINFO}" CACHE STRING "" FORCE)
+endforeach()
+add_compile_definitions($<$<CONFIG:DebugOpt>:LK_DEBUGOPT=1>)
+
 # Static MSVC runtime for everything (GLFW too) so LithoKraft.exe needs no extra DLLs.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
