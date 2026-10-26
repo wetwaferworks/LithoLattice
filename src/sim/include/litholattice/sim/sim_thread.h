@@ -16,6 +16,7 @@
 #include <cstdio>  // LL_SIM_STALL_MS parse (Proposed by Herominde; implemented by Cortana)
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -205,6 +206,12 @@ class cSimThread {
     PointRead pr(threewayYield_ ? &pointReaders_ : nullptr, threewayYield_ ? &readWaiting_ : nullptr);  // LL_THREEWAY (Proposed by JD; co-implemented by JD and Cortana)
     locktiming::TimedGuard l(blockMutex_, locktiming::kBlock);  // 0.0.1.60 timing (diagnostic)
     pr.done();
+    return chunks_.get(x, y, z);
+  }
+  /// 2026-10-25 (JD hitch): non-blocking getBlock for the frame thread; nullopt while the sim is mid-tick.
+  std::optional<BlockId> tryGetBlock(int x, int y, int z) {
+    std::unique_lock<std::recursive_mutex> l(blockMutex_, std::try_to_lock);
+    if (!l.owns_lock()) return std::nullopt;
     return chunks_.get(x, y, z);
   }
   /// Block id and cell state in one locked read (Highway Ramp player collision, JD 2026-10-16).
