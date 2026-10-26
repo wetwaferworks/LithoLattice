@@ -290,8 +290,8 @@ void main() {
     int digit = ones ? v % 10 : (v / 10) % 10, bit = ones ? seg - 8 : seg - 1;
     bool on = seg >= 1 && seg <= 14 && (ones || v >= 10) && ((SEG[digit] >> bit) & 1) != 0;
     if (!on || m.g < 0.5) discard;
-    // 2026-10-25 (JD approved: all LED readouts purple): lit = Posts purple #9B30FF, unlit = dim purple.
-    base = (vVal & 128) != 0 ? vec3(0.608, 0.188, 1.0) : vec3(0.290, 0.110, 0.470);
+    // 2026-10-26 (JD approved palette): lit = Glow #8B65DD, unlit = Deep #1D165A.
+    base = (vVal & 128) != 0 ? vec3(0.545, 0.396, 0.867) /*Glow #8B65DD*/ : vec3(0.114, 0.086, 0.353) /*Deep #1D165A*/;
     emissive = 0.9;
   }
 #ifdef LITHO_VK_FX
