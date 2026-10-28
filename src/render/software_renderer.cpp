@@ -285,7 +285,7 @@ static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
 static std::atomic<uint64_t> g_ringTris[4]{};  // 2026-10-25 (Archie step 6): binned tris per far-LOD ring (LL_SW_PROF)
-static int g_ringEdge[3] = {2, 4, 6};  // = game LL_SW_LOD_RINGS default
+static int g_ringEdge[3] = {32, 64, 96};  // = game LL_SW_LOD_RINGS default (JD's 32-chunk full-fidelity core, 2026-10-28)
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
