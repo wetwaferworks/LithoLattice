@@ -1,7 +1,7 @@
 // Web-only GL loader shims — see gl_web_shims.h for the rationale.
-// The whole translation unit is Emscripten-only; native builds compile an
+// The whole translation unit is web-only; native builds compile an
 // empty TU and native preprocessing of every other file is unchanged.
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 
 #include "gl_web_shims.h"
 
@@ -48,4 +48,4 @@ bool litholattice_webGlLoadFixups() {
   return all;
 }
 
-#endif  // defined(__EMSCRIPTEN__)
+#endif  // defined(__wasm__)

@@ -382,7 +382,7 @@ class cGL33Renderer final : public IRenderer {
     for (size_t i = 0; i < std::size(kProgramNames); ++i) {
       const std::string_view name = kProgramNames[i];
       const bool pbr = (i == kChunkPbrProgram);
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
       // fix 3b (Elfie P1): chunk_pbr.frag uses samplerBuffer, which GLSL ES 3.00 lacks. Decline the
       // PBR path up front with one info line instead of a compile ERROR (supportsPbrPath() -> false).
       if (pbr) { logInfo("gl33: chunk_pbr not available on WebGL2 (no samplerBuffer in GLSL ES 3.00); classic path only"); continue; }
@@ -415,7 +415,7 @@ class cGL33Renderer final : public IRenderer {
     // PBR program: swap in on success, clear on failure (supportsPbrPath() reads id()).
     if (built[kChunkPbrProgram]) pbrProg_ = std::move(*built[kChunkPbrProgram]);
     else pbrProg_ = cGlProgram();
-#if !defined(__EMSCRIPTEN__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
+#if !defined(__wasm__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
     if (!supportsPbrPath()) logError("gl33: chunk_pbr unavailable - PBR/BinaryQuad path disabled, classic path only");
 #endif
     // Sprite program: same optional-path treatment (drawSprites() reads id()).
@@ -855,7 +855,7 @@ class cGL33Renderer final : public IRenderer {
     h = lastFrameH_;
     rgb.resize(size_t(w) * size_t(h) * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
     // WebGL2 (ANGLE) robust readback: the default framebuffer is RGBA8, and
     // glReadPixels(GL_RGB, GL_UNSIGNED_BYTE) is not an accepted format/type
     // pair there — it raises GL_INVALID_OPERATION ("glReadPixelsRobustANGLE:

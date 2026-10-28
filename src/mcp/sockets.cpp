@@ -195,8 +195,8 @@ bool cTcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
-#if defined(__EMSCRIPTEN__)
-// WASM checkpoint (2026-10-18): Emscripten's musl sys/socket.h does not
+#if defined(__wasm__)
+// WASM checkpoint (2026-10-18): the web libc's sys/socket.h does not
 // transitively provide `struct timeval` the way glibc's does; setTimeouts()
 // below uses it for SO_RCVTIMEO/SO_SNDTIMEO. Native builds are untouched.
 #include <sys/time.h>

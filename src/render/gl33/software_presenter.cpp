@@ -1,10 +1,11 @@
 // Software present path: framebuffer texture upload + fullscreen blit.
 // See software_presenter.h for the design and layer rationale.
-// Under Emscripten this TU is empty: gl33/software_presenter_webgl.cpp
+// On the web build this TU is empty: gl33/software_presenter_webgl.cpp
 // provides createSoftwarePresenter with GLSL ES 3.00 shaders instead
 // (WebGL2 rejects the 330 dialect below). Native preprocessing is
-// unchanged — __EMSCRIPTEN__ is defined only by the emcc driver.
-#if !defined(__EMSCRIPTEN__)
+// unchanged — __wasm__ is defined by the compiler for wasm32 targets
+// only.
+#if !defined(__wasm__)
 #include "litholattice/render/software_presenter.h"
 
 #include <optional>
@@ -119,4 +120,4 @@ std::unique_ptr<ISoftwarePresenter> createSoftwarePresenter(GLProcLoader loader)
 }
 
 }  // namespace litholattice
-#endif  // !defined(__EMSCRIPTEN__)
+#endif  // !defined(__wasm__)
