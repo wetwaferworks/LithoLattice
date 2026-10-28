@@ -1,43 +1,49 @@
-// Emscripten (browser) implementation of the Window interface — WASM checkpoint,
+// Web (browser) implementation of the Window interface — WASM checkpoint,
 // 2026-10-18 overnight; input backend landed 2026-10-19 (JD playtest report #1:
 // "controls don't work in the web browser"). NEW FILE: the native window.cpp is
 // untouched and still builds everywhere else; CMake selects this file instead
-// of window.cpp + glfw_input_backend.cpp only under EMSCRIPTEN (see
+// of window.cpp + glfw_input_backend.cpp only for the web build (see
 // src/platform/CMakeLists.txt).
 //
 // Scope, stated honestly:
 // - The page's <canvas id="canvas"> is resized to the requested window size and
 //   framebufferSize() reports the canvas element size.
-// - Input is a REAL backend (class EmscriptenHtml5InputBackend below): DOM
+// - Input is a REAL backend (class WebHtml5InputBackend below): DOM
 //   keyboard (document-level), mouse + wheel (canvas-level), pointer lock for
 //   cursor capture, window focus edges — translated into the same InputEvent
 //   stream the GLFW backend produces natively, with the same semantics
 //   (motion deltas always fed; the game applies them when it has the cursor
 //   captured; FocusLost releases everything held). Transport: main-thread
 //   JS listeners + a per-frame drain (see the transport note at the backend);
-//   emscripten_set_*_callback delivery proved dead in this configuration.
+//   host callback registration delivery proved dead in this configuration.
 // - swap() is a no-op: in the browser the canvas is composited by the page
 //   — but only at task boundaries. Build 50 note: presentation is NOT
 //   this function's job; the app's frame loop must yield (on web it is
-//   driven by emscripten_set_main_loop_arg — see app/main.cpp FrameCtx).
-//   emscripten_webgl_commit_frame() is a documented no-op in current
-//   browsers ('swap is implicit'), and explicitSwapControl changes
-//   nothing without it; both were tried and reverted 2026-10-19.
-// - glProcAddress() forwards to emscripten_webgl_get_proc_address, so the
-//   GL33 loader pattern compiles and links unchanged. For OpenGL33 windows
-//   create() also creates a real WebGL2 (GLES3) context on "#canvas"
-//   and makes it current, mirroring the native contract ("the GL 3.3 core
-//   context is current on return") — the software presenter's WebGL
-//   variant and the GL33 backend both build on it. Whether the GL33
-//   renderer's GLSL 330 shaders run is the pack's business (ES 3.00
-//   translations ride the wasm pack overlay), not this file's.
+//   driven by lk_frame_loop_set — see app/main.cpp FrameCtx). An explicit
+//   commit-frame call is a documented no-op in current browsers ('swap
+//   is implicit'), and explicitSwapControl changes nothing without it;
+//   both were tried and reverted 2026-10-19.
+// - glProcAddress() answers from a table of the page layer's lk_gl*
+//   imports (lk_gl_imports.h), so the GL33 loader pattern compiles and
+//   links unchanged. For OpenGL33 windows create() also creates a real
+//   WebGL2 (GLES3) context on the canvas and makes it current, mirroring
+//   the native contract ("the GL 3.3 core context is current on
+//   return") — the software presenter's WebGL variant and the GL33
+//   backend both build on it. Whether the GL33 renderer's GLSL 330
+//   shaders run is the pack's business (ES 3.00 translations ride the
+//   wasm pack overlay), not this file's.
 // - No Vulkan in the browser: surface/extensions report unavailable, and the
 //   app's Vulkan request falls back exactly as it does on a Vulkan-less PC.
+//
+// All host services are our own named imports, declared in
+// litholattice/platform/lk_web.h and implemented in the page layer
+// (wasm/full/lkboot.js) — the 2026-10-28 purge replaced the previous
+// address-keyed script-snippet mechanism wholesale.
 #include "litholattice/platform/window.h"
 
-#include <emscripten/emscripten.h>
-#include <emscripten/html5.h>
-#include <emscripten/html5_webgl.h>
+#include "litholattice/platform/lk_web.h"
+
+#include "lk_gl_imports.h"  // render/gl33: the lk_gl* import declarations + loader X-macro
 
 #include <algorithm>
 #include <atomic>
@@ -55,7 +61,7 @@ namespace litholattice {
 
 namespace {
 
-double nowSeconds() { return emscripten_get_now() / 1000.0; }
+double nowSeconds() { return lk_now_ms() / 1000.0; }
 
 /// State shared between the input backend's poll() (which converts the
 /// main-thread listener records into events) and the Window (cursor
@@ -172,21 +178,23 @@ char32_t firstCodePoint(const char* s) {
 // ---------------------------------------------------------------------------
 // Input transport (rewritten 2026-10-19, fix run for JD's playtest report #1)
 //
-// The first transport registered C++ callbacks with emscripten_set_*_callback
-// from this (proxied) pthread. In this build configuration those callbacks
-// are NEVER delivered: an in-game diagnostic heartbeat (poll() counting
-// callback pushes) ran for minutes across two browsers runs and recorded
-// pushed=0 while the same page's plain JS listeners saw every event, and a
-// standalone probe with identical flags DID receive its callbacks — so the
-// mechanism is configuration-sensitive in a way we could not pin down and
-// must not depend on. This transport uses only pipes proven live in this
-// binary: MAIN_THREAD_EM_ASM hops to the browser main thread (the same hop
-// the debug-flag read and Window::setTitle already rely on) and poll().
+// The first transport registered C++ callbacks with the host's
+// callback-registration API from this (proxied) pthread. In this build
+// configuration those callbacks are NEVER delivered: an in-game diagnostic
+// heartbeat (poll() counting callback pushes) ran for minutes across two
+// browsers runs and recorded pushed=0 while the same page's plain JS
+// listeners saw every event, and a standalone probe with identical flags
+// DID receive its callbacks — so the mechanism is configuration-sensitive
+// in a way we could not pin down and must not depend on. This transport
+// uses only pipes proven live in this binary: named-import hops to the
+// browser main thread (lk_input_install / lk_input_drain_queue in the
+// page layer, the same hop the debug-flag read and Window::setTitle
+// already rely on) and poll().
 //
 // Main-thread JS listeners (installed once by the backend constructor)
 // serialize DOM events into window.__lkQ as pipe-delimited lines; poll()
-// drains the queue once per frame via one MAIN_THREAD_EM_ASM_INT that also
-// reports the canvas geometry, then converts records to InputEvents with
+// drains the queue once per frame via one lk_input_drain_queue call that
+// also reports the canvas geometry, then converts records to InputEvents with
 // exactly the semantics the callback version had (same key map, same
 // consume rules, same echoes, same drag-look fallback).
 //
@@ -439,7 +447,7 @@ void handleFocus(InputSharedState* st, bool gained, double t) {
 // waking at STEP boundaries (256/s, the web step clock) — input is no
 // longer quantized to presented frames. Each record carries the event's
 // own timestamp (writer side, performance.now() milliseconds — the same
-// clock emscripten_get_now reports), and conversion stamps the
+// clock lk_now_ms reports), and conversion stamps the
 // InputEvent with it, so events distribute across steps by when they
 // happened. If the drain thread cannot start, poll() drains per frame
 // exactly as build 62 did.
@@ -474,7 +482,7 @@ float lkioFloat(uint32_t bits) {
 }
 
 /// Event timestamp from record words 16/17 (float64 milliseconds on the
-/// performance.now clock — the same clock emscripten_get_now reports),
+/// performance.now clock — the same clock lk_now_ms reports),
 /// in seconds. Returns 0 when the stamp is absent or implausible; the
 /// caller falls back to conversion time, the pre-63 behavior.
 double lkioEventSeconds(const uint32_t* rec, double nowSec) {
@@ -496,181 +504,43 @@ void lkioStr(const uint32_t* w, char* out) {
 /// HTML5 input backend for the browser window: DOM events in (via the
 /// main-thread listener queue), InputEvents out — the GLFW backend's
 /// contract on web primitives.
-class EmscriptenHtml5InputBackend final : public IInputBackend {
+class WebHtml5InputBackend final : public IInputBackend {
  public:
-  explicit EmscriptenHtml5InputBackend(std::shared_ptr<InputSharedState> st) : st_(std::move(st)) {
+  explicit WebHtml5InputBackend(std::shared_ptr<InputSharedState> st) : st_(std::move(st)) {
     // Instrumentation switch: ?debuginput=1 in the page URL (read once,
     // here, straight from the address bar the player actually used).
     // Read the flag on the browser MAIN thread: this backend runs on the
     // proxied pthread, where `location` is the worker script's URL (no page
-    // query string) — a plain EM_ASM read here silently always saw "off".
+    // query string) — a plain read here silently always saw "off".
     // The pages set window.LK_DEBUG_INPUT when ?debuginput=1 is present;
     // the main thread's own location.search is the fallback source.
-    st_->debugEcho = MAIN_THREAD_EM_ASM_INT({
-      return (window.LK_DEBUG_INPUT || new URLSearchParams(location.search).has('debuginput')) ? 1 : 0;
-    }) != 0;
+    st_->debugEcho = lk_input_debug_flag() != 0;
     st_->moveEchoBudget = st_->debugEcho ? 24 : 0;
     // Install the main-thread DOM listeners (once). Keyboard on the
     // document: keys belong to whichever frame holds the browser's focus
     // (itch focuses its game iframe on click), and document delivery works
     // regardless of which element inside the frame is focused. The consume
     // rule (preventDefault set) mirrors the old callback return values.
-    MAIN_THREAD_EM_ASM({
-      if (window.__lkInputInstalled) return;
-      window.__lkInputInstalled = 1;
-      window.__lkQ = [];
-      window.__lkCaptureWanted = 0;
-      var Q = window.__lkQ;
-      var cv = document.getElementById('canvas');
-      var enc = encodeURIComponent;
-      // Build 59: the memory-mapped ring writer. When the backend has
-      // published the ring (window.__lkRingOn — SharedArrayBuffer present),
-      // listeners write fixed-size binary records straight into WASM
-      // memory with Atomics and __lkEmit returns true; otherwise it
-      // returns false and the listener falls back to the legacy string
-      // queue, byte-for-byte the pre-59 transport. Record layout + header
-      // contract: see the ring block on the C++ side. Type 0 is a
-      // geometry-only refresh (no record is committed).
-      window.__lkEmit = function(type, flags, i1, f1, f2, f3, f4, s1, s2) {
-        if (!window.__lkRingOn) return false;
-        try {
-          var b = wasmMemory.buffer;
-          var v = window.__lkRingView;
-          if (!v || v.buffer !== b) { v = new Int32Array(b, window.__lkRingBase, window.__lkRingWords); window.__lkRingView = v; }
-          if (type !== 5) {
-            var cv2 = document.getElementById('canvas');
-            if (cv2) {
-              var rc = cv2.getBoundingClientRect();
-              var hv = new Float32Array(b, window.__lkRingBase + 16, 2);
-              hv[0] = rc.width; hv[1] = rc.height;
-              v[6] = cv2.width | 0; v[7] = cv2.height | 0;
-            }
-          }
-          if (type === 0) return true;
-          var cap = window.__lkRingCap;
-          var w = Atomics.load(v, 1);
-          var r = Atomics.load(v, 2);
-          if (w - r >= cap) { Atomics.add(v, 3, 1); return true; }  // full: drop newest, counted in header word 3
-          var base = 8 + (w % cap) * 20;
-          v[base + 1] = flags | 0;
-          v[base + 2] = i1 | 0;
-          v[base + 3] = 0;
-          var fv = new Float32Array(b, window.__lkRingBase + (base + 4) * 4, 4);
-          fv[0] = f1; fv[1] = f2; fv[2] = f3; fv[3] = f4;
-          var u8 = new Uint8Array(b, window.__lkRingBase + (base + 8) * 4, 32);
-          u8.fill(0);
-          var te = window.__lkTE || (window.__lkTE = new TextEncoder());
-          if (s1) { var e1 = te.encode(s1); for (var i = 0; i < e1.length && i < 15; i++) u8[i] = e1[i]; }
-          if (s2) { var e2 = te.encode(s2); for (var j = 0; j < e2.length && j < 15; j++) u8[16 + j] = e2[j]; }
-          // Drain fix (build 63): stamp the record with the EVENT time
-          // (performance.now() ms — the clock emscripten_get_now reads),
-          // float64 bits in words 16/17; 18/19 stay reserved-zero.
-          if (!window.__lkTsF) { var ab = new ArrayBuffer(8); window.__lkTsF = new Float64Array(ab); window.__lkTsU = new Uint32Array(ab); }
-          window.__lkTsF[0] = performance.now();
-          v[base + 16] = window.__lkTsU[0] | 0;
-          v[base + 17] = window.__lkTsU[1] | 0;
-          v[base + 18] = 0; v[base + 19] = 0;
-          Atomics.store(v, base + 0, type);
-          Atomics.store(v, 1, w + 1);
-          return true;
-        } catch (err) { window.__lkRingOn = 0; return false; }
-      };
-      document.addEventListener('keydown', function(e) {
-        if (!window.__lkEmit(1, (e.repeat ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0), 0, 0, 0, 0, 0, e.code, e.key || "")) {
-          Q.push('kd|' + enc(e.code) + '|' + enc(e.key || "") + '|' + (e.repeat ? 1 : 0) + '|' + (e.ctrlKey ? 1 : 0) + '|' + (e.metaKey ? 1 : 0));
-        }
-        if (document.pointerLockElement || e.code === 'Space' || e.code === 'Tab' ||
-            e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft' || e.code === 'ArrowRight' ||
-            e.code === 'PageUp' || e.code === 'PageDown') e.preventDefault();
-      });
-      document.addEventListener('keyup', function(e) {
-        if (!window.__lkEmit(2, 0, 0, 0, 0, 0, 0, e.code, e.key || "")) {
-          Q.push('ku|' + enc(e.code) + '|' + enc(e.key || ""));
-        }
-      });
-      if (cv) {
-        cv.addEventListener('mousedown', function(e) {
-          // A click inside the canvas is the engagement gesture pointer
-          // lock wants: if the game is asking for the cursor and the lock
-          // is not engaged, ask again from inside this handler, where the
-          // browser grants it. Drain-fix rider: Chrome throws an uncaught
-          // SecurityError when lock is re-requested inside its ~1.25 s
-          // post-exit cooldown — inside the cooldown, skip (a later
-          // gesture or the frame loop's timed retry lands it), and always
-          // swallow the returned promise's rejection.
-          // Build 80: on touch-primary pages (touch.js sets
-          // window.__lkTouchPrimary) the request is skipped entirely —
-          // the browser refuses it by design there and drag-look is
-          // the intended path (JD's build-79 device log spammed one
-          // refusal line per tap).
-          if (window.__lkCaptureWanted && !window.__lkTouchPrimary && !document.pointerLockElement) {
-            var sinceExit = performance.now() - (window.__lkLockExitMs || -1e9);
-            if (sinceExit > 1250) {
-              try { var pr = cv.requestPointerLock(); if (pr && typeof pr.catch === 'function') pr.catch(function() {}); } catch (_) {}
-            }
-          }
-          if (!window.__lkEmit(3, 0, e.button, e.offsetX, e.offsetY, 0, 0, null, null)) {
-            Q.push('md|' + e.button + '|' + e.offsetX + '|' + e.offsetY);
-          }
-          e.preventDefault();
-        });
-        cv.addEventListener('mouseup', function(e) {
-          if (!window.__lkEmit(4, 0, e.button, e.offsetX, e.offsetY, 0, 0, null, null)) {
-            Q.push('mu|' + e.button + '|' + e.offsetX + '|' + e.offsetY);
-          }
-        });
-        cv.addEventListener('mousemove', function(e) {
-          if (!window.__lkEmit(5, 0, 0, e.offsetX, e.offsetY, e.movementX, e.movementY, null, null)) {
-            Q.push('mm|' + e.offsetX + '|' + e.offsetY + '|' + e.movementX + '|' + e.movementY);
-          }
-        });
-        cv.addEventListener('wheel', function(e) {
-          if (!window.__lkEmit(6, 0, e.deltaMode, e.deltaY, 0, 0, 0, null, null)) {
-            Q.push('wh|' + e.deltaY + '|' + e.deltaMode);
-          }
-          e.preventDefault();
-        }, { passive: false });
-      }
-      document.addEventListener('pointerlockchange', function() {
-        if (!document.pointerLockElement) window.__lkLockExitMs = performance.now();
-        if (!window.__lkEmit(7, document.pointerLockElement ? 1 : 0, 0, 0, 0, 0, 0, null, null)) {
-          Q.push('plc|' + (document.pointerLockElement ? 1 : 0));
-        }
-      });
-      document.addEventListener('pointerlockerror', function() {
-        if (!window.__lkEmit(8, 0, 0, 0, 0, 0, 0, null, null)) { Q.push('ple'); }
-      });
-      window.addEventListener('focus', function() {
-        if (!window.__lkEmit(9, 0, 0, 0, 0, 0, 0, null, null)) { Q.push('fo'); }
-      });
-      window.addEventListener('blur', function() {
-        if (!window.__lkEmit(10, 0, 0, 0, 0, 0, 0, null, null)) { Q.push('bl'); }
-      });
-      window.addEventListener('resize', function() { window.__lkEmit(0, 0, 0, 0, 0, 0, 0, null, null); });
-    });
-    logInfo("input: emscripten-html5 backend live (transport: main-thread listeners; ring drains at step cadence, legacy queue per frame; debug echo %s)",
+    // The listeners themselves live in the page layer (lkInputInstall
+    // in lkboot.js): the ring writer and the legacy queue are page-side
+    // state, and the install is once-guarded there. Install runs before
+    // the ring publish below — the ordering is load-bearing (the emit
+    // path checks the ring flag the publish sets).
+    lk_input_install();
+    logInfo("input: web-html5 backend live (transport: main-thread listeners; ring drains at step cadence, legacy queue per frame; debug echo %s)",
             st_->debugEcho ? "ON (?debuginput=1)" : "off");
     // Build 59: publish the memory-mapped input ring to the listeners.
     // The magic word is set before the address is revealed, and the JS
-    // side writes only once this block sets window.__lkRingOn — and only
-    // where the page genuinely has shared memory (cross-origin
-    // isolation). Any failure leaves the legacy queue carrying, and
-    // poll() keeps draining it until the first ring record lands.
+    // side writes only once the publish sets window.__lkRingOn — and
+    // only where the page genuinely has shared memory (cross-origin
+    // isolation). A 0 return means exactly that (no shared memory);
+    // the legacy queue keeps carrying, and poll() keeps draining it
+    // until the first ring record lands.
     g_lkioRing[0].store(kLkioMagic, std::memory_order_relaxed);
     const int ringBase = (int)reinterpret_cast<uintptr_t>(&g_lkioRing[0]);
-    ringActive_ = MAIN_THREAD_EM_ASM_INT({
-      try {
-        if (typeof SharedArrayBuffer === 'undefined' || typeof Atomics === 'undefined') return 0;
-        if (typeof wasmMemory === 'undefined' || !(wasmMemory.buffer instanceof SharedArrayBuffer)) return 0;
-        window.__lkRingBase = $0;
-        window.__lkRingCap = $1;
-        window.__lkRingWords = $2;
-        window.__lkRingOn = 1;
-        return 1;
-      } catch (e) { return 0; }
-    }, ringBase, kLkioCap, kLkioTotalWords) != 0;
+    ringActive_ = lk_input_ring_publish(ringBase, kLkioCap, kLkioTotalWords) != 0;
     logInfo("input: memory-mapped ring %s (records at wasm+%d; legacy queue %s)",
-            ringActive_ ? "LIVE" : "unavailable (no shared memory) — legacy transport only", ringBase,
+            ringActive_ ? "LIVE" : "unavailable (page has no shared memory) — legacy transport only", ringBase,
             ringActive_ ? "on standby until first record" : "carrying");
     // Drain fix (build 63): the ring's consumer moves OFF the frame loop.
     // A dedicated thread drains at step cadence (256 wakes/s — the web
@@ -690,12 +560,12 @@ class EmscriptenHtml5InputBackend final : public IInputBackend {
     }
   }
 
-  ~EmscriptenHtml5InputBackend() override {
+  ~WebHtml5InputBackend() override {
     drainStop_.store(true, std::memory_order_release);
     if (drainThread_.joinable()) drainThread_.join();
   }
 
-  std::string_view name() const override { return "emscripten-html5"; }
+  std::string_view name() const override { return "web-html5"; }
 
   void poll(std::vector<InputEvent>& out) override {
     if (ringActive_ && !drainThreadOn_) drainRing();  // fallback only: the drain thread owns the ring when it runs
@@ -802,27 +672,19 @@ class EmscriptenHtml5InputBackend final : public IInputBackend {
     }
   }
 
-  /// One MAIN_THREAD hop per frame: fetch + clear the JS event queue and
-  /// the canvas geometry, then convert every record into InputEvents.
+  /// One main-thread hop per frame: fetch + clear the page-side event
+  /// queue and the canvas geometry, then convert every record into
+  /// InputEvents.
   void drainJsQueue() {
     if (drainBuf_.empty()) drainBuf_.resize(1 << 16);
-    const int n = MAIN_THREAD_EM_ASM_INT({
-      var q = window.__lkQ || [];
-      var cv = document.getElementById('canvas');
-      var cssW = 0; var cssH = 0; var fbW = 0; var fbH = 0;
-      if (cv) { var r = cv.getBoundingClientRect(); cssW = r.width; cssH = r.height; fbW = cv.width; fbH = cv.height; }
-      var nl = String.fromCharCode(10);
-      var s = 'sz|' + cssW + '|' + cssH + '|' + fbW + '|' + fbH + (q.length ? nl + q.join(nl) : "");
-      q.length = 0;  // clear IN PLACE: the listeners captured this array
-      var len = lengthBytesUTF8(s);
-      if (len + 1 > $1) return -1;
-      stringToUTF8(s, $0, $1);
-      return len;
-    }, drainBuf_.data(), (int)drainBuf_.size());
+    const int n = lk_input_drain_queue(drainBuf_.data(), (int)drainBuf_.size());
     if (n < 0) {
-      // A frame's worth of records overflowed the drain buffer; the queue
-      // was still cleared JS-side so the pipe can never wedge shut.
-      logError("input: drain buffer overflow — one frame of input records dropped");
+      // The pending records do not fit the drain buffer. The page side
+      // now leaves the queue intact on overflow (B3 fix, 2026-10-28), so
+      // the drain retries next frame instead of dropping the records;
+      // a queue that stays oversized logs here per attempt rather than
+      // wedging shut.
+      logError("input: drain buffer overflow — input records retained for retry");
       return;
     }
     if (n == 0) return;
@@ -871,11 +733,11 @@ class EmscriptenHtml5InputBackend final : public IInputBackend {
 
 struct Window::Impl {
   std::shared_ptr<InputSharedState> inputState = std::make_shared<InputSharedState>();
-  std::unique_ptr<IInputBackend> input = std::make_unique<EmscriptenHtml5InputBackend>(inputState);
+  std::unique_ptr<IInputBackend> input = std::make_unique<WebHtml5InputBackend>(inputState);
   std::string clipboard;  // page-session clipboard only (not the OS clipboard)
   bool closeRequested = false;
   int fbW = 0, fbH = 0;
-  EMSCRIPTEN_WEBGL_CONTEXT_HANDLE glCtx = 0;  // OpenGL33 windows only
+  int glCtx = 0;  // OpenGL33 windows only (page-layer context handle)
 };
 
 std::unique_ptr<Window> Window::create(const WindowDesc& d) {
@@ -891,15 +753,15 @@ std::unique_ptr<Window> Window::create(const WindowDesc& d) {
   // Size the page canvas to the requested window. Failure is non-fatal: the
   // shell page may manage the canvas itself; framebufferSize() then reports
   // the desc size until the element exists.
-  emscripten_set_canvas_element_size("#canvas", d.width, d.height);
-  logInfo("window: emscripten window %dx%d (api %s)", d.width, d.height,
+  lk_canvas_set_size(d.width, d.height);
+  logInfo("window: web window %dx%d (api %s)", d.width, d.height,
           d.api == GraphicsApi::Vulkan ? "vulkan" : "gl33");
   if (d.api == GraphicsApi::OpenGL33) {
-    EmscriptenWebGLContextAttributes attrs;
-    emscripten_webgl_init_context_attributes(&attrs);
-    attrs.alpha = EM_FALSE;
-    attrs.depth = EM_TRUE;
-    attrs.stencil = EM_TRUE;
+    LkGlContextAttrs attrs;
+    lk_gl_attrs_init(&attrs);
+    attrs.alpha = false;
+    attrs.depth = true;
+    attrs.stencil = true;
     // Pacing pass (2026-10-19): ?aa=on|4 in the page URL requests a
     // multisampled default framebuffer. WebGL's context attribute is a
     // boolean — ANGLE's implicit MSAA is conventionally 4x, so "4" and
@@ -907,24 +769,21 @@ std::unique_ptr<Window> Window::create(const WindowDesc& d) {
     // keeps the shipped default OFF. Read on the browser MAIN thread:
     // this code runs on the proxied pthread, whose `location` is the
     // worker script's URL, not the page's (the ?debuginput trap).
-    const int aaMode = MAIN_THREAD_EM_ASM_INT({
-      const v = new URLSearchParams(location.search).get('aa');
-      return v === 'on' ? 1 : v === '4' ? 4 : 0;
-    });
-    attrs.antialias = aaMode ? EM_TRUE : EM_FALSE;
+    const int aaMode = lk_page_aa_mode();
+    attrs.antialias = aaMode != 0;
     logInfo("window: WebGL antialias %s (?aa=%s)", aaMode ? "requested" : "off",
             aaMode == 1 ? "on" : aaMode == 4 ? "4" : "off");
     // Test-build choice: keep the last presented frame in the drawing
     // buffer so it stays inspectable after main() returns (a screenshot
     // taken post-exit must not race the compositor's buffer clear).
-    attrs.preserveDrawingBuffer = EM_TRUE;
+    attrs.preserveDrawingBuffer = true;
     attrs.majorVersion = 2;  // WebGL2 == GLES3, the GL33 backend's dialect
     attrs.minorVersion = 0;
-    attrs.enableExtensionsByDefault = EM_TRUE;
-    const EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_create_context("#canvas", &attrs);
+    attrs.enableExtensionsByDefault = true;
+    const int ctx = lk_gl_create_context(&attrs);
     if (ctx > 0) {
       w->impl_->glCtx = ctx;
-      emscripten_webgl_make_context_current(ctx);
+      lk_gl_make_current(ctx);
       logInfo("window: WebGL2 context current on #canvas");
     } else {
       logError("window: WebGL2 context creation failed — GL backends will fail their own init gates");
@@ -957,7 +816,7 @@ void Window::setDisplay(const DisplayDesc& d) {
     winH_ = d.height;
     impl_->fbW = d.width;
     impl_->fbH = d.height;
-    emscripten_set_canvas_element_size("#canvas", d.width, d.height);
+    lk_canvas_set_size(d.width, d.height);
   }
 }
 
@@ -984,10 +843,10 @@ bool Window::loadGamepadMappings(const std::string&) { return false; }
 void Window::swap() {}  // the page compositor presents the canvas; see header note
 
 void Window::setTitle(const std::string& t) {
-  // Game code runs on the proxied pthread, which has no DOM: a plain EM_ASM
-  // touching `document` throws ReferenceError there and kills the worker.
-  // MAIN_THREAD_EM_ASM proxies the snippet to the browser main thread.
-  MAIN_THREAD_EM_ASM({ document.title = UTF8ToString($0); }, t.c_str());
+  // Game code runs on the proxied pthread, which has no DOM: the write
+  // goes through the named import, which the page layer executes on
+  // the browser main thread.
+  lk_window_set_title(t.c_str());
 }
 
 std::string Window::clipboardText() const { return impl_->clipboard; }
@@ -1003,7 +862,7 @@ void Window::setCursorCaptured(bool c) {
   static bool jsCaptureSent = false;
   if (c != jsCaptureSent) {
     jsCaptureSent = c;
-    MAIN_THREAD_EM_ASM({ window.__lkCaptureWanted = $0; }, c ? 1 : 0);
+    lk_input_set_capture_wanted(c ? 1 : 0);
   }
   if (c) {
     // Pointer lock is the web's cursor capture. The game loop re-applies
@@ -1022,19 +881,18 @@ void Window::setCursorCaptured(bool c) {
         double last = st.lastLockRequest.load();
         if (now - last > 0.5) {
           st.lastLockRequest = now;
-          emscripten_request_pointerlock("#canvas", EM_FALSE);
+          lk_pointer_lock_request();
         }
       }
     }
   } else if (st.pointerLocked.load()) {
-    emscripten_exit_pointerlock();
-    MAIN_THREAD_EM_ASM({ if (document.exitPointerLock) document.exitPointerLock(); });
+    lk_pointer_lock_exit();
   }
 }
 
 void Window::framebufferSize(int& w, int& h) const {
   int cw = 0, ch = 0;
-  if (emscripten_get_canvas_element_size("#canvas", &cw, &ch) == EMSCRIPTEN_RESULT_SUCCESS && cw > 0 && ch > 0) {
+  if (lk_canvas_get_size(&cw, &ch) == 0 && cw > 0 && ch > 0) {
     w = cw;
     h = ch;
   } else {
@@ -1043,7 +901,7 @@ void Window::framebufferSize(int& w, int& h) const {
   }
 }
 
-void* Window::glProcAddress(const char* name) { return emscripten_webgl_get_proc_address(name); }
+void* Window::glProcAddress(const char* name) { return lk_gl_proc_address(name); }
 
 std::vector<std::string> Window::vulkanInstanceExtensions() const { return {}; }
 uint64_t Window::createVulkanSurface(void*) const { return 0; }
@@ -1051,3 +909,52 @@ uint64_t Window::createVulkanSurface(void*) const { return 0; }
 void Window::setIcon(const IconPixels*, int) {}  // no window icon in a browser tab
 
 }  // namespace litholattice
+
+// ---- context attribute defaults + the GL address table ----------------
+// Defined at global scope: lk_gl_attrs_init and lk_gl_proc_address are
+// part of the in-house web surface declared in lk_web.h.
+
+void lk_gl_attrs_init(LkGlContextAttrs* attrs) {
+  // The shipped defaults, matching what the page layer's context
+  // creation has always received from this TU: zeroed, then alpha,
+  // depth, antialias, premultiplied alpha, major version 1 and
+  // extensions-by-default on. Window::create overrides from here.
+  *attrs = LkGlContextAttrs{};
+  attrs->alpha = true;
+  attrs->depth = true;
+  attrs->antialias = true;
+  attrs->premultipliedAlpha = true;
+  attrs->majorVersion = 1;
+  attrs->enableExtensionsByDefault = true;
+  // Engine code never runs on the browser main thread (the window is
+  // created from an engine thread), so the proxy mode takes the
+  // fallback value previous builds produced on every real path. The
+  // page layer streams context creation to the page regardless and
+  // does not consult the field.
+  attrs->proxyContextToMainThread = 1;
+}
+
+namespace {
+struct LkGlProcEntry {
+  const char* name;
+  void* addr;
+};
+const LkGlProcEntry kLkGlProcs[] = {
+#define LK_GL_PROC_ENTRY(ret, name, args) { "gl" #name, reinterpret_cast<void*>(&lk_gl##name) },
+    LITHOLATTICE_GL_FUNCS(LK_GL_PROC_ENTRY)
+#undef LK_GL_PROC_ENTRY
+};
+}  // namespace
+
+void* lk_gl_proc_address(const char* name) {
+  if (!name) return nullptr;
+  // WebGL2 has no buffer textures (TexBuffer) and no core base-vertex
+  // draw (DrawElementsBaseVertex): answering null routes both names
+  // to the loader fixups, which install the in-house shims
+  // (gl_web_shims.cpp) — the resolution those names have always had
+  // on web, expected-log line included.
+  if (!std::strcmp(name, "glTexBuffer") || !std::strcmp(name, "glDrawElementsBaseVertex")) return nullptr;
+  for (const LkGlProcEntry& e : kLkGlProcs)
+    if (!std::strcmp(name, e.name)) return e.addr;
+  return nullptr;
+}

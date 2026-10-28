@@ -46,7 +46,7 @@ if(UNIX AND NOT APPLE)
   set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
 # WASM checkpoint (2026-10-18): no GLFW in the browser build — the platform
-# module swaps in window_emscripten.cpp (see src/platform/CMakeLists.txt).
+# module swaps in window_web.cpp (see src/platform/CMakeLists.txt).
 if(NOT EMSCRIPTEN)
 FetchContent_Declare(glfw
   GIT_REPOSITORY https://github.com/glfw/glfw.git
