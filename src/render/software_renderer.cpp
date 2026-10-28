@@ -263,6 +263,8 @@ static thread_local bool tlHudStats = true;
 struct HudBig { uint64_t area; int x0, y0, x1, y1; float r, g, b, a; };  // 2026-10-26 HUD fill diagnostic (LL_SW_PROF)
 static HudBig g_hudBig[4] = {}; static uint64_t g_hudBlendPx = 0;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
+static double g_skyMsAcc = 0;        // 2026-10-28 S1a: t_sky — the serial clear/sky fill (LL_SW_PROF)
+static double g_rasterBandsUsAcc = 0;  // 2026-10-28 S3: t_raster_bands_us — wall time of the band dispatch (drawBand run), microseconds
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
 static std::atomic<uint64_t> g_hizTested{0}, g_hizPartial{0}, g_hizTilesTot{0}, g_hizTilesOcc{0};  // Strike 3 sizing
@@ -2722,6 +2724,12 @@ struct SwProf {
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
+    // 2026-10-28 S1a/S3: t_sky (serial clear only — p2par clears in-strip,
+    // timed inside the strips stage) and the band-dispatch wall timer.
+    // t_play_hud is the "hud ms/frame" line above (drawHud total).
+    std::fprintf(stderr, "swprof t_sky ms/frame=%.3f t_raster_bands_us/frame=%.1f\n",
+                 g_skyMsAcc / frames, g_rasterBandsUsAcc / frames);
+    g_skyMsAcc = 0; g_rasterBandsUsAcc = 0;
     for (double& a : acc) a = 0; for (double& a : frameAcc) a = 0; frames = 0;
   }
 };
@@ -2797,7 +2805,13 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     }
   }
   const uint32_t skyColor = swSkyColor(p.sky);
-  if (p2par) hizReset(); else clear(skyColor);
+  {  // 2026-10-28 S1a: t_sky, split out of the clear+cull stage (LL_SW_PROF).
+     // With p2par the strips clear their own rows inside the band workers,
+     // so this times only hizReset(); the serial clear() is the phone path.
+    const auto tSky = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (p2par) hizReset(); else clear(skyColor);
+    if (g_swProfOn) g_skyMsAcc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tSky).count();
+  }
   // Culling prototypes + frustum margin (M1): beginFrame arms the comet /
   // velocity state; decide() then culls per mesh exactly like GL/VK. All
   // prototypes default off, so decide() is the plain margin test.
@@ -3208,9 +3222,15 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
   if (g_swProfOn) { for (double& b : g_bandMs) b = 0; g_lastEmitN = frameEmit_.size() / 6; }
-  {
-    litholattice::RenderBusyScope busy;  // 2026-10-26: LL_BG_YIELD_RENDER holds off new background jobs
-    bandPool.run(drawBand);
+  {  // 2026-10-28 S3: t_raster_bands_us — wall time of the band worker
+     // dispatch + raster + join for this frame (the drawBand run only;
+     // the transform/bin phase above keeps its own swprof stage).
+    const auto tBands = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    {
+      litholattice::RenderBusyScope busy;  // 2026-10-26: LL_BG_YIELD_RENDER holds off new background jobs
+      bandPool.run(drawBand);
+    }
+    if (g_swProfOn) g_rasterBandsUsAcc += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - tBands).count();
   }
   if (g_swProfOn) {
     const unsigned nb = std::min(64u, std::max(1u, bandPool.bands()));

@@ -667,7 +667,22 @@ void cSimThread::run() {
       }
       // ---- fixed-timestep accumulator with catch-up cap
       const auto now = Clock::now();
-      acc_ += now - last; last = now;
+      if (debtResetReq_.exchange(false, std::memory_order_acq_rel)) {
+        // S6 (2026-10-28): MENU -> PLAY debt reset (see resetTimeDebt()).
+        // The pending debt — accumulated residue plus the wall delta not
+        // yet folded in — is discarded and the pacing clock re-based, so
+        // load/menu wall time can neither burst nor book drops here. The
+        // clamp below is skipped for this delta only; tick math is
+        // otherwise untouched, and dropped_ keeps its history.
+        const auto pending = acc_ + (now - last);
+        logInfo("timing: play transition — time debt zeroed (pre-reset debt %lld ticks / %.1f ms pending; ticks executed last pass %u)",
+                (long long)(stepDur_.count() > 0 ? pending / stepDur_ : 0),
+                double(pending.count()) / 1e6, lastPassTicks_);
+        acc_ = Ns(0);
+        last = now;
+      } else {
+        acc_ += now - last; last = now;
+      }
       const Ns maxLag = std::chrono::milliseconds(100);
       if (acc_ > maxLag) { dropped_ += uint64_t((acc_ - maxLag) / stepDur_); acc_ = maxLag; }
 
@@ -702,6 +717,7 @@ void cSimThread::run() {
                                              // (the freeze pauses the sim; unfreeze + re-step to continue)
           if (worldTickN_ != before) { ++steppedWorld; ticksStepped_.fetch_add(1, std::memory_order_relaxed); }
         }
+        lastPassTicks_ = uint32_t(steppedWorld);  // S6: ticks executed this pass (stepper)
         editsApplied |= stepEditsApplied_;
         raycastDone |= stepRaycastDone_;
       } else {
@@ -728,6 +744,7 @@ void cSimThread::run() {
           if (threewayYield_ && pointReaders_.load(std::memory_order_acquire) > 0) handoffYield();  // LL_THREEWAY handshake (Proposed by JD; co-implemented by JD and Cortana)
         }
         inBurst_ = false;
+        lastPassTicks_ = uint32_t(worldTickN_ - burstFrom);  // S6: world ticks executed this pass
         passCut = acc_ >= stepDur_;  // backlog left: yield the lock to the main thread before the next pass
         if (steps > 2 && stallLogWindow()) logInfo("sim-stall: burst world ticks %llu..%llu (%d master steps)", (unsigned long long)burstFrom, (unsigned long long)worldTickN_, steps);
         if (::litholattice::tickprof::enabled()) ::litholattice::tickprof::ticks().noteBurst(steps);  // LL_TICK_PROFILE (measure only)
@@ -774,6 +791,7 @@ void cSimThread::run() {
     SimStats& s = stats_.writeSlot();
     s.worldTick = worldTickN_; s.targetTps = cfgWorldTps_; s.masterHz = cfgMasterHz_;
     s.tps = statTps_; s.tickMs = statTickMs_; s.tickMaxMs = statTickMaxMs_; s.budgetPct = statBudget_; s.droppedTicks = dropped_;
+    s.ticksLastPass = lastPassTicks_;
     s.active = uint32_t(sim_->activeCount());
     s.randomTicks = randomTicks_;
     if (handshake_) {
