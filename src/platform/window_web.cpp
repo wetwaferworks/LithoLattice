@@ -679,11 +679,13 @@ class WebHtml5InputBackend final : public IInputBackend {
     if (drainBuf_.empty()) drainBuf_.resize(1 << 16);
     const int n = lk_input_drain_queue(drainBuf_.data(), (int)drainBuf_.size());
     if (n < 0) {
-      // The pending records do not fit the drain buffer. The page side
-      // now leaves the queue intact on overflow (B3 fix, 2026-10-28), so
-      // the drain retries next frame instead of dropping the records;
-      // a queue that stays oversized logs here per attempt rather than
-      // wedging shut.
+      // Hard stop only. The page side drains what fits and keeps the
+      // rest queued (B3 fix, refined by the second review's F3,
+      // 2026-10-28: whole records up to the cap; a record too big to
+      // fit even alone is dropped page-side and counted there), so a
+      // negative return means the encoded bytes themselves exceeded
+      // the buffer; the queue is intact and the drain retries next
+      // frame.
       logError("input: drain buffer overflow — input records retained for retry");
       return;
     }
