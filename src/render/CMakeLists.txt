@@ -63,6 +63,6 @@ endif()
 if(EMSCRIPTEN)
   target_sources(litholattice_render PRIVATE software_simd_sse2.cpp software_simd_sse41.cpp)
   set_property(SOURCE software_simd.cpp APPEND PROPERTY COMPILE_DEFINITIONS LL_SW_SSE_TU=1)
-  set_property(SOURCE software_simd_sse2.cpp software_simd_sse41.cpp
+  set_property(SOURCE software_simd.cpp software_simd_sse2.cpp software_simd_sse41.cpp
                APPEND PROPERTY COMPILE_OPTIONS -msimd128 -msse4.1)
 endif()
