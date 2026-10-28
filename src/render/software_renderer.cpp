@@ -302,7 +302,18 @@ constexpr unsigned kSwMaxRenderThreads = 64;
 unsigned swAutoRenderThreads(unsigned logical) {
   // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
-  return std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
+  const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
+#ifdef __EMSCRIPTEN__
+  // Phone-framerate pass (2026-10-28 — Archie: optimization design;
+  // Elfie: co-implementation; JD: direction + debugging): on web the
+  // band pool shares the device with the browser compositor, the
+  // Timing Handshake workers and the job pool, so the auto count is
+  // Archie's raster lane count — 4 bands, caller included — not
+  // hw-1. An explicit request still overrides (swResolveThreads).
+  return std::min(n, 4u);
+#else
+  return n;
+#endif
 }
 unsigned swResolveThreads(unsigned req) {
   const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -909,6 +920,15 @@ struct alignas(64) SwTriSetup {
   const float *v0, *v1, *v2;
   float invArea, dw0dx, dw1dx, dw2dx, dzdx, iw0, iw1, iw2;
   int x0, x1;
+#if UINTPTR_MAX == UINT32_MAX
+  // 32-bit (wasm32, the phone build): the three pointers above are
+  // 12 B, not 24, so line 1 would close at 52 B and s0 would land
+  // mid-line. Pad the difference away so the PT4-B layout — hot
+  // line 1 exactly 64 B, s0 opening line 2 — holds on every
+  // platform (surfaced by the 2026-10-28 phone-framerate build;
+  // Archie: PT4-B design; Elfie: co-implementation; JD: direction).
+  char line1Pad[12];
+#endif
   // line 2 (64 B): row window + scalar-shading varyings
   const ShaderVaryings *s0, *s1, *s2;
   int ditherCls, y0, y1, htx0, htx1, skipTo;

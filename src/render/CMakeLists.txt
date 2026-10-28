@@ -54,3 +54,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|amd64)$" AND NOT CMAKE_OSX_ARC
   target_sources(litholattice_render PRIVATE software_simd_sse2.cpp software_simd_sse41.cpp)
   set_property(SOURCE software_simd.cpp APPEND PROPERTY COMPILE_DEFINITIONS LL_SW_SSE_TU=1)
 endif()
+# Phone-framerate ignition (2026-10-28 — Archie: optimization design;
+# Elfie: co-implementation; JD: direction + debugging): under
+# Emscripten the same SSE2/SSE4.1 kernel TUs join the build through
+# the SDK's SSE-to-WASM-SIMD translation. The kernels stay
+# bit-identical (same span4.inl, same op order); dispatch treats the
+# compile-time __wasm_simd128__ feature as the tier (software_simd.cpp).
+if(EMSCRIPTEN)
+  target_sources(litholattice_render PRIVATE software_simd_sse2.cpp software_simd_sse41.cpp)
+  set_property(SOURCE software_simd.cpp APPEND PROPERTY COMPILE_DEFINITIONS LL_SW_SSE_TU=1)
+  set_property(SOURCE software_simd_sse2.cpp software_simd_sse41.cpp
+               APPEND PROPERTY COMPILE_OPTIONS -msimd128 -msse4.1)
+endif()

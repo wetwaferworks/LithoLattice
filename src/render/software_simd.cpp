@@ -18,7 +18,16 @@
 #if defined(LL_SW_AVX2_TU) && defined(LL_SW_X64)
 #define LL_SW_HAVE_AVX2_TU 1
 #endif
-#if defined(LL_SW_SSE_TU) && defined(LL_SW_X64)
+// Phone-framerate ignition (2026-10-28 — Archie: optimization design;
+// Elfie: co-implementation; JD: direction + debugging): under
+// Emscripten the SSE2/SSE4.1 kernel TUs build through the SDK's
+// SSE-to-WASM-SIMD translation, so wasm-SIMD is a first-class dispatch
+// platform beside x64 — there is no CPUID under wasm; the compile-time
+// feature (__wasm_simd128__, set by -msimd128) is the truth.
+#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+#define LL_SW_WASM_SIMD 1
+#endif
+#if defined(LL_SW_SSE_TU) && (defined(LL_SW_X64) || defined(LL_SW_WASM_SIMD))
 #define LL_SW_HAVE_SSE_TU 1
 #endif
 
@@ -76,7 +85,20 @@ Isa activeIsa() {
   static const Isa isa = [] {
     const char* f = std::getenv("LL_SW_FORCE_SCALAR");
     if (f && *f && *f != '0') return Isa::Scalar;
-#ifdef LL_SW_X64
+#if defined(LL_SW_WASM_SIMD) && defined(LL_SW_HAVE_SSE_TU)
+    // WASM SIMD (see the LL_SW_WASM_SIMD note above): the translated
+    // SSE kernels are in the module, so the tier is Sse41 by
+    // construction. LL_SW_ISA may only cap it down (A/B proof path),
+    // mirroring the x64 rule that a cap never raises the tier.
+    {
+      Isa i = Isa::Sse41;
+      if (const char* cap = std::getenv("LL_SW_ISA")) {
+        if (!std::strcmp(cap, "scalar")) i = Isa::Scalar;
+        else if (!std::strcmp(cap, "sse2")) i = Isa::Sse2;
+      }
+      return i;
+    }
+#elif defined(LL_SW_X64)
     Isa i = detectIsa();
 #ifndef LL_SW_HAVE_AVX2_TU
     if (i == Isa::Avx2) i = Isa::Sse41;

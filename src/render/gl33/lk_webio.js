@@ -29,6 +29,45 @@
 //   (no current context / unknown GL object) — the caller then falls
 //   back to the classic per-call path permanently.
 addToLibrary({
+  // Phase 2 mega-draw verbs (gl33_renderer.cpp, Emscripten only):
+  // WEBGL_multi_draw entry points are extension functions, absent
+  // from the GL proc-address table, so probe + draw travel as thin
+  // verbs. Probe honestly reports the extension; draw performs the
+  // multi-draw, or the identical sequence of rebased draws when the
+  // extension is missing (the arena EBO's indices already carry the
+  // base vertex, so the pixels are the same either way). On the thin
+  // runtime lkboot registers its own probe (0 — the thin GL command
+  // stream has no multi-draw op yet), so this draw is reached only
+  // in glue builds. (Landing completed 2026-10-28 for the phone
+  // build — Elfie; Phase 2 design: JD/Cortana; Archie: direction.)
+  lk_mega_probe__sig: 'i',
+  lk_mega_probe: function() {
+    try {
+      var ctx = (typeof GL !== 'undefined' && GL.currentContext) ? GL.currentContext.GLctx : null;
+      if (!ctx) return 0;
+      return ctx.getExtension('WEBGL_multi_draw') ? 1 : 0;
+    } catch (e) {
+      return 0;
+    }
+  },
+  lk_mega_draw__sig: 'iiiii',
+  lk_mega_draw: function(mode, countsPtr, offsetsPtr, drawCount) {
+    try {
+      var ctx = (typeof GL !== 'undefined' && GL.currentContext) ? GL.currentContext.GLctx : null;
+      if (!ctx) return -1;
+      var counts = HEAP32.subarray(countsPtr >> 2, (countsPtr >> 2) + drawCount);
+      var offsets = HEAP32.subarray(offsetsPtr >> 2, (offsetsPtr >> 2) + drawCount);
+      var ext = ctx.getExtension('WEBGL_multi_draw');
+      if (ext) {
+        ext.multiDrawElementsWEBGL(mode, counts, 0, ctx.UNSIGNED_INT, offsets, 0, drawCount);
+      } else {
+        for (var i = 0; i < drawCount; ++i) ctx.drawElements(mode, counts[i], ctx.UNSIGNED_INT, offsets[i]);
+      }
+      return 0;
+    } catch (e) {
+      return -1;
+    }
+  },
   lkio_present__sig: 'iiiiiiiiiiiiii',
   lkio_present: function(target, tex, prog, vao, namePtr, ptr, w, h, fbW, fbH, internalFormat, format, fresh) {
     if (target !== 0) return -1;
