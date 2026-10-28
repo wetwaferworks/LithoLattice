@@ -265,7 +265,20 @@ void cScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
   // the target phone). Exempt it so startup scripts finish in one
   // pass instead of eating an 8-tick throttle at birth; every
   // steady-state hook keeps the full ladder below.
-  if (what && std::string(what).find("onLoad") != std::string::npos) {
+  // Exact-name match (review fix, 2026-10-28): the exemption keys on
+  // the hook's own name — the identifier before '(' in the declaration
+  // string — not a substring, so a future hook whose name merely
+  // contains "onLoad" (an onLoadout, say) keeps the full ladder.
+  bool isOnLoadHook = false;
+  if (what) {
+    std::string decl(what);
+    const size_t paren = decl.find('(');
+    if (paren != std::string::npos) decl.erase(paren);
+    while (!decl.empty() && (decl.back() == ' ' || decl.back() == '\t')) decl.pop_back();
+    const size_t ws = decl.find_last_of(" \t");
+    isOnLoadHook = (ws == std::string::npos ? decl : decl.substr(ws + 1)) == "onLoad";
+  }
+  if (isOnLoadHook) {
     if (!onLoadGraceLogged_) {
       onLoadGraceLogged_ = true;
       logInfo("[script] boot grace: onLoad overran the per-tick quota (%llu us > %u us) and was exempted (Q7)",

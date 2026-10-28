@@ -1074,11 +1074,15 @@ class cGL33Renderer final : public IRenderer {
     // through the web layer). Give the new buffer its element-class birth
     // bind under the arena VAO before the copy-target staging; COPY_WRITE
     // remains legal afterwards (Path B, same harness).
-    if (arenaVao_) {
-        glBindVertexArray(arenaVao_);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);
-    }
+    // Create the arena VAO first when this grow is the arena's first
+    // touch (G3 hardening, 2026-10-28, mirroring growArena): the birth
+    // bind must never be silently skipped — a skipped bind leaves the
+    // new buffer classless and the VAO drawing on a null element
+    // binding, the G3 silent void itself.
+    if (!arenaVao_) glGenVertexArrays(1, &arenaVao_);
+    glBindVertexArray(arenaVao_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);
     glBindBuffer(GL_COPY_WRITE_BUFFER, ebo);
     glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
     if (arenaEbo_) {
