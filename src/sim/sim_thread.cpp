@@ -259,6 +259,7 @@ void cSimThread::start() {
     freezeReported_.store(false);
     stepRefusalLogged_.store(false);
   }
+  logInfo("threads: sim thread starting");  // Q5b census naming (2026-10-28)
   thread_ = std::thread([this] { raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
 }
 

@@ -238,6 +238,7 @@ class cScriptEngine {
   uint32_t throttleTicksRemaining_ = 0;
   uint32_t throttleCount_ = 0;  ///< consecutive CPU overruns
   uint64_t cpuUsedUs_ = 0;      ///< this tick's hook CPU time
+  bool onLoadGraceLogged_ = false;  ///< Q7: the boot-grace exemption logs once
   std::string suspendReason_;
   std::string modId_;                ///< owning mod's id for log lines (empty until set)
   cSuspensionPolicy suspensionPolicy_;  ///< auto-recovery/backoff/probation/escalation

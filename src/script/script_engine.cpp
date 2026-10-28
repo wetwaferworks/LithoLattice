@@ -259,6 +259,21 @@ void cScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
   // Probation halves the effective budget (see cSuspensionPolicy).
   const uint32_t effectiveBudget = suspensionPolicy_.effectiveCpuBudgetUs(modBudgetUs_);
   if (cpuUsedUs_ <= effectiveBudget) { throttleCount_ = 0; return; }  // clean tick: streak broken
+  // Q7 boot grace (Archie exec summary, 2026-10-28, via JD): the
+  // onLoad hook runs once at world load and legitimately costs more
+  // than one tick's steady-state quota (13.55 ms against 1024 us on
+  // the target phone). Exempt it so startup scripts finish in one
+  // pass instead of eating an 8-tick throttle at birth; every
+  // steady-state hook keeps the full ladder below.
+  if (what && std::string(what).find("onLoad") != std::string::npos) {
+    if (!onLoadGraceLogged_) {
+      onLoadGraceLogged_ = true;
+      logInfo("[script] boot grace: onLoad overran the per-tick quota (%llu us > %u us) and was exempted (Q7)",
+              static_cast<unsigned long long>(cpuUsedUs_), effectiveBudget);
+    }
+    throttleCount_ = 0;
+    return;
+  }
   if (suspensionPolicy_.probationActive()) {
     // Zero tolerance on probation: a single overrun suspends immediately,
     // bypassing the throttle ladder.

@@ -350,6 +350,7 @@ bool cTimingHandshakeAuthority::start() {
   }
   for (auto& e : workerExited_) e.store(false);
   workers_.clear();
+  logInfo("threads: timing handshake starting %d pull workers", workerCount_);  // Q5b census naming (2026-10-28)
   for (int s = 0; s < workerCount_; ++s)
     workers_.emplace_back([this, s] { raiseCurrentThreadForSim(); workerLoop(s); });  // 0.0.1.57 F57-1 (R21)
   return true;

@@ -679,6 +679,7 @@ class EmscriptenHtml5InputBackend final : public IInputBackend {
     // thread cannot start, poll() keeps the build-62 per-frame drain.
     if (ringActive_) {
       try {
+        logInfo("threads: input mapped-ring drain thread starting");  // Q5b census naming (2026-10-28)
         drainThread_ = std::thread([this] { drainLoop(); });
         drainThreadOn_ = true;
         logInfo("input: mapped ring drain at STEP cadence (256/s, dedicated thread; frames no longer gate input)");
