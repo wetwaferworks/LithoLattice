@@ -39,14 +39,15 @@
 // then the GL names created at init, the sampler uniform name, and the
 // texel pointer. One host crossing for the whole upload + draw; contract
 // (including the error returns) is documented in lk_webio.js.
-extern "C" int lkio_present(int target, int tex, int prog, int vao, const char* uniformName,
+extern "C" __attribute__((import_module("env"), import_name("lkio_present"))) int lkio_present(
+                            int target, int tex, int prog, int vao, const char* uniformName,
                             const uint32_t* pixels, int w, int h, int fbW, int fbH,
                             int internalFormat, int format, int fresh);
 
 // The page-layer A/B switch (?lkthin=off), declared canonically in
 // litholattice/platform/lk_web.h and declared locally here like
 // lkio_present above: this target does not link the platform library.
-extern "C" int lk_present_thin_ok(void);
+extern "C" __attribute__((import_module("env"), import_name("lk_present_thin_ok"))) int lk_present_thin_ok(void);
 
 namespace litholattice {
 namespace {

@@ -18,8 +18,8 @@
 // WEBGL_multi_draw entry points are extension functions and absent from the
 // GL proc-address table, so the probe and the draw travel as reserved
 // stream ops instead of loader-resolved GL calls.
-extern "C" int lk_mega_probe();
-extern "C" int lk_mega_draw(int mode, const void* counts, const void* offsets, int drawCount);
+extern "C" __attribute__((import_module("env"), import_name("lk_mega_probe"))) int lk_mega_probe();
+extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) int lk_mega_draw(int mode, const void* counts, const void* offsets, int drawCount);
 #endif
 #include "gl_loader.h"
 #include "gl_program.h"
