@@ -139,12 +139,33 @@ int cGlTextureArray::maxAnisotropy() {
   if (maxAniso_ < 0.f) {
     maxAniso_ = 1.f;
     bool has = false;
+#ifdef __wasm__
+    // Web path (G1 fix, 2026-10-28): do NOT query kNumExtensions
+    // (0x821D) here. The thin layer's GetIntegerv forwards the
+    // pname straight to WebGL getParameter, and NUM_EXTENSIONS
+    // is not a WebGL2 getParameter pname: the call raises
+    // GL_INVALID_ENUM, the sticky flag survives, and the NEXT
+    // error check (the palette upload) blames the wrong call.
+    // That was the true source of the "texture array upload
+    // reported a GL error" 0x0500: the palette tuple was always
+    // (GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE). Enumerate by
+    // probing instead: the layer's GetStringi returns null past
+    // the end of its supported-extensions list.
+    if (glGetStringi) {
+      for (GLint i = 0; i < 4096 && !has; ++i) {
+        const char* e = reinterpret_cast<const char*>(glGetStringi(kExtensions, GLuint(i)));
+        if (!e) break;
+        has = std::string(e) == "GL_EXT_texture_filter_anisotropic" || std::string(e) == "GL_ARB_texture_filter_anisotropic";
+      }
+    }
+#else
     GLint n = 0;
     if (glGetIntegerv && glGetStringi) glGetIntegerv(kNumExtensions, &n);
     for (GLint i = 0; i < n && !has; ++i) {
       const char* e = reinterpret_cast<const char*>(glGetStringi(kExtensions, GLuint(i)));
       has = e && (std::string(e) == "GL_EXT_texture_filter_anisotropic" || std::string(e) == "GL_ARB_texture_filter_anisotropic");
     }
+#endif
     if (has && glGetFloatv) { GLfloat m = 1.f; glGetFloatv(kMaxTexMaxAniso, &m); maxAniso_ = std::max(1.f, m); }
     logInfo("gl33: anisotropic filtering %s (max %.0fx)", has ? "available" : "not offered by the driver", maxAniso_);
   }
