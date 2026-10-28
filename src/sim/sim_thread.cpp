@@ -684,7 +684,18 @@ void cSimThread::run() {
         acc_ += now - last; last = now;
       }
       const Ns maxLag = std::chrono::milliseconds(100);
-      if (acc_ > maxLag) { dropped_ += uint64_t((acc_ - maxLag) / stepDur_); acc_ = maxLag; }
+      if (acc_ > maxLag) {
+        // Q5 freeze (2026-10-28): while paused, the loop waits on the
+        // pause predicate, so one wake's wall delta can span the whole
+        // pause; booking that span as dropped ticks is fiction, and the
+        // paused branch right below zeroes acc_ anyway. Skip the booking
+        // while paused: dropped_ stays flat for the whole pause, `last`
+        // has already advanced alongside wall time above, and resume
+        // needs no recovery wipe (the S6 reset stays as a no-op safety).
+        // Debt bookkeeping only; tick content is untouched.
+        if (!paused) dropped_ += uint64_t((acc_ - maxLag) / stepDur_);
+        acc_ = maxLag;
+      }
 
       if (paused) {
         acc_ = Ns(0);
