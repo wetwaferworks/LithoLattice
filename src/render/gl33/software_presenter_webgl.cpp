@@ -1,4 +1,4 @@
-// Software present path, WebGL2 variant — compiled ONLY under Emscripten
+// Software present path, WebGL2 variant — compiled ONLY for the web build
 // (the stock gl33/software_presenter.cpp compiles to an empty TU there;
 // natively this file is the empty one). Same factory, same contract, same
 // blit as the desktop presenter (see software_presenter.h); the deltas are
@@ -13,9 +13,9 @@
 //     to the desktop BGRA read with NO CPU swizzle pass and no per-frame
 //     error check on the upload.
 // The window's WebGL2 context is created and made current by the platform
-// layer (window_emscripten.cpp), exactly as GLFW makes the 3.3 context
+// layer (window_web.cpp), exactly as GLFW makes the 3.3 context
 // current before the desktop presenter is built.
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 
 #include "litholattice/render/software_presenter.h"
 
@@ -25,8 +25,6 @@
 #include <utility>
 #include <vector>
 
-#include <emscripten/emscripten.h>
-
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -35,14 +33,20 @@
 #include "gl_program.h"
 #include "litholattice/core/log.h"
 
-// Build 59 thin import (gl33/lk_webio.js, linked via --js-library from
-// the render CMakeLists): the thin present verb — target 0 (canvas),
+// Build 59 thin import (declared in gl33/lk_webio.js; the verbs are
+// provided directly by the page layer, lkboot.js): the thin present
+// verb — target 0 (canvas),
 // then the GL names created at init, the sampler uniform name, and the
 // texel pointer. One host crossing for the whole upload + draw; contract
 // (including the error returns) is documented in lk_webio.js.
 extern "C" int lkio_present(int target, int tex, int prog, int vao, const char* uniformName,
                             const uint32_t* pixels, int w, int h, int fbW, int fbH,
                             int internalFormat, int format, int fresh);
+
+// The page-layer A/B switch (?lkthin=off), declared canonically in
+// litholattice/platform/lk_web.h and declared locally here like
+// lkio_present above: this target does not link the platform library.
+extern "C" int lk_present_thin_ok(void);
 
 namespace litholattice {
 namespace {
@@ -137,9 +141,7 @@ class cSoftwarePresenterWebGL final : public ISoftwarePresenter {
     // the page URL restores the classic per-call path (A/B switch). Read
     // on the browser main thread: this code runs on the proxied pthread,
     // whose `location` is the worker script's URL (the ?debuginput trap).
-    thinOk_ = MAIN_THREAD_EM_ASM_INT({
-      return new URLSearchParams(location.search).get('lkthin') === 'off' ? 0 : 1;
-    }) != 0;
+    thinOk_ = lk_present_thin_ok() != 0;
     logInfo("software present (webgl): thin-import present %s",
             thinOk_ ? "engaged" : "disabled by ?lkthin=off (classic path)");
     return true;
@@ -222,4 +224,4 @@ std::unique_ptr<ISoftwarePresenter> createSoftwarePresenter(GLProcLoader loader)
 
 }  // namespace litholattice
 
-#endif  // defined(__EMSCRIPTEN__)
+#endif  // defined(__wasm__)

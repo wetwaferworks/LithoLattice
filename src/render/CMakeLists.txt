@@ -28,11 +28,8 @@ litholattice_module_options(litholattice_render)
 
 # Build 59 (web seam, design note Web-Seam-Design-2026-10-20): the
 # hand-written thin imports (gl33/lk_webio.js — plain verbs, target 0 =
-# canvas present target) join every executable that links the render
-# library. Emscripten only; native link lines are untouched.
-if(EMSCRIPTEN)
-  target_link_options(litholattice_render PUBLIC "--js-library" "${CMAKE_CURRENT_SOURCE_DIR}/gl33/lk_webio.js")
-endif()
+# canvas present target) are provided directly by the page layer
+# (lkboot.js) since the 2026-10-28 purge; no link-time library remains.
 
 # RND perf (2026-10-15, Cortana), reworked 1455 per Elfie R3§6: NO
 # translation unit is compiled with /arch:AVX2 or -mavx2 any more, so the
