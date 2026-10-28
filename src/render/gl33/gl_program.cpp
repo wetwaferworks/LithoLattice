@@ -3,7 +3,7 @@
 namespace litholattice::gl33 {
 namespace {
 
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 // Mobile WebGL shader pipeline (Elfie, 2026-10-28; JD assigned the
 // mobile lane and ordered the pipeline: "whatever's stopping the
 // picture from drawing, we need that"). The engine's shader sources
@@ -55,10 +55,10 @@ std::string toGlslEs300(const std::string& src, GLenum type) {
     out.replace(p, 10, "texture(");
   return out;
 }
-#endif  // __EMSCRIPTEN__
+#endif  // defined(__wasm__)
 
 GLuint compile(GLenum type, const std::string& srcIn, std::string* log) {
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
   const std::string src = toGlslEs300(srcIn, type);
 #else
   const std::string& src = srcIn;

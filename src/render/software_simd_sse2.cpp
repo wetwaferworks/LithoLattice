@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #if defined(_M_X64) || defined(__x86_64__) || \
-    (defined(__EMSCRIPTEN__) && defined(__wasm_simd128__))
+    defined(__wasm_simd128__)
 #include <emmintrin.h>
 #include "litholattice/render/software_simd.h"
 namespace litholattice::swsimd {

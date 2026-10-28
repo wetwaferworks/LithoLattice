@@ -29,7 +29,7 @@
 //   (no current context / unknown GL object) — the caller then falls
 //   back to the classic per-call path permanently.
 addToLibrary({
-  // Phase 2 mega-draw verbs (gl33_renderer.cpp, Emscripten only):
+  // Phase 2 mega-draw verbs (gl33_renderer.cpp, web only):
   // WEBGL_multi_draw entry points are extension functions, absent
   // from the GL proc-address table, so probe + draw travel as thin
   // verbs. Probe honestly reports the extension; draw performs the

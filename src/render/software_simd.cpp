@@ -19,12 +19,14 @@
 #define LL_SW_HAVE_AVX2_TU 1
 #endif
 // Phone-framerate ignition (2026-10-28 — Archie: optimization design;
-// Elfie: co-implementation; JD: direction + debugging): under
-// Emscripten the SSE2/SSE4.1 kernel TUs build through the SDK's
+// Elfie: co-implementation; JD: direction + debugging): on the wasm
+// target the SSE2/SSE4.1 kernel TUs build through clang's
 // SSE-to-WASM-SIMD translation, so wasm-SIMD is a first-class dispatch
 // platform beside x64 — there is no CPUID under wasm; the compile-time
 // feature (__wasm_simd128__, set by -msimd128) is the truth.
-#if defined(__EMSCRIPTEN__) && defined(__wasm_simd128__)
+// Re-gated 2026-10-28 (JD's strict rule: that library, never again):
+// keyed off the wasm feature macro only, never the vendor macro.
+#if defined(__wasm_simd128__)
 #define LL_SW_WASM_SIMD 1
 #endif
 #if defined(LL_SW_SSE_TU) && (defined(LL_SW_X64) || defined(LL_SW_WASM_SIMD))

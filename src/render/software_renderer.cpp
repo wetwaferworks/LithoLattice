@@ -303,7 +303,7 @@ unsigned swAutoRenderThreads(unsigned logical) {
   // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
   const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
-#ifdef __EMSCRIPTEN__
+#ifdef __wasm__
   // Phone-framerate pass (2026-10-28 — Archie: optimization design;
   // Elfie: co-implementation; JD: direction + debugging): on web the
   // band pool shares the device with the browser compositor, the

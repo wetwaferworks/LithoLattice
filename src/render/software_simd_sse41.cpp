@@ -5,10 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #if defined(_M_X64) || defined(__x86_64__) || \
-    (defined(__EMSCRIPTEN__) && defined(__wasm_simd128__))
+    defined(__wasm_simd128__)
 #include <smmintrin.h>
 #include "litholattice/render/software_simd.h"
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 // The TU is compiled with -msse4.1 (render CMakeLists), so no
 // per-function target attribute is needed — and clang's wasm target
 // does not accept the x86 "sse4.1" target string anyway.
