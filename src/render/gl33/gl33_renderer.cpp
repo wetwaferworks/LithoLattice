@@ -1038,6 +1038,20 @@ class cGL33Renderer final : public IRenderer {
     size_t cap = std::max(arenaIndices_ ? arenaIndices_ * 2 : kArenaInitialIndices, minIndices);
     GLuint ebo = 0;
     glGenBuffers(1, &ebo);
+    // WebGL2 buffer-class rule (measured 2026-10-28, harness ab_rule): a
+    // buffer's FIRST bind fixes its class. Staging this index buffer via
+    // COPY_WRITE first made every later ELEMENT_ARRAY_BUFFER bind raise
+    // INVALID_OPERATION and latch nothing... the arena VAO drew with a
+    // null element binding while its payloads verified byte-correct (the
+    // G3 silent void; desktop GL has no such rule, so it only died
+    // through the web layer). Give the new buffer its element-class birth
+    // bind under the arena VAO before the copy-target staging; COPY_WRITE
+    // remains legal afterwards (Path B, same harness).
+    if (arenaVao_) {
+        glBindVertexArray(arenaVao_);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);
+    }
     glBindBuffer(GL_COPY_WRITE_BUFFER, ebo);
     glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
     if (arenaEbo_) {
