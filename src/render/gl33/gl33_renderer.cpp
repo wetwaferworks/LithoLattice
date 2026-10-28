@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <string_view>
 #include "builtin_shaders.h"
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 // Phase 2 mega-draw verbs (thin layer, lk_webio.js / lkboot.js):
 // WEBGL_multi_draw entry points are extension functions and absent from the
 // GL proc-address table, so the probe and the draw travel as reserved
@@ -471,7 +471,7 @@ class cGL33Renderer final : public IRenderer {
       // WEBGL_multi_draw exists on the live context. Native builds have no
       // such verb and keep the per-mesh path.
       megaOk_ = false;
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
       megaOk_ = useArena_ && progMega_.id() && lk_mega_probe() == 1;
 #endif
       logInfo("gl33: mega-draw %s", megaOk_ ? "ON (one instanced multi-draw per frame for classic chunk meshes)" : "off (per-mesh draws)");
@@ -681,7 +681,7 @@ class cGL33Renderer final : public IRenderer {
         if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
         glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(megaData_.size() * sizeof(float)), megaData_.data(), GL_DYNAMIC_DRAW);
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
         lk_mega_draw(GL_TRIANGLES, megaCounts_.data(), megaOffsets_.data(), int(megaCounts_.size()));
 #endif
         stats_.drawn += uint32_t(megaCounts_.size());

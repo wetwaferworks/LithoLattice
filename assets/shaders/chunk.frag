@@ -24,4 +24,20 @@ uniform int uDot[2]; uniform int uDigits;
 uniform int uLeafGlow[4]; uniform int uTwinkle;
 uniform int uTintMask[32];  // 2026-10-16 kShadeTraceTint mask layers  // 2026-10-16 crystal twinkle (kShadeLeaf)
 out vec4 frag;
+#ifdef LK_MEGADRAW
+// Mega-draw variant (GL33): the four per-mesh vec4s arrive as flat
+// varyings (fed by the vertex stage's instanced attributes); map the
+// shading include's uniform names onto them and declare the frame-level
+// ground clocks here, since LITHO_PULSE_PUSH / LITHO_TRACE_PUSH make the
+// include skip its own declarations (the Vulkan push-constant pattern).
+#define LITHO_PULSE_PUSH 1
+#define LITHO_TRACE_PUSH 1
+flat in vec4 vPulseP0; flat in vec4 vPulseP1; flat in vec4 vTraceP0; flat in vec4 vTraceP1;
+#define uPulseP0 vPulseP0
+#define uPulseP1 vPulseP1
+#define uTraceP0 vTraceP0
+#define uTraceP1 vTraceP1
+uniform float uGroundPulseTime; uniform float uGroundPulseOn;
+uniform float uGroundTraceTime; uniform float uGroundTraceOn;
+#endif
 #include "chunk_shading.glsl"
