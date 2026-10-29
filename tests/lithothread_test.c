@@ -1594,6 +1594,36 @@ static int case_audit_mutex_count_sat(void) {
   return fails;
 }
 
+/* --- review L1: lithothread_reap_detached collects the tail of
+ * detached threads without any further create / join / detach. */
+static uint32_t g_l1_done;
+static void* l1_entry(void* a) {
+  (void)a;
+  __atomic_fetch_add(&g_l1_done, 1u, __ATOMIC_SEQ_CST);
+  return NULL;
+}
+static int case_reap_detached_tail(void) {
+  int fails = 0;
+  long net0;
+  pthread_t th[4];
+  int i, tries;
+  lithothread_reap_detached(); /* settle earlier cases' tails */
+  net0 = alloc_net();
+  __atomic_store_n(&g_l1_done, 0u, __ATOMIC_SEQ_CST);
+  for (i = 0; i < 4; i++) {
+    CHECK(lt_pthread_create(&th[i], NULL, l1_entry, NULL) == 0);
+  }
+  for (i = 0; i < 4; i++) CHECK(lt_pthread_detach(th[i]) == 0);
+  for (tries = 0; tries < 400; tries++) {
+    lithothread_reap_detached();
+    if (alloc_net() == net0) break;
+    nap_ms(5);
+  }
+  CHECK(__atomic_load_n(&g_l1_done, __ATOMIC_SEQ_CST) == 4u);
+  CHECK_REL_BALANCED(net0);
+  return fails;
+}
+
 /* --- review L5: the reader count stops one below the writer bit. */
 static int case_rwlock_reader_cap(void) {
   int fails = 0;
@@ -1816,6 +1846,7 @@ int main(void) {
   RUN_CASE(case_audit_join_values);
   RUN_CASE(case_audit_mutex_count_sat);
   RUN_CASE(case_rwlock_reader_cap);
+  RUN_CASE(case_reap_detached_tail);
   RUN_CASE(case_audit_abstime_bound);
   RUN_CASE(case_audit_exit_from_dtor);
 

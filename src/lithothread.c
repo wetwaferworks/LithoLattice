@@ -185,8 +185,9 @@ static int lt__thread_returned(lt_rec_t* rec) {
 /* Free the records the key runners have retired whose threads
  * have fully returned; records whose cells still read nonzero
  * stay queued and the gate is retried at the next reap. Called
- * at the head of pthread_create and pthread_detach: the two
- * places that already pay registry costs, which bounds the dead
+ * at the head of pthread_create, pthread_detach and (review L1)
+ * pthread_join, and on demand through lithothread_reap_detached():
+ * the places that already pay registry costs, which bounds the dead
  * list's lag by thread churn, exactly the weave's lazy-reap
  * bargain. */
 static void lt__reap_dead(void) {
@@ -355,6 +356,12 @@ lt_rec_t* lt__attach_rec(void) {
   return rec;
 }
 
+/* Review L1: reaping is lazy, so the last detached threads' records
+ * would otherwise stay allocated until the next create / join /
+ * detach. Shutdown paths and leak tools call this to collect every
+ * record whose thread has fully returned. */
+void lithothread_reap_detached(void) { lt__reap_dead(); }
+
 void lithothread_release_self(void) {
   lt_rec_t* rec = lt__current_rec;
   if (rec != NULL && rec->spawned) return;
@@ -499,6 +506,7 @@ int pthread_join(pthread_t thread, void** retval) {
   lithosys_err_t err;
 
   if (pthread_equal(thread, pthread_self())) return EDEADLK;
+  lt__reap_dead(); /* review L1: join pays the reap too */
   lt__spin_lock(&lt__registry_lock);
   rec = lt__find_locked(thread);
   if (rec == NULL) {

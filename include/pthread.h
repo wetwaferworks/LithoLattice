@@ -291,6 +291,13 @@ void* pthread_getspecific(pthread_key_t key);
  * the weave block. No-op for pthread_create'd and main threads. */
 void lithothread_release_self(void);
 
+/* LithoThread extension (review L1). Detached threads' records are
+ * reaped lazily (at pthread_create, pthread_join and pthread_detach).
+ * Call this at shutdown, or before a leak check, to free every
+ * detached record whose thread has fully returned; records of
+ * threads still running stay queued. */
+void lithothread_reap_detached(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
