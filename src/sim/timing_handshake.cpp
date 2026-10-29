@@ -6,6 +6,7 @@
 #include "litholattice/core/timer_resolution.h"  // 0.0.1.57 F57-1
 #include "litholattice/sim/timing_handshake.h"
 
+#include <cstdio>
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
@@ -596,7 +597,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
               }
             }
             if (!pick) pick = firstDue;
-            if (pick) { info.componentId = pick->desc.id; info.componentName = pick->desc.name; }
+            if (pick) { info.componentId = pick->desc.id; std::snprintf(info.componentName, sizeof(info.componentName), "%s", pick->desc.name ? pick->desc.name : ""); }
             lastFreeze_ = info;
             frozen_.store(true, std::memory_order_release);
             return false;  // no commit, no force-advance

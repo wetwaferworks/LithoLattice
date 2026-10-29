@@ -129,7 +129,10 @@ struct HsStats {
 
 struct HsFreezeInfo {
   uint32_t componentId = 0;
-  const char* componentName = "";
+  // Owned copy (truncated to 63 chars): the info outlives the authority
+  // (lastFreeze() is copied out and read after stop/destruction), so it must
+  // not point into the authority's registration storage.
+  char componentName[64] = {};
   uint64_t phase = 0, cycleTick = 0;
   uint64_t openStampNs = 0, tripStampNs = 0;  // both from the shared steady clock
   uint64_t elapsedNs = 0, ceilingNs = 0;
