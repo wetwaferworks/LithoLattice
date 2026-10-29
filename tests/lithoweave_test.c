@@ -204,6 +204,22 @@ static void* entry_detach(void* arg) {
   return (void*)(uintptr_t)7u;
 }
 
+/* Review L7: a stack request the 32-bit spawn word cannot carry is
+ * refused, not truncated. */
+static int case_stack_too_big(void) {
+  int fails = 0;
+#if SIZE_MAX > 0xFFFFFFFFu
+  lw_descriptor_t d;
+  lw_thread_t h;
+  d.entry = entry_detach;
+  d.arg = NULL;
+  d.stack_size = (size_t)0x100000000ull;
+  d.name = "too-big";
+  CHECK(lw_spawn(&d, &h) == LITHOSYS_EINVAL);
+#endif
+  return fails;
+}
+
 static int case_detach(void) {
   int fails = 0;
   lw_descriptor_t d;
@@ -562,6 +578,7 @@ int main(void) {
 
   RUN_CASE(case_spawn_join);
   RUN_CASE(case_detach);
+  RUN_CASE(case_stack_too_big);
   RUN_CASE(case_tls_dtors);
   RUN_CASE(case_dtor_exit);
   RUN_CASE(case_tls_runaway);

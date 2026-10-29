@@ -120,6 +120,28 @@ static void lw__lock(void) {
 
 static void lw__unlock(void) { lw_at_store32(&lw__lock_word, 0u); }
 
+/* Review L7: tids are positive int32. The allocator wraps from
+ * INT32_MAX back to 2 instead of running negative (where every
+ * handle would be refused), and skips a tid still held by a
+ * registered block, so a live thread's tid is never reissued.
+ * Registry lock held. */
+static int32_t lw__alloc_tid_locked(void) {
+  for (;;) {
+    uint32_t t = lw__next_tid;
+    lw_control_t* c;
+    int live = 0;
+    lw__next_tid = (t >= 0x7FFFFFFFu) ? 2u : t + 1u;
+    if (t < 2u || t > 0x7FFFFFFFu) continue;
+    for (c = lw__registry; c != NULL; c = c->next) {
+      if (c->tid == (int32_t)t) {
+        live = 1;
+        break;
+      }
+    }
+    if (!live) return (int32_t)t;
+  }
+}
+
 /* Find a registered block by handle identity (tid AND pointer, so
  * a stale handle whose block was reaped and whose address was
  * recycled cannot alias a new thread). Caller holds the lock. The
@@ -184,7 +206,7 @@ static lw_control_t* lw__attach_self(void) {
     ctl->tid = 1;
     ctl->flags |= LW__F_MAIN;
   } else {
-    ctl->tid = (int32_t)lw_at_fetch_add32(&lw__next_tid, 1u);
+    ctl->tid = lw__alloc_tid_locked();
   }
   ctl->next = lw__registry;
   lw__registry = ctl;
@@ -262,6 +284,11 @@ lithosys_err_t lw_spawn(const lw_descriptor_t* desc, lw_thread_t* out_handle) {
   if (desc == NULL || desc->entry == NULL || out_handle == NULL) {
     return LITHOSYS_EINVAL;
   }
+#if SIZE_MAX > 0xFFFFFFFFu
+  /* Review L7: the frozen spawn word is 32 bits; refuse a request
+   * it cannot carry instead of truncating it. */
+  if (desc->stack_size > (size_t)0xFFFFFFFFu) return LITHOSYS_EINVAL;
+#endif
   lw__sweep();
 
   ctl = (lw_control_t*)malloc(sizeof(lw_control_t));
@@ -281,13 +308,12 @@ lithosys_err_t lw_spawn(const lw_descriptor_t* desc, lw_thread_t* out_handle) {
     ctl->name[i] = '\0';
   }
 
-  ctl->tid = (int32_t)lw_at_fetch_add32(&lw__next_tid, 1u);
+  lw__lock();
+  ctl->tid = lw__alloc_tid_locked();
   /* The cell carries the tid from before the spawn call until the
    * host zeroes it at exit. This store is the last write the
    * module ever makes to the cell. */
   lw_at_store32(&ctl->tid_cell, (uint32_t)ctl->tid);
-
-  lw__lock();
   ctl->next = lw__registry;
   lw__registry = ctl;
   lw__unlock();
