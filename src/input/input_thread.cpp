@@ -13,6 +13,7 @@ cInputPump::cInputPump(std::unique_ptr<IInputBackend> backend, Mode mode,
     : backend_(std::move(backend)), mode_(mode), pollInterval_(pollInterval) {
   if (mode_ == Mode::Threaded) {
     running_.store(true, std::memory_order_release);
+    logInfo("threads: input system thread starting");  // Q5b census naming (2026-10-28)
     inputThread_ = std::thread([this] { threadLoop(); });
     LITHO_THREAD_LOG("input", "input thread started (backend='%s')", backend_->name().data());
   } else {

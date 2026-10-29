@@ -265,6 +265,8 @@ static thread_local bool tlHudStats = true;
 struct HudBig { uint64_t area; int x0, y0, x1, y1; float r, g, b, a; };  // 2026-10-26 HUD fill diagnostic (LL_SW_PROF)
 static HudBig g_hudBig[4] = {}; static uint64_t g_hudBlendPx = 0;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
+static double g_skyMsAcc = 0;        // 2026-10-28 S1a: t_sky — the serial clear/sky fill (LL_SW_PROF)
+static double g_rasterBandsUsAcc = 0;  // 2026-10-28 S3: t_raster_bands_us — wall time of the band dispatch (drawBand run), microseconds
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
 static std::atomic<uint64_t> g_hizTested{0}, g_hizPartial{0}, g_hizTilesTot{0}, g_hizTilesOcc{0};  // Strike 3 sizing
@@ -285,7 +287,7 @@ static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
 static std::atomic<uint64_t> g_ringTris[4]{};  // 2026-10-25 (Archie step 6): binned tris per far-LOD ring (LL_SW_PROF)
-static int g_ringEdge[3] = {2, 4, 6};  // = game LL_SW_LOD_RINGS default
+static int g_ringEdge[3] = {32, 64, 96};  // = game LL_SW_LOD_RINGS default (JD's 32-chunk full-fidelity core, 2026-10-28)
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
@@ -304,7 +306,18 @@ constexpr unsigned kSwMaxRenderThreads = 64;
 unsigned swAutoRenderThreads(unsigned logical) {
   // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
-  return std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
+  const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
+#ifdef __wasm__
+  // Phone-framerate pass (2026-10-28 — Archie: optimization design;
+  // Elfie: co-implementation; JD: direction + debugging): on web the
+  // band pool shares the device with the browser compositor, the
+  // Timing Handshake workers and the job pool, so the auto count is
+  // Archie's raster lane count — 4 bands, caller included — not
+  // hw-1. An explicit request still overrides (swResolveThreads).
+  return std::min(n, 4u);
+#else
+  return n;
+#endif
 }
 unsigned swResolveThreads(unsigned req) {
   const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -915,6 +928,15 @@ struct alignas(64) SwTriSetup {
   const float *v0, *v1, *v2;
   float invArea, dw0dx, dw1dx, dw2dx, dzdx, iw0, iw1, iw2;
   int x0, x1;
+#if UINTPTR_MAX == UINT32_MAX
+  // 32-bit (wasm32, the phone build): the three pointers above are
+  // 12 B, not 24, so line 1 would close at 52 B and s0 would land
+  // mid-line. Pad the difference away so the PT4-B layout — hot
+  // line 1 exactly 64 B, s0 opening line 2 — holds on every
+  // platform (surfaced by the 2026-10-28 phone-framerate build;
+  // Archie: PT4-B design; Elfie: co-implementation; JD: direction).
+  char line1Pad[12];
+#endif
   // line 2 (64 B): row window + scalar-shading varyings
   const ShaderVaryings *s0, *s1, *s2;
   int ditherCls, y0, y1, htx0, htx1, skipTo;
@@ -2708,6 +2730,12 @@ struct SwProf {
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
+    // 2026-10-28 S1a/S3: t_sky (serial clear only — p2par clears in-strip,
+    // timed inside the strips stage) and the band-dispatch wall timer.
+    // t_play_hud is the "hud ms/frame" line above (drawHud total).
+    std::fprintf(stderr, "swprof t_sky ms/frame=%.3f t_raster_bands_us/frame=%.1f\n",
+                 g_skyMsAcc / frames, g_rasterBandsUsAcc / frames);
+    g_skyMsAcc = 0; g_rasterBandsUsAcc = 0;
     for (double& a : acc) a = 0; for (double& a : frameAcc) a = 0; frames = 0;
   }
 };
@@ -2788,7 +2816,13 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     }
   }
   const uint32_t skyColor = swSkyColor(p.sky);
-  if (p2par) hizReset(); else clear(skyColor);
+  {  // 2026-10-28 S1a: t_sky, split out of the clear+cull stage (LL_SW_PROF).
+     // With p2par the strips clear their own rows inside the band workers,
+     // so this times only hizReset(); the serial clear() is the phone path.
+    const auto tSky = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (p2par) hizReset(); else clear(skyColor);
+    if (g_swProfOn) g_skyMsAcc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tSky).count();
+  }
   // Culling prototypes + frustum margin (M1): beginFrame arms the comet /
   // velocity state; decide() then culls per mesh exactly like GL/VK. All
   // prototypes default off, so decide() is the plain margin test.
@@ -3237,9 +3271,15 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
   if (g_swProfOn) { for (double& b : g_bandMs) b = 0; g_lastEmitN = frameEmit_.size() / 6; }
-  {
-    litholattice::RenderBusyScope busy;  // 2026-10-26: LL_BG_YIELD_RENDER holds off new background jobs
-    bandPool.run(drawBand);
+  {  // 2026-10-28 S3: t_raster_bands_us — wall time of the band worker
+     // dispatch + raster + join for this frame (the drawBand run only;
+     // the transform/bin phase above keeps its own swprof stage).
+    const auto tBands = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    {
+      litholattice::RenderBusyScope busy;  // 2026-10-26: LL_BG_YIELD_RENDER holds off new background jobs
+      bandPool.run(drawBand);
+    }
+    if (g_swProfOn) g_rasterBandsUsAcc += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - tBands).count();
   }
   if (g_swProfOn) {
     const unsigned nb = std::min(64u, std::max(1u, bandPool.bands()));

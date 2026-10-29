@@ -108,6 +108,7 @@ struct SimStats {              // sim -> render, every wake-up (lock-free triple
   int targetTps = 0, masterHz = 0;
   float tps = 0.f, tickMs = 0.f, tickMaxMs = 0.f, budgetPct = 0.f;  // tick ms: avg/max over last 1 s
   uint64_t droppedTicks = 0;
+  uint32_t ticksLastPass = 0;              // world ticks executed in the most recent loop pass (S6, 2026-10-28)
   uint32_t active = 0;                     // IWorldSim::activeCount()
   uint64_t randomTicks = 0;                // opted-in cells random-ticked so far
   struct Domain { int hz = 0; float achieved = 0.f; bool enabled = false; };
@@ -278,6 +279,18 @@ class cSimThread {
     freezeReported_.store(false);
     stepRefusalLogged_.store(false);
   }
+  /// S6 (2026-10-28, Archie ruling; JD direction): zero the accumulated
+  /// wall-clock time debt (acc_) at a presentation boundary — the game
+  /// calls this on the exact frame of the MENU -> PLAY transition, so
+  /// time burned in RESOURCE_LOAD / menu (cores saturated, this thread
+  /// starved) is discarded instead of landing as a catch-up burst plus
+  /// a dropped-tick spike on the first play frames. The sim thread
+  /// consumes the request at its accumulator: acc_ is zeroed and the
+  /// pacing clock re-based BEFORE the lag clamp can book the debt as
+  /// drops; the pre-reset debt and the last pass's tick count are
+  /// logged. Presentation-boundary only — no per-tick math changes,
+  /// and the cumulative dropped_ stat is NOT rewound.
+  void resetTimeDebt() { debtResetReq_.store(true, std::memory_order_release); notifyWake(); }
 
  private:
   void run();
@@ -442,6 +455,7 @@ class cSimThread {
   // starts at 0 — only restarts changed. (Wall-clock pacing — the `last`
   // timestamp in run() — stays a run() local, re-based on each start.)
   uint64_t masterStep_ = 0, worldTickN_ = 0, dropped_ = 0;
+  uint32_t lastPassTicks_ = 0;  // S6: world ticks executed in the last loop pass (published as SimStats::ticksLastPass)
   std::chrono::nanoseconds acc_{0};
   Clock::time_point windowStart_{};  // zero = unset; run() bases it on entry
   uint64_t windowWorldTicks_ = 0;
@@ -466,6 +480,7 @@ class cSimThread {
   int hitInfoXyz_[3]{};
   bool hitInfoValid_ = false;
  std::atomic<bool> paused_{false};
+  std::atomic<bool> debtResetReq_{false};  ///< S6: resetTimeDebt() request, consumed by the sim thread at its accumulator
   std::atomic<uint64_t> stepRequested_{0};  ///< pending single-step ticks (tick debugger)
   std::atomic<uint64_t> ticksStepped_{0};   ///< ticks completed via stepTicks
 };

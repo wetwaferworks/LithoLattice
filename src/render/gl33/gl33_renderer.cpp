@@ -13,13 +13,13 @@
 #include <unordered_map>
 #include <string_view>
 #include "builtin_shaders.h"
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
 // Phase 2 mega-draw verbs (thin layer, lk_webio.js / lkboot.js):
 // WEBGL_multi_draw entry points are extension functions and absent from the
 // GL proc-address table, so the probe and the draw travel as reserved
 // stream ops instead of loader-resolved GL calls.
-extern "C" int lk_mega_probe();
-extern "C" int lk_mega_draw(int mode, const void* counts, const void* offsets, int drawCount);
+extern "C" __attribute__((import_module("env"), import_name("lk_mega_probe"))) int lk_mega_probe();
+extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) int lk_mega_draw(int mode, const void* counts, const void* offsets, int drawCount);
 #endif
 #include "gl_loader.h"
 #include "gl_program.h"
@@ -81,7 +81,7 @@ class cGL33Renderer final : public IRenderer {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * 4), idx.data(), GL_STATIC_DRAW);
     if (useArena_) {  // Phase 2: per-frame instance records (19 floats per visible mesh)
       glGenBuffers(1, &instVbo_); glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-      glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(4096 * 19 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
+      glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(instVboCapacityFloats_ * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
     }
     glGenVertexArrays(1, &lineVao_); glBindVertexArray(lineVao_);
     glGenBuffers(1, &lineVbo_); glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
@@ -131,7 +131,14 @@ class cGL33Renderer final : public IRenderer {
     glUniform2f(uScreen_, float(p.width), float(p.height));
     glBindTexture(GL_TEXTURE_2D, fontTex_);
     glBindVertexArray(hudVao_); glBindBuffer(GL_ARRAY_BUFFER, hudVbo_);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudVerts_.size() * sizeof(HudVertex)), hudVerts_.data(), GL_DYNAMIC_DRAW);
+    // Q3 (Archie exec summary, 2026-10-28): same per-frame orphan
+    // pattern as the mega instance buffer... grow-only allocation,
+    // BufferSubData per frame.
+    if (hudVerts_.size() > hudVboCapacityVerts_) {
+      hudVboCapacityVerts_ = std::max(hudVerts_.size(), hudVboCapacityVerts_ * 2);
+      glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudVboCapacityVerts_ * sizeof(HudVertex)), nullptr, GL_DYNAMIC_DRAW);
+    }
+    glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(hudVerts_.size() * sizeof(HudVertex)), hudVerts_.data());
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(hudVerts_.size()));
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
@@ -375,7 +382,7 @@ class cGL33Renderer final : public IRenderer {
     for (size_t i = 0; i < std::size(kProgramNames); ++i) {
       const std::string_view name = kProgramNames[i];
       const bool pbr = (i == kChunkPbrProgram);
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
       // fix 3b (Elfie P1): chunk_pbr.frag uses samplerBuffer, which GLSL ES 3.00 lacks. Decline the
       // PBR path up front with one info line instead of a compile ERROR (supportsPbrPath() -> false).
       if (pbr) { logInfo("gl33: chunk_pbr not available on WebGL2 (no samplerBuffer in GLSL ES 3.00); classic path only"); continue; }
@@ -408,7 +415,7 @@ class cGL33Renderer final : public IRenderer {
     // PBR program: swap in on success, clear on failure (supportsPbrPath() reads id()).
     if (built[kChunkPbrProgram]) pbrProg_ = std::move(*built[kChunkPbrProgram]);
     else pbrProg_ = cGlProgram();
-#if !defined(__EMSCRIPTEN__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
+#if !defined(__wasm__)  // fix 3b: on WebGL2 the expected decline was logged once (info) above
     if (!supportsPbrPath()) logError("gl33: chunk_pbr unavailable - PBR/BinaryQuad path disabled, classic path only");
 #endif
     // Sprite program: same optional-path treatment (drawSprites() reads id()).
@@ -471,7 +478,7 @@ class cGL33Renderer final : public IRenderer {
       // WEBGL_multi_draw exists on the live context. Native builds have no
       // such verb and keep the per-mesh path.
       megaOk_ = false;
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
       megaOk_ = useArena_ && progMega_.id() && lk_mega_probe() == 1;
 #endif
       logInfo("gl33: mega-draw %s", megaOk_ ? "ON (one instanced multi-draw per frame for classic chunk meshes)" : "off (per-mesh draws)");
@@ -680,8 +687,19 @@ class cGL33Renderer final : public IRenderer {
         glUniform1f(uMegaGroundTraceOn_, p.groundTraceOn ? 1.f : 0.f);
         if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
         glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(megaData_.size() * sizeof(float)), megaData_.data(), GL_DYNAMIC_DRAW);
-#if defined(__EMSCRIPTEN__)
+        // Q3 (Archie exec summary, 2026-10-28): stream into the
+        // pre-allocated instance buffer with BufferSubData. The old
+        // exact-size BufferData orphaned and reallocated the buffer
+        // EVERY frame... one of the per-frame BufferData crossings
+        // convicted by the Build86k device log (~x3/frame). Grow by
+        // doubling, only when a frame's visible set outgrows the
+        // allocation (the sprite path's house pattern, D-M5).
+        if (megaData_.size() > instVboCapacityFloats_) {
+          instVboCapacityFloats_ = std::max(megaData_.size(), instVboCapacityFloats_ * 2);
+          glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(instVboCapacityFloats_ * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(megaData_.size() * sizeof(float)), megaData_.data());
+#if defined(__wasm__)
         lk_mega_draw(GL_TRIANGLES, megaCounts_.data(), megaOffsets_.data(), int(megaCounts_.size()));
 #endif
         stats_.drawn += uint32_t(megaCounts_.size());
@@ -806,7 +824,7 @@ class cGL33Renderer final : public IRenderer {
     glBindVertexArray(lineVao_); glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     if (p.highlight) {
       const auto v = blockOutlineLines(p.hx, p.hy, p.hz);
-      glBufferData(GL_ARRAY_BUFFER, sizeof v, v.data(), GL_DYNAMIC_DRAW);
+      glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v.data());  // Q3: lineVbo_ is pre-allocated for exactly this fixed-size set
       glUniformMatrix4fv(uLineM_, 1, GL_FALSE, p.viewProj.m);
       glUniform3f(uLineC_, 0.05f, 0.05f, 0.08f);
       glDrawArrays(GL_LINES, 0, GLsizei(v.size()));
@@ -814,7 +832,7 @@ class cGL33Renderer final : public IRenderer {
     if (p.crosshair && p.height > 0) {
       const auto v = crosshairLines(p.width, p.height);
       const Mat4 id = Mat4::identity();
-      glBufferData(GL_ARRAY_BUFFER, sizeof v, v.data(), GL_DYNAMIC_DRAW);
+      glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v.data());  // Q3: fits the lineVbo_ pre-allocation
       glUniformMatrix4fv(uLineM_, 1, GL_FALSE, id.m);
       glUniform3f(uLineC_, 1.f, 1.f, 1.f);
       glDisable(GL_DEPTH_TEST);
@@ -837,7 +855,7 @@ class cGL33Renderer final : public IRenderer {
     h = lastFrameH_;
     rgb.resize(size_t(w) * size_t(h) * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-#if defined(__EMSCRIPTEN__)
+#if defined(__wasm__)
     // WebGL2 (ANGLE) robust readback: the default framebuffer is RGBA8, and
     // glReadPixels(GL_RGB, GL_UNSIGNED_BYTE) is not an accepted format/type
     // pair there — it raises GL_INVALID_OPERATION ("glReadPixelsRobustANGLE:
@@ -930,7 +948,14 @@ class cGL33Renderer final : public IRenderer {
   // ---- arena: one VBO (grown by doubling with glCopyBufferSubData) and one VAO; first-fit
   // free list in vertex units with coalescing. glBufferSubData into a freed range is ordered
   // by the driver after earlier draws that read it.
-  static constexpr size_t kArenaInitialVerts = (size_t(32) << 20) / sizeof(PackedVertex);
+  // Q5a step 1 (Archie exec summary, 2026-10-28): initial arena doubled
+  // (32 -> 64 MiB of verts; indices scale at x1.5 below) so a full
+  // radius-16 ring fits without a mid-play grow... a grow is a
+  // frame-thread realloc + full copy (the GenBuffers/DeleteBuffers
+  // fingerprint in the 478.7 ms outlier second of the Build86k log).
+  // The grow census logged in growArena/growIndexArena convicts the
+  // exact full-ring number for the world-load pre-size that follows.
+  static constexpr size_t kArenaInitialVerts = (size_t(64) << 20) / sizeof(PackedVertex);
   void bindArenaAttribs() {
     glBindVertexArray(arenaVao_);
     glBindBuffer(GL_ARRAY_BUFFER, arenaVbo_);
@@ -970,6 +995,7 @@ class cGL33Renderer final : public IRenderer {
   }
   void growArena(size_t minVerts) {
     size_t cap = std::max(arenaVerts_ ? arenaVerts_ * 2 : kArenaInitialVerts, minVerts);
+    logInfo("gl33: arena grow: vertex capacity %zu -> %zu (frame-thread realloc + copy; Q5a census)", arenaVerts_, cap);
     GLuint vbo = 0;
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_COPY_WRITE_BUFFER, vbo);
@@ -1036,8 +1062,27 @@ class cGL33Renderer final : public IRenderer {
   void growIndexArena(size_t minIndices) {
     static constexpr size_t kArenaInitialIndices = kArenaInitialVerts * 3 / 2;  // 6 indices per 4 verts
     size_t cap = std::max(arenaIndices_ ? arenaIndices_ * 2 : kArenaInitialIndices, minIndices);
+    logInfo("gl33: arena grow: index capacity %zu -> %zu (frame-thread realloc + copy; Q5a census)", arenaIndices_, cap);
     GLuint ebo = 0;
     glGenBuffers(1, &ebo);
+    // WebGL2 buffer-class rule (measured 2026-10-28, harness ab_rule): a
+    // buffer's FIRST bind fixes its class. Staging this index buffer via
+    // COPY_WRITE first made every later ELEMENT_ARRAY_BUFFER bind raise
+    // INVALID_OPERATION and latch nothing... the arena VAO drew with a
+    // null element binding while its payloads verified byte-correct (the
+    // G3 silent void; desktop GL has no such rule, so it only died
+    // through the web layer). Give the new buffer its element-class birth
+    // bind under the arena VAO before the copy-target staging; COPY_WRITE
+    // remains legal afterwards (Path B, same harness).
+    // Create the arena VAO first when this grow is the arena's first
+    // touch (G3 hardening, 2026-10-28, mirroring growArena): the birth
+    // bind must never be silently skipped — a skipped bind leaves the
+    // new buffer classless and the VAO drawing on a null element
+    // binding, the G3 silent void itself.
+    if (!arenaVao_) glGenVertexArrays(1, &arenaVao_);
+    glBindVertexArray(arenaVao_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arenaEbo_);
     glBindBuffer(GL_COPY_WRITE_BUFFER, ebo);
     glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
     if (arenaEbo_) {
@@ -1108,6 +1153,7 @@ class cGL33Renderer final : public IRenderer {
   // probe of glMultiDrawElementsInstancedWEBGL; when false, every mega path
   // below is inert and the renderer is bit-identical to the pre-Phase-2 one.
   GLuint arenaEbo_ = 0, instVbo_ = 0;
+  size_t instVboCapacityFloats_ = 4096 * 19;  // floats allocated in instVbo_ (Q3: grow-only, BufferSubData per frame)
   size_t arenaIndices_ = 0;
   std::map<size_t, size_t> arenaIndexFree_;  // first index -> count
   cGlProgram progMega_;
@@ -1157,6 +1203,7 @@ class cGL33Renderer final : public IRenderer {
   GLint uSceneColor_ = -1, uSceneSize_ = -1, uSceneVP_ = -1, uRefractionPass_ = -1;
   RenderStats stats_;
   GLuint hudVao_ = 0, hudVbo_ = 0, fontTex_ = 0;
+  size_t hudVboCapacityVerts_ = 0;  // verts allocated in hudVbo_ (Q3: grow-only, BufferSubData per frame)
   GLint uScreen_ = -1;
   std::vector<HudVertex> hudVerts_;
   // Sprite pass state (2026-10-12): program + streamed VBO + atlas page

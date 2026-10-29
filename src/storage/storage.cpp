@@ -348,7 +348,10 @@ int floorDiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 cWorldStore::cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads, cJobSystem* jobs)
     : dir_(std::move(dir)), payloads_(payloads), jobsys_(jobs) {
   std::filesystem::create_directories(dir_);
-  if (!jobsys_) thread_ = std::thread([this] { run(); });
+  if (!jobsys_) {
+    logInfo("threads: world store starting its own worker thread (no job system)");  // Q5b census naming (2026-10-28)
+    thread_ = std::thread([this] { run(); });
+  }
 }
 
 cWorldStore::~cWorldStore() {
