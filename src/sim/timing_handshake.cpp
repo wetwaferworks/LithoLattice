@@ -353,59 +353,46 @@ bool cTimingHandshakeAuthority::start() {
     pendingFailure_ = PendingFailure{};
   }
   for (auto& e : workerExited_) e.store(false);
-  workers_.clear();
-  workerRecords_.retireAll();
-  logInfo("threads: timing handshake starting %d pull workers", workerCount_);  // Q5b census naming (2026-10-28)
-  for (int s = 0; s < workerCount_; ++s) {
-    workers_.emplace_back([this, s] { raiseCurrentThreadForSim(); workerLoop(s); });  // 0.0.1.57 F57-1 (R21)
-    workerRecords_.add(ThreadClass::Pooled, ThreadRole::SimShard, uint16_t(s), "th-shard");  // ruling 2: pool work; own thread until P3
-  }
+  // Thread Handshake P3 (ruling 2): no threads here. Each publication submits one
+  // barrier-synced job per active shard to the backing pool (whose workers run at sim
+  // priority, F57-1); only the Sim Clock keeps a dedicated thread.
+  pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
+  jobs_ = std::make_shared<ShardJobs>();
+  logInfo("threads: timing handshake starting %d shards as jobs on a %u-worker pool", workerCount_, pool_->size());  // Q5b census naming
   return true;
 }
 
 bool cTimingHandshakeAuthority::stop() {
-  if (!startedOnce_ && workers_.empty()) return true;
+  if (!startedOnce_ && !jobs_) return true;
   stop_.store(true, std::memory_order_release);
   publishCv_.notify_all();
   barrierCv_.notify_all();
-  if (workers_.empty()) { running_.store(false); return true; }
-  // NO-DETACH bounded join (C2; L7: per-worker deadline, saturating
-  // multiply — previously one global deadline was shared by all workers
-  // and ceiling x 2 could overflow). Each worker gets its own full grace
-  // of ceiling x 2 to leave its component and the poll loop.
+  if (!jobs_) { running_.store(false); return true; }
+  // Thread Handshake P3: shard work is pool jobs. Mark the job state dead (queued jobs turn
+  // into no-ops that never touch this authority), then wait, bounded and never abandoning
+  // live storage (C2), for any job still inside a component. Grace = ceiling x 2,
+  // saturating (L7).
+  jobs_->dead.store(true, std::memory_order_seq_cst);
   const uint64_t ceilNs = uint64_t(ceiling_.count());
   const uint64_t graceNs = ceilNs > UINT64_MAX / 2 ? UINT64_MAX : ceilNs * 2;
-  bool allJoined = true;
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (!workers_[i].joinable()) continue;
-    const uint64_t start = nowNs();
-    const uint64_t deadline = graceNs > UINT64_MAX - start ? UINT64_MAX : start + graceNs;
-    while (!workerExited_[i].load(std::memory_order_acquire) && nowNs() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if (workerExited_[i].load(std::memory_order_acquire)) {
-      workers_[i].join();
-      workerRecords_.retire(i);  // P2: joined -> RETURNED
-    } else {
-      // Fail loudly and poison (see the header for the full protocol):
-      // the thread object stays joinable in workers_, the worker keeps
-      // running against LIVE storage, and stop() may be retried once the
-      // component returns. Never detach into freed storage.
-      logError("timing-handshake: worker %zu still inside a component at stop(); NOT detaching — "
-               "stop() FAILED, authority poisoned until a retry joins it (no save/start/destroy is safe)",
-               i);
-      allJoined = false;
-    }
-  }
-  if (allJoined) {
-    workers_.clear();
-    workerRecords_.retireAll();
+  const uint64_t start = nowNs();
+  const uint64_t deadline = graceNs > UINT64_MAX - start ? UINT64_MAX : start + graceNs;
+  while (jobs_->running.load(std::memory_order_seq_cst) != 0 && nowNs() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (jobs_->running.load(std::memory_order_seq_cst) == 0) {
+    jobs_.reset();
+    pool_ = nullptr;
     workersOutstanding_.store(false, std::memory_order_release);
     running_.store(false);
     return true;
   }
+  // Fail loudly and poison (see the header for the protocol): the job keeps running
+  // against LIVE storage, and stop() may be retried once the component returns.
+  logError("timing-handshake: a shard job is still inside a component at stop(); stop() FAILED, "
+           "authority poisoned until a retry sees it return (no save/start/destroy is safe)");
   workersOutstanding_.store(true, std::memory_order_release);
-  // running_ stays true: the authority is not stopped while a worker is
-  // outstanding, and start() refuses via workersOutstanding_ above.
+  // running_ stays true: the authority is not stopped while a job is outstanding, and
+  // start() refuses via workersOutstanding_.
   return false;
 }
 
@@ -439,82 +426,68 @@ HsStats cTimingHandshakeAuthority::statsSnapshot() const {
   return stats_;
 }
 
-void cTimingHandshakeAuthority::workerLoop(int shard) {
-  uint64_t seenSeq = 0;
-  uint64_t idleSinceNs = nowNs();
-  while (!stop_.load(std::memory_order_acquire)) {
-    // A-M3: the worker polls through pollPhase() — the SAME implementation
-    // canTick() exposes — never an inline re-implementation. CH-H2: the
-    // snapshot it returns is revalidated, never a tuple assembled from
-    // separate loads across a publish.
+void cTimingHandshakeAuthority::runShardJob(cTimingHandshakeAuthority* self, const std::shared_ptr<ShardJobs>& st,
+                                            int shard, uint64_t seq) {
+  st->running.fetch_add(1, std::memory_order_seq_cst);
+  // Dekker pair with stop(): it stores dead then reads running; we bump running then read
+  // dead (both seq_cst). Either stop() sees us and waits, or we see dead and skip `self`.
+  if (!st->dead.load(std::memory_order_seq_cst)) {
+    // A-M3: the job reads through pollPhase(), the same poll canTick() exposes. The
+    // publication is stable while its barrier is open, so a torn read only retries.
     PublishedPhase snap;
-    if (pollPhase(uint32_t(shard), seenSeq, snap)) {
-      seenSeq = snap.seq;
-      idleSinceNs = nowNs();
-      const uint64_t ph = snap.phase;
-      const uint64_t ct = snap.cycle;
-      const uint32_t g = snap.group;
-      if (snap.dueWork) {
-        // Clock-monotonicity tripwire (review A-L8, relabelled): both stamps
-        // come from the same shared steady clock and this pull stamp is read
-        // after the open stamp was stored, so pullStamp < openStamp can only
-        // mean the steady clock itself went backwards. This verifies clock
-        // monotonicity — it is NOT a check that two distinct QPC sources
-        // agree (there is only one clock here by design).
-        const uint64_t pullStamp = nowNs();
-        if (pullStamp < snap.openStampNs)
-          qpcViolations_.fetch_add(1, std::memory_order_relaxed);
-        bool stale = false;
-        for (uint32_t id : shards_[size_t(shard)]) {
-          Comp& c = comps_[id];
-          if (!dueFor(c, ph, ct, g)) continue;
-          // CH-H1: revalidate the generation before every item — after a
-          // resetAfterFreeze()/restart this publication is stale and its
-          // remaining items must not execute.
-          if (generation_.load(std::memory_order_acquire) != snap.generation) { stale = true; break; }
-          // C3: on a recorded failure, stop executing this publication's
-          // remaining items (the world may be half-updated) but still
-          // arrive at the barrier below so runPhase can convert the
-          // failure at the phase boundary instead of hanging to the
-          // watchdog ceiling.
-          if (!runItem(c, ph, ct)) break;
-        }
-        if (!stale) {
-          // CH-H1: the arrival itself revalidates (seq, generation) under
-          // m_ — runPhase resets arrivals_ under the same mutex when it
-          // publishes, so a stale arrival can never be counted toward a
-          // later phase's barrier.
-          bool counted = false;
-          {
-            std::lock_guard lk(m_);
-            if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
-                generation_.load(std::memory_order_relaxed) == snap.generation) {
-              shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
-              arrivals_.fetch_add(1, std::memory_order_relaxed);
-              counted = true;
-            }
-          }
-          if (counted) barrierCv_.notify_all();
-        }
-      } else {
+    bool ok = false;
+    for (int i = 0; i < 1000 && !(ok = self->pollPhase(uint32_t(shard), 0, snap)); ++i) std::this_thread::yield();
+    if (ok && snap.seq == seq) self->serveShard(shard, snap);
+  }
+  st->running.fetch_sub(1, std::memory_order_seq_cst);
+}
+
+void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap) {
+  const uint64_t ph = snap.phase;
+  const uint64_t ct = snap.cycle;
+  const uint32_t g = snap.group;
+  if (snap.dueWork) {
+    // Clock-monotonicity tripwire (review A-L8, relabelled): both stamps come from the
+    // same shared steady clock and this pull stamp is read after the open stamp was
+    // stored, so pullStamp < openStamp can only mean the steady clock went backwards.
+    const uint64_t pullStamp = nowNs();
+    if (pullStamp < snap.openStampNs)
+      qpcViolations_.fetch_add(1, std::memory_order_relaxed);
+    bool stale = false;
+    for (uint32_t id : shards_[size_t(shard)]) {
+      Comp& c = comps_[id];
+      if (!dueFor(c, ph, ct, g)) continue;
+      // CH-H1: revalidate the generation before every item; after a
+      // resetAfterFreeze()/restart this publication is stale and its remaining items
+      // must not execute.
+      if (generation_.load(std::memory_order_acquire) != snap.generation) { stale = true; break; }
+      // C3: on a recorded failure, stop executing this publication's remaining items
+      // but still arrive at the barrier so runPhase converts the failure at the phase
+      // boundary instead of hanging to the watchdog ceiling.
+      if (!runItem(c, ph, ct)) break;
+    }
+    if (!stale) {
+      // CH-H1: the arrival revalidates (seq, generation) under m_; runPhase resets
+      // arrivals_ under the same mutex when it publishes, so a stale arrival can never
+      // be counted toward a later phase's barrier.
+      bool counted = false;
+      {
         std::lock_guard lk(m_);
         if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
-            generation_.load(std::memory_order_relaxed) == snap.generation)
+            generation_.load(std::memory_order_relaxed) == snap.generation) {
           shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
+          arrivals_.fetch_add(1, std::memory_order_relaxed);
+          counted = true;
+        }
       }
-      continue;
+      if (counted) barrierCv_.notify_all();
     }
-    if (cfg_.pureSpin) { std::this_thread::yield(); continue; }
-    // Hybrid poll (D9): spin-with-yield for ~50 us, then block on the CV.
-    if (nowNs() - idleSinceNs < 50'000) { std::this_thread::yield(); continue; }
-    std::unique_lock lk(m_);
-    publishCv_.wait_for(lk, std::chrono::milliseconds(1), [&] {
-      return stop_.load(std::memory_order_acquire) ||
-             publishSeq_.load(std::memory_order_acquire) != seenSeq;
-    });
+  } else {
+    std::lock_guard lk(m_);
+    if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
+        generation_.load(std::memory_order_relaxed) == snap.generation)
+      shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
   }
-  if (shard >= 0 && size_t(shard) < workerExited_.size())
-    workerExited_[size_t(shard)].store(true, std::memory_order_release);
 }
 
 bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uint32_t group) {
@@ -541,7 +514,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
     }
   }
 
-  const bool haveWorkers = running_.load(std::memory_order_acquire) && !workers_.empty();
+  const bool haveWorkers = running_.load(std::memory_order_acquire) && jobs_ != nullptr && pool_ != nullptr;
   // Affine work runs BEFORE the phase is published: affine items are the
   // phase prologue (e.g. Signal's mark/prep prepares the very work the pull
   // shards then execute), so workers must not see the phase until every
@@ -563,6 +536,20 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
     publishSeq_.store(seq, std::memory_order_release);  // ... then the wake counter
   }
   publishCv_.notify_all();
+
+  // Thread Handshake P3: one barrier-synced job per active shard, front of the pool's line
+  // and unthrottled. Inactive shards are marked done for this publication here, as their
+  // idle poll used to do.
+  if (haveWorkers) {
+    {
+      std::lock_guard lk(m_);
+      for (int s = 0; s < workerCount_; ++s)
+        if (!shardActive[size_t(s)]) shardDoneSeq_[size_t(s)].store(seq, std::memory_order_release);
+    }
+    for (int s = 0; s < workerCount_; ++s)
+      if (shardActive[size_t(s)])
+        pool_->submitUrgent([self = this, st = jobs_, s, seq] { runShardJob(self, st, s, seq); });
+  }
 
   uint64_t barrierWaitNs = 0;
   if (activeShards > 0) {
@@ -622,6 +609,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // Commit hook (single, per authority — the game's buffer flip lands here).
   if (cfg_.commitFn) cfg_.commitFn(phase, cycleTick, group);
   committedPhase_.store(phase, std::memory_order_release);
+  cThreadCensus::noteCommittedTick(cycleTick);  // JD t3349u item 4: shutdown records carry it
 
   // Fold timings into stats; WAIT accounting (hs-design §1.6, rewritten
   // P1-WAIT per review CH-H4 + sweep decision C2 + review A-M2).

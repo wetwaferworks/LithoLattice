@@ -82,10 +82,20 @@ struct ThreadBudget {
   /// Cores the always-running dedicated threads hold (main + sim clock).
   unsigned dedicatedCores() const { return mainThreads + simClock; }
   /// Every OS thread the engine would own at boot (main excluded: it already exists).
-  unsigned spawnedTotal() const { return simClock + simShards + renderSpawned + pool; }
+  /// P3 (ruling 2): shards are pool jobs, not threads, so they no longer add to the spawn count.
+  unsigned spawnedTotal() const { return simClock + renderSpawned + pool; }
 };
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm = kCensusWasm);
+
+/// JD t3349u item 8: planned threads (Class A main + sim clock + spawned render bands,
+/// Class B pool) against the effective core count. Empty when they fit, else a one-line
+/// warning with the per-class breakdown. instance() logs it once at boot.
+std::string oversubscriptionWarning(const ThreadBudget& b);
+
+/// JD t3349u item 4: retire() with this tick records the last committed Timing Handshake
+/// tick (cThreadCensus::lastCommittedTick()) instead of 0.
+constexpr uint64_t kLastCommittedTick = UINT64_MAX;
 
 /// Hashed part of a thread record: tick stamps and enums only (no wall clock, no OS ids).
 struct ThreadRecord {
@@ -125,6 +135,11 @@ class cThreadCensus {
   /// CLI core override (ruling 5). Must be called before the first instance(); returns
   /// false (and changes nothing) once the census has booted.
   static bool setCliCores(unsigned cores);
+
+  /// JD t3349u item 4: the Timing Handshake notes each committed tick here, so shutdown
+  /// records carry the last committed tick rather than 0.
+  static void noteCommittedTick(uint64_t tick);
+  static uint64_t lastCommittedTick();
 
   /// Band count for a renderer request against this census (ruling 5).
   unsigned renderBands(unsigned req) const { return resolveRenderBands(req, budget_.hw, kCensusWasm); }
@@ -182,8 +197,8 @@ class cThreadRecordSet {
   cThreadRecordSet& operator=(const cThreadRecordSet&) = delete;
   ~cThreadRecordSet() { retireAll(); }
   void add(ThreadClass cls, ThreadRole role, uint16_t roleIndex, const char* name);
-  void retire(size_t i, uint64_t tick = 0);
-  void retireAll(uint64_t tick = 0);
+  void retire(size_t i, uint64_t tick = kLastCommittedTick);
+  void retireAll(uint64_t tick = kLastCommittedTick);
   size_t size() const { return ids_.size(); }
 
  private:

@@ -2,8 +2,11 @@
 #include "litholattice/core/thread_census.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <new>
 #include <thread>
+#include "litholattice/core/log.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -21,6 +24,7 @@ namespace {
 std::atomic<unsigned> g_hwReads{0};
 std::atomic<unsigned> g_cliCores{0};
 std::atomic<bool> g_booted{false};
+std::atomic<uint64_t> g_lastCommittedTick{0};  // JD t3349u item 4
 
 constexpr uint64_t pack(ThreadState s, uint32_t ticket) { return (uint64_t(ticket) << 8) | uint64_t(s); }
 constexpr ThreadState stateOf(uint64_t w) { return ThreadState(uint8_t(w & 0xff)); }
@@ -51,10 +55,10 @@ unsigned autoRenderBands(unsigned cores, bool wasm) {
 unsigned resolveRenderBands(unsigned req, unsigned cores, bool wasm) {
   cores = std::max(1u, cores);
   if (!req) return autoRenderBands(cores, wasm);  // auto: not limited by the hw clamp (2-core floor is 2)
-  const unsigned want = std::min(req, kMaxRenderBands);
-  unsigned b = 1;
-  while (b * 2 <= want && b * 2 <= cores) b *= 2;
-  return b;
+  // JD t3349u item 7: power-of-two was only a heuristic (rows are pulled as 32-row strips
+  // by any band count; the auto rule already yields 11 on 12 cores), so an explicit request
+  // is honoured as given. The one hard limit is the 64-band storage cap.
+  return std::min(req, kMaxRenderBands);
 }
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
@@ -72,6 +76,18 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
   return b;
 }
 
+std::string oversubscriptionWarning(const ThreadBudget& b) {
+  const unsigned planned = b.mainThreads + b.simClock + b.renderSpawned + b.pool;
+  if (planned <= b.hw) return {};
+  char buf[320];
+  std::snprintf(buf, sizeof buf,
+                "threads: %u planned threads exceed %u effective cores (Class A dedicated: main %u + sim clock %u + "
+                "render bands %u; Class B pool: %u workers, shards run as its jobs; System I/O threads not budgeted); "
+                "oversubscribing, no pinning (ruling 6)",
+                planned, b.hw, b.mainThreads, b.simClock, b.renderSpawned, b.pool);
+  return buf;
+}
+
 uint64_t threadRecordHash(const ThreadRecord& r) {
   Fnv f;
   f.u64(r.id);
@@ -81,8 +97,9 @@ uint64_t threadRecordHash(const ThreadRecord& r) {
 }
 
 cThreadCensus& cThreadCensus::instance() {
-  // P2: intentionally never destroyed, so owners torn down during static destruction
-  // (band pool, stores) can still retire their records.
+  // Never destroyed, so owners torn down during static destruction (band pool, stores,
+  // the shared job pool) can still retire their records. JD t3349u item 5: placement-new
+  // into static storage, not a heap leak, so leak sanitizers have nothing to report.
   static cThreadCensus* c = [] {
     g_hwReads.fetch_add(1, std::memory_order_relaxed);
     const unsigned hw = std::thread::hardware_concurrency();
@@ -90,13 +107,20 @@ cThreadCensus& cThreadCensus::instance() {
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
-    const CoresResolution r = resolveCores(g_cliCores.load(), std::getenv("LITHO_CORES"), hw);
+    const char* env = std::getenv("LITHO_CORES");
+    const CoresResolution r = resolveCores(g_cliCores.load(), env, hw);
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-    auto* cc = new cThreadCensus(r.cores, r.source);
+    if (env && *env && r.source == CoresSource::Hardware)  // JD t3349u item 6
+      logWarn("threads: invalid LITHO_CORES='%s' (want an integer 1..4096); falling back to %u cores (hardware)",
+              env, r.cores);
+    alignas(cThreadCensus) static unsigned char storage[sizeof(cThreadCensus)];
+    auto* cc = new (storage) cThreadCensus(r.cores, r.source);
     cc->budget_.hwRaw = hw;  // telemetry: what the hardware reported
     g_booted.store(true);
+    const std::string w = oversubscriptionWarning(cc->budget_);  // JD t3349u item 8
+    if (!w.empty()) logWarn("%s", w.c_str());
     return cc;
   }();
   return *c;
@@ -107,6 +131,9 @@ unsigned cThreadCensus::hwReads() { return g_hwReads.load(std::memory_order_rela
 cThreadCensus::cThreadCensus(unsigned hwRaw, CoresSource source) : budget_(computeThreadBudget(hwRaw)) {
   budget_.source = source;
 }
+
+void cThreadCensus::noteCommittedTick(uint64_t tick) { g_lastCommittedTick.store(tick, std::memory_order_relaxed); }
+uint64_t cThreadCensus::lastCommittedTick() { return g_lastCommittedTick.load(std::memory_order_relaxed); }
 
 bool cThreadCensus::setCliCores(unsigned cores) {
   if (g_booted.load()) return false;
@@ -171,6 +198,7 @@ void cThreadCensus::returnAll(uint64_t tick) {
 }
 
 void cThreadCensus::retire(uint32_t id, uint64_t tick) {
+  if (tick == kLastCommittedTick) tick = lastCommittedTick();  // JD t3349u item 4
   std::lock_guard<std::mutex> l(m_);
   if (id >= slots_.size()) return;
   Slot& s = *slots_[id];

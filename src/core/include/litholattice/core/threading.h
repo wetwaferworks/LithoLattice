@@ -12,9 +12,12 @@
 #include <functional>
 #include <iterator>
 #include <mutex>
+#include <new>
 #include <thread>
 #include <vector>
 #include "litholattice/core/log.h"
+#include "litholattice/core/thread_census.h"     // Thread Handshake P3: the shared backing pool
+#include "litholattice/core/timer_resolution.h"  // raiseCurrentThreadForSim (shard work, F57-1)
 
 namespace litholattice {
 
@@ -87,9 +90,9 @@ struct RenderBusyScope {
 /// is always released, so waitIdle() and JobBatch::wait() can never hang on a failed job.
 class cJobPool {
  public:
-  explicit cJobPool(unsigned n) {
+  explicit cJobPool(unsigned n, void (*threadInit)() = nullptr) {
     workers_.reserve(n);
-    for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this] { run(); });
+    for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this, threadInit] { if (threadInit) threadInit(); run(); });
   }
   ~cJobPool() {
     { std::lock_guard l(m_); stop_ = true; }
@@ -103,6 +106,19 @@ class cJobPool {
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; jobs_.push_back(std::move(job)); }  // 0.0.1.60 timing (diagnostic)
     cv_.notify_one();
   }
+  /// Thread Handshake P3: a front-of-line job that bypasses the BgThrottle cap and
+  /// yield-render. Timing Handshake shard work must never queue behind, or be throttled
+  /// like, background work. Exceptions and waitIdle() behave as for submit().
+  void submitUrgent(std::function<void()> job) {
+    { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; urgent_.push_back(std::move(job)); }
+    cv_.notify_one();
+  }
+  /// Thread Handshake P3 (Archie ruling 3): the process-wide backing pool,
+  /// clamp(cores - 2, 1, 64) workers from the thread census, recorded as Class B.
+  /// Placement-new into static storage and never destroyed (JD t3349u item 5), so owners
+  /// torn down in static destruction can still submit/drain. Workers run at sim priority
+  /// (raiseCurrentThreadForSim, as the dedicated shard threads did).
+  static cJobPool& shared();
   unsigned size() const { return unsigned(workers_.size()); }
   /// Cap on concurrently running jobs for THIS pool unless LL_BG_MAX_ACTIVE overrides it.
   void setDefaultMaxActive(int n) {
@@ -133,19 +149,24 @@ class cJobPool {
         const BgThrottle& bt = BgThrottle::get();
         const bool yieldR = bt.yieldRender || yieldRender_;
         if (maxActive_ <= 0 && !yieldR) {
-          cv_.wait(l, [this] { return stop_ || !jobs_.empty() || maxActive_ > 0 || yieldRender_; });
-          if (!stop_ && (maxActive_ > 0 || yieldRender_)) continue;  // throttle set while waiting: honour it
+          cv_.wait(l, [this] { return stop_ || !jobs_.empty() || !urgent_.empty() || maxActive_ > 0 || yieldRender_; });
+          if (!stop_ && urgent_.empty() && (maxActive_ > 0 || yieldRender_)) continue;  // throttle set while waiting: honour it
         } else {  // opt-in throttle: renderBusy() changes outside m_, so re-check every 1 ms
           auto ready = [&] {
-            return stop_ || (!jobs_.empty() && (maxActive_ <= 0 || active_ < maxActive_) &&
+            return stop_ || !urgent_.empty() || (!jobs_.empty() && (maxActive_ <= 0 || active_ < maxActive_) &&
                              !((bt.yieldRender || yieldRender_) && renderBusy().load(std::memory_order_relaxed) > 0));
           };
           while (!ready()) cv_.wait_for(l, std::chrono::milliseconds(1));
         }
-        if (stop_ && jobs_.empty()) return;
-        if (jobs_.empty()) continue;
-        job = std::move(jobs_.front());
-        jobs_.pop_front();
+        if (stop_ && jobs_.empty() && urgent_.empty()) return;
+        if (!urgent_.empty()) {  // P3: urgent (shard) jobs first, never throttled
+          job = std::move(urgent_.front());
+          urgent_.pop_front();
+        } else {
+          if (jobs_.empty()) continue;
+          job = std::move(jobs_.front());
+          jobs_.pop_front();
+        }
         ++active_;
       }
       try {
@@ -166,6 +187,7 @@ class cJobPool {
   }
   std::vector<std::thread> workers_;
   std::deque<std::function<void()>> jobs_;
+  std::deque<std::function<void()>> urgent_;  // P3: submitUrgent(), ahead of jobs_, guarded by m_
   mutable std::mutex m_;
   std::condition_variable cv_;
   mutable std::condition_variable idle_;
@@ -176,6 +198,19 @@ class cJobPool {
   bool yieldRender_ = false;                     // guarded by m_ (setYieldRender)
   std::atomic<uint64_t> failed_{0};
 };
+
+inline cJobPool& cJobPool::shared() {
+  static cJobPool* p = [] {
+    const unsigned n = cThreadCensus::instance().budget().pool;  // clamp(cores-2, 1, 64)
+    alignas(cJobPool) static unsigned char storage[sizeof(cJobPool)];
+    auto* pool = new (storage) cJobPool(n, &raiseCurrentThreadForSim);
+    for (unsigned i = 0; i < n; ++i)
+      cThreadCensus::instance().declare(ThreadClass::Pooled, ThreadRole::PoolWorker, uint16_t(i), "pool");
+    logInfo("threads: shared job pool up: %u workers (clamp(cores-2, 1, %u))", n, kMaxPoolWorkers);
+    return pool;
+  }();
+  return *p;
+}
 
 /// A group of jobs on a cJobPool that can be waited on by itself (other pool work keeps running).
 /// Each job's exception is caught here; wait() reports how many jobs of this batch failed.

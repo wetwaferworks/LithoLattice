@@ -119,6 +119,13 @@ class cMcpHttpServer {
   void stop();
   bool running() const { return running_.load(); }
 
+  /// Thread Handshake (JD t3349u item 1): a dependency-free thread hook. The mcp library
+  /// stays off core (locked link footprint); the owner installs a hook that records the
+  /// accept thread in the census. Called on the start()/stop() caller's thread:
+  /// started=true right after the accept thread spawns, false right after it joins.
+  using ThreadHook = void (*)(bool started);
+  static void setThreadHook(ThreadHook hook);
+
   /// Current bearer token (hex). The game shows it ONCE in the debug
   /// console; it is never written to the log.
   std::string token() const;

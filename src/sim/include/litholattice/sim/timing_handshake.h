@@ -16,6 +16,8 @@
 // barrier wait, or for authority-thread preemption.
 #pragma once
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
+#include "litholattice/core/threading.h"      // Thread Handshake P3: shard jobs on cJobPool
+#include <memory>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -158,7 +160,11 @@ class cTimingHandshakeAuthority {
     std::chrono::nanoseconds phaseBudgetGroup2{0};
     std::chrono::nanoseconds watchdogCeiling{0};  // 0 = derive: 250 ms (D3)
     uint32_t offenderThreshold = 3;            // overruns before the repeat-offender flag
-    bool pureSpin = false;                     // D9: true = prototype's pure spin poll
+    bool pureSpin = false;                     // D9: true = prototype's pure spin poll (no effect since P3: no polling workers)
+    // Thread Handshake P3 (Archie rulings 2/3): shard work runs as barrier-synced jobs on
+    // this pool; null = cJobPool::shared(), the single physical backing. Must outlive the
+    // authority.
+    cJobPool* pool = nullptr;
     // One commit hook, run on the authority thread after each successful
     // barrier, before the phase is folded into stats. Group is the runPhase
     // group so a hook can ignore phases that are not its own.
@@ -330,7 +336,16 @@ class cTimingHandshakeAuthority {
   // cycle is a single phase (one phase per master step), so x1.
   std::chrono::nanoseconds phaseBudgetForGroup(uint32_t group) const;
   std::chrono::nanoseconds cycleBudgetForGroup(uint32_t group) const;
-  void workerLoop(int shard);
+  // Thread Handshake P3: one shard's due items for one publication, then its barrier
+  // arrival (the former workerLoop body). Runs as a pool job.
+  void serveShard(int shard, const PublishedPhase& snap);
+  // Shard job state shared with queued jobs: a job still queued after stop() sees
+  // dead=true and never touches the authority; stop() waits (bounded) for running==0.
+  struct ShardJobs {
+    std::atomic<bool> dead{false};
+    std::atomic<int> running{0};
+  };
+  static void runShardJob(cTimingHandshakeAuthority* self, const std::shared_ptr<ShardJobs>& st, int shard, uint64_t seq);
   // Executes one component. Exception boundary (P0a / review C3): a throw
   // from the WorkFn is caught here, recorded via recordFailure(), and
   // reported by returning false — it never escapes a worker thread
@@ -389,8 +404,8 @@ class cTimingHandshakeAuthority {
   mutable std::mutex statsM_;
   HsFreezeInfo lastFreeze_{};
 
-  std::vector<std::thread> workers_;
-  cThreadRecordSet workerRecords_;  // Thread Handshake P2: one record per shard worker (Class A)
+  cJobPool* pool_ = nullptr;          // P3: set by start(), cleared by a clean stop()
+  std::shared_ptr<ShardJobs> jobs_;   // P3: fresh per start(); queued jobs keep the old one
   std::deque<std::atomic<bool>> workerExited_;
   bool startedOnce_ = false;
   std::atomic<bool> running_{false};

@@ -66,6 +66,7 @@
 #include "litholattice/core/mpsc_queue.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/thread_debug.h"
+#include "litholattice/core/thread_census.h"  // Thread Handshake P3
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -103,9 +104,9 @@ inline constexpr bool kThreadDebug = false;
 #endif
 
 // ---- thread utilities -----------------------------------------------------------
-/// Platform-guarded thread naming and affinity. Linux: pthread_setname_np /
-/// pthread_setaffinity_np. Elsewhere: setName is a no-op, pinToCores returns false
-/// (and debug-logs the skip). Names are truncated to 15 chars (Linux limit).
+/// Platform-guarded thread naming. Linux: pthread_setname_np; elsewhere a no-op.
+/// Names are truncated to 15 chars (Linux limit). JD t3349u item 9 / Archie ruling 6:
+/// the engine never pins, so the affinity helpers are gone.
 struct ThreadUtil {
   static void setName(const char* name) {
 #if defined(__linux__)
@@ -118,42 +119,20 @@ struct ThreadUtil {
     LITHO_THREAD_LOG("thread", "named '%s'", name);
   }
 
-  /// Pin the calling thread to `mask` (bit c = core c, up to 64 cores).
-  /// Returns false on non-Linux platforms (no-op).
-  static bool pinToCores(uint64_t mask) {
-#if defined(__linux__)
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    for (unsigned c = 0; c < 64; ++c)
-      if (mask & (1ULL << c)) CPU_SET(c, &set);
-    const bool ok = pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
-    LITHO_THREAD_LOG("thread", "affinity mask=0x%llx %s", (unsigned long long)mask,
-                     ok ? "applied" : "FAILED");
-    return ok;
-#else
-    LITHO_THREAD_LOG("thread", "affinity mask=0x%llx ignored (not Linux)",
-                     (unsigned long long)mask);
-    (void)mask;
-    return false;
-#endif
-  }
-
   static unsigned coreCount() {
     const unsigned n = std::thread::hardware_concurrency();
     return n == 0 ? 1 : n;
   }
 };
 
-/// RAII named thread with optional affinity: names itself, pins itself, joins on
-/// destruction (never detached). Used for the input thread; available to audio and
-/// render for their dedicated threads.
+/// RAII named thread: names itself, joins on destruction (never detached). Never
+/// pinned (ruling 6; the affinity mask parameter was removed, JD t3349u item 9).
 class cNamedThread {
  public:
   template <typename Fn>
-  cNamedThread(const char* name, uint64_t affinityMask, Fn&& fn) {
-    thread_ = std::thread([n = std::string(name), affinityMask, f = std::forward<Fn>(fn)]() mutable {
+  cNamedThread(const char* name, Fn&& fn) {
+    thread_ = std::thread([n = std::string(name), f = std::forward<Fn>(fn)]() mutable {
       ThreadUtil::setName(n.c_str());
-      if (affinityMask != 0) ThreadUtil::pinToCores(affinityMask);
       f();
     });
   }
@@ -171,14 +150,11 @@ class cNamedThread {
 class cJobSystem {
  public:
   struct Config {
-    unsigned workerThreads = 0;  ///< 0 = one per core (at least 1, at most kMaxJobThreads)
-    unsigned ioThreads = 1;      ///< dedicated blocking-job threads (clamped to >= 1)
-    /// Affinity masks, bit c = core c. 0 = default policy:
-    /// on Linux with >= 4 cores, workers take cores 1..N-1 and I/O takes core 0,
-    /// keeping realtime-adjacent work (audio/input) off the sim workers' cores.
-    /// On smaller machines / non-Linux: no pinning (best effort, OS schedules).
-    uint64_t workerAffinityMask = 0;
-    uint64_t ioAffinityMask = 0;
+    /// 0 = the census pool ceiling, clamp(cores-2, 1, 64) (Thread Handshake P3, ruling 3:
+    /// shares cJobPool::shared()'s ceiling). Workers are recorded as Class B.
+    unsigned workerThreads = 0;
+    unsigned ioThreads = 1;      ///< dedicated blocking-job threads (clamped to >= 1), class System
+    // Affinity masks removed (JD t3349u item 9, ruling 6: never pin).
     const char* namePrefix = "litho";  ///< worker names: "<prefix>-w0" ... (<=15 chars total)
   };
 
@@ -271,16 +247,6 @@ class cJobSystem {
   /// True when called on a worker or I/O thread of any cJobSystem.
   static bool onJobThread() { return t_onJobThread; }
 
-  /// Affinity mask the engine's realtime-adjacent threads (audio callback helper,
-  /// input thread) should use: core 0 on Linux with >= 4 cores, else 0 (no pin).
-  /// Workers are pinned away from it by the default config policy.
-  static uint64_t realtimeAffinityMask() {
-#if defined(__linux__)
-    return ThreadUtil::coreCount() >= 4 ? 1ULL : 0ULL;
-#else
-    return 0ULL;
-#endif
-  }
 
  private:
   struct Worker {
@@ -328,17 +294,12 @@ class cJobSystem {
  private:
 
   void init(const Config& cfg) {
-    unsigned workers = cfg.workerThreads == 0 ? ThreadUtil::coreCount() : cfg.workerThreads;
+    unsigned workers = cfg.workerThreads == 0 ? cThreadCensus::instance().budget().pool : cfg.workerThreads;
     if (workers < 1) workers = 1;
     if (workers > kMaxJobThreads) workers = kMaxJobThreads;
     unsigned ios = cfg.ioThreads < 1 ? 1 : cfg.ioThreads;
     if (ios > kMaxJobThreads) ios = kMaxJobThreads;
 
-    const uint64_t workerMask = cfg.workerAffinityMask != 0
-                                    ? cfg.workerAffinityMask
-                                    : defaultWorkerMask(workers);
-    const uint64_t ioMask =
-        cfg.ioAffinityMask != 0 ? cfg.ioAffinityMask : defaultIoMask();
 
     workers_.reserve(workers);
     for (unsigned i = 0; i < workers; ++i) workers_.push_back(std::make_unique<Worker>());
@@ -349,12 +310,11 @@ class cJobSystem {
     workerThreads_.reserve(workers);
     for (unsigned i = 0; i < workers; ++i) {
       std::string name = std::string(cfg.namePrefix) + "-w" + std::to_string(i);
-      workerThreads_.emplace_back([this, i, name, workerMask] {
+      workerThreads_.emplace_back([this, i, name] {
         t_onJobThread = true;
         t_worker = WorkerTls{this, i};
         for (auto& d : workers_[i]->deques) d.bindOwner();
         ThreadUtil::setName(name.c_str());
-        if (workerMask != 0) ThreadUtil::pinToCores(workerMask);
         LITHO_THREAD_LOG("thread", "worker %u online (%u workers)", i, workerCount());
         workerLoop(i);
         LITHO_THREAD_LOG("thread", "worker %u offline", i);
@@ -363,40 +323,19 @@ class cJobSystem {
     ioThreads_.reserve(ios);
     for (unsigned i = 0; i < ios; ++i) {
       std::string name = std::string(cfg.namePrefix) + "-io" + std::to_string(i);
-      ioThreads_.emplace_back([this, i, name, ioMask] {
+      ioThreads_.emplace_back([this, i, name] {
         t_onJobThread = true;
         ThreadUtil::setName(name.c_str());
-        if (ioMask != 0) ThreadUtil::pinToCores(ioMask);
         LITHO_THREAD_LOG("thread", "io thread %u online", i);
         ioLoop(i);
         LITHO_THREAD_LOG("thread", "io thread %u offline", i);
       });
     }
+    for (unsigned i = 0; i < workers; ++i) records_.add(ThreadClass::Pooled, ThreadRole::PoolWorker, uint16_t(i), "jobsys-w");
+    for (unsigned i = 0; i < ios; ++i) records_.add(ThreadClass::System, ThreadRole::Storage, uint16_t(i), "jobsys-io");
     LITHO_THREAD_LOG("thread", "cJobSystem up: %u workers + %u io threads", workers, ios);
   }
 
-  static uint64_t defaultWorkerMask(unsigned workers) {
-    // Pin sim workers away from core 0 (reserved for realtime: audio/input/io)
-    // when there are enough cores for it to matter.
-#if defined(__linux__)
-    const unsigned cores = ThreadUtil::coreCount();
-    if (cores >= 4) {
-      uint64_t mask = 0;
-      for (unsigned c = 1; c < cores && c <= workers + 1; ++c) mask |= 1ULL << c;
-      if (mask == 0) mask = ~1ULL;  // paranoia: never an empty mask
-      return mask;
-    }
-#endif
-    (void)workers;
-    return 0ULL;  // no pinning: best effort, the OS schedules
-  }
-
-  static uint64_t defaultIoMask() {
-#if defined(__linux__)
-    if (ThreadUtil::coreCount() >= 4) return 1ULL;  // core 0, with the realtime threads
-#endif
-    return 0ULL;
-  }
 
   void shutdown() {
     LITHO_THREAD_LOG("thread", "shutdown: draining %d worker + %d io jobs in flight",
@@ -415,6 +354,7 @@ class cJobSystem {
     ioCv_.notify_all();
     for (auto& t : workerThreads_) t.join();
     for (auto& t : ioThreads_) t.join();
+    records_.retireAll();  // P3: joined -> RETURNED
     LITHO_THREAD_LOG("thread", "shutdown: all threads joined, failed=%llu",
                      (unsigned long long)failed_.load(std::memory_order_relaxed));
   }
@@ -582,6 +522,7 @@ class cJobSystem {
   std::vector<unsigned> rngState_;  // per-worker steal PRNG state (worker-local use)
   std::vector<std::thread> workerThreads_;
   std::vector<std::thread> ioThreads_;
+  cThreadRecordSet records_;  // Thread Handshake P3: workers Class B, io threads System
 
   // Shared per-priority overflow for full-deque spills (cold path): O(1) push/pop,
   // priority order preserved. Guarded by overflowM_ (L1 leaf).

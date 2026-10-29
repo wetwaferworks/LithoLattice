@@ -624,9 +624,16 @@ int runAudioSelfTest() {
     std::vector<float> left;
     left.reserve(kTotal);
     size_t validTotal = 0;
-    for (int i = 0; i < 1000 && !streamer.finished(); ++i) {
+    // Thread Handshake P3: a wall-clock budget, not 1000 back-to-back renders. When the
+    // worker had filled the queue and gone into its 1 ms poll sleep (~15.6 ms at the default
+    // Windows timer resolution), 1000 empty renders finished in microseconds and the check
+    // failed although nothing was lost (any delay inside play(), e.g. the census boot log,
+    // triggered it). Empty renders now yield; 5 s is far above the ~ms the stream needs.
+    const auto streamDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!streamer.finished() && std::chrono::steady_clock::now() < streamDeadline) {
       std::vector<float> chunk(8192 * 2, 0.f);
       const size_t valid = streamer.render(chunk.data(), 8192);  // the "audio thread"
+      if (valid == 0) std::this_thread::yield();
       validTotal += valid;
       for (size_t f = 0; f < valid && left.size() < kTotal; ++f) left.push_back(chunk[f * 2]);
     }

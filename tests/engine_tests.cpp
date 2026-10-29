@@ -125,6 +125,7 @@
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1] Packed12 round trip
 #include "litholattice/core/seqlock.h"  // P0.5 review fix 1 (Cryosis (sirlinhart))
 #include "litholattice/core/thread_census.h"  // Thread Handshake P1
+#include "litholattice/mcp/http_server.h"       // Thread Handshake P3: MCP thread hook (item 1)
 
 using namespace litholattice;
 
@@ -533,27 +534,14 @@ void testJobSystem() {
     }
     check(ok, "jobsystem: 20x shutdown with in-flight work drains and joins cleanly");
   }
-#if defined(__linux__)
-  {
-    cJobSystem::Config cfg; cfg.workerThreads = 2; cfg.workerAffinityMask = 0x1;  // core 0 only
-    cJobSystem js(cfg);
-    std::atomic<int> ran{0}, pinned{0};
-    for (int i = 0; i < 8; ++i) js.submit([&] {
-      ++ran;
-      cpu_set_t s; CPU_ZERO(&s);
-      if (pthread_getaffinity_np(pthread_self(), sizeof(s), &s) == 0 && CPU_ISSET(0, &s)) ++pinned;
-    });
-    js.waitIdle();
-    check(ran == 8 && pinned == 8, "jobsystem: Linux affinity mask applied to worker threads");
-  }
-  {
-    cJobSystem js;  // default policy: no pinning on this 2-core VM, must run clean
+  {  // JD t3349u item 9: affinity removed (ruling 6, never pin); default size = census pool ceiling
+    cJobSystem js;
     std::atomic<int> n{0};
     for (int i = 0; i < 100; ++i) js.submit([&] { ++n; });
     js.waitIdle();
-    check(n == 100, "jobsystem: default affinity policy runs clean (no pinning on small machines)");
+    check(n == 100 && js.workerCount() == cThreadCensus::instance().budget().pool,
+          "jobsystem: default config takes the census pool ceiling clamp(cores-2, 1, 64), unpinned");
   }
-#endif
 }
 
 void testTickArena() {
@@ -8474,9 +8462,27 @@ void testThreadCensusRulings() {
   check(resolveRenderBands(0, 12, false) == 11 && resolveRenderBands(0, 2, false) == 2 && resolveRenderBands(0, 64, false) == 16,
         "census bands: auto = clamp(cores-1, 2, 16)");
   check(resolveRenderBands(0, 12, true) == 4 && resolveRenderBands(0, 2, true) == 2, "census bands: WASM auto capped at 4");
-  check(resolveRenderBands(3, 8, false) == 2 && resolveRenderBands(100, 16, false) == 16 && resolveRenderBands(8, 4, false) == 4 &&
-            resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 8,
-        "census bands: explicit request -> power of two <= min(req, 64, cores)");
+  check(resolveRenderBands(3, 8, false) == 3 && resolveRenderBands(100, 16, false) == 64 && resolveRenderBands(8, 4, false) == 8 &&
+            resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 16,
+        "census bands: an explicit request is honoured as given, capped only at 64 (JD t3349u item 7)");
+  {
+    const std::string w = oversubscriptionWarning(computeThreadBudget(8));
+    ThreadBudget fits; fits.hw = 64;
+    check(!w.empty() && w.find("main 1") != std::string::npos && w.find("render bands 6") != std::string::npos &&
+              w.find("pool: 6 workers") != std::string::npos && oversubscriptionWarning(fits).empty(),
+          "census: oversubscription warning carries the per-class breakdown, silent when it fits (item 8)");
+  }
+  {
+    const uint64_t prev = cThreadCensus::lastCommittedTick();
+    cThreadCensus::noteCommittedTick(4242);
+    cThreadRecordSet rs;
+    rs.add(ThreadClass::System, ThreadRole::Other, 0, "tick-test");
+    const uint32_t id = uint32_t(cThreadCensus::instance().size() - 1);
+    rs.retireAll();
+    check(cThreadCensus::instance().record(id).returnTick == 4242,
+          "census: a shutdown record carries the last committed tick, not 0 (item 4)");
+    cThreadCensus::noteCommittedTick(prev);
+  }
   const unsigned want = std::min(cThreadCensus::instance().budget().hw, 16u);
   check(cSoftwareRenderer::renderThreads() == cThreadCensus::instance().renderBands(0) || want == 0,
         "census bands: the renderer asks the census (no local clamp)");
@@ -8493,18 +8499,37 @@ void testThreadLifecycle() {
     for (int i = 0; i < 200 && n != want; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); n = osThreadCount(); }
     return n;
   };
+  cJobPool& pool = cJobPool::shared();  // P3: the backing pool is up before the baseline (boot)
   const size_t live0 = c.live();
   const size_t os0 = osThreadCount();
   {
     cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
+    std::atomic<int> ran{0};
+    HsComponentDesc d; d.name = "p3.shard";
+    auth.registerComponent(d, [&](uint64_t, uint64_t) { ran.fetch_add(1); });
+    bool noSpawn = true, phasesOk = true;
     for (int cycle = 0; cycle < 3; ++cycle) {
       check(auth.start(), "lifecycle: handshake start");
-      const size_t shards = size_t(cThreadCensus::instance().budget().simShards);
-      check(c.live() == live0 + shards && c.live(ThreadClass::Pooled) >= shards,
-            "lifecycle: one record per shard worker while running (recorded as pool work, ruling 2)");
-      check(auth.stop(), "lifecycle: handshake stop joins every worker");
-      check(c.live() == live0, "lifecycle: every shard record RETURNED after stop");
+      for (uint64_t p = 0; p < 8; ++p) phasesOk = auth.runPhase(p, p, 0) && phasesOk;
+      noSpawn = noSpawn && (os0 == 0 || osThreadCount() == os0);
+      check(c.live() == live0, "lifecycle: shards are pool jobs, no per-shard thread record (P3, ruling 2)");
+      check(auth.stop(), "lifecycle: handshake stop drains every shard job");
     }
+    check(phasesOk && ran.load() == 24, "lifecycle: each phase's shard job ran exactly once on the shared pool");
+    check(noSpawn, "lifecycle: no OS thread created after boot while the handshake runs (P3 gate)");
+    check(c.live(ThreadClass::Pooled) >= pool.size() && pool.size() == cThreadCensus::instance().budget().pool,
+          "lifecycle: the shared pool is clamp(cores-2, 1, 64) workers, recorded as Class B");
+  }
+  {  // JD t3349u item 1: the MCP accept thread reports through a dependency-free hook
+    static std::atomic<int> up{0}, down{0};
+    mcp::cMcpHttpServer::setThreadHook([](bool started) { (started ? up : down).fetch_add(1); });
+    {
+      mcp::cMcpHttpServer s(mcp::McpBackends{}, "hook-test");
+      if (s.start(0)) s.stop();
+      else up = down = 1;  // no loopback socket here: the hook wiring is still compiled and linked
+    }
+    mcp::cMcpHttpServer::setThreadHook(nullptr);
+    check(up == 1 && down == 1, "mcp: thread hook fires once on start and once after the join");
   }
   {
     ChunkMap w = worldWithColumns(2, &fixtureBlocks());

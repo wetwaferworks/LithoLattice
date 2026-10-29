@@ -26,6 +26,7 @@
 
 namespace litholattice::mcp {
 namespace {
+std::atomic<cMcpHttpServer::ThreadHook> g_threadHook{nullptr};  // JD t3349u item 1
 
 std::string hexEncode(const std::uint8_t* data, std::size_t n) {
   static constexpr char kDigits[] = "0123456789abcdef";
@@ -234,15 +235,21 @@ bool cMcpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
   }
   running_.store(true);
   thread_ = std::thread(&cMcpHttpServer::acceptLoop, this);
+  if (auto h = g_threadHook.load()) h(true);
   return true;
 }
+
+void cMcpHttpServer::setThreadHook(ThreadHook hook) { g_threadHook.store(hook); }
 
 void cMcpHttpServer::stop() {
   bool was = running_.exchange(false);
   // Closing the listener wakes the poll (best effort); the 50 ms poll tick
   // in accept() guarantees the thread notices stop() promptly regardless.
   listener_.close();
-  if (was && thread_.joinable()) thread_.join();
+  if (was && thread_.joinable()) {
+    thread_.join();
+    if (auto h = g_threadHook.load()) h(false);
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   sessions_.clear();
 }
