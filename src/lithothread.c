@@ -772,13 +772,16 @@ static int lt__mutex_flavor(pthread_mutex_t* m) {
 
 /* Recursive relock counting. Only the owning thread ever
  * touches count (it holds the word), so a plain load / store
- * suffices; the increment saturates at UINT32_MAX instead of
- * wrapping to 0, which the unlock path would misread as the
- * final release and free the word under its owner (audit fix
- * pass 2, C-F5). */
-static void lt__count_inc(pthread_mutex_t* m) {
+ * suffices. At UINT32_MAX the relock is refused with EAGAIN
+ * (POSIX: recursive lock count exceeded) instead of wrapping to 0,
+ * which the unlock path would misread as the final release (audit
+ * fix pass 2, C-F5), and instead of silently saturating, which
+ * left one unlock unbalanced (review L4). */
+static int lt__count_inc(pthread_mutex_t* m) {
   uint32_t c = lt_at_load32(&m->count);
-  if (c != UINT32_MAX) lt_at_store32(&m->count, c + 1u);
+  if (c == UINT32_MAX) return EAGAIN;
+  lt_at_store32(&m->count, c + 1u);
+  return 0;
 }
 
 static int lt__mutex_lock_common(pthread_mutex_t* m,
@@ -794,10 +797,7 @@ static int lt__mutex_lock_common(pthread_mutex_t* m,
     self = (uint32_t)lw_current_tid();
     if (lt_at_load32(&m->state) != 0u &&
         lt_at_load32(&m->owner) == self) {
-      if (flavor == PTHREAD_MUTEX_RECURSIVE) {
-        lt__count_inc(m);
-        return 0;
-      }
+      if (flavor == PTHREAD_MUTEX_RECURSIVE) return lt__count_inc(m);
       if (abstime == NULL) return EDEADLK;
       /* A timed lock on a mutex the caller already holds: the
        * deadline can never rescue a self-deadlock, and POSIX
@@ -837,10 +837,7 @@ int pthread_mutex_trylock(pthread_mutex_t* m) {
     self = (uint32_t)lw_current_tid();
     if (lt_at_load32(&m->state) != 0u &&
         lt_at_load32(&m->owner) == self) {
-      if (flavor == PTHREAD_MUTEX_RECURSIVE) {
-        lt__count_inc(m);
-        return 0;
-      }
+      if (flavor == PTHREAD_MUTEX_RECURSIVE) return lt__count_inc(m);
       return EBUSY; /* trylock never deadlocks, even errorcheck */
     }
   }

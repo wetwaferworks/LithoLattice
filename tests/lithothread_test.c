@@ -1575,7 +1575,8 @@ static int case_audit_mutex_count_sat(void) {
   CHECK(lt_pthread_mutexattr_destroy(&at) == 0);
   CHECK(lt_pthread_mutex_lock(&g_sat_mu) == 0); /* count 1 */
   g_sat_mu.count = UINT32_MAX;                  /* boundary, white-box */
-  CHECK(lt_pthread_mutex_lock(&g_sat_mu) == 0); /* saturating relock */
+  CHECK(lt_pthread_mutex_lock(&g_sat_mu) == EAGAIN);    /* L4 */
+  CHECK(lt_pthread_mutex_trylock(&g_sat_mu) == EAGAIN); /* L4 */
   CHECK(g_sat_mu.count == UINT32_MAX);          /* not wrapped to 0 */
   g_sat_try = -1;
   CHECK(lt_pthread_create(&th, NULL, f5_trylock_entry, NULL) == 0);
