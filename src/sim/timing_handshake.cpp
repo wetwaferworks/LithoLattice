@@ -66,8 +66,8 @@ cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg) : cfg_(std::mov
   if (cfg_.workerThreads > 0) {
     workerCount_ = cfg_.workerThreads;
   } else {
-    const unsigned hw = std::thread::hardware_concurrency();
-    workerCount_ = int(std::min(4u, hw > 1 ? hw - 1 : 1u));
+    // Thread Handshake P2: the count comes from the boot census (same rule: min(4, hw-1)).
+    workerCount_ = int(cThreadCensus::instance().budget().simShards);
     if (workerCount_ < 1) workerCount_ = 1;
   }
   shards_.assign(size_t(workerCount_), {});
@@ -354,9 +354,12 @@ bool cTimingHandshakeAuthority::start() {
   }
   for (auto& e : workerExited_) e.store(false);
   workers_.clear();
+  workerRecords_.retireAll();
   logInfo("threads: timing handshake starting %d pull workers", workerCount_);  // Q5b census naming (2026-10-28)
-  for (int s = 0; s < workerCount_; ++s)
+  for (int s = 0; s < workerCount_; ++s) {
     workers_.emplace_back([this, s] { raiseCurrentThreadForSim(); workerLoop(s); });  // 0.0.1.57 F57-1 (R21)
+    workerRecords_.add(ThreadClass::Pooled, ThreadRole::SimShard, uint16_t(s), "th-shard");  // ruling 2: pool work; own thread until P3
+  }
   return true;
 }
 
@@ -381,6 +384,7 @@ bool cTimingHandshakeAuthority::stop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (workerExited_[i].load(std::memory_order_acquire)) {
       workers_[i].join();
+      workerRecords_.retire(i);  // P2: joined -> RETURNED
     } else {
       // Fail loudly and poison (see the header for the full protocol):
       // the thread object stays joinable in workers_, the worker keeps
@@ -394,6 +398,7 @@ bool cTimingHandshakeAuthority::stop() {
   }
   if (allJoined) {
     workers_.clear();
+    workerRecords_.retireAll();
     workersOutstanding_.store(false, std::memory_order_release);
     running_.store(false);
     return true;

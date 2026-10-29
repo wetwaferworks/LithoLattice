@@ -8377,8 +8377,8 @@ void testThreadCensus() {
   std::printf("core: thread census (Thread Handshake P1, record-only)\n");
   struct Want { unsigned hw, shards, bands, pool, cap; bool small; };
   const Want wants[] = {
-      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 3, 2, 1, true},
-      {8, 4, 7, 7, 7, false},  {16, 4, 15, 15, 15, false}, {32, 4, 16, 31, 31, false},
+      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 3, 2, 2, true},  // ruling 3/4: clamp(cores-2, 1, 64)
+      {8, 4, 7, 6, 6, false},  {16, 4, 15, 14, 14, false}, {32, 4, 16, 30, 30, false},
   };
   bool mathOk = true;
   for (const Want& w : wants) {
@@ -8451,6 +8451,74 @@ void testThreadCensus() {
     return x.hash();
   };
   check(build() == build(), "thread record: identical histories hash identically");
+}
+
+// Thread Handshake P2: Archie's rulings (t3340u) in the census: cores precedence, pool size,
+// the single render-band resolver.
+void testThreadCensusRulings() {
+  std::printf("core: thread census rulings (Thread Handshake P2)\n");
+  check(resolveCores(0, nullptr, 12).cores == 12 && resolveCores(0, nullptr, 12).source == CoresSource::Hardware,
+        "census cores: hardware when no override");
+  check(resolveCores(0, "6", 12).cores == 6 && resolveCores(0, "6", 12).source == CoresSource::Env,
+        "census cores: LITHO_CORES beats hardware");
+  check(resolveCores(3, "6", 12).cores == 3 && resolveCores(3, "6", 12).source == CoresSource::Cli,
+        "census cores: CLI beats LITHO_CORES");
+  check(resolveCores(0, "0", 12).cores == 12 && resolveCores(0, "x4", 12).cores == 12 && resolveCores(0, "", 0).cores == 1,
+        "census cores: invalid / zero env ignored, unknown hardware -> 1");
+  bool poolOk = true;
+  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 16u, 32u, 64u, 128u})
+    poolOk = poolOk && computeThreadBudget(hw).pool == std::clamp(hw > 2 ? hw - 2 : 1u, 1u, kMaxPoolWorkers);
+  check(poolOk && computeThreadBudget(4).pool == 2 && computeThreadBudget(2).pool == 1 && computeThreadBudget(1).pool == 1 &&
+            computeThreadBudget(128).pool == kMaxPoolWorkers,
+        "census pool: clamp(cores-2, 1, MAX_POOL_WORKERS); 4 cores -> 2, 1-2 cores -> 1");
+  check(resolveRenderBands(0, 12, false) == 11 && resolveRenderBands(0, 2, false) == 2 && resolveRenderBands(0, 64, false) == 16,
+        "census bands: auto = clamp(cores-1, 2, 16)");
+  check(resolveRenderBands(0, 12, true) == 4 && resolveRenderBands(0, 2, true) == 2, "census bands: WASM auto capped at 4");
+  check(resolveRenderBands(3, 8, false) == 2 && resolveRenderBands(100, 16, false) == 16 && resolveRenderBands(8, 4, false) == 4 &&
+            resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 8,
+        "census bands: explicit request -> power of two <= min(req, 64, cores)");
+  const unsigned want = std::min(cThreadCensus::instance().budget().hw, 16u);
+  check(cSoftwareRenderer::renderThreads() == cThreadCensus::instance().renderBands(0) || want == 0,
+        "census bands: the renderer asks the census (no local clamp)");
+  check(!cThreadCensus::setCliCores(3), "census cores: a CLI override after boot is refused");
+}
+
+// Thread Handshake P2: Class A / system lifecycle. Every record is returned at shutdown and
+// the OS thread count before equals after.
+void testThreadLifecycle() {
+  std::printf("sim: thread lifecycle (Thread Handshake P2)\n");
+  cThreadCensus& c = cThreadCensus::instance();
+  auto settle = [](size_t want) {  // joined threads can linger in the OS list for a moment
+    size_t n = osThreadCount();
+    for (int i = 0; i < 200 && n != want; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); n = osThreadCount(); }
+    return n;
+  };
+  const size_t live0 = c.live();
+  const size_t os0 = osThreadCount();
+  {
+    cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
+    for (int cycle = 0; cycle < 3; ++cycle) {
+      check(auth.start(), "lifecycle: handshake start");
+      const size_t shards = size_t(cThreadCensus::instance().budget().simShards);
+      check(c.live() == live0 + shards && c.live(ThreadClass::Pooled) >= shards,
+            "lifecycle: one record per shard worker while running (recorded as pool work, ruling 2)");
+      check(auth.stop(), "lifecycle: handshake stop joins every worker");
+      check(c.live() == live0, "lifecycle: every shard record RETURNED after stop");
+    }
+  }
+  {
+    ChunkMap w = worldWithColumns(2, &fixtureBlocks());
+    SimConfig cfg; cfg.tickRate = 64; cfg.radiusChunks = 2;
+    cSimThread st(w, fixtureBlocks(), std::make_unique<ChangingSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+    st.start();
+    st.waitLoops(2);
+    check(c.live(ThreadClass::Dedicated) >= 1, "lifecycle: the sim clock holds a dedicated record while running");
+    st.stop();
+  }
+  check(c.live() == live0, "lifecycle: sim clock record RETURNED with reason engine power-down");
+  const size_t os1 = settle(os0);
+  std::printf("  OS threads before %zu, after %zu\n", os0, os1);
+  check(os0 == 0 || os1 == os0, "lifecycle: OS thread count before == after (no leaked threads)");
 }
 
 void testSeqLockStress() {
@@ -8558,10 +8626,10 @@ void testJobInjectionStress() {
 
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
-  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();

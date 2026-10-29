@@ -27,17 +27,41 @@
 
 namespace litholattice {
 
-enum class ThreadClass : uint8_t { Dedicated = 0 /*A*/, Pooled = 1 /*B*/ };
+enum class ThreadClass : uint8_t {
+  Dedicated = 0 /*A*/, Pooled = 1 /*B*/,
+  System = 2,  ///< P2 default (Archie Q3 open): background I/O roles, recorded but outside the budget
+};
 
 enum class ThreadRole : uint8_t {
   Main = 0, SimClock, SimShard, RenderBand, PoolWorker,
-  Audio, Input, Storage, Mcp, Web, Other,  // "rogue" threads: declared, class TBD (Archie Q3)
+  Audio, Input, Storage, Mcp, Web, Other,  // background I/O: class System (P2 default, Archie Q3)
+  RenderExecutor,  // detached-mode software renderer executor (P2)
 };
 
 /// Lifecycle. Dedicated: DEDICATED -> RETURNED. Pooled: POOLED -> CLAIMED -> RECLAIMED -> POOLED ...
 enum class ThreadState : uint8_t { Dedicated = 0, Pooled, Claimed, Reclaimed, Returned };
 
 enum class ThreadReturnReason : uint8_t { None = 0, EnginePowerDown, Reclaimed };
+
+constexpr unsigned kMaxPoolWorkers = 64;
+constexpr unsigned kMaxRenderBands = 64;  ///< explicit --render-threads ceiling (was kSwMaxRenderThreads)
+
+/// Ruling 5 (t3340u): precedence CLI > LITHO_CORES env > hardware.
+enum class CoresSource : uint8_t { Hardware = 0, Env, Cli };
+struct CoresResolution { unsigned cores = 1; CoresSource source = CoresSource::Hardware; };
+/// Pure: cli 0 = not given; env nullptr/empty/invalid/0 = not given; hw 0 = unknown (-> 1).
+CoresResolution resolveCores(unsigned cli, const char* env, unsigned hw);
+
+/// Ruling 5: the single software-renderer band resolver (renderer and rasterizer stop
+/// clamping locally). req 0 = auto: clamp(cores-1, 2, 16), and 4 on WASM. An explicit
+/// req rounds down to a power of two <= min(req, kMaxRenderBands, cores), floor 1.
+unsigned autoRenderBands(unsigned cores, bool wasm);
+unsigned resolveRenderBands(unsigned req, unsigned cores, bool wasm);
+#ifdef __wasm__
+constexpr bool kCensusWasm = true;
+#else
+constexpr bool kCensusWasm = false;
+#endif
 
 /// Pure budget for a given logical core count. computeThreadBudget is the single rule.
 struct ThreadBudget {
@@ -50,16 +74,18 @@ struct ThreadBudget {
   unsigned simShards = 1;      ///< Timing Handshake shard workers: min(4, hw-1), floor 1
   unsigned renderBands = 2;    ///< software renderer bands incl. caller: clamp(hw-1, 2, 16)
   unsigned renderSpawned = 1;  ///< bands spawned as threads (caller runs one band)
-  // Class B
-  unsigned pool = 1;           ///< pooled background workers
+  // Class B (Archie ruling 3/4, t3340u): pool = clamp(cores-2, 1, kMaxPoolWorkers);
+  // 4 cores -> 2 workers, 1-2 cores -> 1 (never 0). System threads never deduct from it.
+  unsigned pool = 1;           ///< pooled workers (single physical backing: cJobPool, P3)
   unsigned activeCap = 1;      ///< adaptive cap seed: max pooled workers active at once
+  CoresSource source = CoresSource::Hardware;  ///< where hw came from (ruling 5)
   /// Cores the always-running dedicated threads hold (main + sim clock).
   unsigned dedicatedCores() const { return mainThreads + simClock; }
   /// Every OS thread the engine would own at boot (main excluded: it already exists).
   unsigned spawnedTotal() const { return simClock + simShards + renderSpawned + pool; }
 };
 
-ThreadBudget computeThreadBudget(unsigned hwRaw);
+ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm = kCensusWasm);
 
 /// Hashed part of a thread record: tick stamps and enums only (no wall clock, no OS ids).
 struct ThreadRecord {
@@ -85,13 +111,23 @@ struct ThreadTelemetry {
 /// FNV-1a over the hashed fields of one record (fixed field order, endian-independent).
 uint64_t threadRecordHash(const ThreadRecord& r);
 
+/// Threads in this process per the OS (0 if unsupported). Used by the P2 leak test.
+size_t osThreadCount();
+
 /// Process-wide census. budget() is fixed after the first call. Records are append-only.
 class cThreadCensus {
  public:
   static cThreadCensus& instance();
 
-  /// Census for an explicit core count (tests). instance() uses hardware_concurrency().
-  explicit cThreadCensus(unsigned hwRaw);
+  /// Census for an explicit core count (tests). instance() resolves CLI > LITHO_CORES > hardware.
+  explicit cThreadCensus(unsigned hwRaw, CoresSource source = CoresSource::Hardware);
+
+  /// CLI core override (ruling 5). Must be called before the first instance(); returns
+  /// false (and changes nothing) once the census has booted.
+  static bool setCliCores(unsigned cores);
+
+  /// Band count for a renderer request against this census (ruling 5).
+  unsigned renderBands(unsigned req) const { return resolveRenderBands(req, budget_.hw, kCensusWasm); }
 
   const ThreadBudget& budget() const { return budget_; }
 
@@ -106,6 +142,11 @@ class cThreadCensus {
 
   /// Power-down: every record becomes RETURNED with reason EnginePowerDown at tick.
   void returnAll(uint64_t tick);
+  /// P2: one thread joined by its owner -> RETURNED, reason EnginePowerDown. Idempotent.
+  void retire(uint32_t id, uint64_t tick);
+  /// P2: records not yet RETURNED (all classes, or one class).
+  size_t live() const;
+  size_t live(ThreadClass cls) const;
 
   size_t size() const;
   ThreadRecord record(uint32_t id) const;
@@ -129,6 +170,25 @@ class cThreadCensus {
   ThreadBudget budget_;
   mutable std::mutex m_;  ///< guards slots_ growth and telemetry; hot path is the atomic word
   std::vector<std::unique_ptr<Slot>> slots_;
+};
+
+/// P2: the records one owner holds for the threads it spawned. add() after the spawn,
+/// retire(i) / retireAll() after the join. The destructor retires anything left, so a
+/// record never outlives its owner. Uses cThreadCensus::instance().
+class cThreadRecordSet {
+ public:
+  cThreadRecordSet() = default;
+  cThreadRecordSet(const cThreadRecordSet&) = delete;
+  cThreadRecordSet& operator=(const cThreadRecordSet&) = delete;
+  ~cThreadRecordSet() { retireAll(); }
+  void add(ThreadClass cls, ThreadRole role, uint16_t roleIndex, const char* name);
+  void retire(size_t i, uint64_t tick = 0);
+  void retireAll(uint64_t tick = 0);
+  size_t size() const { return ids_.size(); }
+
+ private:
+  std::vector<uint32_t> ids_;
+  std::vector<uint8_t> retired_;
 };
 
 }  // namespace litholattice

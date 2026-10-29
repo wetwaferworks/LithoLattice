@@ -261,12 +261,14 @@ void cSimThread::start() {
   }
   logInfo("threads: sim thread starting");  // Q5b census naming (2026-10-28)
   thread_ = std::thread([this] { raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
+  threadRecord_.add(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
 }
 
 bool cSimThread::stop() {
   const bool wasRunning = running_.exchange(false);
   if (wasRunning) notifyWake();  // A-M7: a parked paused loop must wake to see the stop
   if (wasRunning && thread_.joinable()) thread_.join();
+  if (!thread_.joinable()) threadRecord_.retireAll();  // P2: joined -> RETURNED
   if (handshake_) return handshake_->stop();  // no-detach bounded join (P0a/C2); false = worker outstanding, poisoned
   return true;
 }

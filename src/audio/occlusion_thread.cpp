@@ -25,11 +25,13 @@ void cOcclusionThread::start(OcclusionRate rate) {
   if (rate == OcclusionRate::Inline) return;  // no thread needed in inline mode
   running_.store(true);
   thread_ = std::thread(&cOcclusionThread::threadMain, this);
+  sysRecord_.add(ThreadClass::System, ThreadRole::Audio, 0, "audio-occlusion");
 }
 
 void cOcclusionThread::stop() {
   running_.store(false);
   if (thread_.joinable()) thread_.join();
+  sysRecord_.retireAll();  // P2: joined -> RETURNED
 }
 
 size_t cOcclusionThread::addQuery(float lx, float ly, float lz,

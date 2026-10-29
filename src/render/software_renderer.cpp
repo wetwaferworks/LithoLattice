@@ -6,6 +6,7 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/threading.h"
 #include "litholattice/core/f3_trace.h"
 #include <array>
@@ -304,6 +305,8 @@ constexpr unsigned kSwMaxRenderThreads = 64;
 // and main threads), clamped to 2..16. i5-12450H (12 logical) gives 8.
 // An explicit request (CLI / settings renderThreads != 0) still overrides.
 unsigned swAutoRenderThreads(unsigned logical) {
+  return autoRenderBands(logical, kCensusWasm);  // Archie ruling 5: the census owns the rule
+#if 0  // pre-ruling local clamp, kept for reference
   // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
   const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
@@ -318,14 +321,11 @@ unsigned swAutoRenderThreads(unsigned logical) {
 #else
   return n;
 #endif
+#endif  // pre-ruling local clamp
 }
 unsigned swResolveThreads(unsigned req) {
-  const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-  if (!req) return swAutoRenderThreads(hw);  // auto: not limited by the hw clamp below (2-core floor is 2 by ruling)
-  const unsigned want = std::min(req, kSwMaxRenderThreads);
-  unsigned b = 1;
-  while (b * 2 <= want && b * 2 <= hw) b *= 2;
-  return b;
+  // Archie ruling 5 (t3340u): rounding, the auto rule and the WASM cap live in the census.
+  return cThreadCensus::instance().renderBands(req);
 }
 class cSwBandPool {
  public:
@@ -447,6 +447,7 @@ class cSwBandPool {
     cv_.notify_all();
     for (auto& t : threads_) if (t.joinable()) t.join();
     threads_.clear();
+    records_.retireAll();  // Thread Handshake P2: joined -> RETURNED
     std::lock_guard<std::mutex> l(m_);
     stop_ = false;
   }
@@ -460,8 +461,14 @@ class cSwBandPool {
     }
     uint64_t g;
     { std::lock_guard<std::mutex> l(m_); g = gen_; }
-    if (detachedMode_) threads_.emplace_back([this] { executorLoop(); });
-    for (unsigned i = 1; i < bands_; ++i) threads_.emplace_back([this, i, g] { loop(i, g); });
+    if (detachedMode_) {
+      threads_.emplace_back([this] { executorLoop(); });
+      records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
+    }
+    for (unsigned i = 1; i < bands_; ++i) {
+      threads_.emplace_back([this, i, g] { loop(i, g); });
+      records_.add(ThreadClass::Dedicated, ThreadRole::RenderBand, uint16_t(i), "sw-band");
+    }
   }
   // Design B Stage 1: the executor worker. Waits for a published detached
   // body and runs it AS THE FRAME'S CALLER: the executor takes band 0's
@@ -515,6 +522,7 @@ class cSwBandPool {
   }
   unsigned bands_ = 1;
   std::vector<std::thread> threads_;
+  cThreadRecordSet records_;  // Thread Handshake P2: band workers + executor (Class A)
   std::mutex m_, runM_;
   std::condition_variable cv_, done_;
   const std::function<void(unsigned)>* fn_ = nullptr;

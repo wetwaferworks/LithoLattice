@@ -3,6 +3,7 @@
 // codec, CRC-checked chunk records, versioned payloads with migration chains that a game registers
 // (SDK style), and an async store that loads / saves off the calling thread.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include <atomic>
 #include <cassert>
 #include <condition_variable>
@@ -200,6 +201,7 @@ class cWorldStore {
   std::deque<std::function<void()>> jobs_;
   bool stop_ = false, busy_ = false, pumping_ = false;
   std::thread thread_;
+  cThreadRecordSet sysRecord_;  // Thread Handshake P2: system class (outside the budget)
   cJobSystem* jobsys_ = nullptr;  // not owned
   size_t quarantined_ = 0;
   // Flush-job outcome (SV-H1): written by the I/O job, read after the queue

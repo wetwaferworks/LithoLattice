@@ -15,6 +15,7 @@
 // bystander therefore cannot be flagged for another component's work, for
 // barrier wait, or for authority-thread preemption.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -389,6 +390,7 @@ class cTimingHandshakeAuthority {
   HsFreezeInfo lastFreeze_{};
 
   std::vector<std::thread> workers_;
+  cThreadRecordSet workerRecords_;  // Thread Handshake P2: one record per shard worker (Class A)
   std::deque<std::atomic<bool>> workerExited_;
   bool startedOnce_ = false;
   std::atomic<bool> running_{false};

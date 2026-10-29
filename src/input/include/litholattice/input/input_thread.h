@@ -44,6 +44,7 @@
 // to a lock, only to a genuinely full queue.
 // ======================================================================
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 
 #include <atomic>
 #include <chrono>
@@ -106,6 +107,7 @@ class cInputPump {
   std::vector<InputEvent> staging_;             // backend's per-poll output (input thread only)
   std::atomic<bool> running_{false};
   std::thread inputThread_;
+  cThreadRecordSet sysRecord_;  // Thread Handshake P2: system class (outside the budget)
   std::atomic<uint64_t> dropped_{0};
 };
 

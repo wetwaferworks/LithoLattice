@@ -5,6 +5,7 @@
 // the game's IWorldSim, and remesh snapshots. No GL, no render types: remeshing is
 // requested through the SubmitMesh callback with an immutable MeshInput.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/lock_timing.h"
 #include "litholattice/core/threeway.h"  // LL_THREEWAY (Proposed by JD; co-implemented by JD and Cortana)
 #include <chrono>
@@ -410,6 +411,7 @@ class cSimThread {
   std::atomic<uint32_t> domainToggles_{0};
   std::atomic<bool> remeshAll_{false};
   std::thread thread_;
+  cThreadRecordSet threadRecord_;  // Thread Handshake P2: the sim clock (Class A)
   TripleBuffer<SimStats> stats_;
   std::atomic<std::thread::id> statsReader_{};  // Cortana 2026-10-15 1658: F-2 (checked in Debug only)
   float rayEye_[3] = {0.f, -1e9f, 0.f};  ///< 2026-10-25: eye of the last cast ray (placement overlap check)
