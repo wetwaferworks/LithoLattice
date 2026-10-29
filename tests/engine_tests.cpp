@@ -8265,7 +8265,7 @@ void testNetEncryption() {
   }
 }
 
-// --- Litho Strike integration (2026-10-29): counter hash ---
+// --- Litho Strike integration (2026-10-29): counter hash, marchRay ---
 void testCounterHash() {
   std::printf("core: counter hash (shared with the random-tick mixer)\n");
   // Fixed vectors: computed independently (Python splitmix64), and equal to Strike's shotHash.
@@ -8286,10 +8286,43 @@ void testCounterHash() {
   check(u >= 0.0 && u < 1.0 && counterUnit(~0ULL) < 1.0, "counter hash: counterUnit is in [0, 1)");
 }
 
+void testMarchRay() {
+  std::printf("world: marchRay (own-block skip, unloaded columns block)\n");
+  ChunkMap w = worldWithColumns(2, &fixtureBlocks());  // columns cx, cz in 0..1: blocks 0..31
+  w.set(5, 30, 5, kRock);
+  MarchHit h = marchRay(w, 5.5, 40.5, 5.5, 0, -1, 0, 20);
+  check(h.hit && !h.stoppedByUnloaded && h.cell[1] == 30 && h.prev[1] == 31 && h.dist == 9.5,
+        "marchRay: first solid cell, the cell in front, entry distance");
+  int rc[3], rp[3];
+  check(raycast(w, 5.5f, 40.5f, 5.5f, 0, -1, 0, 20, rc, rp) && rc[1] == h.cell[1] && rp[1] == h.prev[1],
+        "marchRay: agrees with raycast on a plain ray");
+  w.set(10, 40, 10, kRock);
+  w.set(14, 40, 10, kRock);
+  h = marchRay(w, 10.5, 40.5, 10.5, 1, 0, 0, 20);
+  check(h.hit && h.cell[0] == 14 && h.dist == 3.5, "marchRay: a ray starting inside a block skips its own cell");
+  h = marchRay(w, 10.5, 40.5, 10.5, 1, 0, 0, 20, nullptr, false);
+  check(h.hit && h.cell[0] == 10 && h.dist == 0.0, "marchRay: skipOrigin=false reports the origin cell");
+  h = marchRay(w, 30.5, 40.5, 5.5, 1, 0, 0, 20);
+  check(!h.hit && h.stoppedByUnloaded && h.cell[0] == 32 && h.prev[0] == 31 && h.dist == 1.5,
+        "marchRay: an unloaded column (x >= 32) stops the ray at its boundary, never air");
+  h = marchRay(w, 0.5, 40.5, 0.5, 0, 0, -1, 20);
+  check(!h.hit && h.stoppedByUnloaded && h.cell[2] == -1 && h.dist == 0.5, "marchRay: negative-side unloaded columns block too");
+  h = marchRay(w, 1.5, 40.5, 1.5, 1, 0, 0, 5);
+  check(!h.hit && !h.stoppedByUnloaded, "marchRay: maxDist ends an all-air march with no hit");
+  h = marchRay(w, std::nan(""), 40.5, 1.5, 1, 0, 0, 5);
+  const MarchHit h2 = marchRay(w, 3e9, 40.5, 1.5, 1, 0, 0, 5);
+  const MarchHit h3 = marchRay(w, 1.5, 40.5, 1.5, 0, 0, 0, 5);
+  check(!h.hit && !h2.hit && !h3.hit && !h.stoppedByUnloaded && !h2.stoppedByUnloaded,
+        "marchRay: NaN / huge origins and a zero direction return no hit (no int-cast UB)");
+  w.set(20, 40, 3, kRock);
+  const MarchHit a = marchRay(w, 17.25, 40.75, 3.5, 3, 0, 0, 20), b = marchRay(w, 17.25, 40.75, 3.5, 1, 0, 0, 20);
+  check(a.hit && b.hit && a.cell[0] == 20 && a.dist == b.dist, "marchRay: direction length does not change the result");
+}
+
 int runModule(const std::string& m) {
   const int before = g_fails;
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); }
-  else if (m == "world") testWorld();
+  else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
   else if (m == "ai") testAi();
