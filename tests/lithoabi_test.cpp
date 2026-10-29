@@ -650,13 +650,13 @@ static int case_init_primary() {
  */
 static int case_guards_basic() {
   int fails = 0;
-  long long guard = 0;
+  abi::__lithoabi_guard_t guard = 0;
   CHECK(abi::__cxa_guard_acquire(&guard) == 1);
   abi::__cxa_guard_release(&guard);
   CHECK(abi::__cxa_guard_acquire(&guard) == 0); /* already done */
   CHECK((guard & 0xff) == 1);
 
-  long long guard2 = 0;
+  abi::__lithoabi_guard_t guard2 = 0;
   CHECK(abi::__cxa_guard_acquire(&guard2) == 1);
   abi::__cxa_guard_abort(&guard2); /* initializer "threw" */
   CHECK((guard2 & 0xff) == 0);
@@ -667,9 +667,53 @@ static int case_guards_basic() {
 }
 
 /* ================================================================
+ * Case C1b (review C1 regression): the guard runtime touches exactly
+ * sizeof(__lithoabi_guard_t) bytes. On wasm32 the compiler's guard
+ * is 4 bytes; the old runtime did 64-bit atomics on it, clobbering
+ * the next static and trapping when misaligned. Natively the width
+ * is 8, and the bytes after it must stay untouched as well. Also
+ * runs a real function-local static through the compiler's own
+ * guard path (tests/wasm_guard_check.cpp covers the wasm32 width).
+ */
+#if defined(__wasm__) || defined(__arm__)
+static_assert(sizeof(abi::__lithoabi_guard_t) == 4, "wasm guard width");
+#else
+static_assert(sizeof(abi::__lithoabi_guard_t) == 8, "Itanium guard width");
+#endif
+static int g_fls_ctor_runs = 0;
+struct FlsProbe {
+  int v;
+  FlsProbe() : v(42) { ++g_fls_ctor_runs; }
+};
+static int fls_value() {
+  static FlsProbe probe; /* compiler-emitted guard + __cxa_guard_* */
+  return probe.v;
+}
+static int case_guards_width() {
+  int fails = 0;
+  struct {
+    abi::__lithoabi_guard_t g;
+    unsigned char after[16];
+  } box;
+  memset(&box, 0xA5, sizeof box);
+  box.g = 0;
+  CHECK(abi::__cxa_guard_acquire(&box.g) == 1);
+  abi::__cxa_guard_abort(&box.g);
+  CHECK(abi::__cxa_guard_acquire(&box.g) == 1);
+  abi::__cxa_guard_release(&box.g);
+  CHECK(abi::__cxa_guard_acquire(&box.g) == 0);
+  for (unsigned i = 0; i < sizeof box.after; ++i) CHECK(box.after[i] == 0xA5);
+  CHECK((*reinterpret_cast<unsigned char*>(&box.g) & 1) == 1);
+  CHECK(fls_value() == 42);
+  CHECK(fls_value() == 42);
+  CHECK(g_fls_ctor_runs == 1);
+  return fails;
+}
+
+/* ================================================================
  * Case C2: guards under thread contention: exactly one winner.
  */
-static long long g_race_guard = 0;
+static abi::__lithoabi_guard_t g_race_guard = 0;
 static int g_race_inits = 0;
 static int g_race_saw_done = 0;
 
@@ -1304,7 +1348,7 @@ static int case_emergency_pool() {
       throw_exception(d);
     }
     case 2: { /* recursive guard initialization */
-      long long guard = 0;
+      abi::__lithoabi_guard_t guard = 0;
       (void)abi::__cxa_guard_acquire(&guard);
       (void)abi::__cxa_guard_acquire(&guard);
       break;
@@ -1411,6 +1455,7 @@ int main(int argc, char** argv) {
   RUN_CASE(case_rethrow_primary_in_handler);
   RUN_CASE(case_init_primary);
   RUN_CASE(case_guards_basic);
+  RUN_CASE(case_guards_width);
   RUN_CASE(case_guards_contention);
   RUN_CASE(case_atexit);
   RUN_CASE(case_thread_atexit);

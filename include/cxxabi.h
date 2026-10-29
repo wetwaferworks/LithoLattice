@@ -140,14 +140,23 @@ void __cxa_decrement_exception_refcount(__cxa_exception* primary);
 [[noreturn]] void __cxa_bad_typeid();
 
 /* ---- guards (function-local statics) ----------------------------
- * The guard object is 8 bytes in the emitted code's static storage;
- * its first byte is the completion flag the compiler's fast path
- * reads. acquire returns nonzero exactly once per guard (the caller
- * then runs the initializer and calls release, or abort if the
- * initializer throws). Thread-safe over LithoThread. */
-int __cxa_guard_acquire(long long* guard);
-void __cxa_guard_release(long long* guard);
-void __cxa_guard_abort(long long* guard);
+ * The guard object's size is target ABI: WebAssembly (and 32-bit
+ * ARM) use the ARM C++ ABI guard, one 32-bit word whose bit 0 is
+ * the completion flag the compiler's fast path tests; the generic
+ * Itanium ABI (x86-64, the native benches) reserves 64 bits and
+ * reads the first byte. __lithoabi_guard_t names the right width,
+ * and guard.cc never touches a byte past it. acquire returns
+ * nonzero exactly once per guard (the caller then runs the
+ * initializer and calls release, or abort if the initializer
+ * throws). Thread-safe over LithoThread. */
+#if defined(__wasm__) || defined(__arm__)
+typedef int __lithoabi_guard_t;
+#else
+typedef long long __lithoabi_guard_t;
+#endif
+int __cxa_guard_acquire(__lithoabi_guard_t* guard);
+void __cxa_guard_release(__lithoabi_guard_t* guard);
+void __cxa_guard_abort(__lithoabi_guard_t* guard);
 
 /* ---- exit registration ------------------------------------------
  * __cxa_atexit registers fn(arg) to run at process exit (or at the
