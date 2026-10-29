@@ -126,6 +126,39 @@ typedef struct {
 } slot_t;
 static slot_t g_model[MODEL_SLOTS];
 
+/* Review M7 fixture: a lock that records whether it is held, and a
+ * grow callback that fails the case if it runs with the lock held
+ * and re-enters the heap with a small allocation (which a held,
+ * non-recursive lock would deadlock on). */
+static int g_lock_held, g_reent_bad, g_reent_allocs, g_in_grow;
+static wh_heap_t* g_reent_heap;
+static void flag_lock(void* u) {
+  (void)u;
+  if (g_lock_held) g_reent_bad = 1; /* re-entered while held */
+  g_lock_held = 1;
+}
+static void flag_unlock(void* u) {
+  (void)u;
+  g_lock_held = 0;
+}
+static void* reentrant_grow(wh_heap_t* heap, size_t min_extra,
+                            size_t* out_bytes, void* user) {
+  void* extent;
+  if (g_lock_held) g_reent_bad = 1;
+  extent = test_grow(heap, min_extra, out_bytes, user);
+  if (!g_in_grow) {
+    void* p;
+    g_in_grow = 1;
+    p = wh_malloc(g_reent_heap, 16);
+    if (p != NULL) {
+      g_reent_allocs++;
+      wh_free(g_reent_heap, p);
+    }
+    g_in_grow = 0;
+  }
+  return extent;
+}
+
 static int model_verify_all(wh_heap_t* h) {
   int i;
   for (i = 0; i < MODEL_SLOTS; i++) {
@@ -582,6 +615,37 @@ int main(void) {
       wh_heap_stats(growing, &st);
       CHECK(st.region_bytes > 1024 * 1024); /* extents were adopted */
     }
+    for (i = 0; i < n; i++) wh_free(growing, blocks[i]);
+    wh_heap_destroy(growing);
+    CASE_END();
+  }
+
+  /* ---- case: grow callback may re-enter the heap (review M7) -------- */
+  {
+    CASE_BEGIN("grow: callback runs unlocked and may allocate");
+    wh_options_t opt;
+    wh_heap_t* growing;
+    void* blocks[64];
+    int i, n = 0;
+    memset(&opt, 0, sizeof opt);
+    opt.grow = reentrant_grow;
+    opt.lock = flag_lock;
+    opt.unlock = flag_unlock;
+    g_reserve_used = 0;
+    g_grow_budget = 1024 * 1024;
+    g_reent_bad = 0;
+    g_reent_allocs = 0;
+    growing = wh_heap_create(g_small.bytes, sizeof(g_small.bytes), &opt);
+    CHECK(growing != NULL);
+    g_reent_heap = growing;
+    for (i = 0; i < 64; i++) {
+      blocks[i] = wh_malloc(growing, 32 * 1024);
+      if (blocks[i] == NULL) break;
+      n++;
+    }
+    CHECK(n > 8);
+    CHECK(g_reent_allocs > 0);   /* the callback did allocate */
+    CHECK(g_reent_bad == 0);     /* and never ran with the lock held */
     for (i = 0; i < n; i++) wh_free(growing, blocks[i]);
     wh_heap_destroy(growing);
     CASE_END();

@@ -335,13 +335,24 @@ static int wh_adopt_region(wh_heap_t* h, void* region, size_t region_bytes) {
 }
 
 /* Grow once through the callback and adopt whatever comes back.
- * Returns 1 when a region was adopted. Lock is held by the caller. */
+ * Returns 1 when a region was adopted. Lock is held by the caller
+ * on entry and on return, but (review M7) it is RELEASED around the
+ * callback, so a grow implementation may allocate, log through
+ * malloc, or otherwise re-enter the heap without deadlocking on a
+ * non-recursive lock. Callers re-search the free lists afterwards
+ * (another thread may have grown or freed meanwhile; two
+ * concurrent growers simply both add a region). If the heap was
+ * destroyed while unlocked the extent is not adopted. */
 static int wh_try_grow(wh_heap_t* h, size_t min_extra) {
   size_t granted = 0;
   void* extent;
-  if (h->opt.grow == NULL) return 0;
-  extent = h->opt.grow(h, min_extra, &granted, h->opt.grow_user);
-  if (extent == NULL || granted == 0) return 0;
+  wh_grow_fn grow = h->opt.grow;
+  void* user = h->opt.grow_user;
+  if (grow == NULL) return 0;
+  wh_unlock(h);
+  extent = grow(h, min_extra, &granted, user);
+  wh_lock(h);
+  if (extent == NULL || granted == 0 || h->magic != WH_MAGIC) return 0;
   return wh_adopt_region(h, extent, granted);
 }
 

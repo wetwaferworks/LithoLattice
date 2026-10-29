@@ -82,8 +82,11 @@ typedef void* (*wh_grow_fn)(wh_heap_t* heap, size_t min_extra_bytes,
 
 /* Lock hooks. Either may be NULL (no locking). lock and unlock are
  * called in balanced pairs around every public operation, with the
- * user pointer passed through. The grow callback above runs under
- * the lock, so a grow implementation must not re-enter the heap. */
+ * user pointer passed through. The grow callback above runs with
+ * the lock RELEASED (review M7), so a grow implementation may
+ * re-enter the heap (allocate, log through malloc); it may run
+ * concurrently with other operations on the heap, and with another
+ * thread's grow. */
 typedef void (*wh_lock_fn)(void* user);
 
 typedef struct wh_options {
