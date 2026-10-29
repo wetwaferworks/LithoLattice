@@ -185,8 +185,10 @@ static void mark(char c) {
 static void h1(void) { mark('1'); }
 static void h2(void) { mark('2'); }
 static void dmark(void*) { mark('D'); }
+static void tmark(void*) { mark('T'); }
 
 extern "C" int __cxa_atexit(void (*f)(void*), void* arg, void* dso);
+extern "C" int __cxa_thread_atexit(void (*f)(void*), void* arg, void* dso);
 extern "C" void* __dso_handle;
 
 /* Aliases for the native back-end's renamed host references
@@ -369,6 +371,42 @@ int main(void) {
            WIFSIGNALED(status) ? WTERMSIG(status) : -1, (long)n);
     CHECK(n == 3 && buf[0] == '2' && buf[1] == '1' && buf[2] == 'D');
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+    CASE_END();
+  }
+
+  {
+    /* Review H3 regression: exit() must destroy the calling
+     * thread's thread_locals before the static/atexit registry
+     * ([basic.start.term]/1). Registration: static-like atexit
+     * handler first, thread_local second; required run: T, 1. */
+    CASE_BEGIN("child: exit() runs thread_local dtors before "
+               "static/atexit handlers (H3)");
+    int fds[2];
+    CHECK(pipe(fds) == 0);
+    pid_t pid = fork();
+    if (pid == 0) {
+      close(fds[0]);
+      g_pipe_w = fds[1];
+      atexit(h1);
+      __cxa_thread_atexit(tmark, NULL, &__dso_handle);
+      exit(5);
+      _exit(99);
+    }
+    close(fds[1]);
+    char buf[8];
+    ssize_t n = 0;
+    for (;;) {
+      ssize_t r = read(fds[0], buf + n, sizeof buf - (size_t)n);
+      if (r <= 0) break;
+      n += r;
+    }
+    close(fds[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    report("  child marks=%ld [%c%c]\n", (long)n, n > 0 ? buf[0] : '-',
+           n > 1 ? buf[1] : '-');
+    CHECK(n == 2 && buf[0] == 'T' && buf[1] == '1');
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 5);
     CASE_END();
   }
 

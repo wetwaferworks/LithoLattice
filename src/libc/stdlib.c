@@ -429,23 +429,27 @@ int at_quick_exit(void (*func)(void)) {
 }
 
 void exit(int code) {
-  /* The C standard's sequence: handlers (LIFO, inside
+  /* The C/C++ sequence: the calling thread's thread_local
+   * destructors, then the handlers (LIFO, inside
    * __cxa_finalize(NULL) covering every registered dso handle,
    * per LithoAbi's implementation), then flush, then leave.
    * (The never-returns attribute rides on the stdlib.h
-   * declaration; it is not repeated on the definitions.) */
-  __cxa_finalize(NULL);
-  /* Audit fix E-1: the calling thread's TLS destructors are not
+   * declaration; it is not repeated on the definitions.)
+   *
+   * Audit fix E-1: the calling thread's TLS destructors are not
    * part of the finalize registry. They live on the weave's
    * per-thread list (LithoAbi's __cxa_thread_atexit registers
    * there), and while a spawned thread's exit runs them through
-   * the trampoline, nothing ran the MAIN thread's on this path:
-   * a main-thread thread_local's destructor silently never ran.
-   * Run them here, between finalize and the flush. The runner
-   * is a no-op when nothing is registered, and its exiting
+   * the trampoline, nothing ran the MAIN thread's on this path.
+   * Review H3: they must run BEFORE __cxa_finalize, because
+   * [basic.start.term]/1 destroys thread-storage objects before
+   * any static-storage object; running them after finalize let a
+   * thread_local destructor touch already-destroyed statics. The
+   * runner is a no-op when nothing is registered, and its exiting
    * guard keeps a destructor that itself reaches exit() from
    * re-entering the pass. */
   lw_run_tls_destructors();
+  __cxa_finalize(NULL);
   __litholibc_stdio_flush_all();
   lithosys_exit(code);
 }
