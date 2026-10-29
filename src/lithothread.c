@@ -122,6 +122,11 @@ static int64_t lt__remaining_ns(clockid_t id, uint64_t deadline_ns) {
 static lt_rec_t* lt__find_locked(pthread_t th) {
   lt_rec_t* r;
   for (r = lt__registry; r != NULL; r = r->next) {
+    /* Skip records still inside pthread_create: their handle is
+     * being written without this lock (review H2), and no caller
+     * can hold that handle yet (its thread is parked in the
+     * trampoline until creating clears). */
+    if (lt_at_load32(&r->creating) != 0u) continue;
     if (r->handle.control == th.control && r->handle.tid == th.tid) return r;
   }
   return NULL;
@@ -194,7 +199,9 @@ static void lt__reap_dead(void) {
   lt__spin_unlock(&lt__registry_lock);
   while (dead != NULL) {
     lt_rec_t* next = dead->next;
-    if (lt__thread_returned(dead)) {
+    /* A record whose pthread_create has not returned is not ours
+     * to judge: its handle may still be being written (H2). */
+    if (lt_at_load32(&dead->creating) == 0u && lt__thread_returned(dead)) {
       lt__free_detached_rec(dead);
     } else {
       dead->next = NULL;
@@ -357,6 +364,12 @@ static void* lt__trampoline(void* p) {
   void* arg = pack->arg;
   free(pack);
 
+  /* Review H2: do not run user code (or reach the exit path that
+   * may retire the record) until the creator has finished
+   * publishing rec->handle. The window is the tail of
+   * lithosys_thread_spawn on the creator, so a pause loop. */
+  while (lt_at_load32(&rec->creating) != 0u) lt_at_spin_pause();
+
   lt__current_rec = rec;
   (void)lw_thread_atexit(lt__key_runner, rec);
   if (setjmp(rec->exit_pad) == 0) {
@@ -405,6 +418,10 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
   }
   rec->spawned = 1;
   lt_at_store32(&rec->detached, detached ? 1u : 0u);
+  /* Review H2: the creator's claim. The child cannot run user
+   * code, and no reaper or lookup will touch the record, until
+   * this clears after *thread is written. */
+  lt_at_store32(&rec->creating, 1u);
   pack->start = start_routine;
   pack->arg = arg;
   pack->rec = rec;
@@ -433,7 +450,13 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     free(rec);
     return (int)err;
   }
-  *thread = rec->handle;
+  {
+    /* Copy out first: once creating clears, a detached record may
+     * be retired and freed at any moment (review H2). */
+    pthread_t h = rec->handle;
+    *thread = h;
+    lt_at_store32(&rec->creating, 0u);
+  }
   return 0;
 }
 

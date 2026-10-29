@@ -125,6 +125,7 @@ typedef struct lt_rec {
   volatile uint32_t exit_phase;      /* trampoline returned (atomic) */
   volatile uint32_t exit_override;   /* late pthread_exit (atomic) */
   volatile uint32_t retire_claimed;  /* reap ownership (atomic CAS) */
+  volatile uint32_t creating; /* pthread_create not yet returned (H2) */
   int join_claimed;
   int errno_value;
   lt_kv_t* key_values;

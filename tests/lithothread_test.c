@@ -327,6 +327,72 @@ static int case_detach(void) {
   return fails;
 }
 
+/* ---- case: detached create / reap stress (review H1 + H2) -------------
+ * Several threads concurrently create detached threads, create
+ * joinable ones and detach them, while every create/detach runs
+ * the reaper. Before the fixes this raced (H2) a detached record's
+ * retire+free against its own pthread_create still writing
+ * rec->handle / *thread, and (H1) the weave sweep freeing a control
+ * block a queued record later read. Run it under ASan/TSan for the
+ * strongest signal; the plain build checks completion and balance. */
+static volatile uint32_t g_stress_runs;
+
+static void* entry_stress_leaf(void* arg) {
+  (void)arg;
+  __atomic_add_fetch(&g_stress_runs, 1u, __ATOMIC_SEQ_CST);
+  return NULL;
+}
+
+static volatile uint32_t g_stress_errs;
+
+static void* entry_stress_driver(void* arg) {
+  int i;
+  int mode = (int)(uintptr_t)arg;
+  pthread_attr_t attr;
+  lt_pthread_attr_init(&attr);
+  lt_pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  for (i = 0; i < 200; ++i) {
+    pthread_t th;
+    if (mode == 0 || (i & 1) == 0) {
+      if (lt_pthread_create(&th, &attr, entry_stress_leaf, NULL) != 0) {
+        __atomic_add_fetch(&g_stress_errs, 1u, __ATOMIC_SEQ_CST);
+      }
+    } else {
+      if (lt_pthread_create(&th, NULL, entry_stress_leaf, NULL) != 0 ||
+          lt_pthread_detach(th) != 0) {
+        __atomic_add_fetch(&g_stress_errs, 1u, __ATOMIC_SEQ_CST);
+      }
+    }
+  }
+  lt_pthread_attr_destroy(&attr);
+  return NULL;
+}
+
+static int case_detach_reap_stress(void) {
+  int fails = 0;
+  enum { D = 4 };
+  pthread_t drv[D];
+  int i;
+  uint64_t deadline;
+  __atomic_store_n(&g_stress_runs, 0u, __ATOMIC_SEQ_CST);
+  __atomic_store_n(&g_stress_errs, 0u, __ATOMIC_SEQ_CST);
+  for (i = 0; i < D; ++i) {
+    CHECK(lt_pthread_create(&drv[i], NULL, entry_stress_driver,
+                            (void*)(uintptr_t)(i & 1)) == 0);
+  }
+  for (i = 0; i < D; ++i) CHECK(lt_pthread_join(drv[i], NULL) == 0);
+  CHECK(g_stress_errs == 0u);
+  deadline = now_ms() + 30000ull;
+  while (__atomic_load_n(&g_stress_runs, __ATOMIC_SEQ_CST) < D * 200u &&
+         now_ms() < deadline) {
+    nap_ms(1);
+  }
+  CHECK(g_stress_runs == D * 200u);
+  CHECK(settle_balance(500));
+  CHECK_BALANCED();
+  return fails;
+}
+
 /* ---- case: mutex contention exactness ---------------------------------- */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long long g_counter; /* guarded by g_mu only */
@@ -1620,6 +1686,7 @@ int main(void) {
 
   RUN_CASE(case_create_join);
   RUN_CASE(case_detach);
+  RUN_CASE(case_detach_reap_stress);
   RUN_CASE(case_mutex_contention);
   RUN_CASE(case_mutex_flavors);
   RUN_CASE(case_cond_queue);
