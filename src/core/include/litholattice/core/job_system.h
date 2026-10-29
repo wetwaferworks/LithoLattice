@@ -63,6 +63,7 @@
 #include <vector>
 
 #include "litholattice/core/chase_lev.h"
+#include "litholattice/core/mpsc_queue.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/thread_debug.h"
 
@@ -195,10 +196,17 @@ class cJobSystem {
   void submit(Job job, JobPriority prio = JobPriority::Normal) {
     assert(!stop_.load(std::memory_order_relaxed) && "submit during/after shutdown");
     inFlight_.fetch_add(1, std::memory_order_relaxed);
-    const unsigned target =
-        submitCursor_.fetch_add(1, std::memory_order_relaxed) % (unsigned)workers_.size();
     const unsigned pi = (unsigned)prio;
-    if (!workers_[target]->deques[pi].pushBottom(std::move(job))) {
+    // P0.5 review fix 2 (external review by Cryosis (sirlinhart)): only a worker of THIS
+    // system pushes onto its OWN deque's bottom; every other thread injects into the
+    // target worker's MPSC queue, which that worker (or an idle thief) drains.
+    if (t_worker.sys != this) {
+      const unsigned target =
+          submitCursor_.fetch_add(1, std::memory_order_relaxed) % (unsigned)workers_.size();
+      workers_[target]->inbox[pi].push(std::move(job));
+      LITHO_THREAD_LOG("job", "submit prio=%u inject worker=%u", pi, target);
+    } else if (!workers_[t_worker.idx]->deques[pi].pushBottom(std::move(job))) {
+      const unsigned target = t_worker.idx;
       // Cold path: this deque is full (1024 pending on one worker). Spill to the
       // shared per-priority overflow; a worker picks it up when its deques run
       // dry. L1 lock, O(1) push.
@@ -207,8 +215,8 @@ class cJobSystem {
       LITHO_THREAD_LOG("job", "submit prio=%u worker=%u OVERFLOW depth=%zu", pi, target,
                        overflow_[pi].size());
     } else if constexpr (kThreadDebug) {
-      LITHO_THREAD_LOG("job", "submit prio=%u worker=%u depth~%zu", pi, target,
-                       workers_[target]->deques[pi].approxSize());
+      LITHO_THREAD_LOG("job", "submit prio=%u worker=%u depth~%zu", pi, t_worker.idx,
+                       workers_[t_worker.idx]->deques[pi].approxSize());
     }
     [[maybe_unused]] const uint64_t g = workGen_.fetch_add(1, std::memory_order_release) + 1;  // wake a sleeper; pairs with the wait predicate
     LITHO_THREAD_LOG("job", "submit gen->%llu notify_one", (unsigned long long)g);
@@ -277,9 +285,47 @@ class cJobSystem {
  private:
   struct Worker {
     cChaseLevDeque<Job, kJobDequeCapacity> deques[kJobPriorityCount];
+    cMpscQueue<Job> inbox[kJobPriorityCount];  // external submits (P0.5 review fix 2)
   };
 
   static thread_local bool t_onJobThread;
+  struct WorkerTls { const cJobSystem* sys = nullptr; unsigned idx = 0; };
+  static thread_local WorkerTls t_worker;
+
+  // Move everything queued in `from`'s injection queues into worker `self`'s own deques
+  // (owner end, owner thread). Non-blocking: skips a queue another thread is draining.
+  // A full deque spills to the shared overflow, as submit always did.
+  bool drainInbox(unsigned self, unsigned from) {
+    Worker& w = *workers_[self];
+    Worker& src = *workers_[from];
+    bool moved = false;
+    for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p) {
+      cMpscQueue<Job>& q = src.inbox[p];
+      if (!q.maybeNonEmpty() || !q.tryClaim()) continue;
+      Job j;
+      while (q.pop(j)) {
+        moved = true;
+        if (!w.deques[p].pushBottom(std::move(j))) {
+          std::lock_guard<std::mutex> l(overflowM_);  // L1
+          overflow_[p].push_back(std::move(j));
+        }
+      }
+      q.release();
+    }
+    return moved;
+  }
+
+ public:
+  /// Owner-rule audit (P0.5 review fix 2): owner-end deque calls from a non-owner
+  /// thread since start. Must stay 0.
+  uint64_t ownerViolations() const {
+    uint64_t n = 0;
+    for (const auto& w : workers_)
+      for (const auto& d : w->deques) n += d.ownerViolations();
+    return n;
+  }
+
+ private:
 
   void init(const Config& cfg) {
     unsigned workers = cfg.workerThreads == 0 ? ThreadUtil::coreCount() : cfg.workerThreads;
@@ -305,6 +351,8 @@ class cJobSystem {
       std::string name = std::string(cfg.namePrefix) + "-w" + std::to_string(i);
       workerThreads_.emplace_back([this, i, name, workerMask] {
         t_onJobThread = true;
+        t_worker = WorkerTls{this, i};
+        for (auto& d : workers_[i]->deques) d.bindOwner();
         ThreadUtil::setName(name.c_str());
         if (workerMask != 0) ThreadUtil::pinToCores(workerMask);
         LITHO_THREAD_LOG("thread", "worker %u online (%u workers)", i, workerCount());
@@ -376,6 +424,7 @@ class cJobSystem {
   // cold overflow path (L1).
   bool findJob(unsigned self, Job& out) {
     Worker& w = *workers_[self];
+    drainInbox(self, self);  // own injected work first: it becomes stealable once in the deque
     for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p) {
       if (w.deques[p].popBottom(out)) return true;
     }
@@ -391,6 +440,16 @@ class cJobSystem {
           LITHO_THREAD_LOG("job", "steal worker=%u victim=%u prio=%d", self, v, p);
           return true;
         }
+      }
+    }
+    // Victims' injection queues: an idle worker drains a busy worker's inbox into its
+    // OWN deque (never the victim's), so injected work is not stranded behind a long job.
+    for (unsigned i = 0; i < n; ++i) {
+      const unsigned v = (start + i) % n;
+      if (v == self) continue;
+      if (drainInbox(self, v)) {
+        for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p)
+          if (w.deques[p].popBottom(out)) return true;
       }
     }
     {
@@ -545,6 +604,7 @@ class cJobSystem {
 };
 
 inline thread_local bool cJobSystem::t_onJobThread = false;
+inline thread_local cJobSystem::WorkerTls cJobSystem::t_worker{};
 
 /// A group of jobs on a cJobSystem that can be waited on by itself (other pool work
 /// keeps running) — the stage barrier for the deterministic scheduler. Each job's

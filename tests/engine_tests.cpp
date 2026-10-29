@@ -8376,9 +8376,61 @@ void testSeqLockStress() {
   }
 }
 
+// P0.5 review fix 2 (external review by Cryosis (sirlinhart), 2026-10-29): external
+// submits go through per-worker MPSC injection queues; no thread but the owner may touch
+// a deque's bottom. 8 external submitters x 1e6 jobs (LL_INJECT_JOBS overrides), plus
+// jobs that submit from inside workers: every job runs exactly once, none lost, and the
+// owner-rule audit stays at zero.
+void testJobInjectionStress() {
+  long long per = 1000000;
+  if (const char* e = std::getenv("LL_INJECT_JOBS")) per = std::max(1LL, std::atoll(e));
+  const int kSubmitters = 8;
+  const size_t total = size_t(per) * kSubmitters;
+  for (unsigned workers : {1u, 2u, 4u, 8u}) {
+    cJobSystem::Config cfg; cfg.workerThreads = workers;
+    cJobSystem js(cfg);
+    std::vector<std::atomic<uint8_t>> runs(total);
+    std::atomic<long long> nested{0};
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> subs;
+    for (int s = 0; s < kSubmitters; ++s)
+      subs.emplace_back([&, s] {
+        for (long long k = 0; k < per; ++k) {
+          const size_t id = size_t(s) * size_t(per) + size_t(k);
+          if ((k & 1023) == 0)  // some jobs fan out from a worker (owner-push path)
+            js.submit([&, id] { runs[id].fetch_add(1, std::memory_order_relaxed);
+                                js.submit([&] { nested.fetch_add(1, std::memory_order_relaxed); }); });
+          else
+            js.submit([&, id] { runs[id].fetch_add(1, std::memory_order_relaxed); },
+                      (k % 3 == 0) ? JobPriority::High : JobPriority::Normal);
+        }
+      });
+    for (auto& t : subs) t.join();
+    js.waitIdle();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    size_t once = 0, bad = 0;
+    for (auto& r : runs) (r.load() == 1 ? once : bad)++;
+    const long long expectNested = kSubmitters * ((per + 1023) / 1024);
+    std::printf("  [inject] workers=%u jobs=%zu once=%zu bad=%zu nested=%lld/%lld ownerViolations=%llu %.0f ms\n",
+                workers, total, once, bad, nested.load(), expectNested,
+                (unsigned long long)js.ownerViolations(), ms);
+    check(bad == 0 && once == total, "jobsystem inject: every externally submitted job runs exactly once");
+    check(nested.load() == expectNested, "jobsystem inject: worker-side submits all run");
+    check(js.ownerViolations() == 0 && js.failedJobs() == 0, "jobsystem inject: no owner-end deque call from a non-owner thread");
+  }
+#ifdef NDEBUG
+  {  // the audit itself works: a bound deque counts a foreign owner-end call
+    cChaseLevDeque<int, 64> d;
+    std::thread([&] { d.bindOwner(); }).join();
+    int x = 1; d.pushBottom(std::move(x));
+    check(d.ownerViolations() == 1, "chase-lev: owner audit flags a non-owner pushBottom");
+  }
+#endif
+}
+
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
