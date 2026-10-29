@@ -118,6 +118,11 @@ void stampChecks(Checker& check) {
       std::error_code ec;
       for (std::filesystem::path p = std::filesystem::current_path(ec); !p.empty(); p = p.parent_path()) {
         paths.push_back((p / "game" / "LithoKraft" / "assets" / "worldgen" / "wafer.json").string());
+        // 2026-10-29: the engine is a submodule shared by several games, so also take the
+        // wafer.json of whichever game sits next to it (game/<Name>/assets/worldgen).
+        if (std::filesystem::is_directory(p / "game", ec))
+          for (const auto& g : std::filesystem::directory_iterator(p / "game", ec))
+            if (g.is_directory(ec)) paths.push_back((g.path() / "assets" / "worldgen" / "wafer.json").string());
         if (p == p.parent_path()) break;
       }
     }
