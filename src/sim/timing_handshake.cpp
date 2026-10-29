@@ -286,17 +286,20 @@ void cTimingHandshakeAuthority::convertPendingFailureIfAny() {
 
 bool cTimingHandshakeAuthority::readPublished(PublishedPhase& out) const {
   // CH-H2: seqlock-style revalidation around the publication tuple.
+  // P0.5 review fix 1 (Cryosis (sirlinhart)): the tuple is read through a real
+  // even/odd seqlock, so phase/cycle/group/stamp/seq always come from ONE publication.
   const uint64_t gen1 = generation_.load(std::memory_order_acquire);
-  const uint64_t seq1 = publishSeq_.load(std::memory_order_acquire);
+  uint64_t w[kPubWords];
+  if (!pub_.tryRead(w)) return false;  // a publish/reset is in progress: caller retries
+  const uint64_t seq1 = w[kPubSeq];
   if (seq1 == 0) return false;
-  out.phase = publishedPhase_.load(std::memory_order_acquire);
-  out.cycle = publishedCycle_.load(std::memory_order_acquire);
-  out.group = publishedGroup_.load(std::memory_order_acquire);
-  out.openStampNs = phaseOpenStamp_.load(std::memory_order_acquire);
-  out.dueWork = false;
-  const uint64_t seq2 = publishSeq_.load(std::memory_order_acquire);
   const uint64_t gen2 = generation_.load(std::memory_order_acquire);
-  if (seq1 != seq2 || gen1 != gen2) return false;  // tuple raced a publish/reset: caller retries
+  if (gen1 != gen2) return false;  // raced a start()/resetAfterFreeze(): caller retries
+  out.phase = w[kPubPhase];
+  out.cycle = w[kPubCycle];
+  out.group = uint32_t(w[kPubGroup]);
+  out.openStampNs = w[kPubStamp];
+  out.dueWork = false;
   out.seq = seq1;
   out.generation = gen1;
   return true;
@@ -336,11 +339,11 @@ bool cTimingHandshakeAuthority::start() {
     // snapshot a worker from a previous life could still be holding.
     std::lock_guard lk(m_);
     generation_.fetch_add(1, std::memory_order_acq_rel);
+    {
+      const uint64_t zero[kPubWords] = {0, 0, 0, 0, 0};
+      pub_.write(zero);
+    }
     publishSeq_.store(0, std::memory_order_release);
-    publishedPhase_.store(0, std::memory_order_relaxed);
-    publishedCycle_.store(0, std::memory_order_relaxed);
-    publishedGroup_.store(0, std::memory_order_relaxed);
-    phaseOpenStamp_.store(0, std::memory_order_relaxed);
     committedPhase_.store(0, std::memory_order_relaxed);
     arrivals_.store(0, std::memory_order_relaxed);
     for (auto& d : shardDoneSeq_) d.store(0, std::memory_order_relaxed);
@@ -514,8 +517,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // before anything else in this phase (noreturn: fail-fast abort).
   convertPendingFailureIfAny();
   if (frozen_.load(std::memory_order_acquire)) return false;
-  const uint64_t openStamp = nowNs();
-  phaseOpenStamp_.store(openStamp, std::memory_order_release);
+  const uint64_t openStamp = nowNs();  // published with the tuple below (seqlock), not alone
 
   // Due set, in registration (id) order; active shards = shards with at
   // least one due non-affine component.
@@ -550,11 +552,10 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   {
     std::lock_guard lk(m_);
     arrivals_.store(0, std::memory_order_relaxed);
-    publishedPhase_.store(phase, std::memory_order_relaxed);
-    publishedCycle_.store(cycleTick, std::memory_order_relaxed);
-    publishedGroup_.store(group, std::memory_order_relaxed);
     seq = publishSeq_.load(std::memory_order_relaxed) + 1;
-    publishSeq_.store(seq, std::memory_order_release);
+    const uint64_t words[kPubWords] = {phase, cycleTick, uint64_t(group), openStamp, seq};
+    pub_.write(words);  // whole tuple first (seqlock) ...
+    publishSeq_.store(seq, std::memory_order_release);  // ... then the wake counter
   }
   publishCv_.notify_all();
 

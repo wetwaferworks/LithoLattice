@@ -123,6 +123,7 @@
 #include "litholattice/render/software_test.h"
 #include "litholattice/render_vk/sprite_vertices.h"  // B2: Vulkan sprite conversion contract
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1] Packed12 round trip
+#include "litholattice/core/seqlock.h"  // P0.5 review fix 1 (Cryosis (sirlinhart))
 
 using namespace litholattice;
 
@@ -8319,9 +8320,65 @@ void testMarchRay() {
   check(a.hit && b.hit && a.cell[0] == 20 && a.dist == b.dist, "marchRay: direction length does not change the result");
 }
 
+// ---- P0.5 review fix 1 (external review by Cryosis (sirlinhart)): seqlock stress ----
+// One writer publishes {k,k,k,k,k}; readers must never accept a tuple whose words differ.
+// Run at 1, 2, 8 and 16 reader threads. A naive "re-read the counter after the fields"
+// reader (the old pattern) runs alongside on the same words as a detector self-check:
+// its torn count is reported (informational; it depends on the hardware's interleaving).
+void testSeqLockStress() {
+  const uint64_t kWrites = [] {
+    const char* e = std::getenv("LL_SEQLOCK_WRITES");
+    return e ? std::strtoull(e, nullptr, 10) : 10000000ULL;
+  }();
+  for (int readers : {1, 2, 8, 16}) {
+    cSeqLockTuple<5> tuple;
+    // Old pattern for the detector: fields first, then the counter.
+    std::atomic<uint64_t> naiveW[5] = {}, naiveSeq{0};
+    std::atomic<bool> done{false};
+    std::atomic<uint64_t> accepted{0}, torn{0}, naiveTorn{0}, backwards{0};
+    std::vector<std::thread> rs;
+    for (int r = 0; r < readers; ++r)
+      rs.emplace_back([&] {
+        uint64_t last = 0, acc = 0, bad = 0, nbad = 0, back = 0;
+        while (!done.load(std::memory_order_relaxed)) {
+          uint64_t w[5];
+          if (tuple.tryRead(w)) {
+            ++acc;
+            if (!(w[0] == w[1] && w[1] == w[2] && w[2] == w[3] && w[3] == w[4])) ++bad;
+            if (w[0] < last) ++back;
+            last = w[0];
+          }
+          const uint64_t s1 = naiveSeq.load(std::memory_order_acquire);
+          uint64_t n[5];
+          for (int i = 0; i < 5; ++i) n[i] = naiveW[i].load(std::memory_order_acquire);
+          if (naiveSeq.load(std::memory_order_acquire) == s1 &&
+              !(n[0] == n[1] && n[1] == n[2] && n[2] == n[3] && n[3] == n[4]))
+            ++nbad;
+        }
+        accepted += acc; torn += bad; naiveTorn += nbad; backwards += back;
+      });
+    const auto t0 = std::chrono::steady_clock::now();
+    for (uint64_t k = 1; k <= kWrites; ++k) {
+      const uint64_t v[5] = {k, k, k, k, k};
+      tuple.write(v);
+      for (int i = 0; i < 5; ++i) naiveW[i].store(k, std::memory_order_relaxed);
+      naiveSeq.store(k, std::memory_order_release);
+    }
+    done = true;
+    for (auto& t : rs) t.join();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  seqlock stress: %d readers, %llu writes in %.0f ms: accepted %llu, torn %llu, backwards %llu; old pattern torn %llu\n",
+                readers, (unsigned long long)kWrites, ms, (unsigned long long)accepted.load(),
+                (unsigned long long)torn.load(), (unsigned long long)backwards.load(), (unsigned long long)naiveTorn.load());
+    char what[160];
+    std::snprintf(what, sizeof what, "seqlock: %d readers accept zero torn and zero backwards tuples (review fix 1)", readers);
+    check(torn.load() == 0 && backwards.load() == 0 && accepted.load() > 0, what);
+  }
+}
+
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); testCounterHash(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }

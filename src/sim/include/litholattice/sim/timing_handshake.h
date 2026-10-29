@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "litholattice/core/seqlock.h"
 #include "litholattice/sim/tick_rate.h"
 
 namespace litholattice {
@@ -404,10 +405,11 @@ class cTimingHandshakeAuthority {
   // publication they were executing is stale and must neither finish its
   // item list nor count toward any barrier.
   std::atomic<uint64_t> generation_{0};
-  std::atomic<uint64_t> publishedPhase_{0};
-  std::atomic<uint64_t> publishedCycle_{0};
-  std::atomic<uint32_t> publishedGroup_{0};
-  std::atomic<uint64_t> phaseOpenStamp_{0};
+  // Publication tuple behind a real seqlock (P0.5 review fix 1, external review by
+  // Cryosis (sirlinhart)): words = {phase, cycle, group, openStampNs, seq}. Written
+  // only under m_ (single writer); read lock-free by readPublished().
+  enum : size_t { kPubPhase = 0, kPubCycle, kPubGroup, kPubStamp, kPubSeq, kPubWords };
+  cSeqLockTuple<kPubWords> pub_;
   std::atomic<uint64_t> committedPhase_{0};
   std::atomic<uint32_t> arrivals_{0};
   std::deque<std::atomic<uint64_t>> shardDoneSeq_;
