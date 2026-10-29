@@ -1,0 +1,3 @@
+# run-native-suites.sh is executed by bash (WSL on Windows, via ctest);
+# keep it LF even in autocrlf checkouts.
+run-native-suites.sh text eol=lf
