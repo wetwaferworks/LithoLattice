@@ -1641,6 +1641,33 @@ static void case_audit_exit_tls(void) {
   CASE_END();
 }
 
+/* Review L6: an over-long numeral is a matching failure, and an
+ * inf/nan near-miss reads no further than the word it could be. */
+static void case_scanf_l6(void) {
+  CASE_BEGIN("review L6: scanf long numerals and inf/nan pushback");
+  {
+    static char big[1400];
+    double d = 7.0;
+    int n, k = 0;
+    char rest[8];
+    memset(big, '1', 1300);
+    big[1300] = 'e';
+    big[1301] = '-';
+    big[1302] = '9';
+    big[1303] = '\0';
+    n = sscanf(big, "%lf", &d);
+    CHECK(n == 0);
+    CHECK(d == 7.0);
+    n = sscanf("info42", "%lf%2s%d", &d, rest, &k);
+    CHECK(n == 3 && d > 1e308 && strcmp(rest, "o4") == 0 && k == 2);
+    n = sscanf("infinity5", "%lf%d", &d, &k);
+    CHECK(n == 2 && d > 1e308 && k == 5);
+    n = sscanf("nanx", "%lf%s", &d, rest);
+    CHECK(n == 2 && d != d && strcmp(rest, "x") == 0);
+  }
+  CASE_END();
+}
+
 /* Review L3: a count past INT_MAX is EOVERFLOW, not a wrapped int. */
 static void case_printf_overflow(void) {
   CASE_BEGIN("review L3: printf total past INT_MAX is EOVERFLOW");
@@ -1752,6 +1779,7 @@ int main(void) {
   case_audit_host_seams();
   case_audit_exit_tls();
   case_printf_overflow();
+  case_scanf_l6();
 
   if (g_failures == 0) {
     report("ALL GROUPS PASS\n");

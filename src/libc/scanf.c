@@ -7,6 +7,15 @@
  * (vscan_core) works over an abstract source: a FILE (through
  * fgetc / ungetc) or a string cursor.
  *
+ * Review L6 contract: %s and %[ without a field width write without
+ * bound, exactly as the standard specifies; engine callers must
+ * always pass a width (%31s for a char[32]). A float numeral longer
+ * than the 1199-character token buffer is a matching failure, not
+ * a truncated value. inf / nan words read only as far as they can
+ * still match, so a near miss pushes back at most a few characters;
+ * a FILE source with a single-byte pushback can still lose those on
+ * a near miss such as "infinx", as it can in any C library.
+ *
  * Conversion set: d i o u x X, e E f g G (through strtod on the
  * collected token), s, c, [set], p (read as a hex integer into a
  * void**), n, and %% matching. Assignment suppression, field
@@ -232,6 +241,7 @@ static int scan_float(scan_src_t* s, long width, double* out) {
   size_t tn = 0;
   long w = width;
   int c, any = 0;
+  int overlong = 0; /* review L6: numeral longer than tok */
   int state = 0; /* 0 start, 1 int digits, 2 frac, 3 exp mark, 4 exp */
   skip_ws(s);
   c = src_get(s);
@@ -246,7 +256,14 @@ static int scan_float(scan_src_t* s, long width, double* out) {
     char word[16];
     size_t wn = 0;
     size_t matched = 0;
-    while (c != EOF && isalpha(c) && wn < sizeof word - 1) {
+    /* Review L6: read only while the letters still spell a prefix
+     * of the one word this first letter can start ("infinity" or
+     * "nan"), so the over-read that has to be pushed back is at
+     * most "inity"'s worth plus the terminator, not a 15-letter
+     * alphabetic run. */
+    const char* target = (c == 'i' || c == 'I') ? "infinity" : "nan";
+    while (c != EOF && target[wn] != '\0' &&
+           tolower(c) == (unsigned char)target[wn]) {
       word[wn++] = (char)tolower(c);
       c = src_get(s);
     }
@@ -338,6 +355,7 @@ static int scan_float(scan_src_t* s, long width, double* out) {
     if (take) {
       any = any || (isdigit(c) != 0);
       if (tn < sizeof tok - 1) tok[tn++] = (char)c;
+      else overlong = 1;
       if (w > 0) w--;
       c = src_get(s);
     }
@@ -365,6 +383,11 @@ static int scan_float(scan_src_t* s, long width, double* out) {
     }
   }
   if (!any) return s->hit_eof ? -1 : 0;
+  /* Review L6: a numeral that did not fit tok would convert to a
+   * silently wrong value (its tail, exponent included, dropped);
+   * answer a matching failure instead. The characters were
+   * consumed, as for any matching failure mid-token. */
+  if (overlong) return 0;
   tok[tn] = '\0';
   *out = strtod(tok, NULL);
   return 1;
