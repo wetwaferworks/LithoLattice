@@ -767,6 +767,38 @@ static int case_once(void) {
   return fails;
 }
 
+/* ---- case: once whose routine exits the thread (review M4) --------------
+ * The first caller's init_routine calls pthread_exit. The once must
+ * roll back to fresh so the next caller runs its routine and
+ * returns; before the fix it stayed "running" and this hung. */
+static pthread_once_t g_once_x = PTHREAD_ONCE_INIT;
+static uint32_t g_once_x_runs;
+static void once_exit_init(void) {
+  __atomic_add_fetch(&g_once_x_runs, 1u, __ATOMIC_SEQ_CST);
+  lt_pthread_exit((void*)(uintptr_t)77);
+}
+static void once_ok_init(void) {
+  __atomic_add_fetch(&g_once_x_runs, 1u, __ATOMIC_SEQ_CST);
+}
+static void* entry_once_exit(void* arg) {
+  (void)arg;
+  lt_pthread_once(&g_once_x, once_exit_init);
+  return NULL; /* not reached */
+}
+static int case_once_exit(void) {
+  int fails = 0;
+  pthread_t th;
+  void* rv = NULL;
+  __atomic_store_n(&g_once_x_runs, 0u, __ATOMIC_SEQ_CST);
+  CHECK(lt_pthread_create(&th, NULL, entry_once_exit, NULL) == 0);
+  CHECK(lt_pthread_join(th, &rv) == 0);
+  CHECK(rv == (void*)(uintptr_t)77);
+  CHECK(lt_pthread_once(&g_once_x, once_ok_init) == 0);
+  CHECK(lt_pthread_once(&g_once_x, once_ok_init) == 0);
+  CHECK(__atomic_load_n(&g_once_x_runs, __ATOMIC_SEQ_CST) == 2u);
+  return fails;
+}
+
 /* ---- case: TLS keys --------------------------------------------------------------------- */
 static pthread_key_t g_key1, g_key2;
 static int g_dtor_log_key[32];
@@ -1694,6 +1726,7 @@ int main(void) {
   RUN_CASE(case_cond_timedwait);
   RUN_CASE(case_rwlock);
   RUN_CASE(case_once);
+  RUN_CASE(case_once_exit);
   RUN_CASE(case_keys);
   RUN_CASE(case_errno);
   RUN_CASE(case_heap_glue);

@@ -390,7 +390,10 @@ with elapsed bounds), condvar bounded queue (1 producer /
 broadcast herd release, cond timedwait (monotonic clock,
 ETIMEDOUT with bounds, past deadline, malformed abstime),
 rwlock (writer exclusion, concurrent readers, writer waits for
-last reader), once under 8-way race, keys (per-thread values,
+last reader), once under 8-way race, once whose routine calls
+pthread_exit (review M4: the once rolls back to fresh and wakes its
+waiters; a C++ exception thrown through the routine, or a direct
+lw_exit, is NOT rolled back and still leaves the once running), keys (per-thread values,
 destructor passes including a destructor that re-arms another
 key, delete + generation inertness), per-thread errno (three
 threads holding 111 / 222 / 333 concurrently), heap glue churn

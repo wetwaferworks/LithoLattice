@@ -330,6 +330,7 @@ static void lt__key_runner(void* arg) {
  * accessor then falls back to its plain slot) instead of
  * recursing to exhaustion. */
 static LT__THREAD_LOCAL int lt__attaching;
+static void lt__once_abandon_all(void); /* review M4, see "once" */
 
 lt_rec_t* lt__attach_rec(void) {
   lt_rec_t* rec;
@@ -581,6 +582,7 @@ int pthread_equal(pthread_t a, pthread_t b) {
 
 void pthread_exit(void* retval) {
   lt_rec_t* rec = lt__current_rec;
+  lt__once_abandon_all(); /* review M4 */
   if (rec != NULL && rec->spawned) {
     if (lt_at_load32(&rec->exit_phase) == 0u) {
       rec->exit_value = retval;
@@ -1379,11 +1381,31 @@ int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t* attr,
  * LithoThread primitive), then stores 2 and notifies the word;
  * losers sleep on the word expecting 1, so the store's notify
  * (or the wait's entry value check) releases them to observe 2.
- * If the routine exits the thread (pthread_exit) the state is
- * left at 1 forever and later callers sleep until their own
- * exit: with no cancellation in this library there is no
- * cleaner answer, and POSIX's own answer rides on the
- * cancellation machinery we deliberately do not have. */
+ * Review M4: if the routine exits the thread (pthread_exit, from
+ * the routine or anything it calls) the once is rolled back to 0
+ * and its waiters woken, so the next caller runs the routine
+ * again, matching POSIX's cancellation answer ("as if
+ * pthread_once was never called"). Each running once is pushed
+ * on a per-thread chain whose nodes live in pthread_once's own
+ * frame, still alive when pthread_exit walks the chain (before
+ * its longjmp). Not covered, documented in docs/LITHOTHREAD.md:
+ * a C++ exception thrown through init_routine (this C file has no
+ * unwind cleanups) and a direct lw_exit bypassing pthread_exit. */
+typedef struct lt_once_node {
+  pthread_once_t* once;
+  struct lt_once_node* prev;
+} lt_once_node_t;
+static LT__THREAD_LOCAL lt_once_node_t* lt__once_top;
+
+static void lt__once_abandon_all(void) {
+  lt_once_node_t* n = lt__once_top;
+  lt__once_top = NULL;
+  while (n != NULL) {
+    lt_at_store32(&n->once->state, 0u);
+    lt__notify(&n->once->state, -1);
+    n = n->prev;
+  }
+}
 
 int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
   if (once_control == NULL || init_routine == NULL) return EINVAL;
@@ -1391,7 +1413,12 @@ int pthread_once(pthread_once_t* once_control, void (*init_routine)(void)) {
     uint32_t s = lt_at_load32(&once_control->state);
     if (s == 2u) return 0;
     if (s == 0u && lt_at_cas32(&once_control->state, 0u, 1u)) {
+      lt_once_node_t node;
+      node.once = once_control;
+      node.prev = lt__once_top;
+      lt__once_top = &node;
       init_routine();
+      lt__once_top = node.prev;
       lt_at_store32(&once_control->state, 2u);
       lt__notify(&once_control->state, -1);
       return 0;
