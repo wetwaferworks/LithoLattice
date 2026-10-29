@@ -124,6 +124,7 @@
 #include "litholattice/render_vk/sprite_vertices.h"  // B2: Vulkan sprite conversion contract
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1] Packed12 round trip
 #include "litholattice/core/seqlock.h"  // P0.5 review fix 1 (Cryosis (sirlinhart))
+#include "litholattice/core/thread_census.h"  // Thread Handshake P1
 
 using namespace litholattice;
 
@@ -8371,6 +8372,87 @@ void testMarchRay() {
 // Run at 1, 2, 8 and 16 reader threads. A naive "re-read the counter after the fields"
 // reader (the old pattern) runs alongside on the same words as a detector self-check:
 // its torn count is reported (informational; it depends on the hardware's interleaving).
+// Thread Handshake P1: census math for 1/2/4/8/16/32 cores, and record behaviour.
+void testThreadCensus() {
+  std::printf("core: thread census (Thread Handshake P1, record-only)\n");
+  struct Want { unsigned hw, shards, bands, pool, cap; bool small; };
+  const Want wants[] = {
+      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 3, 2, 1, true},
+      {8, 4, 7, 7, 7, false},  {16, 4, 15, 15, 15, false}, {32, 4, 16, 31, 31, false},
+  };
+  bool mathOk = true;
+  for (const Want& w : wants) {
+    const ThreadBudget b = computeThreadBudget(w.hw);
+    const bool ok = b.hw == w.hw && b.simShards == w.shards && b.renderBands == w.bands &&
+                    b.renderSpawned == w.bands - 1 && b.pool == w.pool && b.activeCap == w.cap &&
+                    b.smallMachine == w.small && b.simClock == 1 && b.mainThreads == 1;
+    std::printf("  census hw=%-2u: sim clock 1, shards %u, render bands %u (%u spawned), pool %u, cap %u%s -> %u spawned\n",
+                w.hw, b.simShards, b.renderBands, b.renderSpawned, b.pool, b.activeCap, b.smallMachine ? ", small" : "",
+                b.spawnedTotal());
+    mathOk = mathOk && ok;
+  }
+  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the rules");
+  check(computeThreadBudget(0).hw == 1 && computeThreadBudget(0).pool == 1, "thread census: unknown core count (0) treated as 1");
+  // Today's owners use the same numbers (record-only P1 must not change any count).
+  bool same = true;
+  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 12u, 16u, 32u, 64u}) {
+    const ThreadBudget b = computeThreadBudget(hw);
+    same = same && b.simShards == std::min(4u, hw > 1 ? hw - 1 : 1u) && b.renderBands == std::clamp(hw > 1 ? hw - 1 : 1u, 2u, 16u);
+  }
+  check(same, "thread census: shard and band counts equal the Timing Handshake and renderer auto rules");
+  // Small machines: the pool never takes the dedicated cores.
+  bool small = true;
+  for (unsigned hw = 1; hw <= 4; ++hw) { const ThreadBudget b = computeThreadBudget(hw); small = small && b.pool == std::max(1u, hw > 2 ? hw - 2 : 0u); }
+  check(small, "thread census: on <= 4 cores dedicated threads claim first, pool shrinks (floor 1)");
+  // hardware_concurrency is read once.
+  const ThreadBudget& b1 = cThreadCensus::instance().budget();
+  const ThreadBudget& b2 = cThreadCensus::instance().budget();
+  check(&b1 == &b2 && cThreadCensus::hwReads() == 1, "thread census: hardware_concurrency() read exactly once");
+
+  // Records: class A dedicated at tick 0; class B lend / reclaim through the ticket.
+  cThreadCensus c(8);
+  const uint32_t clk = c.declare(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
+  const uint32_t p0 = c.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool-0");
+  check(c.record(clk).state == ThreadState::Dedicated && c.record(clk).spawnTick == 0, "thread record: dedicated starts DEDICATED at spawnTick 0");
+  check(c.record(p0).state == ThreadState::Pooled, "thread record: pooled starts POOLED");
+  check(!c.tryClaim(clk, 5), "thread record: a dedicated thread cannot be lent");
+  check(c.tryClaim(p0, 10) && !c.tryClaim(p0, 11), "thread record: POOLED -> CLAIMED once (second claim refused)");
+  check(c.reclaim(p0, 12) && !c.reclaim(p0, 13), "thread record: CLAIMED -> RECLAIMED once");
+  check(c.tryClaim(p0, 20) && c.record(p0).ticket == 2 && c.record(p0).spawnTick == 20, "thread record: re-lend bumps the ticket");
+  // Telemetry never reaches the hash.
+  const uint64_t h = c.hash();
+  ThreadTelemetry t; t.osThreadId = 1234; t.wallSpawnNs = 987654321; t.name = "renamed";
+  c.setTelemetry(p0, t);
+  check(c.hash() == h, "thread record: telemetry (wall clock, OS id, name) is not hashed");
+  // Concurrent claims: exactly one winner per round.
+  cThreadCensus cc(16);
+  const uint32_t pw = cc.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool");
+  bool oneWinner = true;
+  for (int round = 0; round < 200; ++round) {
+    std::atomic<int> wins{0};
+    std::vector<std::thread> ts;
+    for (int i = 0; i < 8; ++i) ts.emplace_back([&] { if (cc.tryClaim(pw, uint64_t(round))) wins.fetch_add(1); });
+    for (auto& th : ts) th.join();
+    oneWinner = oneWinner && wins.load() == 1;
+    cc.reclaim(pw, uint64_t(round));
+  }
+  check(oneWinner && cc.record(pw).ticket == 200, "thread record: 8 racing claimers, exactly one wins each of 200 rounds");
+  // Power-down returns everything.
+  c.returnAll(99);
+  check(c.count(ThreadState::Returned) == c.size() && c.record(clk).reason == ThreadReturnReason::EnginePowerDown &&
+            c.record(clk).returnTick == 99,
+        "thread record: returnAll -> RETURNED, reason engine power-down, returnTick stamped");
+  // Same declarations + transitions -> same hash (deterministic, id order).
+  auto build = [] {
+    cThreadCensus x(4);
+    x.declare(ThreadClass::Dedicated, ThreadRole::Main, 0, "main");
+    const uint32_t q = x.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool-0");
+    x.tryClaim(q, 3); x.reclaim(q, 4); x.returnAll(7);
+    return x.hash();
+  };
+  check(build() == build(), "thread record: identical histories hash identically");
+}
+
 void testSeqLockStress() {
   const uint64_t kWrites = [] {
     const char* e = std::getenv("LL_SEQLOCK_WRITES");
@@ -8476,7 +8558,7 @@ void testJobInjectionStress() {
 
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
