@@ -21,3 +21,31 @@ set_tests_properties(engine_storage engine_assets engine_mods engine_world PROPE
 if(TEST engine_sim)
   set_tests_properties(engine_sim PROPERTIES TIMEOUT 300)
 endif()
+
+# LithoRoot native suites (review follow-up): the LibC, stdio, Weave,
+# Thread, WaferHeap and LithoAbi suites build with gcc on a Linux host
+# through lithoroot/toolchain/run-native-suites.sh. On Windows they run
+# inside WSL (the default distribution needs gcc/g++). Off by default so
+# a machine without WSL is unaffected. wasm_guard reports SKIP when no
+# wasm-capable clang is found; ctest shows that as skipped.
+option(LITHOROOT_NATIVE_SUITES "Register the LithoRoot native suites with ctest (needs bash+gcc, or WSL on Windows)" OFF)
+if(LITHOROOT_NATIVE_SUITES)
+  get_filename_component(_lr_root "${LithoLattice_SOURCE_DIR}/../lithoroot" ABSOLUTE)
+  if(WIN32)
+    find_program(LITHOROOT_WSL wsl REQUIRED)
+    string(SUBSTRING "${_lr_root}" 0 1 _lr_drive)
+    string(TOLOWER "${_lr_drive}" _lr_drive)
+    string(SUBSTRING "${_lr_root}" 2 -1 _lr_rest)
+    set(_lr_posix "/mnt/${_lr_drive}${_lr_rest}")
+    set(_lr_shell ${LITHOROOT_WSL} bash -c)
+  else()
+    find_program(LITHOROOT_BASH bash REQUIRED)
+    set(_lr_posix "${_lr_root}")
+    set(_lr_shell ${LITHOROOT_BASH} -c)
+  endif()
+  foreach(suite waferheap libc_core lithoweave lithothread libc_stdio lithoabi libc_new_delete wasm_guard)
+    add_test(NAME lithoroot_${suite}
+             COMMAND ${_lr_shell} "cd '${_lr_posix}' && LR_OUT=/tmp/lr-ctest/${suite} bash toolchain/run-native-suites.sh ${suite}")
+    set_tests_properties(lithoroot_${suite} PROPERTIES TIMEOUT 600 SKIP_REGULAR_EXPRESSION "SKIP")
+  endforeach()
+endif()
