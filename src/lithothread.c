@@ -1205,7 +1205,18 @@ int pthread_condattr_getpshared(const pthread_condattr_t* attr, int* pshared) {
  * the benefit is that read-mostly engine tables never convoy
  * behind a queued writer. POSIX permits either preference.
  * Upgrading a held read lock to a write lock is undefined (it
- * deadlocks here, as in most implementations); release first. */
+ * deadlocks here, as in most implementations); release first.
+ *
+ * Review L5 notes. The reader count is capped one below the writer
+ * bit: rdlock / tryrdlock at the cap answer EAGAIN (POSIX: maximum
+ * read locks exceeded) instead of carrying into bit 31. Unlock does
+ * not check ownership: the 16-byte layout has no room for a writer
+ * tid, so unlocking a lock the caller does not hold is undefined
+ * behaviour (as POSIX states) and is not diagnosed. Writer
+ * starvation under a read flood is the documented price of reader
+ * preference above, and a writer release wakes every sleeper of
+ * both classes (a herd), as pthread_cond_signal does (see
+ * lt__cond_wake). */
 
 #define LT__RW_WRITER 0x80000000u
 #define LT__RW_READERS 0x7FFFFFFFu
@@ -1250,6 +1261,7 @@ static int lt__rwlock_acquire(pthread_rwlock_t* r, int write,
     if (write) {
       if (l == 0u && lt_at_cas32(&r->lock, 0u, LT__RW_WRITER)) break;
     } else {
+      if ((l & LT__RW_WRITER) == 0u && l == LT__RW_READERS) return EAGAIN;
       if ((l & LT__RW_WRITER) == 0u &&
           lt_at_cas32(&r->lock, l, l + 1u)) {
         break;
@@ -1302,6 +1314,7 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t* r) {
   if (lt__rwlock_validate(r) != 0) return EINVAL;
   l = lt_at_load32(&r->lock);
   if ((l & LT__RW_WRITER) != 0u) return EBUSY;
+  if (l == LT__RW_READERS) return EAGAIN; /* reader cap (L5) */
   if (!lt_at_cas32(&r->lock, l, l + 1u)) return EBUSY;
   LT_TSAN_ACQUIRE(r);
   return 0;

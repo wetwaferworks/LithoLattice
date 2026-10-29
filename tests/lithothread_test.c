@@ -1594,6 +1594,25 @@ static int case_audit_mutex_count_sat(void) {
   return fails;
 }
 
+/* --- review L5: the reader count stops one below the writer bit. */
+static int case_rwlock_reader_cap(void) {
+  int fails = 0;
+  pthread_rwlock_t rw;
+  CHECK(lt_pthread_rwlock_init(&rw, NULL) == 0);
+  CHECK(lt_pthread_rwlock_rdlock(&rw) == 0);
+  rw.lock = 0x7FFFFFFFu; /* white-box: at the cap */
+  CHECK(lt_pthread_rwlock_rdlock(&rw) == EAGAIN);
+  CHECK(lt_pthread_rwlock_tryrdlock(&rw) == EAGAIN);
+  CHECK(lt_pthread_rwlock_trywrlock(&rw) == EBUSY);
+  CHECK(rw.lock == 0x7FFFFFFFu); /* no carry into the writer bit */
+  rw.lock = 1u;
+  CHECK(lt_pthread_rwlock_unlock(&rw) == 0);
+  CHECK(lt_pthread_rwlock_trywrlock(&rw) == 0);
+  CHECK(lt_pthread_rwlock_unlock(&rw) == 0);
+  CHECK(lt_pthread_rwlock_destroy(&rw) == 0);
+  return fails;
+}
+
 /* --- C-F6: an abstime whose nanosecond conversion would wrap
  * is EINVAL, promptly... not an instant ETIMEDOUT off a wrapped
  * deadline. 18446744074 * 1e9 wraps uint64 (the threshold is
@@ -1796,6 +1815,7 @@ int main(void) {
   RUN_CASE(case_audit_rwlock_trap);
   RUN_CASE(case_audit_join_values);
   RUN_CASE(case_audit_mutex_count_sat);
+  RUN_CASE(case_rwlock_reader_cap);
   RUN_CASE(case_audit_abstime_bound);
   RUN_CASE(case_audit_exit_from_dtor);
 
