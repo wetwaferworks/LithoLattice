@@ -393,6 +393,64 @@ static int case_detach_reap_stress(void) {
   return fails;
 }
 
+/* ---- case: foreign thread release (review M1) --------------------------
+ * A thread made by the HOST's pthread_create (not ours) attaches
+ * lazily on first use (self, keys, errno). Without
+ * lithothread_release_self its weave block, record and key array
+ * leaked; with it the allocation balance returns to baseline and
+ * its key destructor runs. The host entry points are fetched with
+ * dlsym because this file's pthread_* names are the lt_ ones. */
+extern void* dlsym(void* handle, const char* symbol);
+typedef int (*host_create_t)(unsigned long*, const void*, void* (*)(void*),
+                             void*);
+typedef int (*host_join_t)(unsigned long, void**);
+static pthread_key_t g_fk;
+static volatile uint32_t g_fk_dtor_runs;
+static void fk_dtor(void* v) {
+  (void)v;
+  __atomic_add_fetch(&g_fk_dtor_runs, 1u, __ATOMIC_SEQ_CST);
+}
+static void* entry_foreign(void* arg) {
+  (void)arg;
+  (void)lt_pthread_self();
+  lt_pthread_setspecific(g_fk, (void*)(uintptr_t)1);
+  LT_ERRNO = 3;
+  lithothread_release_self();
+  return NULL;
+}
+static int case_foreign_release(void) {
+  int fails = 0;
+  host_create_t hc;
+  host_join_t hj;
+  void* p;
+  int i;
+  long net0;
+  p = dlsym((void*)0, "pthread_create");
+  memcpy(&hc, &p, sizeof hc);
+  p = dlsym((void*)0, "pthread_join");
+  memcpy(&hj, &p, sizeof hj);
+  CHECK(hc != NULL && hj != NULL);
+  if (hc == NULL || hj == NULL) return fails;
+  CHECK(lt_pthread_key_create(&g_fk, fk_dtor) == 0);
+  __atomic_store_n(&g_fk_dtor_runs, 0u, __ATOMIC_SEQ_CST);
+  /* Warm the host thread caches once, then measure. */
+  {
+    unsigned long t;
+    CHECK(hc(&t, NULL, entry_foreign, NULL) == 0);
+    CHECK(hj(t, NULL) == 0);
+  }
+  net0 = alloc_net();
+  for (i = 0; i < 8; ++i) {
+    unsigned long t;
+    CHECK(hc(&t, NULL, entry_foreign, NULL) == 0);
+    CHECK(hj(t, NULL) == 0);
+  }
+  CHECK(alloc_net() == net0);
+  CHECK(__atomic_load_n(&g_fk_dtor_runs, __ATOMIC_SEQ_CST) == 9u);
+  CHECK(lt_pthread_key_delete(g_fk) == 0);
+  return fails;
+}
+
 /* ---- case: mutex contention exactness ---------------------------------- */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long long g_counter; /* guarded by g_mu only */
@@ -1719,6 +1777,7 @@ int main(void) {
   RUN_CASE(case_create_join);
   RUN_CASE(case_detach);
   RUN_CASE(case_detach_reap_stress);
+  RUN_CASE(case_foreign_release);
   RUN_CASE(case_mutex_contention);
   RUN_CASE(case_mutex_flavors);
   RUN_CASE(case_cond_queue);

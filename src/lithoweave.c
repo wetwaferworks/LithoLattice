@@ -432,6 +432,21 @@ void lw_run_tls_destructors(void) {
   ctl->exiting = 0;
 }
 
+void lw_release_self(void) {
+  lw_control_t* ctl = lw__current;
+  if (ctl == NULL || ctl->spawned || (ctl->flags & LW__F_SELF) == 0u ||
+      (ctl->flags & LW__F_MAIN) != 0u || ctl->exiting) {
+    return;
+  }
+  lw_run_tls_destructors();
+  lw__drop_dtors(ctl); /* anything a destructor registered late */
+  lw__lock();
+  lw__unlink_locked(ctl);
+  lw__unlock();
+  lw__current = NULL;
+  free(ctl);
+}
+
 /* ---- exit ------------------------------------------------------------------ */
 void lw_exit(void* retval) {
   lw_control_t* ctl = lw__current;

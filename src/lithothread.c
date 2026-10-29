@@ -355,6 +355,24 @@ lt_rec_t* lt__attach_rec(void) {
   return rec;
 }
 
+void lithothread_release_self(void) {
+  lt_rec_t* rec = lt__current_rec;
+  if (rec != NULL && rec->spawned) return;
+  if (rec != NULL) {
+    if (lw_thread_tid(rec->handle) == 1) return; /* main thread */
+    /* Destructors first, with the record alive: the weave list
+     * holds lt__key_runner(rec). */
+    lw_run_tls_destructors();
+    lt__run_key_destructors(rec);
+    lt__spin_lock(&lt__registry_lock);
+    lt__unlink_locked(rec);
+    lt__spin_unlock(&lt__registry_lock);
+    lt__current_rec = NULL;
+    lt__free_rec(rec);
+  }
+  lw_release_self();
+}
+
 lt_rec_t* lt__self_rec(void) {
   if (lt__current_rec != NULL) return lt__current_rec;
   return lt__attach_rec();

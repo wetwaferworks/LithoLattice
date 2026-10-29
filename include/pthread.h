@@ -278,6 +278,15 @@ int pthread_key_delete(pthread_key_t key);
 int pthread_setspecific(pthread_key_t key, const void* value);
 void* pthread_getspecific(pthread_key_t key);
 
+/* LithoThread extension (review M1). A foreign thread (not created
+ * by pthread_create, not the main thread) that used LithoThread or
+ * errno gets a record, key array and weave block attached lazily;
+ * nothing frees them when it ends, because no host hook reports a
+ * foreign thread's end. Call this as the thread's last LithoRoot
+ * act: it runs its key and TLS destructors and frees the record and
+ * the weave block. No-op for pthread_create'd and main threads. */
+void lithothread_release_self(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

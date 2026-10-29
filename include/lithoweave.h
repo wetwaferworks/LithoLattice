@@ -199,6 +199,18 @@ lithosys_err_t lw_thread_atexit(void (*fn)(void*), void* arg);
  * lw_exit. */
 void lw_run_tls_destructors(void);
 
+/* Review M1: release a lazily attached FOREIGN thread (one the
+ * weave did not spawn and that is not the main thread). Runs its
+ * TLS destructors, then unlinks and frees its control block. Such a
+ * thread's block is otherwise never freed: no host hook tells the
+ * weave that a foreign thread ended (the frozen host surface has
+ * none), so a foreign thread that touched the weave (directly, or
+ * through errno / pthread_self / keys) must call this (or
+ * lithothread_release_self, which calls it) as its last LithoRoot
+ * act. No-op on spawned threads and on the main thread. A later
+ * weave call on the same thread simply attaches it afresh. */
+void lw_release_self(void);
+
 /* Exit the calling thread with a return value, as if its entry
  * had returned it: the entry is unwound (setjmp/longjmp inside the
  * trampoline), TLS destructors run, and the thread's start
