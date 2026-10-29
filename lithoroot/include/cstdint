@@ -1,0 +1,28 @@
+/* cstdint ... the LithoLibC++ <cstdint> header, added by the
+ * toolchain piece. See <cstddef> for why these wrappers exist and
+ * why they are this thin: the C header does the work, this header
+ * lifts the fixed-width names into namespace std.
+ */
+#ifndef LITHOLIBC_CSTDINT_H
+#define LITHOLIBC_CSTDINT_H
+
+#include <stdint.h>
+
+namespace std {
+
+using ::int8_t;
+using ::int16_t;
+using ::int32_t;
+using ::int64_t;
+using ::uint8_t;
+using ::uint16_t;
+using ::uint32_t;
+using ::uint64_t;
+using ::intptr_t;
+using ::uintptr_t;
+using ::intmax_t;
+using ::uintmax_t;
+
+} /* namespace std */
+
+#endif /* LITHOLIBC_CSTDINT_H */

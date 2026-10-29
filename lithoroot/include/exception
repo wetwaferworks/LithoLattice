@@ -1,0 +1,56 @@
+/* exception ... the LithoLibC++ <exception> header, seeded by LithoAbi.
+ *
+ * This header declares ONLY what LithoAbi defines: the std::exception
+ * and std::bad_exception classes, the terminate / unexpected handler
+ * machinery, and the uncaught-exception queries. Their storage and
+ * behavior live in the ABI runtime because the __cxa_* layer depends
+ * on them (the handlers are captured into every exception header at
+ * throw time). The rest of the standard <exception> surface
+ * (exception_ptr, current_exception, nested_exception) is stdlib
+ * code, not ABI code: it arrives with the future stdlib piece, which
+ * widens this header then and builds on the __cxa_*_primary_exception
+ * primitives declared in <cxxabi.h>. Declaring only what exists
+ * keeps every header in LithoRoot an honest map of what links.
+ *
+ * The classes below are layout-fixed by the Itanium C++ ABI: the
+ * compiler emits references to their vtables and typeinfos
+ * (_ZTVSt9exception, _ZTISt9exception, ...) and those objects are
+ * provided by src/lithoabi/std_exceptions.cc. Do not add data
+ * members or reorder the virtuals.
+ */
+#ifndef LITHOABI_EXCEPTION_H
+#define LITHOABI_EXCEPTION_H
+
+namespace std {
+
+class exception {
+public:
+  exception() noexcept {}
+  virtual ~exception();
+  virtual const char* what() const noexcept;
+};
+
+class bad_exception : public exception {
+public:
+  bad_exception() noexcept {}
+  ~bad_exception() override;
+  const char* what() const noexcept override;
+};
+
+typedef void (*terminate_handler)();
+typedef void (*unexpected_handler)();
+
+terminate_handler set_terminate(terminate_handler handler) noexcept;
+unexpected_handler set_unexpected(unexpected_handler handler) noexcept;
+terminate_handler get_terminate() noexcept;
+unexpected_handler get_unexpected() noexcept;
+
+[[noreturn]] void terminate() noexcept;
+[[noreturn]] void unexpected();
+
+bool uncaught_exception() noexcept;
+int uncaught_exceptions() noexcept;
+
+} /* namespace std */
+
+#endif /* LITHOABI_EXCEPTION_H */

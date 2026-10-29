@@ -1,0 +1,53 @@
+/* new ... the LithoLibC++ <new> header, seeded by LithoAbi.
+ *
+ * Declares ONLY the two allocation-failure exception classes whose
+ * vtables and typeinfos the ABI runtime owns (the census of the
+ * current engine binary found their typeinfo name strings,
+ * "St9bad_alloc" and "St20bad_array_new_length", in the vendor ABI
+ * library's place; in LithoRoot that place is
+ * src/lithoabi/std_exceptions.cc), plus the nothrow tag type the
+ * classes' header conventionally travels with.
+ *
+ * operator new / operator delete are NOT declared here: they are
+ * stdlib functions over LithoLibC malloc, defined by the stdlib
+ * piece in src/libc/new_delete.cc. The one widening that file
+ * forced (toolchain piece, docs/TOOLCHAIN.md): std::align_val_t,
+ * the C++17 aligned-allocation tag its definitions name, is
+ * declared below. The new_handler VARIABLE the ABI keeps
+ * (__cxa_new_handler, declared in <cxxabi.h>) is ABI storage;
+ * set_new_handler itself is stdlib surface and also waits.
+ */
+#ifndef LITHOABI_NEW_H
+#define LITHOABI_NEW_H
+
+#include <cstddef>
+#include <exception>
+
+namespace std {
+
+typedef void (*new_handler)();
+
+enum class align_val_t : size_t {};
+
+class bad_alloc : public exception {
+public:
+  bad_alloc() noexcept {}
+  ~bad_alloc() override;
+  const char* what() const noexcept override;
+};
+
+class bad_array_new_length : public bad_alloc {
+public:
+  bad_array_new_length() noexcept {}
+  ~bad_array_new_length() override;
+  const char* what() const noexcept override;
+};
+
+struct nothrow_t {
+  explicit nothrow_t() = default;
+};
+extern const nothrow_t nothrow;
+
+} /* namespace std */
+
+#endif /* LITHOABI_NEW_H */

@@ -1,0 +1,27 @@
+/* cstddef ... the LithoLibC++ <cstddef> header, added by the
+ * toolchain piece.
+ *
+ * The C++ sources of LithoRoot (LithoAbi, new_delete.cc) include
+ * the C++ wrapper headers <cstddef>, <cstdint> and <cstring>; on
+ * the host gates those resolved to the host C++ library's, but the
+ * wasm sysroot is ours end to end, so the wrappers live here. Each
+ * is the standard shape and nothing more: pull in the C header
+ * (ours, or the compiler's own for <stddef.h>) and lift the names
+ * into namespace std. The surface is the one the sources use,
+ * stated in docs/TOOLCHAIN.md.
+ */
+#ifndef LITHOLIBC_CSTDDEF_H
+#define LITHOLIBC_CSTDDEF_H
+
+#include <stddef.h>
+
+namespace std {
+
+using ::size_t;
+using ::ptrdiff_t;
+
+typedef decltype(nullptr) nullptr_t;
+
+} /* namespace std */
+
+#endif /* LITHOLIBC_CSTDDEF_H */

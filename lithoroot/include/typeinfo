@@ -1,0 +1,95 @@
+/* typeinfo ... the LithoLibC++ <typeinfo> header, seeded by LithoAbi.
+ *
+ * Declares std::type_info with the protected virtual interface the
+ * Itanium C++ ABI fixes for it (the shape libstdc++ and libcxxrt
+ * share, because the compiler generates typeinfo objects against
+ * exactly these vtable slots and this object layout), plus
+ * std::bad_cast and std::bad_typeid, whose vtables and typeinfos
+ * the ABI runtime owns (src/lithoabi/std_exceptions.cc).
+ *
+ * The derived type_info classes of namespace __cxxabiv1 (class,
+ * si_class, vmi_class, pointer, function and friends) are declared
+ * in the internal header src/lithoabi/typeinfo_layout.h: the public
+ * <cxxabi.h> of the reference implementations does not carry their
+ * bodies either, and only the runtime and the compiler's emitted
+ * objects ever see them. The layouts there are ABI data layout and
+ * must not drift from this header's base layout: one vtable pointer,
+ * then the name pointer.
+ *
+ * Equality: in a single statically linked module (the engine's
+ * shape on every target LithoRoot serves), one type has one
+ * typeinfo object, so identity of the name pointer is identity of
+ * the type. operator== compares name pointers, with object identity
+ * first. Cross-module typeinfo merging is a dynamic-linking concern
+ * this runtime does not have; see docs/LITHOABI.md.
+ */
+#ifndef LITHOABI_TYPEINFO_H
+#define LITHOABI_TYPEINFO_H
+
+#include <exception>
+#include <cstddef>
+
+namespace __cxxabiv1 {
+class __class_type_info;
+} /* namespace __cxxabiv1 */
+
+namespace std {
+
+class type_info {
+public:
+  virtual ~type_info();
+
+  bool operator==(const type_info& rhs) const noexcept {
+    return this == &rhs || __type_name == rhs.__type_name;
+  }
+  bool operator!=(const type_info& rhs) const noexcept {
+    return !(*this == rhs);
+  }
+  bool before(const type_info& rhs) const noexcept {
+    return __type_name < rhs.__type_name;
+  }
+  std::size_t hash_code() const noexcept {
+    return reinterpret_cast<std::size_t>(__type_name);
+  }
+  const char* name() const noexcept { return __type_name; }
+
+  type_info(const type_info&) = delete;
+  type_info& operator=(const type_info&) = delete;
+
+protected:
+  const char* __type_name;
+  explicit type_info(const char* name) : __type_name(name) {}
+
+public:
+  /* The ABI virtuals. Slot order is ABI-fixed: after the two
+   * destructor slots come these four, in this order. They are
+   * public here (access control is not part of the ABI layout):
+   * their callers are the personality routine, the catch matching
+   * of unrelated type_info classes, and __dynamic_cast, none of
+   * which are members of the classes they call through, and the
+   * reference runtimes all hit the same wall. */
+  virtual bool __is_pointer_p() const;
+  virtual bool __is_function_p() const;
+  virtual bool __do_catch(const type_info* thrown_type, void** thrown_obj,
+                          unsigned outer) const;
+  virtual bool __do_upcast(const __cxxabiv1::__class_type_info* dst_type,
+                           void** obj_ptr) const;
+};
+
+class bad_cast : public exception {
+public:
+  bad_cast() noexcept {}
+  ~bad_cast() override;
+  const char* what() const noexcept override;
+};
+
+class bad_typeid : public exception {
+public:
+  bad_typeid() noexcept {}
+  ~bad_typeid() override;
+  const char* what() const noexcept override;
+};
+
+} /* namespace std */
+
+#endif /* LITHOABI_TYPEINFO_H */
