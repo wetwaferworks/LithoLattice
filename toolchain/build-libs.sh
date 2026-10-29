@@ -18,7 +18,15 @@ rm -rf "$OBJ"
 mkdir -p "$OBJ"
 
 FEATS="-matomics -mbulk-memory -msign-ext -mthread-model posix"
-CFLAGS="--target=wasm32 -std=c99 -O1 -Wall -Wextra $FEATS -I include"
+# -ffreestanding -fno-builtin (review L8): LithoLibC implements memcpy,
+# memmove, memset and friends itself, so the compiler must not
+# recognise their loops as those builtins and lower them back into
+# self-calls (not observed at -O1/-O2 on clang 20, but nothing else
+# prevents it under LTO or a later LLVM).
+# -DLITHOROOT_WITH_THREAD (review L9): this matrix links LithoThread,
+# whose lithothread_errno.c owns __litholibc_errno_location; errno.c
+# compiles empty under the define even if it is ever added below.
+CFLAGS="--target=wasm32 -std=c99 -O1 -Wall -Wextra -ffreestanding -fno-builtin -DLITHOROOT_WITH_THREAD $FEATS -I include"
 CXXFLAGS="--target=wasm32 -std=c++17 -O1 -Wall -Wextra $FEATS -fwasm-exceptions -I include"
 
 # The wasm sysroot translation units. Excluded on purpose:
