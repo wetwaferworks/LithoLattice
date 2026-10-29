@@ -516,9 +516,13 @@ int pthread_join(pthread_t thread, void** retval) {
   if (err != LITHOSYS_OK) {
     /* Our registry is authoritative for detach / claim state, so
      * a refusal here means the weave disagrees about the handle
-     * itself; there is no safe recovery, and the claim stands so
-     * the record cannot be double-reaped. Unreachable through
-     * this API's own calls. */
+     * itself. Unreachable through this API's own calls. Review
+     * L11: drop the claim so the record is not left permanently
+     * unjoinable and undetachable; nothing was unlinked or freed,
+     * so releasing it cannot double-reap. */
+    lt__spin_lock(&lt__registry_lock);
+    rec->join_claimed = 0;
+    lt__spin_unlock(&lt__registry_lock);
     return EINVAL;
   }
   /* Answer the value the weave collected: it is the only write
