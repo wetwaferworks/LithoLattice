@@ -35,7 +35,29 @@ bool near(double a, double b, double tol) { return std::fabs(a - b) <= tol; }
 
 }  // namespace
 
+#if defined(_WIN32)
+#include <crtdbg.h>
+#include <cstdlib>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// Headless test runs (2026-10-29): Debug CRT asserts / aborts report to stderr and
+// fail the process instead of popping an Abort/Retry/Ignore dialog on the desktop.
+static void quietCrtDialogs() {
+  _set_error_mode(_OUT_TO_STDERR);
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+}
+#else
+static void quietCrtDialogs() {}
+#endif
 int main() {
+  quietCrtDialogs();
   const double kDt = 1.0 / 60.0;
   LocomotionInput none{};
 

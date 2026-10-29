@@ -8358,7 +8358,29 @@ int runModule(const std::string& m) {
 
 }  // namespace
 
+#if defined(_WIN32)
+#include <crtdbg.h>
+#include <cstdlib>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// Headless test runs (2026-10-29): Debug CRT asserts / aborts report to stderr and
+// fail the process instead of popping an Abort/Retry/Ignore dialog on the desktop.
+static void quietCrtDialogs() {
+  _set_error_mode(_OUT_TO_STDERR);
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+}
+#else
+static void quietCrtDialogs() {}
+#endif
 int main(int argc, char** argv) {
+  quietCrtDialogs();
   const char* all[] = {"core", "world", "render", "sim", "anim", "storage", "procgen", "trees", "shrubs", "litho_formula", "ui", "assets", "audio", "input", "net", "script", "mods", "console", "index", "mcp", "defrag", "subdiv", "texture"};
   int fails = 0;
   if (argc > 1) for (int i = 1; i < argc; ++i) fails += runModule(argv[i]);
