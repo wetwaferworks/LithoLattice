@@ -77,7 +77,18 @@ struct LocomotionConfig {
   /// on the ground, drifting in the air.
   double groundAccel = 40.0;
   double airAccel = 4.0;
+  /// Auto-step height in blocks (Litho Strike P3, 2026-10-26): when a grounded
+  /// Walk body is blocked horizontally by an obstacle no taller than this,
+  /// a swept raised move lifts it onto the obstacle instead of stopping it.
+  /// Clamped to kMaxStepHeight. 0 = OFF (the default for every existing user).
+  double stepHeight = 0.0;
 };
+
+/// Hard ceiling on LocomotionConfig::stepHeight, enforced inside the controller
+/// (review M2, 2026-10-29). The config is authority-side data (server / sim
+/// thread), never taken from a client; even so, a config asking for more than
+/// one block is clamped so auto-step can never become wall climbing.
+constexpr double kMaxStepHeight = 1.0;
 
 /// Character movement for one body: modes, poses, gravity, speeds.
 ///
@@ -128,7 +139,8 @@ struct LocomotionConfig {
 /// horizontal target = wish * flySpeed approached at groundAccel.
 ///
 /// Deliberately omitted (future feel work, do not read as missing): swim /
-/// climb modes, coyote time, jump buffering, auto-step.
+/// climb modes, coyote time, jump buffering. Auto-step is a config option
+/// (LocomotionConfig::stepHeight, default 0 = off, clamped to kMaxStepHeight).
 class ILocomotion {
  public:
   virtual ~ILocomotion() = default;

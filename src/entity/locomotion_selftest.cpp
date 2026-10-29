@@ -6,6 +6,7 @@
 // resting positions are asserted to 1e-6..1e-2 as noted per check; speeds
 // come from an exponential approach whose residual after the settle times
 // used here is far below the 2% bands asserted.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -311,6 +312,46 @@ int main() {
     e2.x = 0; e2.y = 0; e2.z = 0;
     for (int i = 0; i < 3; ++i) { run(s, e2, dn, kFloor, kDt, 2); run(s, e2, none, kFloor, 0.5, 1); }
     check(!s.kneeling(), "kneel: slow taps (outside the 0.6 s window) do not kneel");
+  }
+  {
+  // --- Auto-step (Litho Strike integration 2026-10-29): swept path, cap at kMaxStepHeight ---
+  // Floor top at y = 30. A 1-high step at x = 5; a 2-high wall at x = 14 in front of a step at x = 15.
+  const auto solid = [](int x, int y, int z) {
+    if (z < 0 || z > 11) return y < 30;
+    return y < 30 || (x == 5 && y == 30) || (x == 14 && (y == 30 || y == 31)) || (x == 15 && y == 30);
+  };
+  LocomotionInput walk{};
+  walk.wishX = 1.0;
+  {  // default: off (every existing user is unchanged)
+    LocomotionConfig cfg;
+    cLocomotionController ctl(cfg);
+    Entity e; e.x = 3.5; e.y = 30.0; e.z = 5.5; e.onGround = true;
+    for (int i = 0; i < 64; ++i) ctl.step(e, walk, solid, 1.0 / 32.0);
+    check(cfg.stepHeight == 0.0 && e.x < 5.0 && e.y < 30.5, "auto-step: default stepHeight 0 = off, the step is a wall");
+  }
+  {  // on: climbs a 1-high step
+    LocomotionConfig cfg; cfg.stepHeight = 1.0;
+    cLocomotionController ctl(cfg);
+    Entity e; e.x = 3.5; e.y = 30.0; e.z = 5.5; e.onGround = true;
+    double maxY = e.y;
+    for (int i = 0; i < 64; ++i) { ctl.step(e, walk, solid, 1.0 / 32.0); maxY = std::max(maxY, e.y); }
+    check(maxY > 30.9 && e.x > 5.5, "auto-step: stepHeight 1 climbs a 1-block step");
+  }
+  {  // swept path: a 2-high wall cannot be clipped at a large dt
+    LocomotionConfig cfg; cfg.stepHeight = 1.0;
+    cLocomotionController ctl(cfg);
+    Entity e; e.x = 13.6; e.y = 30.0; e.z = 5.5; e.onGround = true; e.vx = 8.0;
+    LocomotionInput run = walk; run.sprint = true;
+    for (int i = 0; i < 8; ++i) ctl.step(e, run, solid, 0.25);
+    check(e.x < 14.0 && e.y < 30.5, "auto-step: swept raised move cannot clip a 2-high wall at dt 0.25");
+  }
+  {  // cap: stepHeight 3 is clamped to one block
+    LocomotionConfig cfg; cfg.stepHeight = 3.0;
+    cLocomotionController ctl(cfg);
+    Entity e; e.x = 13.6; e.y = 30.0; e.z = 5.5; e.onGround = true;
+    for (int i = 0; i < 64; ++i) ctl.step(e, walk, solid, 1.0 / 32.0);
+    check(e.x < 14.0 && e.y < 30.5 && kMaxStepHeight == 1.0, "auto-step: stepHeight is clamped to kMaxStepHeight = 1");
+  }
   }
   return g_fails;
 }

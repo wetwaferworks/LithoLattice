@@ -175,6 +175,7 @@ void cLocomotionController::step(Entity& e, const LocomotionInput& in,
 
   // -- Sneak edge-guard bookkeeping (Walk + Sneak + grounded, pre-move).
   const bool guardArmed = mode_ == LocomotionMode::Walk && pose_ == LocomotionPose::Sneak && e.onGround;
+  const bool groundedAtStart = e.onGround;  // the auto-step's licence
   const double preX = e.x, preY = e.y, preZ = e.z;
 
   // -- Substep count: moveCollide moves discretely per axis, so cap each
@@ -207,6 +208,53 @@ void cLocomotionController::step(Entity& e, const LocomotionInput& in,
     moveCollide(e, isSolid, hw, float(height), h);
   }
 
+  // -- Auto-step (Litho Strike P3, 2026-10-26; config stepHeight, default 0 =
+  // off): a grounded, standing Walk body that was blocked horizontally (it
+  // got less than half its intended horizontal travel) retries the move one
+  // step higher. Review M2/M3 (2026-10-29): the retry is a real swept move,
+  // not a teleport. (1) The lift needs headroom where the body stands. (2)
+  // The horizontal move is swept at the raised height through moveCollide,
+  // the same per-axis clamp as walking, so an obstacle anywhere along the
+  // raised path stops it (no corner clipping at large dt). (3) One swept
+  // downward move settles onto the step's top, replacing the old 1/32-block
+  // probe loop. The lift is clamped to kMaxStepHeight. On acceptance the
+  // horizontal velocity is restored to the step's targets: stepping must not
+  // kill momentum. Pure function of (state, input, world, dt).
+  const double stepLift = std::min(cfg_.stepHeight, kMaxStepHeight);
+  if (mode_ == LocomotionMode::Walk && stepLift > 0.0 && groundedAtStart && e.onGround &&
+      pose_ == LocomotionPose::Stand && !in.jump && (wishX != 0.0 || wishZ != 0.0)) {
+    const double ix = targetVx * dt, iz = targetVz * dt;
+    const double dx = e.x - preX, dz = e.z - preZ;
+    const double intended2 = ix * ix + iz * iz;
+    const double moved2 = dx * dx + dz * dz;
+    if (intended2 > 0.0 && moved2 < 0.25 * intended2 &&
+        fitsAt(preX, preY + stepLift, preZ, cfg_.halfWidth, height, isSolid)) {
+      Entity t = e;
+      t.x = preX;
+      t.y = preY + stepLift;
+      t.z = preZ;
+      t.vx = targetVx;
+      t.vy = 0.0;
+      t.vz = targetVz;
+      moveCollide(t, isSolid, hw, float(height), dt);
+      const double rx = t.x - preX, rz = t.z - preZ;
+      if (rx * rx + rz * rz > moved2) {  // the raised path really got further
+        t.vx = 0.0;
+        t.vz = 0.0;
+        t.vy = -(stepLift + 0.5);  // one swept drop of lift + 0.5 over unit time
+        moveCollide(t, isSolid, hw, float(height), 1.0);
+        if (t.onGround && t.y > preY + 0.5 * stepLift) {
+          e.x = t.x;
+          e.y = t.y;
+          e.z = t.z;
+          e.vx = targetVx;
+          e.vz = targetVz;
+          e.vy = 0.0;
+          e.onGround = true;
+        }
+      }
+    }
+  }
   // -- Sneak edge-guard verdict: a grounded sneak that ended airborne with
   // no support within 1.05 blocks below the new footprint never meant to
   // leave — restore the full pre-move position and the grounded flag (the
