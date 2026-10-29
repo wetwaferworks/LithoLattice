@@ -4302,6 +4302,17 @@ class FoldSystem : public ISimSystem {
   }
 };
 
+/// Pushes payload 99, then throws on tick 0 only (partial-commit rollback test).
+class PushThenThrowSystem : public ISimSystem {
+ public:
+  const char* name() const override { return "T"; }
+  std::vector<ResourceAccess> access() const override { return {writeRes(kLog + 2)}; }
+  void update(SchedTickContext& ctx) override {
+    ctx.commands.push(StructuralCommand{StructuralCommand::Kind::Spawn, 0, 99, {}});
+    if (ctx.tick == 0) throw std::runtime_error("fixture: system fails mid-stage");
+  }
+};
+
 /// Pushes Spawn commands with fixed payloads (drain-order test).
 class PushSystem : public ISimSystem {
  public:
@@ -4470,6 +4481,41 @@ void testDetSched() {
     const uint64_t h4 = runWorldJs(4, ticks), h8 = runWorldJs(8, ticks);
     const bool okJs = ref == h1 && h1 == h2 && h2 == h4 && h4 == h8 && ref != 0;
     check(okJs, "det-sched: cJobSystem backend hashes bit-identical to JobPool on 1, 2, 4, 8 workers");
+  }
+
+  // --- P0.5 review fix 4 (external review by Cryosis (sirlinhart)): a failed stage
+  //     commits nothing, and its discarded commands never leak into the next tick ---
+  {
+    bool okPool = true, okJs = true;
+    for (unsigned threads : {1u, 2u, 8u, 16u}) {
+      for (int backend = 0; backend < 2; ++backend) {
+        SchedWorld w;
+        size_t applies = 0;
+        cDeterministicScheduler sched([&](void* wp, size_t sysId, const StructuralCommand& c) {
+          ++applies;
+          static_cast<SchedWorld*>(wp)->drainLog.push_back((sysId << 32) | c.payload);
+        });
+        sched.addSystem(std::make_unique<PushSystem>("P", kLog, std::vector<uint64_t>{11, 12}));
+        sched.addSystem(std::make_unique<PushThenThrowSystem>());
+        sched.addSystem(std::make_unique<PushSystem>("Q", kLog + 1, std::vector<uint64_t>{21}));
+        const uint64_t before = schedWorldHash(w);
+        bool threw = false;
+        std::unique_ptr<cJobPool> pool;
+        std::unique_ptr<cJobSystem> js;
+        if (backend == 0) pool = std::make_unique<cJobPool>(threads);
+        else { cJobSystem::Config cfg; cfg.workerThreads = threads; js = std::make_unique<cJobSystem>(cfg); }
+        try {
+          if (pool) sched.runTick(0, &w, *pool); else sched.runTick(0, &w, *js);
+        } catch (const std::runtime_error&) { threw = true; }
+        bool ok = threw && applies == 0 && w.drainLog.empty() && schedWorldHash(w) == before;
+        if (pool) sched.runTick(1, &w, *pool); else sched.runTick(1, &w, *js);  // tick 1 succeeds
+        ok = ok && applies == 4 &&
+             w.drainLog == std::vector<uint64_t>{11, 12, (1ULL << 32) | 99, (2ULL << 32) | 21};
+        (backend == 0 ? okPool : okJs) &= ok;
+      }
+    }
+    check(okPool, "det-sched: failed stage commits nothing, next tick clean (cJobPool, 1/2/8/16 workers)");
+    check(okJs, "det-sched: failed stage commits nothing, next tick clean (cJobSystem, 1/2/8/16 workers)");
   }
 }
 
