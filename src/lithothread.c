@@ -260,6 +260,20 @@ static void lt__key_slot_read(pthread_key_t key, lt_key_slot_t* out) {
   out->dtor = lt__keys[key].dtor;
 }
 
+/* Review M2: the destructor runner must see gen, used and dtor as
+ * one snapshot. Read unlocked, a pthread_key_delete +
+ * pthread_key_create reusing the slot between the gen and dtor
+ * reads let an exiting thread match the OLD generation and call
+ * the NEW key's destructor on the old value. key_create / delete
+ * mutate the slot only under lt__key_lock, so reading under it is
+ * a consistent snapshot. Exit path only; the lock is never held
+ * across the destructor call itself. */
+static void lt__key_slot_read_locked(pthread_key_t key, lt_key_slot_t* out) {
+  lt__spin_lock(&lt__key_lock);
+  lt__key_slot_read(key, out);
+  lt__spin_unlock(&lt__key_lock);
+}
+
 void lt__run_key_destructors(lt_rec_t* rec) {
   unsigned pass;
   if (rec == NULL || rec->key_values == NULL) return;
@@ -270,7 +284,7 @@ void lt__run_key_destructors(lt_rec_t* rec) {
       void* value = rec->key_values[k].value;
       lt_key_slot_t slot;
       if (value == NULL) continue;
-      lt__key_slot_read(k, &slot);
+      lt__key_slot_read_locked(k, &slot);
       /* Clear first in every case: a live key's destructor sees
        * a NULL value if it queries its own key, and a dead key's
        * value simply evaporates. */
