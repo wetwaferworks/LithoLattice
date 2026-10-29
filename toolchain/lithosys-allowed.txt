@@ -1,0 +1,14 @@
+lithosys_memory_grow
+lithosys_clock_now_ns
+lithosys_thread_spawn
+lithosys_fd_write
+lithosys_fd_read
+lithosys_fd_close
+lithosys_fd_seek
+lithosys_fd_sync
+lithosys_console_write
+lithosys_random_fill
+lithosys_cpu_count
+lithosys_exit
+lithosys_abort
+lithosys_volume_open
