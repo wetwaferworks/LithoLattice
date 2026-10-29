@@ -28,6 +28,7 @@
 #endif
 #include "litholattice/core/tick_arena.h"
 #include "litholattice/core/fail_fast.h"
+#include "litholattice/core/counter_hash.h"
 #if !defined(_WIN32)
 #include <cstdlib>
 #include <sys/types.h>
@@ -8264,9 +8265,30 @@ void testNetEncryption() {
   }
 }
 
+// --- Litho Strike integration (2026-10-29): counter hash ---
+void testCounterHash() {
+  std::printf("core: counter hash (shared with the random-tick mixer)\n");
+  // Fixed vectors: computed independently (Python splitmix64), and equal to Strike's shotHash.
+  check(counterHash(0, 0, 0, 0, 0) == 0x0397ab29740681d9ULL, "counter hash: fixed vector (0,0,0,0,0)");
+  check(counterHash(42, 1000, 3, 7, 0) == 0x56f36c62ea41f67eULL, "counter hash: fixed vector (42,1000,3,7,0)");
+  check(counterHash(42, 1000, 3, 7, 1) == 0x5003744a00b5e968ULL, "counter hash: fixed vector (42,1000,3,7,1)");
+  check(counterHash(~0ULL, ~0ULL, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu) == 0x709776d691dd3057ULL,
+        "counter hash: fixed vector (all ones)");
+  check(counterMix64(0) == 0xe220a8397b1dcdafULL && counterMix64(1) == 0x910a2dec89025cc1ULL &&
+            counterMix64(~0ULL) == 0xe4d971771b652c20ULL,
+        "counter hash: counterMix64 fixed vectors (splitmix64)");
+  bool same = true;
+  for (uint64_t x = 0, s = 1; x < 4096; ++x, s = s * 6364136223846793005ULL + 1442695040888963407ULL)
+    same = same && detMix64(s) == counterMix64(s) && detMix64(x) == counterMix64(x);
+  check(same, "counter hash: counterMix64 == detMix64 (the random-tick mixer) on 8192 inputs");
+  static_assert(counterHash(1, 2, 3, 4, 5) == counterHash(1, 2, 3, 4, 5), "counterHash is constexpr");
+  const double u = counterUnit(counterHash(42, 1000, 3, 7, 0));
+  check(u >= 0.0 && u < 1.0 && counterUnit(~0ULL) < 1.0, "counter hash: counterUnit is in [0, 1)");
+}
+
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); }
   else if (m == "world") testWorld();
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }

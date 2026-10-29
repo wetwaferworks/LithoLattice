@@ -3,6 +3,7 @@
 #include "litholattice/sim/det_sched.h"
 
 #include "litholattice/core/bitops.h"
+#include "litholattice/core/counter_hash.h"
 
 #include <utility>
 
@@ -12,7 +13,8 @@ uint64_t detMix64(uint64_t x) {
   // splitmix64 (public domain, Steele et al.): well-defined unsigned overflow.
   // Build 59: spelled through the shared bit-ops header; bit-exact with
   // the original body (tools/bitops_diff_test.cpp).
-  return bitops::splitmixMix64(x + 0x9E3779B97F4A7C15ULL);
+  // 2026-10-29: shared with the engine counter hash (core/counter_hash.h).
+  return counterMix64(x);
 }
 
 uint64_t detKey(uint64_t entity, uint64_t tick, uint64_t salt) {
