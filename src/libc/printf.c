@@ -16,7 +16,12 @@
  * which is the correctly rounded result for every precision,
  * including %.17g round trips. %a is not implemented (the census
  * has zero call sites): an %a conversion prints literally, as do
- * other unknown conversions, and consumes no argument.
+ * other unknown conversions, and consumes no argument. The same
+ * holds (review L3, documented rather than implemented: no call
+ * sites, and LithoLibC has no wide-character layer) for %A, the
+ * wide %lc / %ls, and the long double length L. %n IS supported,
+ * so format strings must stay compile-time constants. A total
+ * past INT_MAX returns -1 with errno EOVERFLOW.
  *
  * Deliberate glibc-compatible choices the differential test
  * pins down: %s of NULL prints "(null)", %p of NULL prints
@@ -25,6 +30,7 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -40,17 +46,17 @@
 typedef struct {
   int (*emit)(void* ctx, const char* data, size_t len);
   void* ctx;
-  long total;
+  long long total; /* review L3: long is 32-bit on wasm32 */
   int error;
 } sink_t;
 
 static void sink_write(sink_t* sk, const char* data, size_t len) {
   if (len == 0 || sk->error) {
-    sk->total += (long)len;
+    sk->total += (long long)len;
     return;
   }
   if (sk->emit(sk->ctx, data, len) != 0) sk->error = 1;
-  sk->total += (long)len;
+  sk->total += (long long)len;
 }
 static void sink_char(sink_t* sk, char c) { sink_write(sk, &c, 1); }
 static void sink_repeat(sink_t* sk, char c, long count) {
@@ -567,7 +573,7 @@ static int format_out(sink_t* sk, const char* fmt, va_list ap_in) {
         break;
       }
       case 'n': {
-        long total = sk->total;
+        long long total = sk->total;
         switch (len) {
           case LEN_HH: *va_arg(ap, signed char*) = (signed char)total; break;
           case LEN_H: *va_arg(ap, short*) = (short)total; break;
@@ -645,7 +651,17 @@ static int format_out(sink_t* sk, const char* fmt, va_list ap_in) {
     }
   }
   {
-    int result = sk->error ? -1 : (int)sk->total;
+    int result;
+    if (sk->error) {
+      result = -1;
+    } else if (sk->total > INT_MAX) {
+      /* Review L3: the count does not fit the int return; C11
+       * 7.21.6.1 and POSIX answer EOVERFLOW. */
+      errno = EOVERFLOW;
+      result = -1;
+    } else {
+      result = (int)sk->total;
+    }
     va_end(ap);
     return result;
   }

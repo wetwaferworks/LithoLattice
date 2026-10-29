@@ -1641,6 +1641,32 @@ static void case_audit_exit_tls(void) {
   CASE_END();
 }
 
+/* Review L3: a count past INT_MAX is EOVERFLOW, not a wrapped int. */
+static void case_printf_overflow(void) {
+  CASE_BEGIN("review L3: printf total past INT_MAX is EOVERFLOW");
+  {
+    /* Widths clamp at 1 << 24, so 128 maximal fields total exactly
+     * 2^31 (one past INT_MAX) and 127 stay below it. Count-only
+     * sink: nothing is stored. */
+#define L3_A8 1, 1, 1, 1, 1, 1, 1, 1
+#define L3_A64 L3_A8, L3_A8, L3_A8, L3_A8, L3_A8, L3_A8, L3_A8, L3_A8
+    static char fmt[128 * 11 + 1];
+    int r, i;
+    fmt[0] = '\0';
+    for (i = 0; i < 128; i++) strcat(fmt, "%16777216d");
+    errno = 0;
+    r = snprintf(NULL, 0, fmt, L3_A64, L3_A64);
+    CHECK(r == -1);
+    CHECK(errno == EOVERFLOW);
+    fmt[127 * 10] = '\0';
+    r = snprintf(NULL, 0, fmt, L3_A64, L3_A64);
+    CHECK(r == 127 * 16777216);
+#undef L3_A64
+#undef L3_A8
+  }
+  CASE_END();
+}
+
 /* ================= main ================= */
 
 int main(void) {
@@ -1725,6 +1751,7 @@ int main(void) {
   case_time();
   case_audit_host_seams();
   case_audit_exit_tls();
+  case_printf_overflow();
 
   if (g_failures == 0) {
     report("ALL GROUPS PASS\n");
