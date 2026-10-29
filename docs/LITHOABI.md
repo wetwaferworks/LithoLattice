@@ -238,10 +238,19 @@ a child process) death by SIGABRT on the 9th.
 
 One global LithoThread mutex + condition variable serves all
 guards (guard waits are rare and short; one lock keeps the state
-machine auditable). The guard word's low byte is the state the
-compiler's fast path reads (0 uninitialized, 1 initialized, 2
-initializing); bits 32 and up carry the owning thread's LithoWeave
-tid while initializing. A thread that finds its own tid in the
+machine auditable). The guard's width is the target ABI's
+(`__lithoabi_guard_t` in cxxabi.h): 32 bits on wasm32, which uses
+the ARM C++ ABI guard (clang emits `internal global i32, align 4`
+and its fast path tests bit 0), 64 bits on the Itanium native
+targets; the runtime never accesses a byte past it (review C1:
+the earlier 64-bit accesses overran a wasm guard and trapped when
+it was only 4-aligned). The low byte is the state the compiler's
+fast path reads (0 uninitialized, 1 initialized, 2 initializing);
+the owning thread's LithoWeave tid rides the upper bits while
+initializing (bits 32+ on 64-bit guards, the tid's low 24 bits in
+bits 8..31 on 32-bit guards). `run-native-suites.sh wasm_guard`
+compiles a real function-local static for wasm32 and checks the
+emitted guard width against the runtime's type. A thread that finds its own tid in the
 owner field is recursively initializing its own static: the
 language leaves that undefined, and the implementation ends it
 loudly through the terminate path rather than deadlocking (proven
