@@ -138,6 +138,21 @@ static void lt__free_rec(lt_rec_t* rec) {
   free(rec);
 }
 
+/* Review H1: LithoThread owns the weave lifetime of its spawned
+ * threads. Their weave blocks stay JOINABLE at weave level even
+ * when the pthread is detached (no lw_detach), so the weave sweep
+ * can never free a control block that a queued record's
+ * lt__thread_returned still reads. The reaper releases the block
+ * itself with lw_join, which returns at once because it is only
+ * called after the tid cell has read 0. Exactly one caller reaches
+ * this per record (the retire_claimed CAS). */
+static void lt__free_detached_rec(lt_rec_t* rec) {
+  if (rec->spawned && rec->handle.control != NULL) {
+    (void)lw_join(rec->handle, NULL);
+  }
+  lt__free_rec(rec);
+}
+
 /* True once the record's thread has fully returned. The host
  * stores 0 into the weave tid cell only after the whole
  * trampoline has returned, destructor passes included, and that
@@ -153,7 +168,10 @@ static void lt__free_rec(lt_rec_t* rec) {
  * thread will never touch the record again. The join path
  * satisfies this gate by construction (lw_join returns only
  * after observing the 0); the lazy frees below check it
- * explicitly. */
+ * explicitly. The control block's survival is guaranteed by
+ * ownership, not timing (review H1): the weave block of a
+ * spawned record is never weave-detached, so only
+ * lt__free_detached_rec / pthread_join ever release it. */
 static int lt__thread_returned(lt_rec_t* rec) {
   const uint32_t* cell = lw_thread_cell(rec->handle);
   return cell == NULL || lt_at_load32(cell) == 0u;
@@ -177,7 +195,7 @@ static void lt__reap_dead(void) {
   while (dead != NULL) {
     lt_rec_t* next = dead->next;
     if (lt__thread_returned(dead)) {
-      lt__free_rec(dead);
+      lt__free_detached_rec(dead);
     } else {
       dead->next = NULL;
       *keep_tail = dead;
@@ -400,19 +418,10 @@ int pthread_create(pthread_t* thread, const pthread_attr_t* attr,
   desc.arg = pack;
   desc.stack_size = stacksize;
   desc.name = NULL;
+  /* No weave-level detach for a detached pthread (review H1): the
+   * weave block stays joinable and the record's reaper releases it
+   * with lw_join once the thread has returned. */
   err = lw_spawn(&desc, &rec->handle);
-  if (err == LITHOSYS_OK && detached) {
-    /* The weave spawns joinable only; detachment is a separate
-     * call made while the handle is still unpublished, the same
-     * pattern its own test uses. In this window the call cannot
-     * fail (the block is registered, unclaimed, and ours alone);
-     * if a future weave changed that, falling back to joinable
-     * keeps every structure owned and a later pthread_detach
-     * simply performs the call again. */
-    if (lw_detach(rec->handle) != LITHOSYS_OK) {
-      lt_at_store32(&rec->detached, 0u);
-    }
-  }
   if (err != LITHOSYS_OK) {
     /* The weave retires its own control block on a refused
      * spawn; ours is unwound the same total way. The host's code
@@ -482,7 +491,6 @@ int pthread_join(pthread_t thread, void** retval) {
 
 int pthread_detach(pthread_t thread) {
   lt_rec_t* rec;
-  lithosys_err_t err;
 
   lt__reap_dead();
   lt__spin_lock(&lt__registry_lock);
@@ -491,15 +499,16 @@ int pthread_detach(pthread_t thread) {
     lt__spin_unlock(&lt__registry_lock);
     return ESRCH;
   }
-  if (lt_at_load32(&rec->detached) != 0u || rec->join_claimed) {
+  if (!rec->spawned || lt_at_load32(&rec->detached) != 0u ||
+      rec->join_claimed) {
+    /* An attached (main / foreign) thread was never joinable; the
+     * weave refused its detach before review H1, and still does
+     * by this check. */
     lt__spin_unlock(&lt__registry_lock);
     return EINVAL;
   }
   lt_at_store32(&rec->detached, 1u);
   lt__spin_unlock(&lt__registry_lock);
-
-  err = lw_detach(thread);
-  if (err != LITHOSYS_OK) return EINVAL;
 
   /* If the thread already finished, its key runner has run (it
    * precedes the host's completion store, which precedes any
@@ -516,7 +525,7 @@ int pthread_detach(pthread_t thread) {
       lt__spin_lock(&lt__registry_lock);
       lt__unlink_locked(rec);
       lt__spin_unlock(&lt__registry_lock);
-      lt__free_rec(rec);
+      lt__free_detached_rec(rec);
     } else {
       lt__retire_rec(rec);
     }
