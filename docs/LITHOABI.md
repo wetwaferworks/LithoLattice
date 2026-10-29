@@ -379,6 +379,18 @@ matching by hand. The tag, the throw intrinsic's spelling, the
 compiler's landing-pad glue, and the real unwind are the
 toolchain piece's to verify.
 
+## Thread exit and C++ frames
+
+`lw_exit` and `pthread_exit` leave a thread by longjmp back to the
+trampoline. That is not a forced unwind: C++ destructors between the
+call and the thread entry do not run, so a held `std::lock_guard`
+stays locked and owned memory leaks, and with `-fwasm-exceptions`
+the longjmp would cross EH frames. The contract (review M3) is that
+neither is called while C++ frames with non-trivial destructors are
+live; threads end by returning from their entry. No engine code
+calls either today. A forced-unwind exit (an exception the
+trampoline catches) is the alternative if that ever has to change.
+
 ## Open risks for the toolchain piece
 
 1. `backend_wasm.cc` spellings: the tag (candidate name

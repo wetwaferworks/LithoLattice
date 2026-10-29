@@ -222,7 +222,15 @@ void lw_release_self(void);
  * not spawn (main or foreign), it runs that thread's destructors
  * and then ends the whole instance through lithosys_exit(0):
  * on the wasm host the main thread returning IS instance exit,
- * and this keeps the meaning identical. */
+ * and this keeps the meaning identical.
+ *
+ * CONTRACT (review M3): lw_exit leaves the thread by longjmp. It
+ * does NOT unwind C++ frames: no destructors run for live objects
+ * between the call and the thread entry (a held lock_guard stays
+ * locked, a unique_ptr leaks), and under -fwasm-exceptions it would
+ * mix SjLj with EH frames. Do not call lw_exit (or pthread_exit,
+ * which uses it) while any C++ frame with non-trivial destructors
+ * is live; return from the thread entry instead. */
 #if defined(_MSC_VER)
 __declspec(noreturn)
 #elif defined(__GNUC__) || defined(__clang__)

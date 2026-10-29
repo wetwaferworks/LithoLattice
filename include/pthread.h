@@ -200,6 +200,10 @@ int pthread_join(pthread_t thread, void** retval);
 int pthread_detach(pthread_t thread);
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t a, pthread_t b);
+/* Review M3: pthread_exit is a longjmp to the thread entry (through
+ * lw_exit) and does not unwind C++ frames; see the contract on
+ * lw_exit in lithoweave.h. Return from the start routine instead
+ * when C++ objects with destructors are live. */
 void pthread_exit(void* retval);
 
 /* ---- thread attributes -------------------------------------------------- */
