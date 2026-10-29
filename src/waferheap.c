@@ -316,6 +316,17 @@ static int wh_adopt_region(wh_heap_t* h, void* region, size_t region_bytes) {
   base += skip;
   region_bytes -= skip;
   if (region_bytes < WH_REGION_HDR + WH_MIN_BLOCK + WH_OVERHEAD) return 0;
+  /* Review L2: refuse an extent that overlaps (or repeats) one
+   * already adopted; adopting it twice would hand the same bytes out
+   * from two free lists. */
+  {
+    wh_region_t* o;
+    for (o = h->regions; o != NULL; o = o->next) {
+      const char* lo = (const char*)o;
+      const char* hi = o->blocks_end + WH_OVERHEAD;
+      if (base < hi && lo < base + region_bytes) return 0;
+    }
+  }
   r = (wh_region_t*)base;
   usable = region_bytes - WH_REGION_HDR;
   usable &= ~(size_t)(WH_ALIGNMENT - 1);
@@ -534,6 +545,10 @@ int wh_heap_add_region(wh_heap_t* heap, void* region, size_t region_bytes) {
   int ok;
   if (!wh_valid(heap)) return 0;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return 0;
+  }
   ok = wh_adopt_region(heap, region, region_bytes);
   wh_unlock(heap);
   return ok;
@@ -547,6 +562,10 @@ void* wh_malloc(wh_heap_t* heap, size_t size) {
   if (!wh_valid(heap)) return NULL;
   if (!wh_block_size_for(size, &block_size)) return NULL;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return NULL;
+  }
   out = wh_alloc_core(heap, block_size, 1);
   wh_unlock(heap);
   return out;
@@ -557,6 +576,10 @@ void wh_free(wh_heap_t* heap, void* ptr) {
   wh_block_t* next;
   if (!wh_valid(heap) || ptr == NULL) return;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return ;
+  }
   b = wh_decode(heap, ptr, NULL);
   if (b == NULL || wh_block_is_free(b)) {
     wh_unlock(heap);
@@ -600,6 +623,10 @@ void* wh_realloc(wh_heap_t* heap, void* ptr, size_t size) {
   }
   if (!wh_block_size_for(size, &want)) return NULL;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return NULL;
+  }
   b = wh_decode(heap, ptr, &offset);
   if (b == NULL) {
     wh_unlock(heap);
@@ -711,6 +738,10 @@ void* wh_aligned_alloc(wh_heap_t* heap, size_t alignment, size_t size) {
   if (!wh_block_size_for(size + alignment + sizeof(size_t), &block_size))
     return NULL;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return NULL;
+  }
   b = NULL;
   {
     void* mem = wh_alloc_core(heap, block_size, 1);
@@ -734,6 +765,10 @@ size_t wh_malloc_usable_size(wh_heap_t* heap, const void* ptr) {
   size_t result = 0;
   if (!wh_valid(heap) || ptr == NULL) return 0;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return 0;
+  }
   b = wh_decode(heap, ptr, NULL);
   if (b != NULL && !wh_block_is_free(b))
     result = (size_t)((char*)b + wh_block_size(b) - (const char*)ptr);
@@ -749,6 +784,10 @@ void wh_heap_stats(wh_heap_t* heap, wh_stats_t* out_stats) {
   memset(out_stats, 0, sizeof(*out_stats));
   if (!wh_valid(heap)) return;
   wh_lock(heap);
+  if (heap->magic != WH_MAGIC) { /* destroyed while we waited (L2) */
+    wh_unlock(heap);
+    return ;
+  }
   out_stats->region_bytes = heap->region_bytes;
   out_stats->used_bytes = heap->used_bytes;
   out_stats->free_bytes = heap->free_bytes;
@@ -771,28 +810,44 @@ void wh_heap_stats(wh_heap_t* heap, wh_stats_t* out_stats) {
 
 /* ---- default heap layer ------------------------------------------------------------ */
 
-static wh_heap_t* wh_default = NULL;
+/* Review L2: the default heap pointer is read and written with
+ * atomic acquire/release so a set on one thread is seen whole on
+ * another; each wh_libc_* call loads it once. */
+static wh_heap_t* volatile wh_default = NULL;
 
-void wh_set_default_heap(wh_heap_t* heap) { wh_default = heap; }
+#if defined(__GNUC__) || defined(__clang__)
+#define WH_DEFAULT_LOAD() __atomic_load_n(&wh_default, __ATOMIC_ACQUIRE)
+#define WH_DEFAULT_STORE(v) __atomic_store_n(&wh_default, (v), __ATOMIC_RELEASE)
+#else
+#define WH_DEFAULT_LOAD() (wh_default)
+#define WH_DEFAULT_STORE(v) (wh_default = (v))
+#endif
 
-wh_heap_t* wh_default_heap(void) { return wh_default; }
+void wh_set_default_heap(wh_heap_t* heap) { WH_DEFAULT_STORE(heap); }
+
+wh_heap_t* wh_default_heap(void) { return WH_DEFAULT_LOAD(); }
 
 void* wh_libc_malloc(size_t size) {
-  return wh_default ? wh_malloc(wh_default, size) : NULL;
+  wh_heap_t* h = WH_DEFAULT_LOAD();
+  return h ? wh_malloc(h, size) : NULL;
 }
 
 void wh_libc_free(void* ptr) {
-  if (wh_default) wh_free(wh_default, ptr);
+  wh_heap_t* h = WH_DEFAULT_LOAD();
+  if (h) wh_free(h, ptr);
 }
 
 void* wh_libc_realloc(void* ptr, size_t size) {
-  return wh_default ? wh_realloc(wh_default, ptr, size) : NULL;
+  wh_heap_t* h = WH_DEFAULT_LOAD();
+  return h ? wh_realloc(h, ptr, size) : NULL;
 }
 
 void* wh_libc_calloc(size_t count, size_t size) {
-  return wh_default ? wh_calloc(wh_default, count, size) : NULL;
+  wh_heap_t* h = WH_DEFAULT_LOAD();
+  return h ? wh_calloc(h, count, size) : NULL;
 }
 
 void* wh_libc_aligned_alloc(size_t alignment, size_t size) {
-  return wh_default ? wh_aligned_alloc(wh_default, alignment, size) : NULL;
+  wh_heap_t* h = WH_DEFAULT_LOAD();
+  return h ? wh_aligned_alloc(h, alignment, size) : NULL;
 }

@@ -620,6 +620,22 @@ int main(void) {
     CASE_END();
   }
 
+  /* ---- case: overlapping / duplicate regions refused (review L2) ---- */
+  {
+    static union { long double a; void* p; unsigned long long u; unsigned char bytes[64 * 1024]; } ov;
+    wh_heap_t* oh;
+    CASE_BEGIN("add_region: overlapping or duplicate extents refused");
+    oh = wh_heap_create(ov.bytes, 32 * 1024, NULL);
+    CHECK(oh != NULL);
+    CHECK(wh_heap_add_region(oh, ov.bytes + 16 * 1024, 16 * 1024) == 0);
+    CHECK(wh_heap_add_region(oh, ov.bytes + 32 * 1024, 32 * 1024) == 1);
+    CHECK(wh_heap_add_region(oh, ov.bytes + 32 * 1024, 32 * 1024) == 0);
+    CHECK(wh_heap_add_region(oh, ov.bytes + 40 * 1024, 8 * 1024) == 0);
+    wh_heap_destroy(oh);
+    CHECK(wh_malloc(oh, 16) == NULL);
+    CASE_END();
+  }
+
   /* ---- case: grow callback may re-enter the heap (review M7) -------- */
   {
     CASE_BEGIN("grow: callback runs unlocked and may allocate");
