@@ -1,0 +1,7 @@
+# LithoLattice hash pins: one line per suite. A change that moves a pin says so in its commit and JD signs off.
+lithokraft demo-test cities on   24c52df2be14789c
+lithokraft demo-test cities off  43693d018d046b25
+lithokraft handshake-test        14ab85cf9e86e24f
+lithostrike handshake 256t       dabdf72e8f017380
+lithostrike handshake 4096t      9ec41f9ac81918e4
+lithostrike perf                 f2e3a33dded455bc

@@ -227,14 +227,41 @@ option(LITHOLATTICE_BUILD_FUZZERS "Build the litholattice_fuzz harnesses (tools/
 if(LITHOLATTICE_BUILD_FUZZERS)
   add_subdirectory(tools/fuzz)
 endif()
-# Game source lives in ../game/LithoKraft. engine/LithoKraft is a symlink on Linux/macOS,
-# but Windows unzips it as a plain file, so fall back to the real path when it is not a dir.
-if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/LithoKraft")
-  set(LITHOKRAFT_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/LithoKraft")
+# Game hookup (2026-10-29, engine repo split). LithoLattice is its own repo; each game repo
+# (LithoKraft, LithoStrike, LithoKart) mounts it as a git submodule at <game repo>/engine and
+# keeps its game at <game repo>/game/<Name>. Configure with `cmake -S engine -B build` from the
+# game repo, exactly as before. LL_GAME_NAME picks the game; empty auto-detects the one present.
+# With no game next to it (the engine repo on its own) only the engine modules and tests build.
+set(LL_GAME_NAME "" CACHE STRING "Game under ../game to build on the engine (LithoKraft, LithoStrike, LithoKart); empty = auto-detect")
+set(LL_GAME_DIR "")
+if(LL_GAME_NAME)
+  get_filename_component(LL_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../game/${LL_GAME_NAME}" ABSOLUTE)
+  if(NOT EXISTS "${LL_GAME_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "LL_GAME_NAME=${LL_GAME_NAME}: ${LL_GAME_DIR}/CMakeLists.txt not found")
+  endif()
 else()
-  get_filename_component(LITHOKRAFT_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../game/LithoKraft" ABSOLUTE)
+  foreach(_ll_g LithoKraft LithoStrike LithoKart)
+    # engine/<Name> is a symlink on Linux/macOS; Windows unzips it as a plain file, so fall back to ../game/<Name>.
+    if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${_ll_g}" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_ll_g}/CMakeLists.txt")
+      set(LL_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${_ll_g}")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../game/${_ll_g}/CMakeLists.txt")
+      get_filename_component(LL_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../game/${_ll_g}" ABSOLUTE)
+    endif()
+    if(LL_GAME_DIR)
+      set(LL_GAME_NAME "${_ll_g}")
+      break()
+    endif()
+  endforeach()
 endif()
-add_subdirectory("${LITHOKRAFT_GAME_DIR}" game)  # binary dir "game": the exe LithoKraft sits in the build root
+set(LL_GAME_TARGET "")
+if(LL_GAME_DIR)
+  string(TOLOWER "${LL_GAME_NAME}" LL_GAME_TARGET)  # lithokraft / lithostrike / lithokart: the game exe target
+  set(LITHOKRAFT_GAME_DIR "${LL_GAME_DIR}")  # old name, kept for scripts that read it
+  message(STATUS "LithoLattice: building game ${LL_GAME_NAME} from ${LL_GAME_DIR}")
+  add_subdirectory("${LL_GAME_DIR}" game)  # binary dir "game": the game exe sits in the build root
+else()
+  message(STATUS "LithoLattice: no game found next to the engine; building the engine and its tests only")
+endif()
 
 # 2026-10-18 (JD): the rolling build counter. Eight wheels of 0..63 (64^8 = 2^48 builds);
 # EVERY build invocation rolls the rightmost wheel +1, carrying left at 64 (JD's law, the
@@ -251,8 +278,8 @@ set(_jd_counter_mode --no-bump)
 if(LL_ENGINE_COUNTER_BUMP)
   set(_jd_counter_mode)
 endif()
-if(LITHOLATTICE_PYTHON3)
-  get_filename_component(JD_TREE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" DIRECTORY)
+get_filename_component(JD_TREE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" DIRECTORY)  # the game repo root (engine/ is the submodule)
+if(LITHOLATTICE_PYTHON3 AND EXISTS "${JD_TREE_ROOT}/tools/build_counter.py")
   add_custom_target(jd_build_counter ALL
     COMMAND "${LITHOLATTICE_PYTHON3}" "${JD_TREE_ROOT}/tools/build_counter.py" ${_jd_counter_mode}
             --state "${JD_TREE_ROOT}/BUILD_COUNTER.txt"
@@ -260,12 +287,12 @@ if(LITHOLATTICE_PYTHON3)
             --log "${JD_TREE_ROOT}/BUILD_COUNTER.log"
     COMMENT "JD rolling build counter"
     VERBATIM)
-  if(TARGET lithokraft)
-    add_dependencies(lithokraft jd_build_counter)
-    target_include_directories(lithokraft PRIVATE "${CMAKE_BINARY_DIR}/generated")
+  if(LL_GAME_TARGET AND TARGET ${LL_GAME_TARGET})
+    add_dependencies(${LL_GAME_TARGET} jd_build_counter)
+    target_include_directories(${LL_GAME_TARGET} PRIVATE "${CMAKE_BINARY_DIR}/generated")
   endif()
 else()
-  message(WARNING "python3 not found: JD rolling build counter target is disabled")
+  message(STATUS "build counter disabled (python3 or <tree>/tools/build_counter.py not found)")
 endif()
 
 # LithoCEF host shell (JD, 2026-10-20): "The CEF layer will sit OUTSIDE of the

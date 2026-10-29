@@ -30,7 +30,7 @@ endif()
 # wasm-capable clang is found; ctest shows that as skipped.
 option(LITHOROOT_NATIVE_SUITES "Register the LithoRoot native suites with ctest (needs bash+gcc, or WSL on Windows)" OFF)
 if(LITHOROOT_NATIVE_SUITES)
-  get_filename_component(_lr_root "${LithoLattice_SOURCE_DIR}/../lithoroot" ABSOLUTE)
+  get_filename_component(_lr_root "${LithoLattice_SOURCE_DIR}/lithoroot" ABSOLUTE)
   if(WIN32)
     find_program(LITHOROOT_WSL wsl REQUIRED)
     string(SUBSTRING "${_lr_root}" 0 1 _lr_drive)
