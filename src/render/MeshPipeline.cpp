@@ -2,7 +2,8 @@
 
 #include <cstddef>
 
-#include "MesherDetail.h"
+#include "MesherKernels.h"
+#include "UnifiedMesherCounters.h"
 #include "WorkerScratch.h"
 #include "litholattice/core/log.h"
 #include "litholattice/render/unified_mesher.h"
@@ -13,20 +14,20 @@
 namespace litholattice {
 
 void cMeshPipeline::flush(std::unique_ptr<GreedyGrid>& greedyGrid, bool greedy) {
-  if (canonOut_) flushCanonical(*greedyGrid, out_.verts, *canonOut_, greedy);  // render pipeline M2
-  else if (greedy) flushGreedy(*greedyGrid, out_.verts);  // Cortana 2026-10-15 1705
+  if (canonOut_) cMesherKernels::flushCanonical(*greedyGrid, out_.verts, *canonOut_, greedy);  // render pipeline M2
+  else if (greedy) cMesherKernels::flushGreedy(*greedyGrid, out_.verts);  // Cortana 2026-10-15 1705
 }
 
 void cMeshPipeline::packedFallback(size_t legacyVerts, FallbackReasonStats::Local& fbr, cWorkerScratch& ws) {
   CanonicalMesh* canonOut = canonOut_;
   if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
-    if (packFallback(out_.verts, legacyVerts, *canonOut)) {
-      g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
+    if (cMesherKernels::packFallback(out_.verts, legacyVerts, *canonOut)) {
+      cUnifiedMesherCounters::fbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
       FallbackReasonStats::instance().flush(fbr, legacyVerts / 4, canonOut->quads.size());
     }
     else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
     if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
-      if (splitCanonicalTwo(*canonOut, ws.qSlot, ws.fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
+      if (splitCanonicalTwo(*canonOut, ws.qSlot, ws.fSlot)) cUnifiedMesherCounters::splits.fetch_add(1, std::memory_order_relaxed);
       else *canonOut = CanonicalMesh{}, canonOut->magic = 0;
     }
   }
@@ -86,7 +87,7 @@ void cMeshPipeline::canonLods(cWorkerScratch& ws, const IBlockAppearance& look, 
           if (f == 2) slot = FaceSlot::Top;
           else if (f == 3) slot = FaceSlot::Bottom;
           else {
-            const int dd = kFaceDir[f];
+            const int dd = cMesherKernels::kFaceDir[f];
             slot = dd == facing ? FaceSlot::Front : dd == dirBack(facing) ? FaceSlot::Back : dd == dirRight(facing) ? FaceSlot::Right : FaceSlot::Left;
           }
           const FaceMaterial fm = mats.face(b, slot, leaf ? !fancyLeaves : active);
@@ -105,13 +106,13 @@ void cMeshPipeline::canonLods(cWorkerScratch& ws, const IBlockAppearance& look, 
     UnifiedMeshInput ui;
     ui.matId = umId; ui.materials = umats.data(); ui.materialCount = uint32_t(umats.size()); ui.firstLod = 1;
     if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok &&
-        (mergeCanonLods(lodMesh, *canonOut) || (canonOut->next && mergeCanonLods(lodMesh, *canonOut->next))))
+        (cMesherKernels::mergeCanonLods(lodMesh, *canonOut) || (canonOut->next && cMesherKernels::mergeCanonLods(lodMesh, *canonOut->next))))
     {
-      g_umLodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
-      g_umSkirtQuads.fetch_add(uint64_t(lodMesh.lods[1].skirt.count) + lodMesh.lods[2].skirt.count, std::memory_order_relaxed);
+      cUnifiedMesherCounters::lodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
+      cUnifiedMesherCounters::skirtQuads.fetch_add(uint64_t(lodMesh.lods[1].skirt.count) + lodMesh.lods[2].skirt.count, std::memory_order_relaxed);
     }
     else
-      g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
+      cUnifiedMesherCounters::lodFallback.fetch_add(1, std::memory_order_relaxed);
   }
 }
 

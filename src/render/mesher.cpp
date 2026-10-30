@@ -11,7 +11,8 @@
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
 #include "MeshPipeline.h"  // refactor step 4: meshSubChunkPass stages
-#include "MesherDetail.h"  // refactor step 4: shared mesher internals
+#include "MesherKernels.h"
+#include "UnifiedMesherCounters.h"  // refactor step 4: shared mesher internals
 #include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
@@ -53,7 +54,7 @@ constexpr Face kFaces[6] = {
   {{ 0, 0,-1}, {0, 1, 0}, {1, 0, 0}},  // -Z (north)
 };
 constexpr int kCorner[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
-// kFaceDir: see MesherDetail.h (refactor step 4c, shared with the LOD stage)
+// kFaceDir: cMesherKernels::kFaceDir (MesherKernels.h)
 
 struct Look {
   uint16_t layer = 0;  // Cortana 2026-10-15 1628: CA-03 [ENGINE]
@@ -188,8 +189,8 @@ void emitGreedyQuad(std::vector<PackedVertex>& out, int f, int slice, int iu, in
   }
 }
 
-}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
-void flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out) {
+}  // namespace (refactor step 4: cMesherKernels member, see MesherKernels.h)
+void cMesherKernels::flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out) {
   for (int f = 0; f < 6; ++f) {
     const uint16_t used = g.sliceUsed[f];
     g.sliceUsed[f] = 0;
@@ -250,8 +251,8 @@ uint64_t canonKeyOf(const canon::DecodedQuad& q, uint64_t pal) {
          uint64_t(q.cornerAo & 3u);
 }
 
-}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
-void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
+}  // namespace (refactor step 4: cMesherKernels member, see MesherKernels.h)
+void cMesherKernels::flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
   std::vector<uint32_t>& t_qSlot = cWorkerScratch::forThisThread().qSlot;  // M11 (refactor step 2: scratch-owned)
   cm = CanonicalMesh{};
   t_qSlot.clear();
@@ -337,8 +338,8 @@ namespace {
 //   light    = full sky, no block light (no light engine in the mesh path yet)
 // The 24-bit strength-buffer slot is not carried (no shader reads it; see the Step 1
 // note in the pass). decodeFallbackVertex is the exact inverse with slot = 0.
-}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
-bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
+}  // namespace (refactor step 4: cMesherKernels member, see MesherKernels.h)
+bool cMesherKernels::packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
   std::vector<uint32_t>& t_fSlot = cWorkerScratch::forThisThread().fSlot;  // M11 (refactor step 2: scratch-owned)
   cm.fallback.clear();
   cm.fallback.reserve(n);
@@ -445,9 +446,7 @@ PackedVertex decodeFallbackVertex(const canon::Packed12& raw, const CanonicalMes
   p.slot = 0;
   return p;
 }
-}  // namespace (refactor step 4: counters shared with MeshPipeline.cpp)
-std::atomic<uint64_t> g_umFbVerts{0}, g_umFbChecked{0}, g_umFbMismatch{0};
-namespace {
+// (refactor step 4: counters now cUnifiedMesherCounters, UnifiedMesherCounters.h)
 
 // Render pipeline M6 (step 3 on the game path: registry feed into UnifiedMesher). L1/L2
 // come from UnifiedMesher over a per-job material table built from the registry: one
@@ -457,8 +456,8 @@ namespace {
 // light engine feeds the mesh path yet (lightApron 0), so L1/L2 carry full sky like L0.
 // The UnifiedMesher palette is merged into the L0 palette (dedup by packed entry) and
 // its quads re-indexed; on palette overflow the mesh keeps L0 only (counted).
-}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
-bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
+}  // namespace (refactor step 4: cMesherKernels member, see MesherKernels.h)
+bool cMesherKernels::mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   const size_t palBefore = dst.palette.size();
   std::vector<uint32_t> remap(src.palette.size());
   for (size_t i = 0; i < src.palette.size(); ++i) {
@@ -486,9 +485,7 @@ bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   return true;
 }
 namespace {
-}  // namespace (refactor step 4: counters shared with MeshPipeline.cpp)
-std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0}, g_umSplits{0};
-namespace {
+// (refactor step 4: counters now cUnifiedMesherCounters, UnifiedMesherCounters.h)
 
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
@@ -712,7 +709,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
           if (f == 2) slot = FaceSlot::Top;
           else if (f == 3) slot = FaceSlot::Bottom;
           else {
-            const int d = kFaceDir[f];
+            const int d = cMesherKernels::kFaceDir[f];
             slot = d == facing ? FaceSlot::Front : d == dirBack(facing) ? FaceSlot::Back : d == dirRight(facing) ? FaceSlot::Right : FaceSlot::Left;
           }
           const std::optional<FaceMaterial> over = look.faceMaterial(cellC, slot, active);
@@ -886,10 +883,10 @@ bool unifiedMesherEnabled() {
   }
   return v == 1;
 }
-static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
+// (refactor step 4: meshes/checked/mismatch/unpublished/quads/bytes are cUnifiedMesherCounters members)
 UnifiedMesherStats unifiedMesherStats() {
-  return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
-          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load(), g_umSkirtQuads.load(), g_umSplits.load()};
+  return {cUnifiedMesherCounters::meshes.load(), cUnifiedMesherCounters::checked.load(), cUnifiedMesherCounters::mismatch.load(), cUnifiedMesherCounters::unpublished.load(), cUnifiedMesherCounters::quads.load(), cUnifiedMesherCounters::bytes.load(),
+          cUnifiedMesherCounters::lodQuads.load(), cUnifiedMesherCounters::lodFallback.load(), cUnifiedMesherCounters::fbVerts.load(), cUnifiedMesherCounters::fbChecked.load(), cUnifiedMesherCounters::fbMismatch.load(), cUnifiedMesherCounters::skirtQuads.load(), cUnifiedMesherCounters::splits.load()};
 }
 bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask) {
   out.clear();
@@ -1091,13 +1088,13 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
                (unsigned long long)epoch2);
   }
   if (unified) {
-    g_umMeshes.fetch_add(1, std::memory_order_relaxed);
+    cUnifiedMesherCounters::meshes.fetch_add(1, std::memory_order_relaxed);
     if (canonVerifyOn()) {  // decode-equivalence: canonical-decoded stream == legacy stream (as quad sets)
       const ChunkMesh legacy = meshSubChunkStable(in, ctx);
       if (ctx.blocks.content().definitionEpoch() == epoch1) {
-        g_umChecked.fetch_add(1, std::memory_order_relaxed);
+        cUnifiedMesherCounters::checked.fetch_add(1, std::memory_order_relaxed);
         if (sortedQuads(out.verts) != sortedQuads(legacy.verts)) {
-          g_umMismatch.fetch_add(1, std::memory_order_relaxed);
+          cUnifiedMesherCounters::mismatch.fetch_add(1, std::memory_order_relaxed);
           logError("unified-mesher: decode MISMATCH sub-chunk (%d,%d,%d): canonical %zu quads vs legacy %zu quads",
                    in.cx, in.sy, in.cz, out.verts.size() / 4, legacy.verts.size() / 4);
         }
@@ -1114,9 +1111,9 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
         const PackedVertex b = decodeFallbackVertex(*fbAll[i].first, *fbAll[i].second);
         same = std::memcmp(&a, &b, sizeof a) == 0;
       }
-      g_umFbChecked.fetch_add(1, std::memory_order_relaxed);
+      cUnifiedMesherCounters::fbChecked.fetch_add(1, std::memory_order_relaxed);
       if (!same) {
-        g_umFbMismatch.fetch_add(1, std::memory_order_relaxed);
+        cUnifiedMesherCounters::fbMismatch.fetch_add(1, std::memory_order_relaxed);
         logError("unified-mesher: Packed12 fallback MISMATCH sub-chunk (%d,%d,%d) (%zu fallback verts)", in.cx, in.sy, in.cz,
                  canon->fallback.size());
       }
@@ -1137,11 +1134,11 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
       }
     }
     if (canon->magic == canon::kMeshMagic) {
-      g_umQuads.fetch_add(canon->quads.size(), std::memory_order_relaxed);
-      g_umBytes.fetch_add(canon->residentBytes(), std::memory_order_relaxed);
+      cUnifiedMesherCounters::quads.fetch_add(canon->quads.size(), std::memory_order_relaxed);
+      cUnifiedMesherCounters::bytes.fetch_add(canon->residentBytes(), std::memory_order_relaxed);
       out.canonical = std::move(canon);
     } else {
-      g_umUnpublished.fetch_add(1, std::memory_order_relaxed);
+      cUnifiedMesherCounters::unpublished.fetch_add(1, std::memory_order_relaxed);
     }
   }
   if (meshVerifyEnabled()) {
