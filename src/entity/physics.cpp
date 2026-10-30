@@ -30,8 +30,10 @@ bool moveCollideStep(Entity& e, const std::function<bool(int x, int y, int z)>& 
   {
     const double nx = e.x + e.vx * dt;
     if (aabbCollides(nx, e.y, e.z, halfWidth, height, isSolid)) {
-      e.x = e.vx > 0 ? std::floor(nx + halfWidth) - halfWidth - 1e-4
-                     : std::floor(nx - halfWidth) + 1 + halfWidth + 1e-4;
+      // H29c: vx == 0 means already embedded; don't shove toward +x.
+      if (e.vx != 0)
+        e.x = e.vx > 0 ? std::floor(nx + halfWidth) - halfWidth - 1e-4
+                       : std::floor(nx - halfWidth) + 1 + halfWidth + 1e-4;
       e.vx = 0;
       hit = true;
     } else {
@@ -42,8 +44,9 @@ bool moveCollideStep(Entity& e, const std::function<bool(int x, int y, int z)>& 
   {
     const double nz = e.z + e.vz * dt;
     if (aabbCollides(e.x, e.y, nz, halfWidth, height, isSolid)) {
-      e.z = e.vz > 0 ? std::floor(nz + halfWidth) - halfWidth - 1e-4
-                     : std::floor(nz - halfWidth) + 1 + halfWidth + 1e-4;
+      if (e.vz != 0)  // H29c
+        e.z = e.vz > 0 ? std::floor(nz + halfWidth) - halfWidth - 1e-4
+                       : std::floor(nz - halfWidth) + 1 + halfWidth + 1e-4;
       e.vz = 0;
       hit = true;
     } else {
