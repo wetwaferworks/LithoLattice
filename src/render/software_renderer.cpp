@@ -1457,7 +1457,8 @@ static void varyingsFromPackedVertex(const PackedVertex& v, ShaderVaryings& s) {
   s.ao = g_swAo ? kSwAoLut[(v.faceAo >> 3) & 3] : 1.0f;
   static const float kFaceNormals[6][3] = {
       {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-  const uint8_t face = v.faceAo & 7;
+  // Archie review H16: the field is 3 bits; 6/7 (bad input) would read past kFaceNormals.
+  const uint8_t face = uint8_t((v.faceAo & 7) < 6 ? (v.faceAo & 7) : 0);
   s.nx = kFaceNormals[face][0];
   s.ny = kFaceNormals[face][1];
   s.nz = kFaceNormals[face][2];

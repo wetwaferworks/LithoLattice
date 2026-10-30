@@ -75,6 +75,8 @@ const cVkCanonUploader::Tmpl& cVkCanonUploader::lookup(uint64_t raw, uint64_t pa
   misses_.fetch_add(1, std::memory_order_relaxed);
   if (cache_.size() >= kCacheCap) cache_.clear();
   canon::DecodedQuad d = canon::unpackQuad(raw);
+  // Archie review C4: face is a 3-bit field; 6/7 would index face[] out of bounds.
+  if (size_t(d.face) >= 6) return cache_.emplace(key, Tmpl{}).first->second;
   CanonicalMesh one;
   one.palette.assign(1, palEntry);
   d.paletteIdx = 0;

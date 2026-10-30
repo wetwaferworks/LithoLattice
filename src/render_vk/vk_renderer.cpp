@@ -472,6 +472,7 @@ class cVulkanRenderer final : public IRenderer {
     const VkFence fence = f.inFlight.get();
     if (vkWaitForFences(dev_->device(), 1, &fence, VK_TRUE, 1000000000ULL) != VK_SUCCESS)
       return false;
+    grabReady_ = false;  // Archie review M2: one grab per requestGrab (no stale re-grab)
     w = int(grabExtent_.width);
     h = int(grabExtent_.height);
     const bool bgra = grabFormat_ == VK_FORMAT_B8G8R8A8_UNORM;
@@ -948,8 +949,12 @@ class cVulkanRenderer final : public IRenderer {
     for (const auto& c : f.copies) vkCmdCopyBuffer(cmd, c.src, c.dst, 1, &c.region);  // [A52-4]
     auto mb = make<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    // Archie review H15: pulled meshes read these buffers as storage in the
+    // vertex shader, not as vertex attributes - cover both consumers.
+    mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
     f.copies.clear();
   }
 

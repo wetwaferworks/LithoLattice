@@ -303,6 +303,8 @@ class cGL33Renderer final : public IRenderer {
     if (spriteVao_) glDeleteVertexArrays(1, &spriteVao_);
     if (spriteVbo_) glDeleteBuffers(1, &spriteVbo_);
     for (GLuint t : spriteTex_) glDeleteTextures(1, &t);
+    if (instVbo_) glDeleteBuffers(1, &instVbo_);         // Archie review H13
+    if (canonVao_) glDeleteVertexArrays(1, &canonVao_);  // Archie review M4 (leak)
   }
 
   const char* name() const override { return "OpenGL 3.3 core"; }
@@ -682,7 +684,9 @@ class cGL33Renderer final : public IRenderer {
     arenaVerts_ = 0;
     arenaFree_.clear();
     if (arenaEbo_) { glDeleteBuffers(1, &arenaEbo_); arenaEbo_ = 0; }
-    if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
+    // Archie review H13: instVbo_ is created once (ctor) and reused by every
+    // frame; it is freed in the destructor, not here (a clear+reload used to
+    // leave the arena path drawing from buffer 0).
     arenaIndices_ = 0;
     arenaIndexFree_.clear();
   }

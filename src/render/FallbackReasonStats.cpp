@@ -102,7 +102,7 @@ std::string FallbackReasonStats::detailLine() const {
     std::snprintf(buf, sizeof buf, " mode%d=%" PRIu64, idx[k], modes_[idx[k]].load());
     s += buf;
   }
-  static int aidx[256];
+  int aidx[256];  // Archie review M5: was static (shared across concurrent callers)
   for (int i = 0; i < 256; ++i) aidx[i] = i;
   std::sort(aidx, aidx + 256, [&](int a, int b) { return ao_[a].load() > ao_[b].load(); });
   s += " | ao(c0,c1,c2,c3):";
