@@ -115,6 +115,21 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
 /// nbrLod[f]: 0..2 = canonical lod, -1 = legacy stream (full detail, = L0), -2 = nothing
 /// drawn there (no seam to crack against).
 uint8_t canonSkirtMask(int lod, const int nbrLod[6]);
+/// Render pipeline M12 (GPU uploaders, Archie ruling 5): the pull stream a GPU backend
+/// uploads instead of PackedVertex quads. 4 x uint32 per texel (GL RGBA32UI TBO / Vulkan
+/// SSBO uvec4). First fbQuads * 4 texels = Packed12 fallback vertices (L0 only, one per
+/// vertex: w0, w1, w2, layerId | rgb565Tint << 16); then one texel per canonical quad
+/// (lo, hi, layer | value << 16 | mode << 24, 0) with the palette already resolved
+/// (canonKeyOf), so split halves (M11) need no palette indirection. Same quad set as
+/// decodeCanonicalMesh(cm, lod, ., skirtMask); fallback quads are moved to the front.
+struct CanonPullStream { std::vector<uint32_t> texels; uint32_t fbQuads = 0, quads = 0; };
+bool buildCanonPullStream(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out);
+/// CPU mirror of assets/shaders/canonical_pull_legacy.glsl: legacy vertex `corner` (0..3)
+/// of pull quad q (0 .. fbQuads + quads - 1). The shaders are line-for-line copies.
+PackedVertex canonPullReference(const CanonPullStream& s, uint32_t q, uint32_t corner, int lod);
+/// M12 verify counters (LL_CANON_VERIFY=1): pulled stream vs decodeCanonicalMesh, L0..L2.
+struct CanonPullVerifyStats { uint64_t checked = 0, mismatches = 0; };
+CanonPullVerifyStats canonPullVerifyStats();
 /// M11 (Archie ruling 1): split a mesh whose palette grew past kMaxPalette (up to 2x) in
 /// two, in stream order. qSlot / fSlot = the wide palette index of every L0 quad /
 /// fallback vertex (the packed 10-bit fields are rewritten). Returns false if the second

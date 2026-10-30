@@ -20,6 +20,25 @@ void cmCheck(bool ok, const char* what) {
   if (!ok) ++g_cmFails;
 }
 
+// M12: the GPU pull stream (canonPullReference, mirrored by canonical_pull_legacy.glsl)
+// expands to the same quads as decodeCanonicalMesh (as sorted 64-byte quad sets).
+bool pullMatches(const CanonicalMesh& m, int lod, uint8_t mask) {
+  std::vector<PackedVertex> dec, got;
+  CanonPullStream ps;
+  if (!decodeCanonicalMesh(m, lod, dec, mask) || !buildCanonPullStream(m, lod, mask, ps)) return false;
+  for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q)
+    for (uint32_t k = 0; k < 4; ++k) got.push_back(canonPullReference(ps, q, k, lod));
+  auto quads = [](const std::vector<PackedVertex>& v) {
+    std::multiset<std::vector<uint8_t>> out;
+    for (size_t i = 0; i + 4 <= v.size(); i += 4) {
+      const uint8_t* b = reinterpret_cast<const uint8_t*>(&v[i]);
+      out.emplace(b, b + 4 * sizeof(PackedVertex));
+    }
+    return out;
+  };
+  return dec.size() == got.size() && !dec.empty() && quads(dec) == quads(got);
+}
+
 uint32_t rng(uint32_t& s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
 
 struct Scene {
@@ -237,6 +256,9 @@ int testCanonicalMesh() {
     std::vector<PackedVertex> all, none;
     decodeCanonicalMesh(open, 1, all); decodeCanonicalMesh(open, 1, none, 0);
     cmCheck(all.size() == none.size() + size_t(open.lods[1].skirt.count) * 4, "decode honours the skirt mask");
+    cmCheck(pullMatches(open, 0, 0x3F) && pullMatches(open, 1, 0x3F) && pullMatches(open, 1, 0x21) && pullMatches(open, 2, 0x3F) &&
+                pullMatches(open, 2, 0),
+            "GPU pull stream == CPU decode at L0/L1/L2 with skirt masks (canonical_pull_legacy.glsl mirror)");
   }
   {
     // M11 (Archie ruling 1): a 1500-entry palette splits in two, stream order preserved.
@@ -268,6 +290,15 @@ int testCanonicalMesh() {
     cmCheck(ok && w.next && w.palette.size() <= canon::kMaxPalette && w.next->palette.size() <= canon::kMaxPalette &&
             got.size() == ref.size() && std::memcmp(got.data(), ref.data(), ref.size() * sizeof(PackedVertex)) == 0,
             "palette overflow split: two halves, each <= 1024 entries, decode == unsplit stream");
+    cmCheck(pullMatches(w, 0, 0x3F), "GPU pull stream == CPU decode on a split mesh (Packed12 fallback + both halves)");
+    CanonicalMesh big; canon::PaletteFields gp; gp.layerId = 300; gp.modeFlags = canon::kModeGroundPulse; gp.pulse = 9;
+    canon::PaletteFields em; em.layerId = 7; em.emissive = 15;
+    big.palette = {canon::packPalette(gp), canon::packPalette(em)};
+    for (uint32_t f = 0; f < 6; ++f) {
+      canon::DecodedQuad d; d.face = f; d.ox = f & 1u ? 0 : 1; d.oy = 0; d.oz = 0; d.w = 16; d.h = 16; d.cornerAo = 0x55u * (f % 4); d.paletteIdx = f & 1u;
+      big.lods[0].face[f] = BucketRange{uint32_t(big.quads.size()), 1}; big.quads.push_back(canon::packQuad(d));
+    }
+    cmCheck(pullMatches(big, 0, 0x3F), "GPU pull: 16x16 quads (uint8 UV wrap), ground-pulse / emissive keys, layer > 255");
   }
   {
     // Determinism: the same bytes from 1 and 8 threads, and from a fresh mesher.

@@ -10,6 +10,8 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <regex>
+#include <cstdlib>
 #include <unordered_map>
 #include <string_view>
 #include "builtin_shaders.h"
@@ -31,6 +33,11 @@ extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) in
 #include "litholattice/render/pbr_gl_upload.h"
 #include "litholattice/render/pbr_quad_mesh.h"
 #include "litholattice/render/renderer.h"
+#include "litholattice/render/mesher.h"          // M12: buildCanonPullStream
+#include "litholattice/render/unified_mesher.h"  // M12: CanonicalMesh
+#ifndef GL_RGBA32UI
+#define GL_RGBA32UI 0x8D70
+#endif
 
 namespace litholattice {
 namespace {
@@ -60,6 +67,51 @@ std::string builtinSource(std::string_view file, std::string* error) {
   const std::optional<std::string> src = builtinFile(file);
   if (!src) { *error = "missing built-in file " + std::string(file); return {}; }
   return expandShaderIncludes(*src, builtinFile, error).value_or(std::string{});
+}
+
+/// Render pipeline M12 (GL TBO uploader, LL_GL_CANON=1): wrap the chunk vertex shader so
+/// it can pull its four legacy attributes from the canonical pull stream (RGBA32UI buffer
+/// texture, canonical_pull_legacy.glsl) instead of the vertex arrays. uCanonMode 0 keeps
+/// the vertex-array path (legacy meshes, entities), so one program serves both and the
+/// shading code below the attributes is the unmodified chunk.vert by construction.
+std::optional<std::string> canonPullVariant(const std::string& vs, std::string* why) {
+  static const std::regex attr(R"(layout\s*\(\s*location\s*=\s*([0-3])\s*\)\s*in\s+(uvec[234]|uint)\s+(aPos|aInfo|aShade|aLayerHi)\s*;)");
+  std::string out;
+  int found = 0;
+  auto it = std::sregex_iterator(vs.begin(), vs.end(), attr);
+  size_t last = 0;
+  for (; it != std::sregex_iterator(); ++it) {
+    const std::smatch& m = *it;
+    out += vs.substr(last, size_t(m.position(0)) - last);
+    out += "layout(location = " + m[1].str() + ") in " + m[2].str() + " " + m[3].str() + "_lkIn; " + m[2].str() + " " + m[3].str() + ";";
+    last = size_t(m.position(0) + m.length(0));
+    ++found;
+  }
+  out += vs.substr(last);
+  if (found != 4) { *why = "chunk.vert does not declare aPos/aInfo/aShade/aLayerHi as plain attributes"; return std::nullopt; }
+  static const std::regex mainRe(R"(void\s+main\s*\(\s*(void)?\s*\))");
+  std::smatch mm;
+  if (!std::regex_search(out, mm, mainRe)) { *why = "no main() in chunk.vert"; return std::nullopt; }
+  out.replace(size_t(mm.position(0)), size_t(mm.length(0)), "void lk_chunk_main()");
+  const std::optional<std::string> hdr = builtinFile("canonical_pull_legacy.glsl");
+  if (!hdr) { *why = "missing built-in canonical_pull_legacy.glsl"; return std::nullopt; }
+  out += "\n" + *hdr + R"(
+uniform usamplerBuffer uCanonTbo;
+uniform int uCanonMode; uniform int uCanonBase; uniform int uCanonFb; uniform int uCanonLod;
+void main() {
+  if (uCanonMode == 0) { aPos = aPos_lkIn; aInfo = aInfo_lkIn; aShade = aShade_lkIn; aLayerHi = aLayerHi_lkIn; }
+  else {
+    int q = gl_VertexID / 6, k = gl_VertexID - q * 6;
+    uint corner = uint(k < 3 ? k : (k == 3 ? 0 : k - 2));  // the shared quad pattern {0,1,2,0,2,3}
+    CanonLegacyVertex cv;
+    if (q < uCanonFb) cv = canonPullFallback(texelFetch(uCanonTbo, uCanonBase + q * 4 + int(corner)));
+    else cv = canonPullQuadLegacy(texelFetch(uCanonTbo, uCanonBase + uCanonFb * 4 + (q - uCanonFb)), corner, uint(uCanonLod));
+    aPos = cv.pos; aInfo = cv.info; aShade = cv.shade; aLayerHi = cv.layerHi;
+  }
+  lk_chunk_main();
+}
+)";
+  return out;
 }
 
 constexpr uint32_t kMaxQuads = kMaxQuadsPerMesh;  // shared quad index buffer size (renderer.h)
@@ -429,6 +481,28 @@ class cGL33Renderer final : public IRenderer {
       spriteProg_.use();
       glUniform1i(uSpriteAtlas_, 0);  // atlas pages live on texture unit 0 (2D target)
     }
+#if !defined(__wasm__)
+    canonOn_ = false;
+    if (const char* e = std::getenv("LL_GL_CANON"); e && e[0] == '1') {
+      std::string clog, vs, fs;
+      if (const ShaderSource* src = lib.find("chunk")) { vs = std::string(src->vertex); fs = std::string(src->fragment); }
+      else { vs = builtinSource("chunk.vert", &clog); fs = builtinSource("chunk.frag", &clog); }
+      std::optional<std::string> cvs = vs.empty() ? std::nullopt : canonPullVariant(vs, &clog);
+      std::optional<cGlProgram> cp = cvs ? cGlProgram::build(*cvs, fs, &clog) : std::nullopt;
+      if (cp) {
+        prog_ = std::move(*cp);
+        canonOn_ = true;
+        uCanonMode_ = prog_.uniform("uCanonMode"); uCanonBase_ = prog_.uniform("uCanonBase");
+        uCanonFb_ = prog_.uniform("uCanonFb"); uCanonLod_ = prog_.uniform("uCanonLod");
+        prog_.use();
+        glUniform1i(prog_.uniform("uCanonTbo"), kCanonTexUnit);
+        glUniform1i(uCanonMode_, 0);
+        canonModeSet_ = 0;
+      }
+      logInfo("gl33: canonical TBO uploader (LL_GL_CANON) %s%s", canonOn_ ? "ON (RGBA32UI pull stream, legacy fallback per mesh)" : "OFF: ",
+              canonOn_ ? "" : clog.c_str());
+    }
+#endif
     uVP_ = prog_.uniform("uVP"); uOffset_ = prog_.uniform("uOffset");
     uCam_ = prog_.uniform("uCam"); uSky_ = prog_.uniform("uSky");
     uFogEnd_ = prog_.uniform("uFogEnd"); uTime_ = prog_.uniform("uTime"); uTwinkle_ = prog_.uniform("uTwinkle"); uDebug_ = prog_.uniform("uDebug");
@@ -547,6 +621,9 @@ class cGL33Renderer final : public IRenderer {
     // cast through uint64_t first, then back (bit-preserving). Mirrors vk_renderer.cpp.
     const int64_t key = int64_t((uint64_t(uint32_t(m.cx)) << 40) ^ (uint64_t(uint32_t(m.sy)) << 32) ^ uint64_t(uint32_t(m.cz)));
     if (m.verts.empty()) { erase(key); return; }
+    static const bool kCanonNoUp = [] { const char* e = std::getenv("LL_GL_CANON_NOUP"); return e && e[0] == '1'; }();  // diag: wrapped shader, arrays only
+    if (canonOn_ && !kCanonNoUp && m.canonical && uploadCanon(key, m)) return;
+    if (auto it = meshes_.find(key); it != meshes_.end() && it->second.canon) erase(key);  // canonical -> legacy
     if (useArena_) { uploadToArena(key, m); return; }
     Gpu& g = meshes_[key];
     g.cx = m.cx; g.sy = m.sy; g.cz = m.cz;
@@ -575,7 +652,96 @@ class cGL33Renderer final : public IRenderer {
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(m.verts.size() * sizeof(PackedVertex)), m.verts.data(), GL_STATIC_DRAW);
   }
 
+  // M12: one RGBA32UI buffer texture holds every canonical mesh's pull stream (first-fit
+  // free list in texel units, doubling growth like the vertex arena).
+  bool uploadCanon(int64_t key, const ChunkMesh& m) {
+    CanonPullStream ps;
+    if (!buildCanonPullStream(*m.canonical, 0, 0x3F, ps)) return false;
+    // Same quad set as the legacy stream or no deal (e.g. a mesh the game re-decoded).
+    if (size_t(ps.fbQuads + ps.quads) * 4 != m.verts.size() || ps.texels.empty()) { ++canonRejects_; return false; }
+    static const bool kCanonCheck = [] { const char* e = std::getenv("LL_GL_CANON_CHECK"); return e && e[0] == '1'; }();
+    if (kCanonCheck) {  // diag: pulled quads vs the legacy stream the arrays path would draw
+      using K = std::array<uint32_t, 10>;
+      auto kv = [](const PackedVertex& v) { return K{v.x, v.y, v.z, v.u, v.v, v.faceAo, v.layer, v.value, v.mode, uint32_t(v.layerHi)}; };
+      std::vector<std::array<K, 4>> a, b;
+      for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q) { std::array<K, 4> e; for (uint32_t c = 0; c < 4; ++c) e[c] = kv(canonPullReference(ps, q, c, 0)); a.push_back(e); }
+      for (size_t q = 0; q * 4 < m.verts.size(); ++q) { std::array<K, 4> e; for (int c = 0; c < 4; ++c) e[c] = kv(m.verts[q * 4 + c]); b.push_back(e); }
+      static uint64_t ck = 0, bad = 0, ordBad = 0; ++ck;
+      if (a != b) ++ordBad;
+      auto sa = a, sb = b; std::sort(sa.begin(), sa.end()); std::sort(sb.begin(), sb.end());
+      if (sa != sb) {
+        if (bad++ < 6) for (size_t i = 0; i < sa.size(); ++i) if (sa[i] != sb[i]) {
+          std::string s;
+          for (int c = 0; c < 4; ++c) { s += " P["; for (uint32_t x : sa[i][c]) s += std::to_string(x) + ","; s += "] L["; for (uint32_t x : sb[i][c]) s += std::to_string(x) + ","; s += "]"; }
+          logError("gl33 canon-check mesh %d,%d,%d quad %zu:%s", m.cx, m.sy, m.cz, i, s.c_str()); break; }
+      }
+      if ((ck & 1023) == 0 || bad == 1) logInfo("gl33 canon-check: %llu meshes, %llu set-mismatch, %llu order-diff", (unsigned long long)ck, (unsigned long long)bad, (unsigned long long)ordBad);
+    }
+    erase(key);
+    const size_t n = ps.texels.size() / 4;
+    auto first = canonAlloc(n);
+    if (!first) { canonGrow(n); first = canonAlloc(n); }
+    if (!first) return false;
+    Gpu& g = meshes_[key];
+    g.canon = true; g.cFirst = *first; g.cCount = n; g.cFb = GLint(ps.fbQuads);
+    g.cVerts = GLsizei(size_t(ps.fbQuads + ps.quads) * 6);
+    g.cx = m.cx; g.sy = m.sy; g.cz = m.cz;
+    for (int i = 0; i < 4; ++i) { g.pulseP0[i] = m.pulseP0[i]; g.pulseP1[i] = m.pulseP1[i]; g.traceP0[i] = m.traceP0[i]; g.traceP1[i] = m.traceP1[i]; }
+    glBindBuffer(GL_TEXTURE_BUFFER, canonBuf_);
+    glBufferSubData(GL_TEXTURE_BUFFER, GLintptr(g.cFirst * 16), GLsizeiptr(n * 16), ps.texels.data());
+    canonTexels_ += n;
+    ++canonMeshes_;
+    return true;
+  }
+  std::optional<size_t> canonAlloc(size_t n) {
+    for (auto it = canonFree_.begin(); it != canonFree_.end(); ++it) {
+      if (it->second < n) continue;
+      const size_t first = it->first, rest = it->second - n;
+      canonFree_.erase(it);
+      if (rest) canonFree_.emplace(first + n, rest);
+      return first;
+    }
+    return std::nullopt;
+  }
+  void canonRelease(size_t first, size_t n) {
+    if (!n) return;
+    auto it = canonFree_.emplace(first, n).first;
+    if (const auto next = std::next(it); next != canonFree_.end() && it->first + it->second == next->first) {
+      it->second += next->second; canonFree_.erase(next);
+    }
+    if (it != canonFree_.begin())
+      if (const auto prev = std::prev(it); prev->first + prev->second == it->first) { prev->second += it->second; canonFree_.erase(it); }
+  }
+  void canonGrow(size_t minTexels) {
+    const size_t cap = std::max(canonCap_ ? canonCap_ * 2 : size_t(1) << 20, canonCap_ + minTexels);
+    GLint maxTexels = 0;
+    glGetIntegerv(0x8C2B /* GL_MAX_TEXTURE_BUFFER_SIZE */, &maxTexels);
+    if (maxTexels > 0 && cap > size_t(maxTexels)) { logError("gl33: canonical TBO would exceed GL_MAX_TEXTURE_BUFFER_SIZE (%d)", maxTexels); return; }
+    logInfo("gl33: canonical TBO grow: %zu -> %zu texels (16 B each)", canonCap_, cap);
+    GLuint buf = 0;
+    glGenBuffers(1, &buf);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, buf);
+    glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * 16), nullptr, GL_STATIC_DRAW);
+    if (canonBuf_) {
+      glBindBuffer(GL_COPY_READ_BUFFER, canonBuf_);
+      glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, GLsizeiptr(canonCap_ * 16));
+      glDeleteBuffers(1, &canonBuf_);
+    }
+    canonRelease(canonCap_, cap - canonCap_);
+    canonBuf_ = buf;
+    canonCap_ = cap;
+    if (!canonTex_) glGenTextures(1, &canonTex_);
+    glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
+    glBindTexture(GL_TEXTURE_BUFFER, canonTex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, canonBuf_);
+    glActiveTexture(GL_TEXTURE0);
+    if (!canonVao_) glGenVertexArrays(1, &canonVao_);
+  }
+
   void clearChunkMeshes() override {
+    canonFree_.clear();
+    if (canonCap_) canonFree_.emplace(size_t(0), canonCap_);
+    canonTexels_ = 0;
     for (auto& [k, g] : meshes_) if (g.vao) { glDeleteBuffers(1, &g.vbo); glDeleteVertexArrays(1, &g.vao); }
     meshes_.clear();
     for (auto& [k, g] : pbrMeshes_) if (g.vao) { glDeleteBuffers(1, &g.vbo); glDeleteVertexArrays(1, &g.vao); }
@@ -614,6 +780,11 @@ class cGL33Renderer final : public IRenderer {
     glUniform1f(uGroundTraceTime_, p.groundTraceTimeSec);  // wafer ground traces: same sim clock, independent toggle
     glUniform1f(uGroundTraceOn_, p.groundTraceOn ? 1.f : 0.f);
     textures_.bind();
+    if (canonOn_ && canonTex_) {
+      glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
+      glBindTexture(GL_TEXTURE_BUFFER, canonTex_);
+      glActiveTexture(GL_TEXTURE0);
+    }
     stats_.drawn = 0;
     // Fix 2026-10-11 (audit): was classic meshes only; count PBR meshes too.
     stats_.meshes = uint32_t(meshes_.size() + pbrMeshes_.size());
@@ -712,13 +883,20 @@ class cGL33Renderer final : public IRenderer {
       // skips the draw (outer tier); Cull skips. Base margin = foundation.
       const CullDecision cd = decideOnce(k, mn);
       if (cd != CullDecision::Full) continue;
+      if (canonOn_ && canonModeSet_ != (g.canon ? 1 : 0)) { canonModeSet_ = g.canon ? 1 : 0; glUniform1i(uCanonMode_, canonModeSet_); }
       glUniform3f(uOffset_, mn.x, mn.y, mn.z);
       setEffect4(uPulseP0_, lastPulseP0, g.pulseP0);  // wafer ground pulse: this mesh's blended params
       setEffect4(uPulseP1_, lastPulseP1, g.pulseP1);
       setEffect4(uTraceP0_, lastTraceP0, g.traceP0);  // wafer ground traces: this mesh's blended params
       setEffect4(uTraceP1_, lastTraceP1, g.traceP1);
       effectPrimed = true;
-      if (useArena_) {
+      if (g.canon) {
+        if (boundVao != canonVao_) { glBindVertexArray(canonVao_); boundVao = canonVao_; }
+        glUniform1i(uCanonBase_, GLint(g.cFirst));
+        glUniform1i(uCanonFb_, g.cFb);
+        glUniform1i(uCanonLod_, 0);
+        glDrawArrays(GL_TRIANGLES, 0, g.cVerts);
+      } else if (useArena_) {
         if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
         // Rebased indices (Phase 2): the arena EBO's per-mesh indices already
         // carry the base vertex, so the classic arena draw needs no
@@ -733,6 +911,7 @@ class cGL33Renderer final : public IRenderer {
       }
       ++stats_.drawn;
     }
+    if (canonOn_ && canonModeSet_ != 0) { canonModeSet_ = 0; glUniform1i(uCanonMode_, 0); }  // entities etc. use the arrays
     // PBR (BinaryQuad) meshes: drawn with chunk_pbr. The classic meshes above are
     // untouched - program selection follows the uploaded meshes (coexistence).
     // pbrMatTex_ == 0 means no material table was ever uploaded (no registry);
@@ -925,12 +1104,20 @@ class cGL33Renderer final : public IRenderer {
                  // Phase 2 mega-draw: this mesh's rebased pattern indices in the
                  // arena index buffer (index units), and the (first, count) they
                  // were built for — rebuilt whenever the vertex range moves.
-                 size_t indexFirst = 0; size_t indexBuiltFirst = ~size_t(0); GLsizei indexBuiltCount = 0; };
+                 size_t indexFirst = 0; size_t indexBuiltFirst = ~size_t(0); GLsizei indexBuiltCount = 0;
+                 // M12 canonical pull mesh (LL_GL_CANON): texel range in the canonical TBO.
+                 bool canon = false; size_t cFirst = 0, cCount = 0; GLint cFb = 0; GLsizei cVerts = 0; };
   // PBR (BinaryQuad) meshes: one VAO+VBO each (never in the arena - see uploadPbrChunkMesh).
   struct PbrGpu { GLuint vao = 0, vbo = 0; GLsizei indexCount = 0; int cx = 0, sy = 0, cz = 0; };
   void erase(int64_t key) {
     auto it = meshes_.find(key);
     if (it == meshes_.end()) return;
+    if (it->second.canon) {
+      canonRelease(it->second.cFirst, it->second.cCount);
+      canonTexels_ -= it->second.cCount;
+      meshes_.erase(it);
+      return;
+    }
     if (useArena_) {
       freeRange(it->second.first, it->second.count);
       if (it->second.indexBuiltCount > 0) freeIndexRange(it->second.indexFirst, size_t(it->second.indexBuiltCount));
@@ -1186,6 +1373,15 @@ class cGL33Renderer final : public IRenderer {
   GLuint pbrMatBuf_ = 0, pbrMatTex_ = 0;  // material table: buffer texture (GL 3.1+)
   uint64_t pbrMatGeneration_ = UINT64_MAX;  // registry generation of the uploaded table
   PbrTransparencyTier pbrTier_ = PbrTransparencyTier::ScreenDoor;  // user-selectable; game sets it
+  // M12 canonical TBO uploader state (LL_GL_CANON=1).
+  static constexpr GLint kCanonTexUnit = 5;
+  bool canonOn_ = false;
+  int canonModeSet_ = 0;
+  GLuint canonBuf_ = 0, canonTex_ = 0, canonVao_ = 0;
+  size_t canonCap_ = 0, canonTexels_ = 0;
+  uint64_t canonMeshes_ = 0, canonRejects_ = 0;
+  std::map<size_t, size_t> canonFree_;  // first texel -> count
+  GLint uCanonMode_ = -1, uCanonBase_ = -1, uCanonFb_ = -1, uCanonLod_ = -1;
   static constexpr GLint kPbrMatTexUnit = 2;  // material table texture unit (0/1 are classic)
   GLint uPbrVP_ = -1, uPbrOffset_ = -1, uPbrCam_ = -1, uPbrMat_ = -1;
   GLint uPbrLightPos_ = -1, uPbrLightColor_ = -1, uPbrLightCount_ = -1, uPbrTier_ = -1;

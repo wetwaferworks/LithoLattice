@@ -989,6 +989,95 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
   }
   return true;
 }
+namespace {
+void pullCollect(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out, bool fbPass) {
+  if (fbPass) {
+    if (lod == 0)
+      for (const canon::Packed12& f : cm.fallback) {
+        const uint32_t pi = canon::unpackPacked12(f).paletteIdx;
+        const canon::PaletteFields pf = canon::unpackPalette(pi < cm.palette.size() ? cm.palette[pi] : 0);
+        out.texels.insert(out.texels.end(), {f.w[0], f.w[1], f.w[2], uint32_t(pf.layerId) | (uint32_t(pf.rgb565Tint) << 16)});
+      }
+  } else {
+    const CanonicalLod& L = cm.lods[size_t(lod)];
+    auto range = [&](BucketRange r, bool skirt) {
+      for (uint32_t i = r.start; i < r.start + r.count && i < cm.quads.size(); ++i) {
+        const canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
+        if (d.paletteIdx >= cm.palette.size() || d.face > 5 || d.w == 0 || d.h == 0) continue;
+        if (skirt && !((skirtMask >> d.face) & 1u)) continue;
+        const uint64_t key = canonKeyOf(d, cm.palette[d.paletteIdx]);
+        const uint32_t layer = uint32_t((key >> 24) & 0xFFFFu), value = uint32_t((key >> 16) & 0xFFu), mode = uint32_t((key >> 8) & 0xFFu);
+        out.texels.insert(out.texels.end(), {uint32_t(cm.quads[i]), uint32_t(cm.quads[i] >> 32), layer | (value << 16) | (mode << 24), 0u});
+        ++out.quads;
+      }
+    };
+    for (int f = 0; f < 6; ++f) range(L.face[size_t(f)], false);
+    range(L.skirt, true);
+    range(L.blend, false);
+  }
+  if (cm.next) pullCollect(*cm.next, lod, skirtMask, out, fbPass);
+}
+std::atomic<uint64_t> g_pullChecked{0}, g_pullMismatch{0};
+}  // namespace
+bool buildCanonPullStream(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out) {
+  out = CanonPullStream{};
+  if (cm.magic != canon::kMeshMagic || lod < 0 || lod > 2) return false;
+  pullCollect(cm, lod, skirtMask, out, true);
+  out.fbQuads = uint32_t(out.texels.size() / 16);
+  out.texels.resize(size_t(out.fbQuads) * 16);  // whole quads only (decode emits 4 per quad)
+  pullCollect(cm, lod, skirtMask, out, false);
+  return true;
+}
+PackedVertex canonPullReference(const CanonPullStream& st, uint32_t q, uint32_t corner, int lod) {
+  PackedVertex o{};
+  if (q < st.fbQuads) {  // canonPullFallback
+    const uint32_t* t = &st.texels[(size_t(q) * 4 + corner) * 4];
+    const uint32_t fx = t[0] & 0xFFFu, fy = (t[0] >> 12) & 0xFFFu, fz = ((t[0] >> 24) & 0xFFu) | ((t[1] & 0xFu) << 8);
+    const uint32_t u = (t[1] >> 4) & 0xFFFu, v = (t[1] >> 16) & 0xFFFu, nid = (t[1] >> 28) & 0xFu;
+    const uint32_t ao = (t[2] >> 10) & 3u, wind = (t[2] >> 12) & 0x3Fu, layer = t[3] & 0xFFFFu, tint = t[3] >> 16;
+    o.x = uint16_t(fx); o.y = uint16_t(fy); o.z = uint16_t(fz);
+    o.u = uint8_t((u >> 4) & 0xFFu); o.v = uint8_t((v >> 4) & 0xFFu);
+    o.faceAo = uint8_t(((nid & 7u) | (ao << 3) | (wind << 5) | ((nid >> 3) << 7)) & 0xFFu);
+    o.layer = uint8_t(layer & 0xFFu); o.value = uint8_t(tint & 0xFFu); o.mode = uint8_t((tint >> 8) & 0xFFu);
+    o.layerHi = uint8_t((layer >> 8) & 0xFFu);
+    return o;
+  }
+  const uint32_t* t = &st.texels[(size_t(st.fbQuads) * 4 + (q - st.fbQuads)) * 4];  // canonPullQuadLegacy
+  const uint32_t lo = t[0], hi = t[1];
+  int c[3] = {int(lo & 0x3Fu), int((lo >> 6) & 0x3Fu), int((lo >> 12) & 0x3Fu)};
+  const int w = int((lo >> 18) & 0xFu) + 1, h = int((lo >> 22) & 0xFu) + 1;
+  const uint32_t f = (lo >> 26) & 7u, ao = (hi >> 10) & 3u;
+  if (f > 5) return o;
+  const int ua = kTexUAxis[f], va = kTexVAxis[f], na = 3 - ua - va;
+  if (!(f & 1u)) c[na] -= 1;
+  int mn[3], mx[3];
+  mn[na] = c[na] * 16; mx[na] = mn[na] + 16;
+  mn[ua] = c[ua] * 16; mx[ua] = (c[ua] + w) * 16;
+  mn[va] = c[va] * 16; mx[va] = (c[va] + h) * 16;
+  static constexpr int kGeoU[6] = {1, 2, 2, 0, 0, 1};
+  const int gu = kGeoU[f];
+  const bool cu = corner == 1 || corner == 2, cv = corner >= 2, posN = !(f & 1u);
+  int pos[3], local[3];
+  for (int a = 0; a < 3; ++a) {
+    if (a == na) pos[a] = posN ? mx[a] : mn[a];
+    else if (a == gu) pos[a] = cu ? mx[a] : mn[a];
+    else pos[a] = cv ? mx[a] : mn[a];
+  }
+  for (int a = 0; a < 3; ++a) local[a] = pos[a] > mn[a] ? 16 : 0;
+  for (int a = 0; a < 3; ++a) pos[a] = std::max(pos[a], 0);
+  int u, v;
+  faceUV(int(f), local, 0, u, v);
+  const uint32_t s = 1u << lod;
+  o.x = uint16_t((uint32_t(pos[0]) * s) & 0xFFFFu); o.y = uint16_t((uint32_t(pos[1]) * s) & 0xFFFFu);
+  o.z = uint16_t((uint32_t(pos[2]) * s) & 0xFFFFu);
+  const uint32_t layer = t[2] & 0xFFFFu;
+  o.u = uint8_t((uint32_t(u) * uint32_t(w)) & 0xFFu); o.v = uint8_t((uint32_t(v) * uint32_t(h)) & 0xFFu);
+  o.faceAo = uint8_t((f | (ao << 3)) & 0xFFu);
+  o.layer = uint8_t(layer & 0xFFu); o.value = uint8_t((t[2] >> 16) & 0xFFu); o.mode = uint8_t((t[2] >> 24) & 0xFFu);
+  o.layerHi = uint8_t(layer >> 8);
+  return o;
+}
+CanonPullVerifyStats canonPullVerifyStats() { return {g_pullChecked.load(), g_pullMismatch.load()}; }
 uint8_t canonSkirtMask(int lod, const int nbrLod[6]) {
   uint8_t m = 0;
   for (int f = 0; f < 6; ++f) {
@@ -1093,6 +1182,21 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
         g_umFbMismatch.fetch_add(1, std::memory_order_relaxed);
         logError("unified-mesher: Packed12 fallback MISMATCH sub-chunk (%d,%d,%d) (%zu fallback verts)", in.cx, in.sy, in.cz,
                  canon->fallback.size());
+      }
+    }
+    if (canon->magic == canon::kMeshMagic && canonVerifyOn()) {  // M12: GPU pull stream == CPU decode (quad sets), L0..L2
+      for (int lod = 0; lod < 3; ++lod) {
+        std::vector<PackedVertex> dec, pulled;
+        CanonPullStream ps;
+        if (!decodeCanonicalMesh(*canon, lod, dec) || !buildCanonPullStream(*canon, lod, 0x3F, ps)) continue;
+        for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q)
+          for (uint32_t k = 0; k < 4; ++k) pulled.push_back(canonPullReference(ps, q, k, lod));
+        g_pullChecked.fetch_add(1, std::memory_order_relaxed);
+        if (sortedQuads(dec) != sortedQuads(pulled)) {
+          g_pullMismatch.fetch_add(1, std::memory_order_relaxed);
+          logError("unified-mesher: GPU pull MISMATCH sub-chunk (%d,%d,%d) lod %d: decode %zu verts vs pull %zu", in.cx, in.sy,
+                   in.cz, lod, dec.size(), pulled.size());
+        }
       }
     }
     if (canon->magic == canon::kMeshMagic) {

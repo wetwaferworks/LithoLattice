@@ -108,6 +108,22 @@ add_custom_command(OUTPUT ${out}
   VERBATIM)
 list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
 
+# Render pipeline M12: the legacy-attribute pull header (canonical_pull_legacy.glsl) used by the
+# GL TBO uploader and the Vulkan pull path: GL 3.3 validation (spliced) + SPIR-V compile.
+set(LITHOLATTICE_PULL_GLSL ${LithoLattice_SOURCE_DIR}/assets/shaders/canonical_pull_legacy.glsl)
+set(out ${LITHOLATTICE_SPV_DIR}/canon_pull_check_gl33.stamp)
+add_custom_command(OUTPUT ${out}
+  COMMAND ${CMAKE_COMMAND} -DGLSLANG=$<TARGET_FILE:glslang-standalone>
+          -DSRC=${LITHOLATTICE_VK_SHADER_DIR}/canon_pull_check_gl33.vert -DHDR=${LITHOLATTICE_PULL_GLSL}
+          -DINC=canonical_pull_legacy.glsl
+          -DOUT=${LITHOLATTICE_SPV_DIR}/canon_pull_check_gl33.vert -DSTAMP=${out}
+          -P ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  DEPENDS glslang-standalone ${LITHOLATTICE_VK_SHADER_DIR}/canon_pull_check_gl33.vert ${LITHOLATTICE_PULL_GLSL}
+          ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  COMMENT "GLSL 330: canonical legacy pull header (GL TBO uploader)"
+  VERBATIM)
+list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
+
 add_library(litholattice_render_vk STATIC vk_loader.cpp vk_handles.cpp vk_device.cpp vk_resources.cpp vk_vertex_arena.cpp
             vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp ${LITHOLATTICE_SPV_HEADERS})
 target_include_directories(litholattice_render_vk PUBLIC include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
