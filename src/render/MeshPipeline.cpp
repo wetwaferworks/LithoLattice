@@ -2,10 +2,33 @@
 
 #include <cstddef>
 
+#include "MesherDetail.h"
+#include "WorkerScratch.h"
 #include "litholattice/core/log.h"
+#include "litholattice/render/unified_mesher.h"
 #include "litholattice/render/trace_ramps.h"
 
 namespace litholattice {
+
+void cMeshPipeline::flush(std::unique_ptr<GreedyGrid>& greedyGrid, bool greedy) {
+  if (canonOut_) flushCanonical(*greedyGrid, out_.verts, *canonOut_, greedy);  // render pipeline M2
+  else if (greedy) flushGreedy(*greedyGrid, out_.verts);  // Cortana 2026-10-15 1705
+}
+
+void cMeshPipeline::packedFallback(size_t legacyVerts, FallbackReasonStats::Local& fbr, cWorkerScratch& ws) {
+  CanonicalMesh* canonOut = canonOut_;
+  if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
+    if (packFallback(out_.verts, legacyVerts, *canonOut)) {
+      g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
+      FallbackReasonStats::instance().flush(fbr, legacyVerts / 4, canonOut->quads.size());
+    }
+    else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
+    if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
+      if (splitCanonicalTwo(*canonOut, ws.qSlot, ws.fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
+      else *canonOut = CanonicalMesh{}, canonOut->magic = 0;
+    }
+  }
+}
 
 void cMeshPipeline::capGuard() {
   if (out_.verts.size() > size_t(kMaxQuadsPerMesh) * 4) {  // cannot happen for 16^3 cubes; guards custom shapes

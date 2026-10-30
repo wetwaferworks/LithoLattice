@@ -11,6 +11,7 @@
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
 #include "MeshPipeline.h"  // refactor step 4: meshSubChunkPass stages
+#include "MesherDetail.h"  // refactor step 4: shared mesher internals
 #include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
@@ -187,6 +188,7 @@ void emitGreedyQuad(std::vector<PackedVertex>& out, int f, int slice, int iu, in
   }
 }
 
+}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
 void flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out) {
   for (int f = 0; f < 6; ++f) {
     const uint16_t used = g.sliceUsed[f];
@@ -213,6 +215,7 @@ void flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out) {
     }
   }
 }
+namespace {
 
 
 // Render pipeline M2 (2026-10-29, Archie migration step 3 on the game path): canonical
@@ -247,6 +250,7 @@ uint64_t canonKeyOf(const canon::DecodedQuad& q, uint64_t pal) {
          uint64_t(q.cornerAo & 3u);
 }
 
+}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
 void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
   std::vector<uint32_t>& t_qSlot = cWorkerScratch::forThisThread().qSlot;  // M11 (refactor step 2: scratch-owned)
   cm = CanonicalMesh{};
@@ -318,6 +322,7 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
   cm.lods[0].skirt.start = cm.lods[0].blend.start = uint32_t(cm.quads.size());
   if (!ok) cm = CanonicalMesh{}, cm.magic = 0;  // magic 0 = not publishable
 }
+namespace {
 
 // Render pipeline M7 (Archie step 2/3 completion: fully canonical meshes). Every legacy
 // vertex the greedy/canonical flush did not produce (rotated, strength-slot, trace-tint,
@@ -332,6 +337,7 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
 //   light    = full sky, no block light (no light engine in the mesh path yet)
 // The 24-bit strength-buffer slot is not carried (no shader reads it; see the Step 1
 // note in the pass). decodeFallbackVertex is the exact inverse with slot = 0.
+}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
 bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
   std::vector<uint32_t>& t_fSlot = cWorkerScratch::forThisThread().fSlot;  // M11 (refactor step 2: scratch-owned)
   cm.fallback.clear();
@@ -367,6 +373,7 @@ bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& c
   }
   return true;
 }
+namespace {
 }  // namespace
 // M11 (Archie ruling 1): split in stream order (fallback, then L0 quads). The first half
 // takes items while its palette has room; the first item that does not fit (a fallback
@@ -438,7 +445,9 @@ PackedVertex decodeFallbackVertex(const canon::Packed12& raw, const CanonicalMes
   p.slot = 0;
   return p;
 }
+}  // namespace (refactor step 4: counters shared with MeshPipeline.cpp)
 std::atomic<uint64_t> g_umFbVerts{0}, g_umFbChecked{0}, g_umFbMismatch{0};
+namespace {
 
 // Render pipeline M6 (step 3 on the game path: registry feed into UnifiedMesher). L1/L2
 // come from UnifiedMesher over a per-job material table built from the registry: one
@@ -475,7 +484,9 @@ bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   }
   return true;
 }
+}  // namespace (refactor step 4: counters shared with MeshPipeline.cpp)
 std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0}, g_umSplits{0};
+namespace {
 
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
@@ -780,20 +791,10 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
           fbr.addShape(FallbackShape::Extra, (out.verts.size() - extraV0) / 4);
         }
       }
+  cMeshPipeline pipe(in, ctx, out, canonOut);  // refactor step 4: the stages after the cell pass, same order
   const size_t legacyVerts = out.verts.size();  // render pipeline M7: per-cell stream before the canonical flush
-  if (canonOut) flushCanonical(*greedyGrid, out.verts, *canonOut, greedy);  // render pipeline M2
-  else if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
-  if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
-    if (packFallback(out.verts, legacyVerts, *canonOut)) {
-      g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
-      FallbackReasonStats::instance().flush(fbr, legacyVerts / 4, canonOut->quads.size());
-    }
-    else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
-    if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
-      if (splitCanonicalTwo(*canonOut, ws.qSlot, ws.fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
-      else *canonOut = CanonicalMesh{}, canonOut->magic = 0;
-    }
-  }
+  pipe.flush(greedyGrid, greedy);
+  pipe.packedFallback(legacyVerts, fbr, ws);
   if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
     cWorkerScratch::Lod& wl = ws.lod();  // refactor step 2: was function-static thread_locals
     std::vector<uint32_t>& keyGen = wl.keyGen;
@@ -856,11 +857,8 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     else
       g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
   }
-  {  // refactor step 4: the tail stages, same order
-    cMeshPipeline pipe(in, ctx, out, canonOut);
-    pipe.capGuard();
-    pipe.perMeshParams();
-  }
+  pipe.capGuard();
+  pipe.perMeshParams();
   return out;
 }
 

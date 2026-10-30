@@ -2,9 +2,16 @@
 // pipeline of stages that run the existing code in the same order. Moved verbatim, no output
 // change (Gate G anchors + LL_CANON_VERIFY at every sub-step). Private to the render library.
 #pragma once
+#include <cstddef>
+#include <memory>
+
+#include "litholattice/render/FallbackReasonStats.h"
 #include "litholattice/render/mesher.h"
 
 namespace litholattice {
+
+struct GreedyGrid;
+class cWorkerScratch;
 
 class cMeshPipeline {
  public:
@@ -13,6 +20,11 @@ class cMeshPipeline {
   cMeshPipeline(const MeshInput& in, const MeshContext& ctx, ChunkMesh& out, CanonicalMesh* canonOut)
       : in_(in), ctx_(ctx), out_(out), canonOut_(canonOut) {}
 
+  /// Stage: flush the greedy grid into the canonical mesh (M2) or, legacy greedy, into the stream.
+  void flush(std::unique_ptr<GreedyGrid>& grid, bool greedy);
+  /// Stage: Packed12 fallback of the per-cell stream (M7) and the M11 palette split.
+  /// legacyVerts = stream size before the flush.
+  void packedFallback(size_t legacyVerts, FallbackReasonStats::Local& fbr, cWorkerScratch& ws);
   /// Stage: trim an oversized legacy stream (cannot happen for 16^3 cubes; guards custom shapes).
   void capGuard();
   /// Stage: per-mesh draw params (wafer ground pulse, Trace-mix pulse colour, ground traces).
