@@ -440,6 +440,22 @@ void testArchieHandshakeH1H3() {
     tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
     check(b.lastTickHash() == a.lastTickHash(), "tick ledger H1a: async spawned by a stale job of an abandoned tick never commits");
   }
+  {  // H1d: a cancelled record that never completes must not pin the sweep's low watermark.
+    L c(4096);
+    c.openTick(1);
+    {
+      L::JobScope js(c, c.slot(0), 0, 7, 0);
+      (void)L::asyncBegin(1);  // its job never calls asyncComplete
+      L::finishJob(c.slot(0), 0);
+    }
+    c.abandonOpenTick();
+    for (int i = 0; i < 200; ++i) {
+      std::vector<uint64_t> h;
+      tick1(c, 1, &h); c.asyncComplete(h[0], uint64_t(i)); c.sweep(kNever); c.commit();
+    }
+    std::printf("  tick ledger H1d: scan window after 200 ticks = %llu\n", (unsigned long long)c.asyncScanWindow());
+    check(c.asyncScanWindow() <= 4, "tick ledger H1d: a never-completed cancelled record does not grow the sweep window");
+  }
 }
 
 void testJobSystem() {

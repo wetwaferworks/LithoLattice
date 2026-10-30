@@ -182,7 +182,12 @@ class cTickLedger {
     }
     uint64_t asyncSum = 0, asyncN = 0, waitNs = 0;
     const uint64_t head = asyncHead_.load(std::memory_order_acquire);
-    while (asyncLow_ < head && async_[asyncLow_ & asyncMask_].state.load(std::memory_order_acquire) == kFree) ++asyncLow_;
+    // H1d: a cancelled record is never folded, so it must not pin the low watermark (its
+    // late asyncComplete just frees it). Only kPending/kDone records hold asyncLow_.
+    for (; asyncLow_ < head; ++asyncLow_) {
+      const uint32_t st = async_[asyncLow_ & asyncMask_].state.load(std::memory_order_acquire);
+      if (st != kFree && st != kCancelled) break;
+    }
     // H1c: pass 1 waits for every due record WITHOUT freeing any, so a watchdog trip
     // leaves them all intact for the rerun of this tick; pass 2 folds and frees.
     for (uint64_t i = asyncLow_; i < head; ++i) {
