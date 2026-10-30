@@ -101,6 +101,19 @@ bool unifiedMesherEnabled();
 struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0; };
 /// M6: L1/L2 from the registry feed on the game path (LL_CANON_LODS=0 turns it off).
 bool canonLodsEnabled();
+/// Render pipeline M8 (uploaders): decode one LOD of a canonical mesh to the legacy
+/// PackedVertex stream (the CPU reference every uploader is checked against).
+/// lod 0 = Packed12 fallback then L0 quads: byte-identical to ChunkMesh::verts in unified
+/// mode (slot field 0). lod 1/2 = face buckets, skirts, blend; positions x2/x4, one texture
+/// tile per coarse cell (sub-block fallback geometry is not drawn at L1/L2).
+/// Returns false (out empty) for an unpublishable mesh or a bad lod.
+bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out);
+/// Draw-side LOD selection (Archie Q38/Q40): Chebyshev chunk distance d against rings
+/// ring1 (L0 -> L1) and ring2 (L1 -> L2), +-1.5 chunk hysteresis (2 in integer chunks)
+/// around the current lod (-1 = no current, pick directly).
+int selectCanonLod(int d, int current, int ring1, int ring2);
+/// LL_CANON_LOD_RINGS="r1,r2" (default 12,24 chunks).
+void canonLodRings(int& ring1, int& ring2);
 UnifiedMesherStats unifiedMesherStats();
 bool meshVerifyEnabled();
 struct MeshVerifyStats { uint64_t checked = 0, mismatches = 0, skipped = 0; };

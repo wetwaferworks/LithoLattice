@@ -6,6 +6,8 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/render/mesher.h"
+#include "litholattice/render/unified_mesher.h"
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/threading.h"
 #include "litholattice/core/f3_trace.h"
@@ -1902,9 +1904,75 @@ void cSoftwareRenderer::expandStored(const StoredMesh& m, size_t vertBegin, size
   }
 }
 
+static std::atomic<int> g_swCanonOverride{-1};
+void cSoftwareRenderer::setCanonIngest(bool on) { g_swCanonOverride.store(on ? 1 : 0); }
+bool cSoftwareRenderer::canonIngestEnabled() {
+  static const bool v = [] { const char* e = std::getenv("LL_SW_CANON"); return e && e[0] == '1'; }();
+  const int o = g_swCanonOverride.load(std::memory_order_relaxed);
+  return o < 0 ? v : o == 1;
+}
+int cSoftwareRenderer::canonLodOf(int cx, int sy, int cz) const {
+  auto it = canonSrc_.find(swMeshKey(cx, sy, cz));
+  return it == canonSrc_.end() ? -1 : it->second.lod;
+}
+static int swCanonDist(int cx, int cz, int camCx, int camCz) {
+  return std::max(std::abs(cx - camCx), std::abs(cz - camCz));
+}
+void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
+  const int ccx = int(std::floor(cam.x / 16.f)), ccz = int(std::floor(cam.z / 16.f));
+  if (ccx == canonCamCx_ && ccz == canonCamCz_) return;
+  canonCamCx_ = ccx; canonCamCz_ = ccz;
+  if (canonSrc_.empty()) return;
+  int r1 = 0, r2 = 0;
+  canonLodRings(r1, r2);
+  for (auto& [key, src] : canonSrc_) {
+    const int want = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
+    if (want == src.lod) continue;
+    ChunkMesh dm = src.meta;  // verts empty in the stored meta
+    dm.canonical.reset();
+    if (!decodeCanonicalMesh(*src.meta.canonical, want, dm.verts) || dm.verts.empty()) continue;  // keep current lod
+    src.lod = want;
+    canonInner_ = true;
+    uploadChunkMesh(dm);
+    canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
+  }
+}
+
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
-  ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
+  if (canonIngestEnabled() && !canonInner_) {
+    if (mesh.verts.empty() || !mesh.canonical || mesh.canonical->magic != canon::kMeshMagic) {
+      canonSrc_.erase(key);
+    } else {
+      int r1 = 0, r2 = 0;
+      canonLodRings(r1, r2);
+      SwCanonSrc src;
+      src.meta.cx = mesh.cx; src.meta.sy = mesh.sy; src.meta.cz = mesh.cz;
+      {
+        ChunkMesh tmp = mesh;  // copy the per-chunk params, drop the legacy stream
+        tmp.verts = {};
+        src.meta = std::move(tmp);
+      }
+      const int want = canonCamCx_ == (1 << 30) ? 0 : selectCanonLod(swCanonDist(mesh.cx, mesh.cz, canonCamCx_, canonCamCz_), -1, r1, r2);
+      ChunkMesh dm = src.meta;
+      dm.canonical.reset();
+      int lod = want;
+      if (!decodeCanonicalMesh(*mesh.canonical, lod, dm.verts) || dm.verts.empty()) {
+        lod = 0;
+        decodeCanonicalMesh(*mesh.canonical, 0, dm.verts);
+      }
+      if (!dm.verts.empty()) {
+        src.lod = lod;
+        canonSrc_[key] = std::move(src);
+        canonInner_ = true;
+        uploadChunkMesh(dm);
+        canonInner_ = false;
+        return;
+      }
+      canonSrc_.erase(key);  // nothing decodable: fall through to the legacy stream
+    }
+  }
+  ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   if (mesh.verts.empty()) {  // empty = remove, like the other backends
     meshes_.erase(key);
     return;
@@ -2112,6 +2180,7 @@ void cSoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts)
 
 void cSoftwareRenderer::clearChunkMeshes() {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
+  canonSrc_.clear();
   meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
   pbrMeshes_.clear();
 }
@@ -2751,6 +2820,7 @@ SwProf g_swProf;
 }  // namespace
 
 void cSoftwareRenderer::renderFrame(const FrameParams& p) {
+  if (canonIngestEnabled()) reselectCanonLods(p.camPos);  // M8 draw-side LOD (store-owned here)
   // Ginny (Argon) 2026-10-16 Pass 2 A/B proof (Cortana): LL_SW_AB=<n> renders frame n with
   // the LL_SW_AB_A mask (default 0 = pre-Pass-2), then again with the active mask, and logs
   // how many pixels differ. Off (zero cost beyond one branch) unless the env var is set.

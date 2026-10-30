@@ -3956,6 +3956,49 @@ void testRender() {
       return q;
     };
     check(sq(u) == sq(scene) && u.canonical != nullptr, "mesher (unified): golden scene decodes to the legacy quads and publishes a canonical mesh");
+    // Render pipeline M8: the uploader reference decode (L0) is the published stream exactly.
+    std::vector<PackedVertex> dv;
+    bool same = u.canonical && decodeCanonicalMesh(*u.canonical, 0, dv) && dv.size() == u.verts.size();
+    for (size_t i = 0; same && i < dv.size(); ++i) {
+      PackedVertex a = dv[i], b = u.verts[i];
+      a.slot = b.slot = 0;
+      same = std::memcmp(&a, &b, sizeof a) == 0;
+    }
+    check(same, "mesher (M8): decodeCanonicalMesh(L0) reproduces ChunkMesh::verts in order");
+    check(selectCanonLod(3, -1, 12, 24) == 0 && selectCanonLod(12, 0, 12, 24) == 0 && selectCanonLod(13, 0, 12, 24) == 0 &&
+              selectCanonLod(14, 0, 12, 24) == 1 && selectCanonLod(11, 1, 12, 24) == 1 && selectCanonLod(9, 1, 12, 24) == 0 &&
+              selectCanonLod(40, 0, 12, 24) == 2 && selectCanonLod(23, 2, 12, 24) == 2 && selectCanonLod(21, 2, 12, 24) == 1,
+          "mesher (M8): LOD ring selection with +-1.5 chunk hysteresis");
+    {  // M8 software uploader: canonical ingest renders the same framebuffer as the legacy stream.
+      FrameParams fp;
+      fp.width = 96; fp.height = 96;
+      fp.viewProj = Mat4{};
+      fp.viewProj.m[0] = 0.125f; fp.viewProj.m[5] = 0.125f; fp.viewProj.m[10] = 0.03125f;
+      fp.viewProj.m[12] = -1.f; fp.viewProj.m[13] = -1.f; fp.viewProj.m[14] = 0.f; fp.viewProj.m[15] = 1.f;
+      fp.camPos = {8.f, 8.f, 8.f};
+      fp.crosshair = false;
+      auto shot = [&](bool canonOn, int* lodOut) {
+        cSoftwareRenderer::setCanonIngest(canonOn);
+        cSoftwareRenderer sr;
+        sr.resize(96, 96);
+        sr.setPerPixelShading(true);
+        sr.setModelDither(false);
+        sr.uploadChunkMesh(u);
+        sr.renderFrame(fp);
+        if (lodOut) *lodOut = sr.canonLodOf(0, 0, 0);
+        return sr.framebuffer().pixels;
+      };
+      int lodLegacy = 0, lodCanon = -1;
+      const std::vector<uint32_t> a = shot(false, &lodLegacy), b = shot(true, &lodCanon);
+      cSoftwareRenderer::setCanonIngest(false);
+      size_t lit = 0;
+      for (uint32_t px : a) lit += px != a[0];
+      size_t ndiff = 0;
+      for (size_t i = 0; i < a.size() && i < b.size(); ++i) ndiff += a[i] != b[i];
+      std::printf("  M8 sw: lodLegacy %d lodCanon %d lit %zu diff %zu (%zu/%zu px)\n", lodLegacy, lodCanon, lit, ndiff, a.size(), b.size());
+      check(lodLegacy == -1 && lodCanon == 0 && a == b && lit > 0,
+            "software (M8): LL_SW_CANON ingest of the canonical mesh is pixel-identical to the legacy stream");
+    }
   }
   const uint64_t h = fnv(scene.verts.data(), scene.verts.size() * sizeof(PackedVertex));
   std::printf("  scene hash %016llx, %zu quads\n", (unsigned long long)h, scene.verts.size() / 4);

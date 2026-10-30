@@ -302,6 +302,23 @@ class cSoftwareRenderer : public IRenderer {
   void setPbrContext(const PbrFragmentContext* ctx) { pbrContext_ = ctx; }
 
  private:
+  // Render pipeline M8 (software uploader): LL_SW_CANON=1 ingests ChunkMesh::canonical
+  // (span decode via decodeCanonicalMesh) with draw-side LOD/skirt selection; default off =
+  // the legacy PackedVertex stream. canonSrc_ keeps each canonical mesh + its current lod so
+  // a camera ring crossing re-decodes at the new lod (store-owned: drain/renderFrame only).
+  struct SwCanonSrc { ChunkMesh meta; int lod = 0; };
+  std::map<int64_t, SwCanonSrc> canonSrc_;
+  int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
+  bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
+  void reselectCanonLods(const Vec3& cam);
+ public:
+  static bool canonIngestEnabled();
+  static void setCanonIngest(bool on);  ///< overrides LL_SW_CANON (tests)
+  /// Test hook: the lod the canonical path currently draws for a stored chunk (-1 = legacy).
+  int canonLodOf(int cx, int sy, int cz) const;
+  /// Test hook: move the LOD reference point without a frame (renderFrame does this).
+  void setCanonCamera(const Vec3& cam) { reselectCanonLods(cam); }
+ private:
   SoftwareFramebuffer fb_;
   std::vector<int> meshRowY0_, meshRowY1_;  ///< RND-H3: per drawn mesh screen row span
   std::vector<float> frameScreen_;  ///< Cortana 2026-10-15 1112: chunk-pass verts transformed once per frame

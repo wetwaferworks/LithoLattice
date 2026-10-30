@@ -17,6 +17,7 @@
 #include <cstdlib>
 static int llP2PerfOff() { static const int v = [] { const char* e = std::getenv("LL_P2_PERF_OFF"); return e ? int(std::strtol(e, nullptr, 0)) : 0; }(); return v; }  // Cortana 2026-10-16 1520: A/B perf switch (render/display only)
 
+#include <cstdio>
 namespace litholattice {
 namespace {
 
@@ -881,6 +882,54 @@ static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_u
 UnifiedMesherStats unifiedMesherStats() {
   return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
           g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load()};
+}
+bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out) {
+  out.clear();
+  if (cm.magic != canon::kMeshMagic || lod < 0 || lod > 2) return false;
+  if (lod == 0) {
+    out.reserve(cm.fallback.size());
+    for (const canon::Packed12& f : cm.fallback) out.push_back(decodeFallbackVertex(f, cm));
+  }
+  const CanonicalLod& L = cm.lods[size_t(lod)];
+  const int s = 1 << lod;
+  auto range = [&](BucketRange r) {
+    for (uint32_t i = r.start; i < r.start + r.count && i < cm.quads.size(); ++i) {
+      const canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
+      if (d.paletteIdx >= cm.palette.size() || d.face > 5 || d.w == 0 || d.h == 0) continue;
+      const int f = int(d.face), ua = kTexUAxis[f], va = kTexVAxis[f], na = 3 - ua - va;
+      int c[3] = {int(d.ox), int(d.oy), int(d.oz)};
+      if (!(d.face & 1u)) c[na] -= 1;
+      const size_t first = out.size();
+      emitGreedyQuad(out, f, c[na], c[ua], c[va], int(d.w), int(d.h), canonKeyOf(d, cm.palette[d.paletteIdx]));
+      if (s > 1)
+        for (size_t k = first; k < out.size(); ++k) {
+          out[k].x = uint16_t(out[k].x * s); out[k].y = uint16_t(out[k].y * s); out[k].z = uint16_t(out[k].z * s);
+        }
+    }
+  };
+  for (int f = 0; f < 6; ++f) range(L.face[size_t(f)]);
+  range(L.skirt);
+  range(L.blend);
+  return true;
+}
+int selectCanonLod(int d, int current, int ring1, int ring2) {
+  auto base = [&](int dd) { return dd < ring1 ? 0 : dd < ring2 ? 1 : 2; };
+  if (current < 0 || current > 2) return base(d);
+  const int b = base(d);
+  if (b > current) return std::max(current, base(d - 2));
+  if (b < current) return std::min(current, base(d + 2));
+  return current;
+}
+void canonLodRings(int& ring1, int& ring2) {
+  static const std::pair<int, int> r = [] {
+    int a = 12, b = 24;
+    if (const char* e = std::getenv("LL_CANON_LOD_RINGS")) {
+      int x = 0, y = 0;
+      if (std::sscanf(e, "%d,%d", &x, &y) == 2 && x > 0 && y > x) a = x, b = y;
+    }
+    return std::pair<int, int>{a, b};
+  }();
+  ring1 = r.first; ring2 = r.second;
 }
 bool canonLodsEnabled() {
   static const bool v = [] { const char* e = std::getenv("LL_CANON_LODS"); return !(e && e[0] == '0'); }();
