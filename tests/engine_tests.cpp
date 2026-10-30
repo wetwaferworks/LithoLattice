@@ -282,6 +282,16 @@ void testCore() {
     ok = ok && !Json::parse("[1, 0x10]", j);
     ok = ok && !Json::parse("01", j);        // leading zero is not JSON
     ok = ok && !Json::parse("1.", j);        // fraction needs a digit
+    // H6: \u escapes are bounds/hex checked and decoded; dump() round-trips controls.
+    ok = ok && !Json::parse("\"\\u12\"", j);       // truncated: must not eat the closing quote
+    ok = ok && !Json::parse("\"ab\\u\"", j);
+    ok = ok && !Json::parse("\"\\uZZZZ\"", j);
+    ok = ok && Json::parse("\"\\u0041\\u00e9\\ud83d\\ude00\"", j) && j.str == "A\xC3\xA9\xF0\x9F\x98\x80";
+    {
+      Json r;
+      ok = ok && Json::parse("\"a\\r\\b\\f\\u0001z\"", j) && j.str == std::string("a\r\b\f\x01z");
+      ok = ok && Json::parse(j.dump(), r) && r.str == j.str;
+    }
     ok = ok && !Json::parse("[truex]", j);   // literal must end the token
     ok = ok && Json::parse("-0.5e+10", j) && j.num == -0.5e10;
     check(ok, "core: Json::parse rejects trailing input, NaN/Infinity/hex-float spellings, and malformed numbers");
