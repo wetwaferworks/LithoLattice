@@ -67,6 +67,7 @@
 #include "litholattice/render/pbr_quad_mesh.h"
 #include "litholattice/core/math.h"
 #include "litholattice/world/chunk_ingress.h"
+#include "litholattice/world/chunk_swarm.h"
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/render/frame_pacer.h"
@@ -8731,6 +8732,35 @@ void testChunkIngress() {
     std::vector<std::vector<uint8_t>> got;
     in.drainInto(got);
     check(got.size() == 1000 && in.queuedBytes() == 0, "P5 render ingress: catch-up drain returns every item, bytes back to 0");
+  }
+  {  // P6 slab: radius tiers, preallocation, reuse, cap, buffers outliving the slab
+    check(kSlabRadius4Columns == 81 && kSlabRadius8Columns == 289, "P6 slab: radius 4/8 tiers are 81/289 columns");
+    std::shared_ptr<std::vector<int>> outlive;
+    {
+      cSlab<std::vector<int>> slab(kSlabRadius4Columns);
+      check(slab.idle() == 81, "P6 slab: preallocates the radius-4 tier");
+      { auto a = slab.acquire(); a->push_back(7); check(slab.idle() == 80 && slab.hits() == 1, "P6 slab: acquire takes a preallocated buffer"); }
+      check(slab.idle() == 81, "P6 slab: release returns the buffer");
+      slab.reserve(kSlabRadius8Columns);
+      check(slab.idle() == 289 && slab.cap() == 289, "P6 slab: grows to the radius-8 tier");
+      std::vector<std::shared_ptr<std::vector<int>>> held;
+      for (int i = 0; i < 300; ++i) held.push_back(slab.acquire());
+      check(slab.misses() == 11, "P6 slab: past the tier, acquire allocates (never fails)");
+      held.clear();
+      check(slab.idle() == 289 && slab.dropped() == 11, "P6 slab: returns past the cap are freed");
+      outlive = slab.acquire();
+    }
+    outlive.reset();  // slab gone: the deleter frees instead of returning
+    check(!outlive, "P6 slab: a buffer may outlive its slab");
+  }
+  {  // P6 slack harvesting
+    check(cSlackHarvester::slicesFor(16.0, 8.0, 2.0, 1.0, 8) == 6, "P6 slack: spare time / slice cost");
+    check(cSlackHarvester::slicesFor(16.0, 15.0, 2.0, 1.0, 8) == 0, "P6 slack: no spare, no slices");
+    check(cSlackHarvester::slicesFor(100.0, 0.0, 2.0, 1.0, 8) == 8, "P6 slack: clamped to max");
+    cSlackHarvester h(0.5, 8, 2.0);
+    const int before = h.grant(16.0, 10.0);
+    for (int i = 0; i < 40; ++i) h.noteSlice(2.0);
+    check(before == 8 && h.grant(16.0, 10.0) == 2, "P6 slack: an expensive slice shrinks the grant");
   }
   {
     cSimPromotionBudget b;
