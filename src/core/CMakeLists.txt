@@ -1,5 +1,5 @@
 add_library(litholattice_core STATIC json.cpp log.cpp timer_resolution.cpp process_memory.cpp tick_arena.cpp
-            thread_debug.cpp fail_fast.cpp lock_timing.cpp quiet_crt.cpp thread_census.cpp)  # lock_timing: 0.0.1.60 diagnostic (Proposed by JD, Built by Cortana)
+            thread_debug.cpp fail_fast.cpp lock_timing.cpp quiet_crt.cpp thread_census.cpp work_trace.cpp)  # lock_timing: 0.0.1.60 diagnostic (Proposed by JD, Built by Cortana)
 # LITHOLATTICE_THREAD_DEBUG is PUBLIC so every module sees the same compile-time
 # logging switch (the macros must agree across translation units).
 target_compile_definitions(litholattice_core PUBLIC
