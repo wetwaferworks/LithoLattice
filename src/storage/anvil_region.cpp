@@ -505,15 +505,19 @@ bool cAnvilRegion::erase(int lx, int lz, std::string* err) {
   const int sl = slot(lx, lz);
   const uint8_t oldC = counts_[sl];
   if (oldC == 0) return true;
+  // Archie review H9 (2026-10-30): clear and flush the location entry FIRST,
+  // then release the storage. Freeing first let a failed/crashed header
+  // write leave the entry pointing at sectors a later write reuses (or at
+  // a deleted sidecar).
+  static const uint8_t zero[4] = {};
+  if (!writeAt(kLocTableOff + uint64_t(4 * sl), zero, sizeof(zero), err)) return false;
+  if (!flushFile(err)) return false;
   if (oldC & kExternalBit) {
     std::error_code ec;
     std::filesystem::remove(sidecarPath(path_, rx_ * kSpan + lx, rz_ * kSpan + lz), ec);
   } else {
     freeRun(sectors_[sl], oldC & 0x7F);
   }
-  static const uint8_t zero[4] = {};
-  if (!writeAt(kLocTableOff + uint64_t(4 * sl), zero, sizeof(zero), err)) return false;
-  if (!flushFile(err)) return false;
   sectors_[sl] = 0;
   counts_[sl] = 0;
   return true;
