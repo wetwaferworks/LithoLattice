@@ -11,6 +11,7 @@
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
 #include "MeshPipeline.h"  // refactor step 4: meshSubChunkPass stages
+#include "MesherSelector.h"  // refactor step 5: the LL_* mesher env reads
 #include "MesherKernels.h"
 #include "UnifiedMesherCounters.h"  // refactor step 4: shared mesher internals
 #include <bit>
@@ -20,7 +21,7 @@
 #include "litholattice/core/log.h"
 
 #include <cstdlib>
-static int llP2PerfOff() { static const int v = [] { const char* e = std::getenv("LL_P2_PERF_OFF"); return e ? int(std::strtol(e, nullptr, 0)) : 0; }(); return v; }  // Cortana 2026-10-16 1520: A/B perf switch (render/display only)
+static int llP2PerfOff() { static const int v = litholattice::cMesherSelector::envP2PerfOff(); return v; }  // Cortana 2026-10-16 1520: A/B perf switch (render/display only)
 
 #include <cstdio>
 namespace litholattice {
@@ -489,10 +490,7 @@ namespace {
 
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
-  static const int v = [] {
-    const char* e = std::getenv("LL_MESH_GREEDY");
-    return e && *e ? (e[0] == '0' ? 0 : 1) : -1;
-  }();
+  static const int v = cMesherSelector::envGreedyOverride();
   return v;
 }
 
@@ -811,8 +809,7 @@ void setLeavesFancy(bool fancy) { g_leavesFancy.store(fancy ? 1 : 0, std::memory
 bool leavesFancy() {
   int v = g_leavesFancy.load(std::memory_order_relaxed);
   if (v < 0) {
-    const char* e = std::getenv("LL_LEAVES");
-    v = (e && std::string_view(e) == "fast") ? 0 : 1;
+    v = cMesherSelector::envLeavesFancy();
     int expect = -1;
     g_leavesFancy.compare_exchange_strong(expect, v);
     v = g_leavesFancy.load(std::memory_order_relaxed);
@@ -826,8 +823,7 @@ void setFoliageDensity(int mode) { g_foliageDensity.store(mode ? 1 : 0, std::mem
 int foliageDensity() {
   int v = g_foliageDensity.load(std::memory_order_relaxed);
   if (v < 0) {
-    const char* e = std::getenv("LL_FOLIAGE_DENSITY");
-    v = (e && std::string_view(e) == "1") ? 1 : 0;
+    v = cMesherSelector::envFoliageDensity();
     int expect = -1;
     g_foliageDensity.compare_exchange_strong(expect, v);
     v = g_foliageDensity.load(std::memory_order_relaxed);
@@ -845,7 +841,7 @@ void foliageFocus(int& cx, int& cz) {
 }
 
 // Cortana 2026-10-15 1340: verify-mode state (see mesher.h).
-static bool verifyForcedOff() { const char* e = std::getenv("LL_VERIFY_OFF"); return e && e[0] == '1'; }  // not cached: g_meshVerify initialises before main, --no-verify sets the env later  // verify-off switch: LL_VERIFY_OFF=1 / --no-verify disables DebugOpt always-on verifies (benchmarks)
+static bool verifyForcedOff() { return cMesherSelector::envVerifyOff(); }  // not cached: g_meshVerify initialises before main, --no-verify sets the env later  // verify-off switch: LL_VERIFY_OFF=1 / --no-verify disables DebugOpt always-on verifies (benchmarks)
 #ifdef NDEBUG
 static std::atomic<bool> g_meshVerify{false};
 #else
@@ -876,9 +872,8 @@ void setUnifiedMesher(bool on) { g_unifiedMesher.store(on ? 1 : 0, std::memory_o
 bool unifiedMesherEnabled() {
   int v = g_unifiedMesher.load(std::memory_order_relaxed);
   if (v < 0) {
-    const char* e = std::getenv("LL_UNIFIED_MESHER");
     int expect = -1;
-    g_unifiedMesher.compare_exchange_strong(expect, (e && e[0] == '1') ? 1 : 0);
+    g_unifiedMesher.compare_exchange_strong(expect, cMesherSelector::envUnifiedMesher());
     v = g_unifiedMesher.load(std::memory_order_relaxed);
   }
   return v == 1;
@@ -1028,18 +1023,11 @@ int selectCanonLod(int d, int current, int ring1, int ring2) {
   return current;
 }
 void canonLodRings(int& ring1, int& ring2) {
-  static const std::pair<int, int> r = [] {
-    int a = 12, b = 24;
-    if (const char* e = std::getenv("LL_CANON_LOD_RINGS")) {
-      int x = 0, y = 0;
-      if (std::sscanf(e, "%d,%d", &x, &y) == 2 && x > 0 && y > x) a = x, b = y;
-    }
-    return std::pair<int, int>{a, b};
-  }();
+  static const std::pair<int, int> r = cMesherSelector::envCanonLodRings();
   ring1 = r.first; ring2 = r.second;
 }
 bool canonLodsEnabled() {
-  static const bool v = [] { const char* e = std::getenv("LL_CANON_LODS"); return !(e && e[0] == '0'); }();
+  static const bool v = cMesherSelector::envCanonLods();
   return v;
 }
 static bool canonVerifyOn() {
@@ -1047,7 +1035,7 @@ static bool canonVerifyOn() {
   static const bool off = verifyForcedOff();  // first call is after argv parsing (first mesh)
   return !off;
 #else
-  static const bool v = [] { const char* e = std::getenv("LL_CANON_VERIFY"); return e && e[0] == '1'; }();
+  static const bool v = cMesherSelector::envCanonVerify();
   return v || meshVerifyEnabled();
 #endif
 }
