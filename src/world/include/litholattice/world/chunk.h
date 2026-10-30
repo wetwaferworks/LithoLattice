@@ -2,6 +2,7 @@
 // (all-air sub-chunks are null and skipped by worldgen, meshing and the sim).
 #pragma once
 #include <array>
+#include <atomic>
 #include <map>
 #include <string>
 #include <cstdint>
@@ -282,8 +283,78 @@ class MaterialPalette {
   std::shared_ptr<const Entries> entries_;  // null == empty palette
 };
 
+// ---- Chunk state word (Thread Handshake P5, 2026-10-29) ----
+// One 64-bit atomic word per column: [BorderGen16|SimTicket16|MeshGen16|Dirty8|Stage8].
+// Stage walks GEN -> STAGED_SIM (sim pop budget, at the commit barrier) -> MESH
+// (neighbor edges via BorderGen + kChunkDirtyNeighbor) -> STAGED_RENDER -> ACTIVE.
+// The word is bookkeeping only: nothing in the sim reads it, so it can never
+// change a world hash. Copy/assign snapshot the value (columns stay copyable).
+enum class ChunkStage : uint8_t { Gen = 0, StagedSim = 1, Mesh = 2, StagedRender = 3, Active = 4 };
+constexpr uint8_t kChunkDirtyNeighbor = 1u << 0;  ///< a neighbor's edge changed (BorderGen bumped)
+constexpr uint8_t kChunkDirtyBlocks = 1u << 1;    ///< own voxels changed since the last mesh
+constexpr uint8_t kChunkDirtyLight = 1u << 2;     ///< light needs re-propagation
+
+struct ChunkStateWord {
+  static constexpr uint64_t pack(uint16_t border, uint16_t ticket, uint16_t mesh, uint8_t dirty, ChunkStage st) {
+    return (uint64_t(border) << 48) | (uint64_t(ticket) << 32) | (uint64_t(mesh) << 16) | (uint64_t(dirty) << 8) | uint64_t(st);
+  }
+  static constexpr uint16_t borderGen(uint64_t w) { return uint16_t(w >> 48); }
+  static constexpr uint16_t simTicket(uint64_t w) { return uint16_t(w >> 32); }
+  static constexpr uint16_t meshGen(uint64_t w) { return uint16_t(w >> 16); }
+  static constexpr uint8_t dirtyBits(uint64_t w) { return uint8_t(w >> 8); }
+  static constexpr ChunkStage stageOf(uint64_t w) { return ChunkStage(uint8_t(w)); }
+
+  ChunkStateWord() = default;
+  ChunkStateWord(const ChunkStateWord& o) : w_(o.w_.load(std::memory_order_acquire)) {}
+  ChunkStateWord& operator=(const ChunkStateWord& o) {
+    w_.store(o.w_.load(std::memory_order_acquire), std::memory_order_release);
+    return *this;
+  }
+
+  uint64_t load() const { return w_.load(std::memory_order_acquire); }
+  ChunkStage stage() const { return stageOf(load()); }
+  /// Generic CAS update: fn(old) -> new. Returns the value written.
+  template <class Fn>
+  uint64_t update(Fn fn) {
+    uint64_t o = w_.load(std::memory_order_relaxed);
+    uint64_t n;
+    do { n = fn(o); } while (!w_.compare_exchange_weak(o, n, std::memory_order_acq_rel, std::memory_order_relaxed));
+    return n;
+  }
+  /// Stage transition guarded by the expected current stage; false (and no
+  /// change) when the column is not in `from` (a racing transition won).
+  bool advance(ChunkStage from, ChunkStage to) {
+    uint64_t o = w_.load(std::memory_order_relaxed);
+    do {
+      if (stageOf(o) != from) return false;
+    } while (!w_.compare_exchange_weak(o, (o & ~uint64_t(0xff)) | uint64_t(to), std::memory_order_acq_rel, std::memory_order_relaxed));
+    return true;
+  }
+  void setStage(ChunkStage to) { update([to](uint64_t o) { return (o & ~uint64_t(0xff)) | uint64_t(to); }); }
+  void setSimTicket(uint16_t t) { update([t](uint64_t o) { return (o & ~(uint64_t(0xffff) << 32)) | (uint64_t(t) << 32); }); }
+  uint16_t bumpMeshGen() {
+    return meshGen(update([](uint64_t o) { return (o & ~(uint64_t(0xffff) << 16)) | (uint64_t(uint16_t(meshGen(o) + 1)) << 16); }));
+  }
+  /// A neighbor's edge changed: bump BorderGen and raise kChunkDirtyNeighbor.
+  uint16_t bumpBorderGen() {
+    return borderGen(update([](uint64_t o) {
+      return (o & ~(uint64_t(0xffff) << 48)) | (uint64_t(uint16_t(borderGen(o) + 1)) << 48) | (uint64_t(kChunkDirtyNeighbor) << 8);
+    }));
+  }
+  void markDirtyBits(uint8_t bits) { w_.fetch_or(uint64_t(bits) << 8, std::memory_order_acq_rel); }
+  /// Clears `mask` in Dirty8; returns the bits of `mask` that were set.
+  uint8_t takeDirty(uint8_t mask) {
+    return uint8_t(dirtyBits(w_.fetch_and(~(uint64_t(mask) << 8), std::memory_order_acq_rel)) & mask);
+  }
+
+ private:
+  std::atomic<uint64_t> w_{0};  // GEN, all counters 0
+};
+static_assert(std::atomic<uint64_t>::is_always_lock_free, "chunk state word must be lock-free");
+
 struct ChunkColumn {
   int cx = 0, cz = 0;
+  mutable ChunkStateWord state;  ///< P5 chunk handshake word (atomic bookkeeping; mutable so const readers can advance it)
   // Column eviction bookkeeping (A2 / B-M1, 2026-10-13): `dirty` is set by
   // ChunkMap::set/setState on every mutation of a RESIDENT column, and
   // `generation` counts those mutations. A freshly generated or disk-loaded

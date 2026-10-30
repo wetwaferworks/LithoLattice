@@ -123,6 +123,17 @@ class ChunkMap {
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
   }
+  /// P5 deferred free: like erase(), but hands the column back instead of
+  /// freeing it, so the caller can release the memory outside the sim hold
+  /// (cDeferredFreeQueue). Null when the column was not resident.
+  std::unique_ptr<ChunkColumn> extract(int cx, int cz) {
+    auto it = columns_.find(ChunkKey::make(cx, cz));
+    if (it == columns_.end()) return nullptr;
+    std::unique_ptr<ChunkColumn> col = std::move(it->second);
+    columns_.erase(it);
+    if (editListener_) editListener_(cx, cz);
+    return col;
+  }
   bool contains(int cx, int cz) const { return columns_.find(ChunkKey::make(cx, cz)) != columns_.end(); }
   auto& columns() { return columns_; }
   const auto& columns() const { return columns_; }

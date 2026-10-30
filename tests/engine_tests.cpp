@@ -66,6 +66,7 @@
 #include "litholattice/render/pbr_gl_upload.h"
 #include "litholattice/render/pbr_quad_mesh.h"
 #include "litholattice/core/math.h"
+#include "litholattice/world/chunk_ingress.h"
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/render/frame_pacer.h"
@@ -8666,6 +8667,121 @@ void testLendReclaim() {
     check(pct(sat, 0.99) < 2000.0, "reclaim: shard start p99 under gen saturation stays below one 2 ms gen slice (never queued behind gen)");
 }
 
+// Thread Handshake P5: chunk state word + ingress rings + pop budgets.
+void testChunkIngress() {
+  std::printf("world: chunk state word + ingress rings (Thread Handshake P5)\n");
+  {
+    ChunkStateWord w;
+    check(w.stage() == ChunkStage::Gen && w.load() == 0, "P5 word: starts GEN, all zero");
+    check(w.advance(ChunkStage::Gen, ChunkStage::StagedSim), "P5 word: GEN->STAGED_SIM");
+    check(!w.advance(ChunkStage::Gen, ChunkStage::Mesh), "P5 word: guarded advance refuses a wrong from-stage");
+    w.setSimTicket(0xBEEF);
+    check(w.bumpMeshGen() == 1 && w.bumpMeshGen() == 2, "P5 word: MeshGen counts");
+    check(w.bumpBorderGen() == 1, "P5 word: BorderGen bumps");
+    const uint64_t v = w.load();
+    check(ChunkStateWord::simTicket(v) == 0xBEEF && ChunkStateWord::meshGen(v) == 2 && ChunkStateWord::borderGen(v) == 1 &&
+              ChunkStateWord::stageOf(v) == ChunkStage::StagedSim && (ChunkStateWord::dirtyBits(v) & kChunkDirtyNeighbor),
+          "P5 word: fields packed independently");
+    check(w.takeDirty(kChunkDirtyNeighbor) == kChunkDirtyNeighbor && w.takeDirty(kChunkDirtyNeighbor) == 0, "P5 word: takeDirty clears once");
+    ChunkStateWord c = w;
+    check(c.load() == w.load(), "P5 word: copy snapshots the value");
+    check(ChunkStateWord::pack(1, 2, 3, 4, ChunkStage::Active) == 0x0001000200030404ull, "P5 word: layout [Border|Ticket|Mesh|Dirty|Stage]");
+    // concurrent border bumps never lose an increment
+    ChunkStateWord shared;
+    std::vector<std::thread> ts;
+    for (int t = 0; t < 4; ++t) ts.emplace_back([&] { for (int i = 0; i < 5000; ++i) { shared.bumpBorderGen(); shared.bumpMeshGen(); } });
+    for (auto& t : ts) t.join();
+    check(ChunkStateWord::borderGen(shared.load()) == uint16_t(20000) && ChunkStateWord::meshGen(shared.load()) == uint16_t(20000),
+          "P5 word: CAS updates lose nothing under contention");
+  }
+  {
+    cSpscRing<uint64_t> r(64);
+    std::atomic<bool> bad{false};
+    constexpr uint64_t kN = 200000;
+    std::thread prod([&] { for (uint64_t i = 1; i <= kN; ++i) { uint64_t v = i; while (!r.tryPush(std::move(v))) std::this_thread::yield(); } });
+    uint64_t expect = 1, v = 0;
+    while (expect <= kN) { if (r.tryPop(v)) { if (v != expect) bad = true; ++expect; } }
+    prod.join();
+    check(!bad.load() && r.sizeApprox() == 0, "P5 SPSC ring: FIFO, nothing lost");
+  }
+  {
+    cIngress<uint64_t> in(64);  // tiny ring: the overflow path must carry the burst losslessly
+    constexpr int kP = 4;
+    constexpr uint64_t kPer = 50000;
+    std::atomic<int> done{0};
+    std::vector<std::thread> ps;
+    for (int p = 0; p < kP; ++p) ps.emplace_back([&, p] { for (uint64_t i = 0; i < kPer; ++i) in.push(uint64_t(p) * kPer + i + 1); done.fetch_add(1); });
+    std::vector<uint64_t> got;
+    while (done.load() < kP) in.drainInto(got);
+    for (auto& t : ps) t.join();
+    in.drainInto(got);
+    std::sort(got.begin(), got.end());
+    bool ok = got.size() == kP * kPer;
+    for (size_t i = 0; ok && i < got.size(); ++i) ok = got[i] == i + 1;
+    check(ok, "P5 MPSC ingress: every item exactly once (ring + overflow)");
+    std::printf("  ingress overflow pushes: %llu of %llu\n", (unsigned long long)in.overflowTotal(), (unsigned long long)(kP * kPer));
+  }
+  {
+    cSimPromotionBudget b;
+    check(b.open(100) == 4, "P5 pop budget: first barrier seeds 4");
+    b.spend(4);
+    check(b.open(100) == 0, "P5 pop budget: no tick stepped, no promotions");
+    check(b.open(101) == 4, "P5 pop budget: 4 per sim tick");
+    check(b.open(110) == cSimPromotionBudget::kMaxBank, "P5 pop budget: banked ticks capped");
+    b.spend(100);
+    check(b.bank() == 0, "P5 pop budget: spend floors at 0");
+    int idleGrant = 0;
+    for (int i = 0; i < cSimPromotionBudget::kIdleOpens; ++i) idleGrant = b.open(110);
+    check(idleGrant == cSimPromotionBudget::kPerTick, "P5 pop budget: idle sim (paused) falls back to one tick's worth per open");
+    check(spawnSpiralBypass(true, 5, 6, 4, 5) && !spawnSpiralBypass(true, 6, 5, 4, 5) && !spawnSpiralBypass(false, 4, 5, 4, 5),
+          "P5 ring-center bypass: 3x3 center, spawn spiral only");
+  }
+  {
+    RenderPopBudget rb;
+    rb.maxItems = 3;
+    rb.maxBytes = 100;
+    check(rb.admit(500), "P5 render pop: first item always admitted");
+    rb.take(500);
+    check(!rb.admit(1), "P5 render pop: K bytes cap");
+    RenderPopBudget rn;
+    rn.maxItems = 2;
+    rn.take(1); rn.take(1);
+    check(!rn.admit(1), "P5 render pop: N items cap");
+  }
+  {
+    cBorderRing br;
+    check(br.note(7) && !br.note(7) && br.note(9), "P5 border ring: dedup");
+    std::vector<uint64_t> out;
+    br.popUpTo(1, out);
+    check(out.size() == 1 && out[0] == 7 && br.size() == 1, "P5 border ring: FIFO, bounded pop");
+    check(br.note(7), "P5 border ring: re-note after pop");
+    br.forget(9);
+    out.clear(); br.popUpTo(8, out);
+    check(out.size() == 1 && out[0] == 7 && br.empty(), "P5 border ring: forget");
+  }
+  {
+    struct Probe { std::atomic<int>* n; ~Probe() { n->fetch_add(1); } };
+    std::atomic<int> freed{0};
+    cDeferredFreeQueue<Probe> q;
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 5);
+    freed = 0;  // the temporary above died already
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 5);
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 6);
+    freed = 0;
+    check(q.collect(4) == 0 && freed == 0, "P5 deferred free: nothing before the fence");
+    check(q.collect(5, 1) == 1 && freed == 1, "P5 deferred free: bounded per collect");
+    check(q.collect(6) == 2 && freed == 3 && q.pending() == 0, "P5 deferred free: drains past the fence");
+  }
+  {
+    ChunkMap m;
+    auto col = std::make_unique<ChunkColumn>();
+    col->cx = 3; col->cz = -2;
+    m.insert(std::move(col));
+    auto back = m.extract(3, -2);
+    check(back && back->cx == 3 && !m.contains(3, -2) && !m.extract(3, -2), "P5 ChunkMap::extract hands the column back");
+  }
+}
+
 // Thread Handshake P4: tick ledger. Ring (T_offset + seq) & MASK from a tick arena, swept
 // linearly at the barrier; sync jobs hash returnTick, async jobs hash (spawnTick,
 // dispatchSeq, commit epoch, payload); commit_epoch advances only on COMMITTED. Gate:
@@ -8925,7 +9041,7 @@ void testJobInjectionStress() {
 int runModule(const std::string& m) {
   const int before = g_fails;
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
-  else if (m == "world") { testWorld(); testMarchRay(); }
+  else if (m == "world") { testWorld(); testMarchRay(); testChunkIngress(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
   else if (m == "ai") testAi();
