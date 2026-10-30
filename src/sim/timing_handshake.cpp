@@ -495,6 +495,11 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // before anything else in this phase (noreturn: fail-fast abort).
   convertPendingFailureIfAny();
   if (frozen_.load(std::memory_order_acquire)) return false;
+  // Thread Handshake P4 (Archie t3353u): a new epoch reclaims the shared pool's lent
+  // background capacity until this phase commits (or freezes): no background slice starts
+  // while shard jobs wait or into the shard reserve; lent workers return at their next
+  // slice boundary.
+  cJobPoolEpoch epoch(running_.load(std::memory_order_acquire) ? pool_ : nullptr);
   const uint64_t openStamp = nowNs();  // published with the tuple below (seqlock), not alone
 
   // Due set, in registration (id) order; active shards = shards with at

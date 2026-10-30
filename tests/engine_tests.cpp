@@ -8555,6 +8555,117 @@ void testThreadLifecycle() {
   check(os0 == 0 || os1 == os0, "lifecycle: OS thread count before == after (no leaked threads)");
 }
 
+// Thread Handshake P4 (Archie t3353u): lend / reclaim on the shared pool. Background
+// views run on lent capacity only; a Timing Handshake epoch reclaims it. Measures shard
+// job start latency (phase open -> component start, max over shards) with the pool idle,
+// with stage-bounded 2 ms gen slices saturating the background lane, and (for contrast
+// only) with the same slices flat-merged into the normal lane.
+void testLendReclaim() {
+  std::printf("sim: shared pool lend / reclaim (Thread Handshake P4)\n");
+  cJobPool& pool = cJobPool::shared();
+  auto nowNs = [] {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  };
+  {
+    cJobPool v(pool, cJobPool::Lane::Background, 3);
+    std::atomic<int> n{0}, live{0}, peak{0};
+    for (int i = 0; i < 200; ++i)
+      v.submit([&, i] {
+        const int l = ++live;
+        int p = peak.load();
+        while (l > p && !peak.compare_exchange_weak(p, l)) {}
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        --live;
+        ++n;
+        if (i % 50 == 0) throw std::runtime_error("fixture");
+      });
+    v.waitIdle();
+    const int cap = int(std::min(3u, pool.lendCap()));
+    check(n == 200 && v.failedJobs() == 4 && peak.load() <= cap && v.size() == unsigned(cap),
+          "pool view: background jobs all run, failures counted per view, never more than min(view cap, lendCap) at once");
+    std::atomic<int> m{0};
+    { cJobPool w(pool, cJobPool::Lane::Background, 2); for (int i = 0; i < 50; ++i) w.submit([&] { ++m; }); }
+    check(m == 50, "pool view: destruction drains queued background jobs");
+  }
+  check(pool.reserve() == std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u) &&
+            pool.lendCap() == pool.size() - pool.reserve() && pool.lendCap() >= 1,
+        "pool lend: reserve = min(shards, workers-1), lendCap = workers - reserve >= 1");
+
+  cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
+  const int shards = int(cThreadCensus::instance().budget().simShards);
+  std::vector<std::atomic<uint64_t>> startNs(size_t(std::max(1, shards)));
+  std::atomic<uint64_t> openNs{0};
+  for (int s = 0; s < shards; ++s) {
+    HsComponentDesc d;
+    const std::string name = "p4.shard" + std::to_string(s);
+    d.name = name.c_str();
+    auth.registerComponent(d, [&, s](uint64_t, uint64_t) { startNs[size_t(s)].store(nowNs()); });
+  }
+  check(auth.start(), "reclaim: handshake start");
+  uint64_t phase = 0;
+  auto runPhases = [&](int count, std::vector<double>& out) {
+    bool ok = true;
+    for (int i = 0; i < count; ++i) {
+      for (auto& x : startNs) x.store(0);
+      openNs.store(nowNs());
+      ok = auth.runPhase(phase, phase, 0) && ok;
+      ++phase;
+      uint64_t worst = 0;
+      for (int s = 0; s < shards; ++s) worst = std::max(worst, startNs[size_t(s)].load() - openNs.load());
+      out.push_back(double(worst) / 1000.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));  // between bursts: the lane reopens
+    }
+    return ok;
+  };
+  auto pct = [](std::vector<double> v, double q) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    return v[std::min(v.size() - 1, size_t(q * double(v.size() - 1) + 0.5))];
+  };
+  std::atomic<bool> genStop{false};
+  std::atomic<uint64_t> slices{0};
+  auto slice = [&] {  // one stage-bounded world-gen stand-in: 2 ms of CPU
+    if (genStop.load()) return;
+    const uint64_t t = nowNs();
+    while (nowNs() - t < 2000000) {}
+    ++slices;
+  };
+  std::vector<double> idle, sat, flat;
+  bool ok = runPhases(200, idle);
+  const cJobPool::LendStats s0 = pool.lendStats();
+  {
+    cJobPool gen(pool, cJobPool::Lane::Background, 64);
+    gen.setDefaultMaxActive(0);  // uncapped view: only the pool's lendCap limits it
+    for (int i = 0; i < 4000; ++i) gen.submit(slice);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ok = runPhases(200, sat) && ok;
+    genStop.store(true);
+  }
+  const cJobPool::LendStats s1 = pool.lendStats();
+  genStop.store(false);
+  {
+    cJobPool flatView(pool, cJobPool::Lane::Normal, 64);  // contrast: no lending, gen on the normal lane
+    for (int i = 0; i < 4000; ++i) flatView.submit(slice);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ok = runPhases(200, flat) && ok;
+    genStop.store(true);
+  }
+  check(auth.stop(), "reclaim: handshake stop");
+  std::printf("  [reclaim] pool %u workers, lend %u, reserve %u, %d shards; shard start latency (us, phase open -> start, worst shard)\n",
+              pool.size(), s1.lendCap, s1.reserve, shards);
+  std::printf("  [reclaim]   idle pool          p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(idle, 0.5), pct(idle, 0.99), pct(idle, 1.0));
+  std::printf("  [reclaim]   gen saturated (lent) p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(sat, 0.5), pct(sat, 0.99), pct(sat, 1.0));
+  std::printf("  [reclaim]   flat merge (contrast) p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(flat, 0.5), pct(flat, 0.99), pct(flat, 1.0));
+  std::printf("  [reclaim]   gen slices %llu, bg peak %u, epochs opened with lent workers %llu/%llu, slices started inside epochs %llu\n",
+              (unsigned long long)slices.load(), s1.bgPeak, (unsigned long long)(s1.reclaimsWithLent - s0.reclaimsWithLent),
+              (unsigned long long)(s1.epochs - s0.epochs), (unsigned long long)(s1.bgStartedInEpoch - s0.bgStartedInEpoch));
+  check(ok, "reclaim: every phase committed under gen saturation");
+  check(s1.bgPeak <= s1.lendCap, "reclaim: background never holds more than lendCap workers");
+  check(s1.reclaimsWithLent > s0.reclaimsWithLent, "reclaim: epochs opened while gen slices were lent (reclaim exercised)");
+  if (s1.reserve >= unsigned(shards))
+    check(pct(sat, 0.99) < 2000.0, "reclaim: shard start p99 under gen saturation stays below one 2 ms gen slice (never queued behind gen)");
+}
+
 void testSeqLockStress() {
   const uint64_t kWrites = [] {
     const char* e = std::getenv("LL_SEQLOCK_WRITES");
@@ -8663,7 +8774,7 @@ int runModule(const std::string& m) {
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
-  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();
