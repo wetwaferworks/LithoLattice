@@ -8,6 +8,7 @@
 #include "litholattice/core/log.h"  // Cortana 2026-10-16 2335 F55-2
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/unified_mesher.h"  // render pipeline M2
+#include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
@@ -581,6 +582,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   static const int full[4] = {3, 3, 3, 3};
 
   out.verts.reserve(4096);
+  FallbackReasonStats::Local fbr;  // fix (a): job-local, flushed once below
   // Cortana 2026-10-15 1705: greedy meshing (see GreedyGrid).
   const int greedyEnv = greedyEnvOverride();
   const bool greedy = greedyEnv < 0 ? ctx.greedy : greedyEnv == 1;
@@ -603,6 +605,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
         const BlockId b = in.id[ci];
         if (b == kAir) continue;
         const CellState st = in.st[ci];
+        const size_t cellV0 = out.verts.size();  // fix (a): attributes non-face-loop fallback quads
         const int mn[3] = {x * 16, y * 16, z * 16};
         const BlockDef& def = jobDef(b);  // jobDefs only grows via jobDef(), called once per cell: ref stays valid for this cell
         // 2026-10-24 (JD: LEDs drawn as the X sprite): a legacy attachable with no mount face recorded
@@ -645,18 +648,23 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
                 v.z = uint16_t(int(v.z) - off * wdz);
               }
             }
+            fbr.addShape(FallbackShape::BoxModel, (out.verts.size() - cellV0) / 4);
             continue;
           }
         }
         if (def.shape == Shape::Cube && look.shapedRender(def) &&
-            look.meshShaped(CustomBlock{in, reg, mats, b, st, x, y, z}, writer))
+            look.meshShaped(CustomBlock{in, reg, mats, b, st, x, y, z}, writer)) {
+          fbr.addShape(FallbackShape::Shaped, (out.verts.size() - cellV0) / 4);
           continue;  // 2026-10-24: render-only slab model (collision stays a full cell)
+        }
         if (def.shape == Shape::Custom) {  // the game builds it (e.g. connected strips)
           look.meshCustom(CustomBlock{in, reg, mats, b, st, x, y, z}, writer);
+          fbr.addCustom(b, (out.verts.size() - cellV0) / 4);
           continue;
         }
         if (def.shape == Shape::Cross) {  // sprite: the active-state top face, alpha-tested
           emitCross(out.verts, mn, lookOf(mats.face(b, FaceSlot::Top, look.active(def, st)), kShadeCutout));
+          fbr.addShape(FallbackShape::Cross, (out.verts.size() - cellV0) / 4);
           continue;
         }
         if (def.shape != Shape::Cube && def.shape != Shape::Slab) continue;
@@ -750,24 +758,35 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
             const int s1 = at(su, 0), s2 = at(0, sv), cr = at(su, sv);
             ao[c] = (s1 && s2) ? 0 : 3 - (s1 + s2 + cr);
           }
-          if (parkFaces && !slab && greedyEligible(lk, ao)) {  // Cortana 2026-10-15 1705: park for merging
+          // fix (a): same gate as !slab && greedyEligible(lk, ao), split so the first failing condition is counted
+          const FallbackReason fbReason = FallbackReasonStats::checkCanonicalEligibility(slab, lk.mode, lk.rot, lk.slot, lk.uv == UvRect{}, ao);
+          if (parkFaces && fbReason == FallbackReason::Count) {  // Cortana 2026-10-15 1705: park for merging
             const int blk[3] = {x, y, z};
             park(*greedyGrid, f, blk, lk, ao[0]);
+            ++fbr.canonFaces;
             continue;
           }
+          if (canonOut) fbr.add(fbReason, leaf && fancyLeaves ? 2u : 1u, lk.mode, ao);
           emitFace(out.verts, f, mn, mx, mn, slab && f == 2 ? full : ao, lk);
           if (leaf && fancyLeaves) {  // two-sided: the same quad again, reversed winding (no cull-state change)
             emitFace(out.verts, f, mn, mx, mn, slab && f == 2 ? full : ao, lk);
             std::swap(out.verts[out.verts.size() - 3], out.verts[out.verts.size() - 1]);
           }
         }
-        look.meshExtra(cellC, writer);
+        {
+          const size_t extraV0 = out.verts.size();
+          look.meshExtra(cellC, writer);
+          fbr.addShape(FallbackShape::Extra, (out.verts.size() - extraV0) / 4);
+        }
       }
   const size_t legacyVerts = out.verts.size();  // render pipeline M7: per-cell stream before the canonical flush
   if (canonOut) flushCanonical(*greedyGrid, out.verts, *canonOut, greedy);  // render pipeline M2
   else if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
   if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
-    if (packFallback(out.verts, legacyVerts, *canonOut)) g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
+    if (packFallback(out.verts, legacyVerts, *canonOut)) {
+      g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
+      FallbackReasonStats::instance().flush(fbr, legacyVerts / 4, canonOut->quads.size());
+    }
     else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
     if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
       if (splitCanonicalTwo(*canonOut, t_qSlot, t_fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
