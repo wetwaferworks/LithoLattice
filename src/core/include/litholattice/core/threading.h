@@ -111,8 +111,12 @@ class cJobPool {
   /// like, background work. Exceptions and waitIdle() behave as for submit().
   void submitUrgent(std::function<void()> job) {
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; urgent_.push_back(std::move(job)); }
+    urgentCount_.fetch_add(1, std::memory_order_release);
     cv_.notify_one();
   }
+  /// True while urgent (shard) jobs wait for a worker. Cooperative work (the cJobSystem
+  /// facade's pumps) checks it at every job boundary and hands its worker back.
+  bool urgentPending() const { return urgentCount_.load(std::memory_order_acquire) > 0; }
   /// Thread Handshake P3 (Archie ruling 3): the process-wide backing pool,
   /// clamp(cores - 2, 1, 64) workers from the thread census, recorded as Class B.
   /// Placement-new into static storage and never destroyed (JD t3349u item 5), so owners
@@ -162,6 +166,7 @@ class cJobPool {
         if (!urgent_.empty()) {  // P3: urgent (shard) jobs first, never throttled
           job = std::move(urgent_.front());
           urgent_.pop_front();
+          urgentCount_.fetch_sub(1, std::memory_order_release);
         } else {
           if (jobs_.empty()) continue;
           job = std::move(jobs_.front());
@@ -197,6 +202,7 @@ class cJobPool {
   int maxActive_ = BgThrottle::get().maxActive;  // guarded by m_; 0 = uncapped
   bool yieldRender_ = false;                     // guarded by m_ (setYieldRender)
   std::atomic<uint64_t> failed_{0};
+  std::atomic<int> urgentCount_{0};  // urgent_.size(), readable without m_ (urgentPending)
 };
 
 inline cJobPool& cJobPool::shared() {
