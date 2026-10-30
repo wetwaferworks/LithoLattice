@@ -26,6 +26,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "litholattice/render/canonical_quad.h"
 
@@ -55,8 +56,14 @@ struct CanonicalMesh {
   std::vector<uint64_t> quads;
   std::vector<uint64_t> palette;
   std::vector<canon::Packed12> fallback;  ///< non-cube geometry (filled by later steps)
+  /// M11 (Archie ruling 1): palette overflow splits the sub-chunk into two meshes instead
+  /// of falling back to the legacy stream. `next` is the second half (own palette of up to
+  /// kMaxPalette entries). Stream order is preserved: decode(this) ++ decode(next) is the
+  /// unsplit stream (this = fallback prefix [+ L0 quad prefix], next = the rest). LOD
+  /// ranges live in whichever half had palette room. Null for every normal mesh.
+  std::shared_ptr<CanonicalMesh> next;
   size_t residentBytes() const noexcept {
-    return 64 + quads.size() * 8 + palette.size() * 8 + fallback.size() * 12;
+    return 64 + quads.size() * 8 + palette.size() * 8 + fallback.size() * 12 + (next ? next->residentBytes() : 0);
   }
 };
 

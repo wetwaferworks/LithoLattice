@@ -86,6 +86,9 @@ constexpr PaletteFields unpackPalette(uint64_t raw) noexcept {
 inline constexpr uint16_t kLegacyLookMarker = 0xFFFF;
 
 /// Packed12 fallback vertex (Table 3): fixed-point 1/256 position, 1/2048 UV.
+/// TODO(Archie ruling 3, 2026-10-30): rotated / custom-UV faces ride Packed12 for now
+/// (accepted). Refactor: give rotated cube faces a canonical quad path (uvRot already
+/// exists in the quad) and keep Packed12 for true non-cube geometry only.
 struct Packed12Fields {
   uint32_t fx = 0, fy = 0, fz = 0;  // 0..4095
   uint32_t u = 0, v = 0;            // 0..4095

@@ -247,8 +247,10 @@ uint64_t canonKeyOf(const canon::DecodedQuad& q, uint64_t pal) {
          uint64_t(q.cornerAo & 3u);
 }
 
+thread_local std::vector<uint32_t> t_qSlot, t_fSlot;  // M11: wide palette slots (split input)
 void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
   cm = CanonicalMesh{};
+  t_qSlot.clear();
   bool ok = true;
   std::vector<uint64_t> lookKeys;  // parallel to cm.palette (first-seen)
   for (int f = 0; f < 6; ++f) {
@@ -288,7 +290,7 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
           size_t slot = 0;
           while (slot < lookKeys.size() && lookKeys[slot] != (key & ~uint64_t(3))) ++slot;
           if (slot == lookKeys.size()) {
-            if (slot >= canon::kMaxPalette) ok = false;
+            if (slot >= 2 * canon::kMaxPalette) ok = false;  // M11: > 1024 splits the mesh in two
             lookKeys.push_back(key & ~uint64_t(3));
             cm.palette.push_back(canonPaletteOf(key, ok));
           }
@@ -302,9 +304,10 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
           q.skyLight = 63;  // lighting is not split yet (step 1): full sky, no block light
           const uint64_t raw = canon::packQuad(q);
           cm.quads.push_back(raw);
+          t_qSlot.push_back(uint32_t(slot));
           // Decode back to the legacy stream from the canonical bytes.
           const canon::DecodedQuad d = canon::unpackQuad(raw);
-          const uint64_t dk = ok ? canonKeyOf(d, cm.palette[d.paletteIdx]) : key;
+          const uint64_t dk = ok ? canonKeyOf(d, cm.palette[slot]) : key;
           int c[3] = {int(d.ox), int(d.oy), int(d.oz)};
           if (!(d.face & 1u)) c[na] -= 1;
           emitGreedyQuad(out, int(d.face), c[na], c[ua], c[va], int(d.w), int(d.h), dk);
@@ -332,6 +335,7 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
 bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
   cm.fallback.clear();
   cm.fallback.reserve(n);
+  t_fSlot.clear();
   uint64_t lastPal = ~uint64_t(0);
   uint32_t lastIdx = 0;
   for (size_t i = 0; i < n; ++i) {
@@ -346,7 +350,7 @@ bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& c
       size_t j = 0;
       while (j < cm.palette.size() && cm.palette[j] != pal) ++j;
       if (j == cm.palette.size()) {
-        if (j >= canon::kMaxPalette) return false;
+        if (j >= 2 * canon::kMaxPalette) return false;  // M11: split handles 1024..2047
         cm.palette.push_back(pal);
       }
       lastPal = pal; lastIdx = uint32_t(j);
@@ -356,11 +360,71 @@ bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& c
     f.u = uint32_t(p.u) << 4; f.v = uint32_t(p.v) << 4;
     f.normalId = (p.faceAo & 7u) | (uint32_t(p.faceAo >> 7) << 3);
     f.ao = (p.faceAo >> 3) & 3u; f.wind = (p.faceAo >> 5) & 3u;
-    f.paletteIdx = lastIdx; f.blockLight = 0; f.skyLight = 63;
+    f.paletteIdx = lastIdx & 0x3FFu; f.blockLight = 0; f.skyLight = 63;
     cm.fallback.push_back(canon::packPacked12(f));
+    t_fSlot.push_back(lastIdx);
   }
   return true;
 }
+}  // namespace
+// M11 (Archie ruling 1): split in stream order (fallback, then L0 quads). The first half
+// takes items while its palette has room; the first item that does not fit (a fallback
+// quad = 4 vertices moves as a unit) and everything after it go to the second half.
+bool splitCanonicalTwo(CanonicalMesh& cm, const std::vector<uint32_t>& qSlot, const std::vector<uint32_t>& fSlot) {
+  if (qSlot.size() != cm.quads.size() || fSlot.size() != cm.fallback.size()) return false;
+  const std::vector<uint64_t> wide = std::move(cm.palette);
+  CanonicalMesh part[2];
+  std::vector<int32_t> remap[2] = {std::vector<int32_t>(wide.size(), -1), std::vector<int32_t>(wide.size(), -1)};
+  int cur = 0;
+  auto need = [&](int p, const uint32_t* s, size_t n) {
+    size_t add = 0;
+    for (size_t i = 0; i < n; ++i) {
+      if (s[i] >= wide.size()) return size_t(1) << 20;
+      bool dup = remap[p][s[i]] >= 0;
+      for (size_t j = 0; j < i && !dup; ++j) dup = s[j] == s[i];
+      add += dup ? 0 : 1;
+    }
+    return add;
+  };
+  auto place = [&](const uint32_t* s, size_t n) -> int {
+    if (cur == 0 && part[0].palette.size() + need(0, s, n) > canon::kMaxPalette) cur = 1;
+    if (part[cur].palette.size() + need(cur, s, n) > canon::kMaxPalette) return -1;
+    for (size_t i = 0; i < n; ++i)
+      if (remap[cur][s[i]] < 0) { remap[cur][s[i]] = int32_t(part[cur].palette.size()); part[cur].palette.push_back(wide[s[i]]); }
+    return cur;
+  };
+  for (size_t i = 0; i < cm.fallback.size(); i += 4) {
+    const size_t n = std::min<size_t>(4, cm.fallback.size() - i);
+    const int p = place(&fSlot[i], n);
+    if (p < 0) return false;
+    for (size_t k = i; k < i + n; ++k) {
+      canon::Packed12Fields f = canon::unpackPacked12(cm.fallback[k]);
+      f.paletteIdx = uint32_t(remap[p][fSlot[k]]);
+      part[p].fallback.push_back(canon::packPacked12(f));
+    }
+  }
+  for (size_t i = 0; i < cm.quads.size(); ++i) {
+    const int p = place(&qSlot[i], 1);
+    if (p < 0) return false;
+    canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
+    d.paletteIdx = uint32_t(remap[p][qSlot[i]]);
+    part[p].quads.push_back(canon::packQuad(d));
+  }
+  for (CanonicalMesh& m : part) {  // L0 face buckets (quads stay face-ordered)
+    uint32_t at = 0;
+    for (int f = 0; f < 6; ++f) {
+      uint32_t c = 0;
+      while (at + c < m.quads.size() && canon::unpackQuad(m.quads[at + c]).face == uint32_t(f)) ++c;
+      m.lods[0].face[size_t(f)] = BucketRange{at, c};
+      at += c;
+    }
+    m.lods[0].skirt.start = m.lods[0].blend.start = uint32_t(m.quads.size());
+  }
+  cm = std::move(part[0]);
+  if (!part[1].quads.empty() || !part[1].fallback.empty()) cm.next = std::make_shared<CanonicalMesh>(std::move(part[1]));
+  return true;
+}
+namespace {
 PackedVertex decodeFallbackVertex(const canon::Packed12& raw, const CanonicalMesh& cm) {
   const canon::Packed12Fields f = canon::unpackPacked12(raw);
   const canon::PaletteFields pf = canon::unpackPalette(f.paletteIdx < cm.palette.size() ? cm.palette[f.paletteIdx] : 0);
@@ -410,7 +474,7 @@ bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   }
   return true;
 }
-std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0};
+std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0}, g_umSplits{0};
 
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
@@ -705,6 +769,10 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
     if (packFallback(out.verts, legacyVerts, *canonOut)) g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
     else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
+    if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
+      if (splitCanonicalTwo(*canonOut, t_qSlot, t_fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
+      else *canonOut = CanonicalMesh{}, canonOut->magic = 0;
+    }
   }
   if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
     static thread_local std::vector<uint32_t> keyGen(size_t(1) << 19, 0u);
@@ -758,7 +826,8 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     }
     UnifiedMeshInput ui;
     ui.matId = umId; ui.materials = umats.data(); ui.materialCount = uint32_t(umats.size()); ui.firstLod = 1;
-    if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok && mergeCanonLods(lodMesh, *canonOut))
+    if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok &&
+        (mergeCanonLods(lodMesh, *canonOut) || (canonOut->next && mergeCanonLods(lodMesh, *canonOut->next))))
     {
       g_umLodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
       g_umSkirtQuads.fetch_add(uint64_t(lodMesh.lods[1].skirt.count) + lodMesh.lods[2].skirt.count, std::memory_order_relaxed);
@@ -884,7 +953,7 @@ bool unifiedMesherEnabled() {
 static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
 UnifiedMesherStats unifiedMesherStats() {
   return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
-          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load(), g_umSkirtQuads.load()};
+          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load(), g_umSkirtQuads.load(), g_umSplits.load()};
 }
 bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask) {
   out.clear();
@@ -914,6 +983,10 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
   for (int f = 0; f < 6; ++f) range(L.face[size_t(f)], false);
   range(L.skirt, true);
   range(L.blend, false);
+  if (cm.next) {  // M11: second half of a split mesh, appended in stream order
+    std::vector<PackedVertex> tail;
+    if (decodeCanonicalMesh(*cm.next, lod, tail, skirtMask)) out.insert(out.end(), tail.begin(), tail.end());
+  }
   return true;
 }
 uint8_t canonSkirtMask(int lod, const int nbrLod[6]) {
@@ -1005,11 +1078,14 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
       }
     }
     if (canon->magic == canon::kMeshMagic && canonVerifyOn()) {  // M7: Packed12 fallback decodes to the legacy per-cell stream
-      bool same = canon->fallback.size() <= out.verts.size();
-      for (size_t i = 0; same && i < canon->fallback.size(); ++i) {
+      std::vector<std::pair<const canon::Packed12*, const CanonicalMesh*>> fbAll;  // M11: both halves
+      for (const CanonicalMesh* m = canon.get(); m; m = m->next.get())
+        for (const auto& f : m->fallback) fbAll.emplace_back(&f, m);
+      bool same = fbAll.size() <= out.verts.size();
+      for (size_t i = 0; same && i < fbAll.size(); ++i) {
         PackedVertex a = out.verts[i];
         a.slot = 0;
-        const PackedVertex b = decodeFallbackVertex(canon->fallback[i], *canon);
+        const PackedVertex b = decodeFallbackVertex(*fbAll[i].first, *fbAll[i].second);
         same = std::memcmp(&a, &b, sizeof a) == 0;
       }
       g_umFbChecked.fetch_add(1, std::memory_order_relaxed);

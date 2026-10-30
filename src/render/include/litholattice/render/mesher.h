@@ -98,7 +98,7 @@ void setMeshVerify(bool on);
 /// compare quad sets (decode equivalence).
 void setUnifiedMesher(bool on);
 bool unifiedMesherEnabled();
-struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0, skirtQuads = 0; };
+struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0, skirtQuads = 0, splits = 0; };
 /// M6: L1/L2 from the registry feed on the game path (LL_CANON_LODS=0 turns it off).
 bool canonLodsEnabled();
 /// Render pipeline M8 (uploaders): decode one LOD of a canonical mesh to the legacy
@@ -115,6 +115,11 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
 /// nbrLod[f]: 0..2 = canonical lod, -1 = legacy stream (full detail, = L0), -2 = nothing
 /// drawn there (no seam to crack against).
 uint8_t canonSkirtMask(int lod, const int nbrLod[6]);
+/// M11 (Archie ruling 1): split a mesh whose palette grew past kMaxPalette (up to 2x) in
+/// two, in stream order. qSlot / fSlot = the wide palette index of every L0 quad /
+/// fallback vertex (the packed 10-bit fields are rewritten). Returns false if the second
+/// half overflows too (the mesh is then not publishable).
+bool splitCanonicalTwo(CanonicalMesh& cm, const std::vector<uint32_t>& qSlot, const std::vector<uint32_t>& fSlot);
 /// Draw-side LOD selection (Archie Q38/Q40): Chebyshev chunk distance d against rings
 /// ring1 (L0 -> L1) and ring2 (L1 -> L2), +-1.5 chunk hysteresis (2 in integer chunks)
 /// around the current lod (-1 = no current, pick directly).

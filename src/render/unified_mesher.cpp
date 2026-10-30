@@ -53,6 +53,7 @@ uint64_t canonicalMeshHash(const CanonicalMesh& m) noexcept {
   for (uint64_t p : m.palette) fnvU64(h, p);
   fnvU32(h, uint32_t(m.fallback.size()));
   for (const canon::Packed12& p : m.fallback) { fnvU32(h, p.w[0]); fnvU32(h, p.w[1]); fnvU32(h, p.w[2]); }
+  if (m.next) fnvU64(h, canonicalMeshHash(*m.next));  // M11: split second half
   return h;
 }
 

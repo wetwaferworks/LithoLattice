@@ -9,6 +9,7 @@
 #include "litholattice/render/canonical_quad.h"
 #include "litholattice/render/unified_mesher.h"
 #include "litholattice/render/mesher.h"
+#include <cstring>
 
 namespace litholattice {
 namespace {
@@ -236,6 +237,37 @@ int testCanonicalMesh() {
     std::vector<PackedVertex> all, none;
     decodeCanonicalMesh(open, 1, all); decodeCanonicalMesh(open, 1, none, 0);
     cmCheck(all.size() == none.size() + size_t(open.lods[1].skirt.count) * 4, "decode honours the skirt mask");
+  }
+  {
+    // M11 (Archie ruling 1): a 1500-entry palette splits in two, stream order preserved.
+    CanonicalMesh w; std::vector<uint32_t> qs, fs; uint32_t r = 7;
+    for (uint32_t i = 0; i < 1500; ++i) { canon::PaletteFields pf; pf.layerId = uint16_t(i); w.palette.push_back(canon::packPalette(pf)); }
+    std::vector<PackedVertex> ref;
+    for (uint32_t q = 0; q < 100; ++q)
+      for (int v = 0; v < 4; ++v) {
+        canon::Packed12Fields f; f.fx = rng(r) & 4095; f.fy = rng(r) & 4095; f.fz = rng(r) & 4095; f.u = (rng(r) & 255) << 4; f.v = (rng(r) & 255) << 4;
+        f.normalId = rng(r) & 15; f.paletteIdx = 0; f.skyLight = 63;
+        const uint32_t slot = q * 3;
+        CanonicalMesh one; one.palette.push_back(w.palette[slot]); one.fallback.push_back(canon::packPacked12(f));
+        std::vector<PackedVertex> t; decodeCanonicalMesh(one, 0, t); ref.insert(ref.end(), t.begin(), t.end());
+        f.paletteIdx = slot & 0x3FFu; w.fallback.push_back(canon::packPacked12(f)); fs.push_back(slot);
+      }
+    for (uint32_t f = 0; f < 6; ++f) {
+      const uint32_t st = uint32_t(w.quads.size());
+      for (uint32_t i = 0; i < 250; ++i) {
+        canon::DecodedQuad d; d.face = f; d.ox = rng(r) % 16; d.oy = rng(r) % 16; d.oz = rng(r) % 16; d.w = 1 + rng(r) % 4; d.h = 1 + rng(r) % 4; d.cornerAo = 0xFF; d.skyLight = 63;
+        const uint32_t slot = (f * 250 + i) % 1500;
+        CanonicalMesh one; one.palette.push_back(w.palette[slot]); d.paletteIdx = 0; one.quads.push_back(canon::packQuad(d)); one.lods[0].face[f] = BucketRange{0, 1};
+        std::vector<PackedVertex> t; decodeCanonicalMesh(one, 0, t); ref.insert(ref.end(), t.begin(), t.end());
+        d.paletteIdx = slot & 0x3FFu; w.quads.push_back(canon::packQuad(d)); qs.push_back(slot);
+      }
+      w.lods[0].face[f] = BucketRange{st, 250};
+    }
+    const bool ok = splitCanonicalTwo(w, qs, fs);
+    std::vector<PackedVertex> got; decodeCanonicalMesh(w, 0, got);
+    cmCheck(ok && w.next && w.palette.size() <= canon::kMaxPalette && w.next->palette.size() <= canon::kMaxPalette &&
+            got.size() == ref.size() && std::memcmp(got.data(), ref.data(), ref.size() * sizeof(PackedVertex)) == 0,
+            "palette overflow split: two halves, each <= 1024 entries, decode == unsplit stream");
   }
   {
     // Determinism: the same bytes from 1 and 8 threads, and from a fresh mesher.
