@@ -4013,6 +4013,33 @@ void testRender() {
       std::printf("  M8 sw: lodLegacy %d lodCanon %d lit %zu diff %zu (%zu/%zu px)\n", lodLegacy, lodCanon, lit, ndiff, a.size(), b.size());
       check(lodLegacy == -1 && lodCanon == 0 && a == b && lit > 0,
             "software (M8): LL_SW_CANON ingest of the canonical mesh is pixel-identical to the legacy stream");
+      {  // Fix (e), Archie Q5: an LRU-capped decode cache evicts out-of-view decodes, re-decodes in view, same pixels.
+        cSoftwareRenderer::setCanonIngest(true);
+        cSoftwareRenderer sr;
+        sr.resize(96, 96);
+        sr.setPerPixelShading(true);
+        sr.setModelDither(false);
+        sr.decodeCacheForTest().setCapBytes(1);
+        ChunkMesh far = u;
+        far.cx = 100;
+        sr.uploadChunkMesh(u);
+        sr.uploadChunkMesh(far);
+        sr.renderFrame(fp);
+        const std::vector<uint32_t> c1 = sr.framebuffer().pixels;
+        const bool farEvicted = sr.canonLodOf(100, 0, 0) == -1 && sr.canonLodOf(0, 0, 0) == 0;
+        FrameParams away = fp;
+        away.viewProj.m[12] = 50.f;  // nothing in view: (0,0,0) goes cold and is evicted
+        sr.renderFrame(away);
+        const bool nearEvicted = sr.canonLodOf(0, 0, 0) == -1;
+        sr.renderFrame(fp);
+        const std::vector<uint32_t> c2 = sr.framebuffer().pixels;
+        const auto& dc = sr.decodeCacheForTest();
+        std::printf("  fix e sw cache: evictions %llu redecodes %llu resident %zu B\n", (unsigned long long)dc.evictions(),
+                    (unsigned long long)dc.redecodes(), dc.residentBytes());
+        cSoftwareRenderer::setCanonIngest(false);
+        check(farEvicted && nearEvicted && c1 == a && c2 == a && dc.evictions() >= 2 && dc.redecodes() >= 1 && sr.canonLodOf(0, 0, 0) == 0,
+              "software (fix e): capped canonical decode cache evicts cold chunks and re-decodes in view, pixel-identical");
+      }
     }
   }
   const uint64_t h = fnv(scene.verts.data(), scene.verts.size() * sizeof(PackedVertex));

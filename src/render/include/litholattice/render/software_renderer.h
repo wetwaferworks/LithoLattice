@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "litholattice/render/cpu_texture_array.h"
+#include "litholattice/render/SwDecodeCache.h"
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/overlay_geometry.h"
 #include "litholattice/render/pbr_quad_mesh.h"
@@ -316,7 +317,16 @@ class cSoftwareRenderer : public IRenderer {
   int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
   bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
   void reselectCanonLods(const Vec3& cam);
+  // Fix (e), Archie Q5: LRU cap on the expanded decode of canonical chunks (meshes_ entries
+  // made by redecodeCanon). Evicted chunks keep canonSrc_ (lod = -1) and re-decode in view.
+  cSwDecodeCache decodeCache_;
+  uint64_t decodeFrame_ = 0;
+  std::vector<int64_t> decodeEvictScratch_;
+  void redecodeEvictedInView(const FrameParams& p);
+  void evictColdDecodes();
  public:
+  /// Test hook (fix (e)): the canonical decode cache (resident bytes, evictions, cap).
+  cSwDecodeCache& decodeCacheForTest() { return decodeCache_; }
   static bool canonIngestEnabled();
   static void setCanonIngest(bool on);  ///< overrides LL_SW_CANON (tests)
   /// Test hook: the lod the canonical path currently draws for a stored chunk (-1 = legacy).

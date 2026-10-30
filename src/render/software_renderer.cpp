@@ -1943,7 +1943,34 @@ bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
   canonInner_ = true;
   uploadChunkMesh(dm);
   canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
+  const int64_t key = swMeshKey(src.meta.cx, src.meta.sy, src.meta.cz);
+  auto it = meshes_.find(key);  // fix (e): account the expanded decode
+  if (it != meshes_.end())
+    decodeCache_.onDecoded(key, it->second.quads.size() * sizeof(StoredQuad) + it->second.verts.size() * sizeof(PackedVertex), decodeFrame_);
   return true;
+}
+// Fix (e): an evicted canonical chunk (lod -1) that is in view decodes again at its pending lod.
+void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
+  for (auto& [key, src] : canonSrc_) {
+    if (src.lod >= 0) continue;
+    const Vec3 mn{src.meta.cx * 16.f, src.meta.sy * 16.f, src.meta.cz * 16.f};
+    if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) continue;
+    const int want = src.pend >= 0 ? src.pend : 0;
+    if (redecodeCanon(src, want)) decodeCache_.countRedecode();
+  }
+}
+// Fix (e): drop the least-recently-drawn decodes over the cap (never one drawn this frame).
+void cSoftwareRenderer::evictColdDecodes() {
+  decodeCache_.collectEvictions(decodeFrame_, decodeEvictScratch_);
+  for (int64_t key : decodeEvictScratch_) {
+    auto it = canonSrc_.find(key);
+    if (it == canonSrc_.end()) { decodeCache_.onErased(key); continue; }
+    ++storeGen_;
+    meshes_.erase(key);
+    it->second.lod = -1;
+    decodeCache_.onErased(key);
+    decodeCache_.countEviction();
+  }
 }
 void cSoftwareRenderer::refreshCanonNeighbours(int cx, int sy, int cz) {
   static const int kD[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};  // same column = same lod: no Y seam
@@ -1963,7 +1990,7 @@ void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
   for (auto& [key, src] : canonSrc_)
     src.pend = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
   for (auto& [key, src] : canonSrc_)
-    if (!redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod
+    if (src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
 }
 
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
@@ -1991,6 +2018,7 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
       canonSrc_.erase(key);  // nothing decodable: fall through to the legacy stream
     }
   }
+  if (!canonInner_) decodeCache_.onErased(key);  // fix (e): a legacy store or removal is not a cached decode
   ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   if (mesh.verts.empty()) {  // empty = remove, like the other backends
     meshes_.erase(key);
@@ -2200,6 +2228,7 @@ void cSoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts)
 void cSoftwareRenderer::clearChunkMeshes() {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
   canonSrc_.clear();
+  decodeCache_.clear();  // fix (e)
   meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
   pbrMeshes_.clear();
 }
@@ -2924,6 +2953,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // velocity state; decide() then culls per mesh exactly like GL/VK. All
   // prototypes default off, so decide() is the plain margin test.
   cullProto_.beginFrame(p.viewProj, p.yawRad, p.pitchRad, p.timeSec);
+  const bool canonCache = canonIngestEnabled() && !canonSrc_.empty();
+  if (canonCache) { ++decodeFrame_; redecodeEvictedInView(p); }  // fix (e)
   twinkleMode_ = p.leafTwinkle;  // 2026-10-16 crystal twinkle: render clock only
   shimmerTime_ = float(std::fmod(double(p.timeSec), 3600.0));  // Cortana 2026-10-16: render.shimmer clock
   twinklePhase_ = p.leafTwinkle == 2 ? uint32_t(int64_t(p.timeSec * 0.8f * 256.0f)) & 255u : 0u;
@@ -2968,7 +2999,9 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
       continue;
     const float dx = mn.x + 8.f - p.camPos.x, dy = mn.y + 8.f - p.camPos.y, dz = mn.z + 8.f - p.camPos.z;
     drawOrder_.emplace_back(dx * dx + dy * dy + dz * dz, &m);
+    if (canonCache) decodeCache_.touch(key, decodeFrame_);  // fix (e)
   }
+  if (canonCache) evictColdDecodes();  // fix (e): only non-drawn entries; drawOrder_ pointers stay valid
   // Elfie 2026-10-17: LOD is now a draw range, not a swap (the mesh pointer sort
   // below makes per-index state fragile, so the range is derived where used).
   // Beyond the switch distance only the untagged prefix is active.
