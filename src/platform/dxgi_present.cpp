@@ -45,17 +45,17 @@ struct cDxgiPresenter::Impl {
       if (SUCCEEDED(hr)) hr = fac->CreateSwapChainForHwnd(dev, hwnd, &d, nullptr, nullptr, &sc);
       if (fac && SUCCEEDED(hr)) fac->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
       rel(fac); rel(ad); rel(dxdev);
-      if (FAILED(hr)) { logError("dxgi present: swap chain creation failed (0x%08lx)", long(hr)); return false; }
+      if (FAILED(hr)) { rel(sc); w = h = 0; logError("dxgi present: swap chain creation failed (0x%08lx)", long(hr)); return false; }
     } else {
       const HRESULT hr = sc->ResizeBuffers(0, UINT(nw), UINT(nh), DXGI_FORMAT_UNKNOWN, 0);
-      if (FAILED(hr)) { logError("dxgi present: ResizeBuffers failed (0x%08lx)", long(hr)); return false; }
+      if (FAILED(hr)) { w = h = 0; logError("dxgi present: ResizeBuffers failed (0x%08lx)", long(hr)); return false; }
     }
     D3D11_TEXTURE2D_DESC td{};
     td.Width = UINT(nw); td.Height = UINT(nh); td.MipLevels = 1; td.ArraySize = 1;
     td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DYNAMIC; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    if (FAILED(dev->CreateTexture2D(&td, nullptr, &upload))) { logError("dxgi present: upload texture failed"); return false; }
+    if (FAILED(dev->CreateTexture2D(&td, nullptr, &upload))) { upload = nullptr; w = h = 0; logError("dxgi present: upload texture failed"); return false; }
     w = nw; h = nh;
     return true;
   }
