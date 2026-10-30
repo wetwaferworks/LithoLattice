@@ -89,6 +89,7 @@ int testCanonicalMeshEntry();  // canonical_mesh_test.cpp (render pipeline step 
 #include <fstream>
 #include <sstream>
 #include "litholattice/sim/sim_thread.h"
+#include "litholattice/sim/tick_ledger.h"
 #include "litholattice/storage/storage.h"
 #include "litholattice/storage/anvil_region.h"
 #include "litholattice/storage/file_contract.h"
@@ -199,6 +200,7 @@ void testDetSched();   // defined below testRandomTicks
 void testTraceJitCompose();  // defined below testDetSched
 void testSignalPropagate();  // defined below testTraceJitCompose
 void testJobSystem();  // defined below testCore
+void testArchieHandshakeH1H3();  // defined below testCore
 void testFileContract();  // defined below testAnvilRegion
 void testAsyncIo();       // defined below testFileContract
 void testModSandbox();    // defined below testAsyncIo
@@ -298,6 +300,7 @@ void testCore() {
   }
   testJobSystem();
   testTickArena();
+  testArchieHandshakeH1H3();
 }
 
 void testFailFast() {
@@ -385,6 +388,39 @@ void testFailFast() {
     check(reported, "fail-fast: the report reached stderr before the abort");
   }
 #endif
+}
+
+// Archie review H1a/H1c/H1d (tick ledger freeze paths) and H3b (urgent counter).
+namespace arhs {
+using L = litholattice::cTickLedger;
+void tick1(L& l, int spawn, std::vector<uint64_t>* hs) {
+  l.openTick(1);
+  {
+    L::JobScope js(l, l.slot(0), 0, 7, 0);
+    for (int i = 0; i < spawn; ++i) { const uint64_t h = L::asyncBegin(1); if (hs) hs->push_back(h); }
+    L::finishJob(l.slot(0), 0);
+  }
+}
+}  // namespace arhs
+void testArchieHandshakeH1H3() {
+  using arhs::L;
+  using arhs::tick1;
+  constexpr uint64_t kNever = UINT64_MAX;
+  {  // H1c: a sweep that times out must not free (lose) due records it already folded.
+    L a, b;
+    std::vector<uint64_t> ha, hb;
+    tick1(a, 2, &ha); a.sweep(kNever); a.commit();
+    a.asyncComplete(ha[0], 11); a.asyncComplete(ha[1], 22);
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(b, 2, &hb); b.sweep(kNever); b.commit();
+    b.asyncComplete(hb[0], 11);
+    tick1(b, 0, nullptr);
+    const bool tripped = !b.sweep(0);  // record 1 still pending: watchdog trip
+    b.asyncComplete(hb[1], 22);
+    b.abandonOpenTick();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    check(tripped && b.lastTickHash() == a.lastTickHash(), "tick ledger H1c: a frozen sweep keeps due async records for the rerun");
+  }
 }
 
 void testJobSystem() {

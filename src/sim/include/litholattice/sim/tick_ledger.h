@@ -174,6 +174,8 @@ class cTickLedger {
     uint64_t asyncSum = 0, asyncN = 0, waitNs = 0;
     const uint64_t head = asyncHead_.load(std::memory_order_acquire);
     while (asyncLow_ < head && async_[asyncLow_ & asyncMask_].state.load(std::memory_order_acquire) == kFree) ++asyncLow_;
+    // H1c: pass 1 waits for every due record WITHOUT freeing any, so a watchdog trip
+    // leaves them all intact for the rerun of this tick; pass 2 folds and frees.
     for (uint64_t i = asyncLow_; i < head; ++i) {
       AsyncRec& r = async_[i & asyncMask_];
       uint32_t st = r.state.load(std::memory_order_acquire);
@@ -187,6 +189,10 @@ class cTickLedger {
         }
         waitNs += lnow() - w0;
       }
+    }
+    for (uint64_t i = asyncLow_; i < head; ++i) {
+      AsyncRec& r = async_[i & asyncMask_];
+      if (r.state.load(std::memory_order_acquire) != kDone || r.dueTick != tick) continue;
       uint64_t a = mix(0xa5a5a5a5a5a5a5a5ULL, r.spawnTick);
       a = mix(a, r.dispatchSeq); a = mix(a, commitEpoch); a = mix(a, r.payloadHash);
       asyncSum += a;
@@ -248,6 +254,8 @@ class cTickLedger {
   const Stats& stats() const { return stats_; }  // authority thread (or stopped)
   uint32_t ringCapacity() const { return mask_ + 1; }
   uint32_t asyncCapacity() const { return asyncMask_ + 1; }
+  /// Test/telemetry: async records the sweep still scans (head - low watermark).
+  uint64_t asyncScanWindow() const { return asyncHead_.load(std::memory_order_acquire) - asyncLow_; }
 
   static uint64_t mix(uint64_t h, uint64_t v) {
     uint64_t z = h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
