@@ -26,7 +26,7 @@ extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) in
 #include "gl_loader.h"
 #include "gl_program.h"
 #include "gl_texture_array.h"
-#include "GlTboSlabPool.h"  // fix (c): paged canonical TBO
+#include "GlTboSlabUploader.h"  // refactor step 3: IMeshUploader over the fix (c) slab pool
 #include "litholattice/assets/shader_library.h"
 #include "litholattice/core/log.h"
 #include "litholattice/render/block_materials.h"
@@ -493,7 +493,7 @@ class cGL33Renderer final : public IRenderer {
       if (cp) {
         prog_ = std::move(*cp);
         const char* sl = std::getenv("LL_GL_CANON_SLABS");
-        canonOn_ = canonPool_.init(sl ? std::atoi(sl) : 2);  // fix (c): 64 MiB slabs, preallocated
+        canonOn_ = canonUp_.pool().init(sl ? std::atoi(sl) : 2);  // fix (c): 64 MiB slabs, preallocated
         if (canonOn_ && !canonVao_) glGenVertexArrays(1, &canonVao_);
         uCanonMode_ = prog_.uniform("uCanonMode"); uCanonBase_ = prog_.uniform("uCanonBase");
         uCanonFb_ = prog_.uniform("uCanonFb"); uCanonLod_ = prog_.uniform("uCanonLod");
@@ -657,46 +657,22 @@ class cGL33Renderer final : public IRenderer {
 
   // M12: one RGBA32UI buffer texture holds every canonical mesh's pull stream (first-fit
   // free list in texel units, doubling growth like the vertex arena).
+  // M12 canonical pull stream via the IMeshUploader (refactor step 3): prepare (build +
+  // validate), drop the old entry, commit (slab placement + upload). Same order as before.
   bool uploadCanon(int64_t key, const ChunkMesh& m) {
-    CanonPullStream ps;
-    if (!buildCanonPullStream(*m.canonical, 0, 0x3F, ps)) return false;
-    // Same quad set as the legacy stream or no deal (e.g. a mesh the game re-decoded).
-    if (size_t(ps.fbQuads + ps.quads) * 4 != m.verts.size() || ps.texels.empty()) { ++canonRejects_; return false; }
-    static const bool kCanonCheck = [] { const char* e = std::getenv("LL_GL_CANON_CHECK"); return e && e[0] == '1'; }();
-    if (kCanonCheck) {  // diag: pulled quads vs the legacy stream the arrays path would draw
-      using K = std::array<uint32_t, 10>;
-      auto kv = [](const PackedVertex& v) { return K{v.x, v.y, v.z, v.u, v.v, v.faceAo, v.layer, v.value, v.mode, uint32_t(v.layerHi)}; };
-      std::vector<std::array<K, 4>> a, b;
-      for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q) { std::array<K, 4> e; for (uint32_t c = 0; c < 4; ++c) e[c] = kv(canonPullReference(ps, q, c, 0)); a.push_back(e); }
-      for (size_t q = 0; q * 4 < m.verts.size(); ++q) { std::array<K, 4> e; for (int c = 0; c < 4; ++c) e[c] = kv(m.verts[q * 4 + c]); b.push_back(e); }
-      static uint64_t ck = 0, bad = 0, ordBad = 0; ++ck;
-      if (a != b) ++ordBad;
-      auto sa = a, sb = b; std::sort(sa.begin(), sa.end()); std::sort(sb.begin(), sb.end());
-      if (sa != sb) {
-        if (bad++ < 6) for (size_t i = 0; i < sa.size(); ++i) if (sa[i] != sb[i]) {
-          std::string s;
-          for (int c = 0; c < 4; ++c) { s += " P["; for (uint32_t x : sa[i][c]) s += std::to_string(x) + ","; s += "] L["; for (uint32_t x : sb[i][c]) s += std::to_string(x) + ","; s += "]"; }
-          logError("gl33 canon-check mesh %d,%d,%d quad %zu:%s", m.cx, m.sy, m.cz, i, s.c_str()); break; }
-      }
-      if ((ck & 1023) == 0 || bad == 1) logInfo("gl33 canon-check: %llu meshes, %llu set-mismatch, %llu order-diff", (unsigned long long)ck, (unsigned long long)bad, (unsigned long long)ordBad);
-    }
+    if (!canonUp_.prepare(m)) return false;
     erase(key);
-    const size_t n = ps.texels.size() / 4;
-    const auto range = canonPool_.alloc(n);
-    if (!range) return false;
+    MeshPlacement pl;
+    if (!canonUp_.commit(pl)) return false;
     Gpu& g = meshes_[key];
-    g.canon = true; g.cSlab = range->slab; g.cFirst = range->first; g.cCount = n; g.cFb = GLint(ps.fbQuads);
-    g.cVerts = GLsizei(size_t(ps.fbQuads + ps.quads) * 6);
+    g.canon = true; g.cSlab = pl.slab; g.cFirst = pl.first; g.cCount = pl.count; g.cFb = GLint(pl.fallbackQuads);
+    g.cVerts = GLsizei(size_t(pl.fallbackQuads + pl.quads) * 6);
     g.cx = m.cx; g.sy = m.sy; g.cz = m.cz;
     for (int i = 0; i < 4; ++i) { g.pulseP0[i] = m.pulseP0[i]; g.pulseP1[i] = m.pulseP1[i]; g.traceP0[i] = m.traceP0[i]; g.traceP1[i] = m.traceP1[i]; }
-    canonPool_.upload(*range, ps.texels.data(), n);
-    canonTexels_ += n;
-    ++canonMeshes_;
     return true;
   }
   void clearChunkMeshes() override {
-    canonPool_.reset();
-    canonTexels_ = 0;
+    canonUp_.clear();
     for (auto& [k, g] : meshes_) if (g.vao) { glDeleteBuffers(1, &g.vbo); glDeleteVertexArrays(1, &g.vao); }
     meshes_.clear();
     for (auto& [k, g] : pbrMeshes_) if (g.vao) { glDeleteBuffers(1, &g.vbo); glDeleteVertexArrays(1, &g.vao); }
@@ -846,7 +822,7 @@ class cGL33Renderer final : public IRenderer {
         if (canonBoundSlab_ != g.cSlab) {
           canonBoundSlab_ = g.cSlab;
           glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
-          glBindTexture(GL_TEXTURE_BUFFER, canonPool_.texture(g.cSlab));
+          glBindTexture(GL_TEXTURE_BUFFER, canonUp_.pool().texture(g.cSlab));
           glActiveTexture(GL_TEXTURE0);
         }
         glUniform1i(uCanonBase_, GLint(g.cFirst));
@@ -1070,8 +1046,8 @@ class cGL33Renderer final : public IRenderer {
     auto it = meshes_.find(key);
     if (it == meshes_.end()) return;
     if (it->second.canon) {
-      canonPool_.release({it->second.cSlab, it->second.cFirst}, it->second.cCount);
-      canonTexels_ -= it->second.cCount;
+      MeshPlacement pl; pl.slab = it->second.cSlab; pl.first = it->second.cFirst; pl.count = it->second.cCount;
+      canonUp_.release(pl);
       meshes_.erase(it);
       return;
     }
@@ -1335,10 +1311,8 @@ class cGL33Renderer final : public IRenderer {
   bool canonOn_ = false;
   int canonModeSet_ = 0;
   GLuint canonVao_ = 0;
-  size_t canonTexels_ = 0;
-  gl33::cGlTboSlabPool canonPool_;  // fix (c): paged 64 MiB slabs (was one doubling buffer)
+  gl33::cGlTboSlabUploader canonUp_;  // refactor step 3: IMeshUploader (owns the fix (c) slab pool)
   uint32_t canonBoundSlab_ = ~uint32_t(0);
-  uint64_t canonMeshes_ = 0, canonRejects_ = 0;
   GLint uCanonMode_ = -1, uCanonBase_ = -1, uCanonFb_ = -1, uCanonLod_ = -1;
   static constexpr GLint kPbrMatTexUnit = 2;  // material table texture unit (0/1 are classic)
   GLint uPbrVP_ = -1, uPbrOffset_ = -1, uPbrCam_ = -1, uPbrMat_ = -1;
