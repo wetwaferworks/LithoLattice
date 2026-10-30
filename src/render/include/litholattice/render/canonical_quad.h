@@ -81,6 +81,10 @@ constexpr PaletteFields unpackPalette(uint64_t raw) noexcept {
   return p;
 }
 
+/// M7 fallback palette marker: pbrMatId == kLegacyLookMarker means rgb565Tint carries the
+/// legacy look (shade mode << 8 | value) of a Packed12 fallback vertex, not a colour.
+inline constexpr uint16_t kLegacyLookMarker = 0xFFFF;
+
 /// Packed12 fallback vertex (Table 3): fixed-point 1/256 position, 1/2048 UV.
 struct Packed12Fields {
   uint32_t fx = 0, fy = 0, fz = 0;  // 0..4095

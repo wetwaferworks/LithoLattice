@@ -315,6 +315,65 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
   if (!ok) cm = CanonicalMesh{}, cm.magic = 0;  // magic 0 = not publishable
 }
 
+// Render pipeline M7 (Archie step 2/3 completion: fully canonical meshes). Every legacy
+// vertex the greedy/canonical flush did not produce (rotated, strength-slot, trace-tint,
+// cutout, alpha-blend, slabs, box models, crosses, custom shapes: the per-cell stream
+// written before the flush) is stored as a Packed12 fallback vertex, 4 per quad, in the
+// same CanonicalMesh. Encoding (lossless for every field a shader reads):
+//   fx/fy/fz = legacy 1/16-block sub-chunk units (0..4095; > 4095 = not publishable)
+//   u/v      = legacy 8-bit UV << 4
+//   normalId = face (bits 0..2) | faceAo bit 7 << 3; ao = faceAo bits 3..4;
+//   wind     = faceAo bits 5..6 (texture rotation)
+//   palette  = layerId + kLegacyLookMarker + (mode << 8 | value) in rgb565Tint
+//   light    = full sky, no block light (no light engine in the mesh path yet)
+// The 24-bit strength-buffer slot is not carried (no shader reads it; see the Step 1
+// note in the pass). decodeFallbackVertex is the exact inverse with slot = 0.
+bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
+  cm.fallback.clear();
+  cm.fallback.reserve(n);
+  uint64_t lastPal = ~uint64_t(0);
+  uint32_t lastIdx = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const PackedVertex& p = v[i];
+    if (p.x > 4095 || p.y > 4095 || p.z > 4095) return false;
+    canon::PaletteFields pf;
+    pf.layerId = uint16_t(p.layerIndex());
+    pf.pbrMatId = canon::kLegacyLookMarker;
+    pf.rgb565Tint = uint16_t((uint32_t(p.mode) << 8) | p.value);
+    const uint64_t pal = canon::packPalette(pf);
+    if (pal != lastPal) {
+      size_t j = 0;
+      while (j < cm.palette.size() && cm.palette[j] != pal) ++j;
+      if (j == cm.palette.size()) {
+        if (j >= canon::kMaxPalette) return false;
+        cm.palette.push_back(pal);
+      }
+      lastPal = pal; lastIdx = uint32_t(j);
+    }
+    canon::Packed12Fields f;
+    f.fx = p.x; f.fy = p.y; f.fz = p.z;
+    f.u = uint32_t(p.u) << 4; f.v = uint32_t(p.v) << 4;
+    f.normalId = (p.faceAo & 7u) | (uint32_t(p.faceAo >> 7) << 3);
+    f.ao = (p.faceAo >> 3) & 3u; f.wind = (p.faceAo >> 5) & 3u;
+    f.paletteIdx = lastIdx; f.blockLight = 0; f.skyLight = 63;
+    cm.fallback.push_back(canon::packPacked12(f));
+  }
+  return true;
+}
+PackedVertex decodeFallbackVertex(const canon::Packed12& raw, const CanonicalMesh& cm) {
+  const canon::Packed12Fields f = canon::unpackPacked12(raw);
+  const canon::PaletteFields pf = canon::unpackPalette(f.paletteIdx < cm.palette.size() ? cm.palette[f.paletteIdx] : 0);
+  PackedVertex p{};
+  p.x = uint16_t(f.fx); p.y = uint16_t(f.fy); p.z = uint16_t(f.fz);
+  p.u = uint8_t(f.u >> 4); p.v = uint8_t(f.v >> 4);
+  p.faceAo = uint8_t((f.normalId & 7u) | (f.ao << 3) | (f.wind << 5) | ((f.normalId >> 3) << 7));
+  p.setLayer(pf.layerId);
+  p.mode = uint8_t(pf.rgb565Tint >> 8); p.value = uint8_t(pf.rgb565Tint & 0xFFu);
+  p.slot = 0;
+  return p;
+}
+std::atomic<uint64_t> g_umFbVerts{0}, g_umFbChecked{0}, g_umFbMismatch{0};
+
 // Render pipeline M6 (step 3 on the game path: registry feed into UnifiedMesher). L1/L2
 // come from UnifiedMesher over a per-job material table built from the registry: one
 // local material per (block, active, facing), per-face looks from BlockMaterials (the
@@ -639,8 +698,13 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
         }
         look.meshExtra(cellC, writer);
       }
+  const size_t legacyVerts = out.verts.size();  // render pipeline M7: per-cell stream before the canonical flush
   if (canonOut) flushCanonical(*greedyGrid, out.verts, *canonOut, greedy);  // render pipeline M2
   else if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
+  if (canonOut && canonOut->magic == canon::kMeshMagic) {  // render pipeline M7: Packed12 fallback
+    if (packFallback(out.verts, legacyVerts, *canonOut)) g_umFbVerts.fetch_add(legacyVerts, std::memory_order_relaxed);
+    else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
+  }
   if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
     static thread_local std::vector<uint32_t> keyGen(size_t(1) << 19, 0u);
     static thread_local std::vector<uint16_t> keyLocal(size_t(1) << 19, uint16_t(0));
@@ -816,7 +880,7 @@ bool unifiedMesherEnabled() {
 static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
 UnifiedMesherStats unifiedMesherStats() {
   return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
-          g_umLodQuads.load(), g_umLodFallback.load()};
+          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load()};
 }
 bool canonLodsEnabled() {
   static const bool v = [] { const char* e = std::getenv("LL_CANON_LODS"); return !(e && e[0] == '0'); }();
@@ -877,6 +941,21 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
           logError("unified-mesher: decode MISMATCH sub-chunk (%d,%d,%d): canonical %zu quads vs legacy %zu quads",
                    in.cx, in.sy, in.cz, out.verts.size() / 4, legacy.verts.size() / 4);
         }
+      }
+    }
+    if (canon->magic == canon::kMeshMagic && canonVerifyOn()) {  // M7: Packed12 fallback decodes to the legacy per-cell stream
+      bool same = canon->fallback.size() <= out.verts.size();
+      for (size_t i = 0; same && i < canon->fallback.size(); ++i) {
+        PackedVertex a = out.verts[i];
+        a.slot = 0;
+        const PackedVertex b = decodeFallbackVertex(canon->fallback[i], *canon);
+        same = std::memcmp(&a, &b, sizeof a) == 0;
+      }
+      g_umFbChecked.fetch_add(1, std::memory_order_relaxed);
+      if (!same) {
+        g_umFbMismatch.fetch_add(1, std::memory_order_relaxed);
+        logError("unified-mesher: Packed12 fallback MISMATCH sub-chunk (%d,%d,%d) (%zu fallback verts)", in.cx, in.sy, in.cz,
+                 canon->fallback.size());
       }
     }
     if (canon->magic == canon::kMeshMagic) {

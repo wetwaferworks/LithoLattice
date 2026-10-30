@@ -98,7 +98,7 @@ void setMeshVerify(bool on);
 /// compare quad sets (decode equivalence).
 void setUnifiedMesher(bool on);
 bool unifiedMesherEnabled();
-struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0; };
+struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0; };
 /// M6: L1/L2 from the registry feed on the game path (LL_CANON_LODS=0 turns it off).
 bool canonLodsEnabled();
 UnifiedMesherStats unifiedMesherStats();
