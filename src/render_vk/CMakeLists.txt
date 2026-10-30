@@ -125,7 +125,7 @@ add_custom_command(OUTPUT ${out}
 list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
 
 add_library(litholattice_render_vk STATIC vk_loader.cpp vk_handles.cpp vk_device.cpp vk_resources.cpp vk_vertex_arena.cpp
-            vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp ${LITHOLATTICE_SPV_HEADERS})
+            vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp VkCanonUploader.cpp ${LITHOLATTICE_SPV_HEADERS})
 target_include_directories(litholattice_render_vk PUBLIC include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(litholattice_render_vk PUBLIC litholattice_render PRIVATE litholattice_core Vulkan::Headers ${CMAKE_DL_LIBS})
 # Phase 4.0 (Direction JD, research Elfie, implementation Cortana): streaming / culling counters (logging only).
