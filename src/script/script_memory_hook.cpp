@@ -120,8 +120,7 @@ void quotaDeallocate(void* p) noexcept {
   std::shared_ptr<QuotaAccount> account = std::move(header->account);
   header->account.~shared_ptr<QuotaAccount>();
   if (account) {
-    account->bytes -= static_cast<int64_t>(n);
-    if (account->bytes < 0) account->bytes = 0;
+    account->credit(static_cast<int64_t>(n));  // Archie review H25c
   }
   std::free(raw);
 }
