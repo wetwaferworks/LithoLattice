@@ -9144,6 +9144,61 @@ void testTickLedger() {
     check(auth.stop(), "ledger: freeze fixture stop");
   }
 
+  {  // Archie review H2 probe (2026-10-30): resetAfterFreeze() while the frozen
+     // phase's worker is STILL stuck. Its late finishJob lands after the reset,
+     // during the next phases. Compare the per-tick ledger trace after the reset
+     // with the same run where the stuck worker drained before the reset (the
+     // existing, accepted shape above). Identical trace + every post-reset phase
+     // committed = the late write is harmless.
+    struct Probe { std::vector<uint64_t> ticks; bool frozeAt2 = false, postOk = true; uint64_t epoch = 0; };
+    auto probe = [](bool resetWhileStuck) {
+      cTimingHandshakeAuthority::Config cfg;
+      cfg.workerThreads = 2;
+      cfg.watchdogCeiling = std::chrono::milliseconds(30);
+      cTimingHandshakeAuthority auth(cfg);
+      std::atomic<bool> stall{false};
+      for (uint32_t id = 0; id < 4; ++id) {
+        HsComponentDesc d; d.name = "ledger.h2probe";
+        auth.registerComponent(d, [&stall, id](uint64_t phase, uint64_t cycle) {
+          if (id == 0 && stall.exchange(false)) std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          L::notePayload(L::mix(id, cycle * 977 + phase));
+        });
+      }
+      Probe pr;
+      check(auth.start(), "ledger: H2 probe start");
+      auth.runPhase(0, 0, 0);
+      auth.runPhase(1, 0, 0);
+      stall = true;
+      pr.frozeAt2 = !auth.runPhase(2, 0, 0);
+      if (!resetWhileStuck) std::this_thread::sleep_for(std::chrono::milliseconds(400));
+      auth.resetAfterFreeze();
+      const auto t0 = std::chrono::steady_clock::now();
+      for (uint64_t p = 3; p < 60; ++p) {
+        pr.postOk = auth.runPhase(p, p / 4, 0) && pr.postOk;
+        pr.ticks.push_back(auth.ledger().lastTickHash());
+        // Keep phases flowing across the stuck worker's wake-up (~250 ms).
+        if (resetWhileStuck) std::this_thread::sleep_for(std::chrono::milliseconds(6));
+      }
+      if (resetWhileStuck) std::this_thread::sleep_until(t0 + std::chrono::milliseconds(400));
+      pr.epoch = auth.commitEpoch();
+      check(auth.stop(), "ledger: H2 probe stop");
+      return pr;
+    };
+    const Probe drained = probe(false);
+    bool same = true, allOk = true, froze = drained.frozeAt2;
+    for (int trial = 0; trial < 3; ++trial) {
+      const Probe stuck = probe(true);
+      froze = froze && stuck.frozeAt2;
+      allOk = allOk && stuck.postOk && stuck.epoch == drained.epoch;
+      same = same && stuck.ticks == drained.ticks;
+    }
+    std::printf("  [ledger] H2 probe: froze=%d drainedOk=%d stuckOk=%d traceSame=%d epoch=%llu\n", int(froze),
+                int(drained.postOk), int(allOk), int(same), (unsigned long long)drained.epoch);
+    check(froze && drained.postOk, "ledger: H2 probe fixture froze at phase 2 and recovered (drained reference)");
+    check(allOk && same,
+          "ledger: resetAfterFreeze with a still-stuck worker - post-reset phases commit and the ledger trace matches the drained run (Archie H2)");
+  }
+
   {  // overhead: 16 trivial components on 4 shards of the shared pool, ledger on vs off
     auto bench = [](bool ledger, uint64_t& ovAvg, uint64_t& ovMax, uint32_t& ring) {
       cTimingHandshakeAuthority::Config cfg;
