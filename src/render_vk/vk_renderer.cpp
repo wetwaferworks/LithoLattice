@@ -80,6 +80,9 @@ class cVulkanRenderer final : public IRenderer {
  public:
   // Ginny 2026-10-16 (perf list): greedy-merged chunk faces; chunk_shading.glsl repeats the tile.
   bool prefersGreedyMeshes() const override { return true; }
+  // Thread Handshake P7: wafer reveal (binding 7, uploaded with the frame uniforms).
+  bool supportsWaferReveal() const override { return true; }
+  void setWaferReveal(const WaferRevealFrame& r) override { reveal_ = r; }
   ~cVulkanRenderer() override {
     if (dev_) vkDeviceWaitIdle(dev_->device());
     if (dev_) for (FrameSlot& f : frames_) if (f.timer) vkDestroyQueryPool(dev_->device(), f.timer, nullptr);  // [A52-3]
@@ -494,6 +497,7 @@ class cVulkanRenderer final : public IRenderer {
     UniqueFence inFlight;
     UniqueSemaphore imageAcquired;
     std::optional<Buffer> uniforms, overlay;
+    std::optional<Buffer> reveal;  ///< Thread Handshake P7: wafer reveal header + spawn timestamps
     // Sprite pass vertex stream (JD wiring 2026-10-13): per-slot so a frame
     // in flight never races the next frame's upload; grow-only like GL33.
     std::optional<Buffer> sprites;
@@ -605,7 +609,9 @@ class cVulkanRenderer final : public IRenderer {
       f.imageAcquired = UniqueSemaphore(d, sem);
       f.uniforms = Buffer::create(*dev_, sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisible);
       f.overlay = Buffer::create(*dev_, kOverlayBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible);
-      if (!f.uniforms || !f.overlay) return false;
+      f.reveal = Buffer::create(*dev_, kRevealBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostVisible);
+      if (!f.uniforms || !f.overlay || !f.reveal) return false;
+      std::memset(f.reveal->mapped(), 0, kRevealBytes);  // header .y = 0: reveal off
       if (arena_->kind() != cVertexArena::Kind::Host) {
         f.staging = Buffer::create(*dev_, kStagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostVisible);
         if (!f.staging) return false;
@@ -623,7 +629,7 @@ class cVulkanRenderer final : public IRenderer {
     const VkDevice d = dev_->device();
     const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kFramesInFlight},
-                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight * (1 + kMaxPullBlocks)}};  // mega-draw V2b + Phase 2 arena array
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight * (2 + kMaxPullBlocks)}};  // + P7 reveal  // mega-draw V2b + Phase 2 arena array
     auto ci = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     ci.maxSets = kFramesInFlight;
     ci.poolSizeCount = uint32_t(std::size(sizes));
@@ -682,6 +688,16 @@ class cVulkanRenderer final : public IRenderer {
       w[kBindingFont].pImageInfo = &font;
       w[kBindingSpriteAtlas].pImageInfo = &spriteAtlas;
       vkUpdateDescriptorSets(dev_->device(), 5, w, 0, nullptr);
+      // Thread Handshake P7: the chunk vertex shader declares binding 7 statically, so it is always written.
+      const VkDescriptorBufferInfo rv{f.reveal->handle(), 0, kRevealBytes};
+      VkWriteDescriptorSet rw{};
+      rw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      rw.dstSet = f.set;
+      rw.dstBinding = kBindingWaferReveal;
+      rw.descriptorCount = 1;
+      rw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      rw.pBufferInfo = &rv;
+      vkUpdateDescriptorSets(dev_->device(), 1, &rw, 0, nullptr);
     }
   }
 
@@ -930,7 +946,21 @@ class cVulkanRenderer final : public IRenderer {
     });
   }
 
+  // Thread Handshake P7: std430 { vec4 hdr (now, on, etchSec, riseBlocks); ivec4 org (cx, cz, half, 0); float ts[65*65]; }
+  static constexpr VkDeviceSize kRevealBytes = 32 + sizeof(float) * kRevealSide * kRevealSide;
+  WaferRevealFrame reveal_;
+  void writeReveal(const FrameSlot& f) {
+    auto* b = static_cast<unsigned char*>(f.reveal->mapped());
+    const bool on = reveal_.active && reveal_.spawnTs.size() == size_t(kRevealSide) * kRevealSide;
+    const float hdr[4] = {reveal_.nowSec, on ? 1.f : 0.f, reveal_.etchSec, reveal_.riseBlocks};
+    const int32_t org[4] = {reveal_.originCx, reveal_.originCz, kRevealHalf, 0};
+    std::memcpy(b, hdr, 16);
+    std::memcpy(b + 16, org, 16);
+    if (on) std::memcpy(b + 32, reveal_.spawnTs.data(), sizeof(float) * reveal_.spawnTs.size());
+  }
+
   void writeUniforms(const FrameSlot& f, const FrameParams& p) {
+    writeReveal(f);
     FrameUniforms u = materials_;
     std::memcpy(u.viewProj, p.viewProj.m, sizeof u.viewProj);
     u.cam[0] = p.camPos.x; u.cam[1] = p.camPos.y; u.cam[2] = p.camPos.z;

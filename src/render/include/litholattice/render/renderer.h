@@ -95,6 +95,7 @@ inline void selectLod(const std::vector<PackedVertex>& in, bool far, std::vector
 }  // namespace litholattice
 
 #include "litholattice/render/pbr_lights.h"  // AnalyticLight for FrameParams::pbrLights
+#include "litholattice/render/wafer_reveal.h"  // Thread Handshake P7
 #include "litholattice/render/pbr_transparency_tiers.h"  // PbrTransparencyTier for setPbrTier
 
 namespace litholattice {
@@ -332,6 +333,10 @@ class IRenderer {
   /// mode flag: classic chunk programs draw PackedVertex uploads, chunk_pbr draws
   /// PbrChunkMesh uploads - both maps can coexist in one frame.
   virtual bool supportsPbrPath() const { return false; }  ///< chunk_pbr built and usable
+  /// Thread Handshake P7: the wafer reveal (per-column spawn timestamps). Backends without it
+  /// (GL / software) ignore the call and say so here, so the game can skip the reveal.
+  virtual bool supportsWaferReveal() const { return false; }
+  virtual void setWaferReveal(const WaferRevealFrame&) {}
   // Cortana 2026-10-15 1705: greedy meshing [ENGINE]
   /// True when the backend tiles chunk UVs beyond 1 per block (greedy-merged quads).
   /// GPU backends clamp (CLAMP_TO_EDGE) and keep per-block quads. Constant; any thread.

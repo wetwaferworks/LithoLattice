@@ -68,6 +68,7 @@
 #include "litholattice/core/math.h"
 #include "litholattice/world/chunk_ingress.h"
 #include "litholattice/world/chunk_swarm.h"
+#include "litholattice/render/wafer_reveal.h"  // Thread Handshake P7
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/render/frame_pacer.h"
@@ -8761,6 +8762,46 @@ void testChunkIngress() {
     const int before = h.grant(16.0, 10.0);
     for (int i = 0; i < 40; ++i) h.noteSlice(2.0);
     check(before == 8 && h.grant(16.0, 10.0) == 2, "P6 slack: an expensive slice shrinks the grant");
+  }
+  {  // P7 wafer reveal: Chebyshev spiral + pacer
+    bool bijective = revealSpiralIndex(0, 0) == 0;
+    for (int k = 1; k <= 6; ++k) {
+      std::vector<int> seen(size_t(8 * k), 0);
+      for (int dz = -k; dz <= k; ++dz)
+        for (int dx = -k; dx <= k; ++dx)
+          if (revealRing(dx, dz) == k) {
+            const int i = revealSpiralIndex(dx, dz);
+            if (i < 0 || i >= 8 * k) bijective = false; else ++seen[size_t(i)];
+          }
+      for (int c : seen) bijective = bijective && c == 1;
+    }
+    check(bijective, "P7 spiral: each ring maps 1:1 onto 0..8k-1");
+    cWaferRevealPacer::Config c;
+    c.maxRing = 4;
+    const auto ready = [](int, int) { return true; };
+    cWaferRevealPacer p;
+    p.begin(10, -3, c);
+    check(p.spawnTs(0, 0) == 0.f && p.spawnTs(1, 1) == 0.f && p.spawnTs(2, 0) == kRevealHidden,
+          "P7 pacer: pedestal at t=0, outer rings unscheduled");
+    for (int i = 0; i < 100; ++i) p.advance(0.f, ready);
+    check(p.now() == 0.f && p.ringsScheduled() == 2 && !p.skyboxOnline(), "P7 pacer: paused clock schedules nothing");
+    int frames = 0;
+    while (!p.skyboxOnline() && frames < 1000) { p.advance(1.f / 60.f, ready); ++frames; }
+    check(p.skyboxOnline() && frames < 120, "P7 pacer: rings at v_etch, then SKYBOX_ONLINE");
+    check(p.spawnTs(3, 0) > p.spawnTs(2, 0) && p.spawnTs(-4, 4) > p.spawnTs(4, -3), "P7 pacer: outward, spiral order");
+    WaferRevealFrame f;
+    p.fill(f);
+    check(!f.active, "P7 pacer: reveal off once the sky is online");
+    std::vector<int> asked;
+    cWaferRevealPacer w;
+    w.begin(0, 0, c);
+    frames = 0;
+    while (!w.skyboxOnline() && frames < 2000) { w.advance(1.f / 60.f, [](int, int) { return false; }); ++frames; }
+    check(w.skyboxOnline() && frames > 300, "P7 pacer: unready rings wait, then time out (never stalls)");
+    c.vEtch = std::numeric_limits<float>::infinity();
+    cWaferRevealPacer b;
+    b.begin(0, 0, c);
+    check(b.skyboxOnline() && b.spawnTs(kRevealHalf, -kRevealHalf) == kRevealInstant, "P7 pacer: infinite v_etch (bench) is instant");
   }
   {
     cSimPromotionBudget b;
