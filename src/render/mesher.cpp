@@ -968,7 +968,8 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
   }
   if (meshVerifyEnabled()) {
     const uint64_t e0 = ctx.blocks.content().definitionEpoch();
-    const ChunkMesh live = meshSubChunkPass(in, ctx);  // locked live registry reads
+    CanonicalMesh liveCanon;  // M7: same mode as the pass under test (unified orders verts differently)
+    const ChunkMesh live = meshSubChunkPass(in, ctx, unified ? &liveCanon : nullptr);  // locked live registry reads
     const uint64_t e1 = ctx.blocks.content().definitionEpoch();
     if (e0 != e1 || e0 != epoch1) {
       g_mvSkipped.fetch_add(1, std::memory_order_relaxed);
