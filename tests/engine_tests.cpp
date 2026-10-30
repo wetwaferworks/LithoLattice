@@ -8666,6 +8666,159 @@ void testLendReclaim() {
     check(pct(sat, 0.99) < 2000.0, "reclaim: shard start p99 under gen saturation stays below one 2 ms gen slice (never queued behind gen)");
 }
 
+// Thread Handshake P4: tick ledger. Ring (T_offset + seq) & MASK from a tick arena, swept
+// linearly at the barrier; sync jobs hash returnTick, async jobs hash (spawnTick,
+// dispatchSeq, commit epoch, payload); commit_epoch advances only on COMMITTED. Gate:
+// the per-tick ledger hash trace is identical at 1/2/4/8/16 shards with random worker
+// sleeps (jitter), and the ledger's own bookkeeping is ~0 ms per tick.
+void testTickLedger() {
+  std::printf("sim: tick ledger (Thread Handshake P4)\n");
+  using L = cTickLedger;
+  struct Trace { std::vector<uint64_t> ticks; uint64_t chain = 0, epoch = 0, asyncN = 0, late = 0, sync = 0; };
+  auto runTrace = [](int workers, bool jitter, bool start, int perturbAt) {
+    cJobPool pool(unsigned(std::max(1, workers)));
+    cTimingHandshakeAuthority::Config cfg;
+    cfg.workerThreads = workers;
+    cfg.pool = &pool;
+    cfg.phasesPerCycle = 4;
+    cfg.watchdogCeiling = std::chrono::seconds(5);
+    cTimingHandshakeAuthority auth(cfg);
+    std::atomic<uint64_t> curPhase{0};
+    auto rnd = [](uint32_t maxUs) {
+      thread_local std::mt19937 g{std::random_device{}()};
+      return std::uniform_int_distribution<uint32_t>(0, maxUs)(g);
+    };
+    // Random worker delay: a random busy wait, and 1 time in 16 a real sleep (the OS
+    // timer makes every sleep ~1 ms or more on Windows, so sleeping always would make
+    // the test minutes long without adding any new ordering).
+    auto jitterWait = [&rnd](uint32_t maxUs) {
+      if (rnd(15) == 0) { std::this_thread::sleep_for(std::chrono::microseconds(rnd(maxUs))); return; }
+      const auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(rnd(maxUs));
+      while (std::chrono::steady_clock::now() < end) {}
+    };
+    for (uint32_t id = 0; id < 12; ++id) {
+      HsComponentDesc d;
+      d.name = "ledger.jitter";
+      if (id % 4 == 3) d.cadence = CadenceClass::HalfCycle;
+      auth.registerComponent(d, [&, id, jitter, perturbAt](uint64_t phase, uint64_t cycle) {
+        if (jitter) jitterWait(300);
+        L::notePayload(L::mix(id, cycle * 131 + phase));
+        if (perturbAt >= 0 && phase == uint64_t(perturbAt) && id == 5) L::notePayload(1);
+        if ((id + phase) % 3 == 0) {
+          const uint64_t h = L::asyncBegin(1 + id % 3);
+          const uint64_t payload = L::mix(L::mix(id, phase), 7);
+          pool.submit([&auth, &jitterWait, h, payload, jitter] {
+            if (jitter) jitterWait(2000);
+            auth.ledger().asyncComplete(h, payload);
+          });
+        }
+      });
+    }
+    if (start) check(auth.start(), "ledger: handshake start");
+    Trace tr;
+    bool ok = true;
+    for (uint64_t p = 0; p < 300; ++p) {
+      curPhase = p;
+      ok = auth.runPhase(p, p / 4, 0) && ok;
+      tr.ticks.push_back(auth.ledger().lastTickHash());
+    }
+    pool.waitIdle();
+    check(ok, "ledger: every phase committed");
+    if (start) check(auth.stop(), "ledger: handshake stop");
+    tr.chain = auth.ledger().chainHash();
+    tr.epoch = auth.commitEpoch();
+    tr.asyncN = auth.ledger().stats().asyncCommitted;
+    tr.late = auth.ledger().stats().asyncLate;
+    tr.sync = auth.ledger().stats().syncRecords;
+    return tr;
+  };
+  const Trace ref = runTrace(1, false, true, -1);
+  check(ref.epoch == 300, "ledger: commit_epoch advances once per COMMITTED phase (300 phases -> 300)");
+  check(ref.asyncN > 0 && ref.sync > 0, "ledger: sync and async records were committed");
+  bool allSame = true;
+  uint64_t lateTotal = 0;
+  for (int w : {1, 2, 4, 8, 16}) {
+    const Trace t = runTrace(w, true, true, -1);
+    const bool same = t.ticks == ref.ticks && t.chain == ref.chain && t.epoch == ref.epoch && t.asyncN == ref.asyncN;
+    std::printf("  [ledger] jitter run: %2d shards, chain %016llx, sync %llu, async %llu (barrier waited on %llu late) %s\n", w,
+                (unsigned long long)t.chain, (unsigned long long)t.sync, (unsigned long long)t.asyncN,
+                (unsigned long long)t.late, same ? "MATCH" : "MISMATCH");
+    allSame = allSame && same;
+    lateTotal += t.late;
+  }
+  std::printf("  [ledger] reference (1 shard, no jitter) chain %016llx\n", (unsigned long long)ref.chain);
+  check(allSame, "ledger: jitter test - per-tick ledger hashes identical at 1/2/4/8/16 shards with random worker sleeps");
+  check(lateTotal > 0, "ledger: jitter really reordered completions (the barrier had to wait for late async jobs)");
+  const Trace inl = runTrace(4, true, false, -1);
+  check(inl.ticks == ref.ticks && inl.chain == ref.chain, "ledger: inline (never started) authority produces the same ledger trace");
+  const Trace pert = runTrace(4, true, true, 150);
+  check(pert.chain != ref.chain && std::equal(ref.ticks.begin(), ref.ticks.begin() + 150, pert.ticks.begin()) &&
+            pert.ticks[150] != ref.ticks[150],
+        "ledger: a changed payload changes the ledger hash from that tick on (and not before)");
+
+  {  // commit_epoch never advances on a frozen phase
+    cTimingHandshakeAuthority::Config cfg;
+    cfg.workerThreads = 1;
+    cfg.watchdogCeiling = std::chrono::milliseconds(30);
+    cTimingHandshakeAuthority auth(cfg);
+    std::atomic<bool> stall{false};
+    HsComponentDesc d; d.name = "ledger.stall";
+    auth.registerComponent(d, [&](uint64_t, uint64_t) {
+      if (stall.load()) std::this_thread::sleep_for(std::chrono::milliseconds(80));
+      L::notePayload(42);
+    });
+    check(auth.start(), "ledger: freeze fixture start");
+    bool ok = auth.runPhase(0, 0, 0) && auth.runPhase(1, 0, 0);
+    const uint64_t e0 = auth.commitEpoch();
+    stall = true;
+    const bool froze = !auth.runPhase(2, 0, 0);
+    const uint64_t e1 = auth.commitEpoch();
+    stall = false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    auth.resetAfterFreeze();
+    ok = auth.runPhase(3, 0, 0) && ok;
+    check(ok && froze && e0 == 2 && e1 == 2 && auth.commitEpoch() == 3,
+          "ledger: commit_epoch is monotonic and only advances on COMMITTED (a frozen phase leaves it alone)");
+    check(auth.stop(), "ledger: freeze fixture stop");
+  }
+
+  {  // overhead: 16 trivial components on 4 shards of the shared pool, ledger on vs off
+    auto bench = [](bool ledger, uint64_t& ovAvg, uint64_t& ovMax, uint32_t& ring) {
+      cTimingHandshakeAuthority::Config cfg;
+      cfg.workerThreads = 4;
+      cfg.ledger = ledger;
+      cTimingHandshakeAuthority auth(cfg);
+      std::atomic<uint64_t> sink{0};
+      for (int i = 0; i < 16; ++i) {
+        HsComponentDesc d; d.name = "ledger.bench";
+        auth.registerComponent(d, [&sink, i](uint64_t ph, uint64_t) { sink.fetch_add(ph + uint64_t(i), std::memory_order_relaxed); L::notePayload(ph); });
+      }
+      auth.start();
+      for (uint64_t p = 0; p < 200; ++p) auth.runPhase(p, p, 0);  // warm-up
+      const auto t0 = std::chrono::steady_clock::now();
+      const int kPhases = 3000;
+      const L::Stats s0 = auth.ledger().stats();
+      for (uint64_t p = 200; p < 200 + uint64_t(kPhases); ++p) auth.runPhase(p, p, 0);
+      const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / kPhases;
+      const L::Stats s1 = auth.ledger().stats();
+      ovAvg = (s1.ticks > s0.ticks) ? (s1.overheadNsTotal - s0.overheadNsTotal) / (s1.ticks - s0.ticks) : 0;
+      ovMax = s1.overheadNsMax;
+      ring = auth.ledger().ringCapacity();
+      auth.stop();
+      return us;
+    };
+    uint64_t a = 0, m = 0, a2 = 0, m2 = 0;
+    uint32_t ring = 0, ring2 = 0;
+    const double offUs = bench(false, a2, m2, ring2);
+    const double onUs = bench(true, a, m, ring);
+    std::printf("  [ledger] overhead: 16 jobs/tick on 4 shards, ring %u slots: ledger bookkeeping avg %.4f ms max %.4f ms per tick\n",
+                ring, double(a) * 1e-6, double(m) * 1e-6);
+    std::printf("  [ledger] phase wall time avg: ledger on %.1f us, ledger off %.1f us (difference %.1f us, scheduling noise included)\n",
+                onUs, offUs, onUs - offUs);
+    check(a < 50000, "ledger: bookkeeping overhead ~0 ms per tick (avg < 0.05 ms in tick_profile terms)");
+  }
+}
+
 void testSeqLockStress() {
   const uint64_t kWrites = [] {
     const char* e = std::getenv("LL_SEQLOCK_WRITES");
@@ -8774,7 +8927,7 @@ int runModule(const std::string& m) {
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
   else if (m == "world") { testWorld(); testMarchRay(); }
   else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
-  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();

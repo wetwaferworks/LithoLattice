@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "litholattice/core/seqlock.h"
+#include "litholattice/sim/tick_ledger.h"  // Thread Handshake P4: tick ledger + commit_epoch
 #include "litholattice/sim/tick_rate.h"
 
 namespace litholattice {
@@ -165,6 +166,11 @@ class cTimingHandshakeAuthority {
     // this pool; null = cJobPool::shared(), the single physical backing. Must outlive the
     // authority.
     cJobPool* pool = nullptr;
+    // Thread Handshake P4: the tick ledger (sync/async hashing rule + commit_epoch). On
+    // by default; false skips all ledger work (overhead A/B only). commit_epoch still
+    // advances on every COMMITTED phase either way.
+    bool ledger = true;
+    uint32_t ledgerAsyncCapacity = 4096;  // async records in flight (rounded up to 2^n)
     // One commit hook, run on the authority thread after each successful
     // barrier, before the phase is folded into stats. Group is the runPhase
     // group so a hook can ignore phases that are not its own.
@@ -211,6 +217,13 @@ class cTimingHandshakeAuthority {
   void setCommitFn(std::function<void(uint64_t, uint64_t, uint32_t)> fn);
 
   int workerCount() const { return workerCount_; }
+  // Thread Handshake P4. commitEpoch(): Archie's monotonic commit_epoch, advanced only at
+  // the barrier when a phase reaches COMMITTED (any thread may read it). ledger(): the
+  // tick ledger; WorkFns use cTickLedger::notePayload / asyncBegin, any thread may call
+  // ledger().asyncComplete; hashes/stats are authority-thread (or stopped) reads.
+  uint64_t commitEpoch() const { return ledger_.commitEpoch(); }
+  cTickLedger& ledger() { return ledger_; }
+  const cTickLedger& ledger() const { return ledger_; }
   int phasesPerCycle() const { return cfg_.phasesPerCycle; }
   std::chrono::nanoseconds watchdogCeiling() const { return ceiling_; }
 
@@ -306,7 +319,7 @@ class cTimingHandshakeAuthority {
           durationNs(o.durationNs.load(std::memory_order_relaxed)),
           started(o.started.load(std::memory_order_relaxed)),
           finished(o.finished.load(std::memory_order_relaxed)),
-          offenderLogged(o.offenderLogged) {}
+          offenderLogged(o.offenderLogged), ledgerSeq(o.ledgerSeq) {}
     Comp& operator=(Comp&& o) noexcept {
       desc = o.desc; fn = std::move(o.fn); shard = o.shard;
       startStampNs.store(o.startStampNs.load(std::memory_order_relaxed));
@@ -314,6 +327,7 @@ class cTimingHandshakeAuthority {
       started.store(o.started.load(std::memory_order_relaxed));
       finished.store(o.finished.load(std::memory_order_relaxed));
       offenderLogged = o.offenderLogged;
+      ledgerSeq = o.ledgerSeq;
       return *this;
     }
     Comp(const Comp&) = delete;
@@ -327,6 +341,7 @@ class cTimingHandshakeAuthority {
     std::atomic<bool> started{false};
     std::atomic<bool> finished{false};
     bool offenderLogged = false;  // authority thread only
+    uint32_t ledgerSeq = 0;       // P4: this phase's ledger seq (set before publish)
   };
   bool dueFor(const Comp& c, uint64_t phase, uint64_t cycle, uint32_t group) const;
   // Effective budgets for a runPhase group (A-M2 + sweep C2).
@@ -403,6 +418,7 @@ class cTimingHandshakeAuthority {
   // own direct stats() reads need no lock (same thread as the fold).
   mutable std::mutex statsM_;
   HsFreezeInfo lastFreeze_{};
+  cTickLedger ledger_;  // P4 (constructed from cfg_ in the ctor init list order: after cfg_)
 
   cJobPool* pool_ = nullptr;          // P3: set by start(), cleared by a clean stop()
   std::shared_ptr<ShardJobs> jobs_;   // P3: fresh per start(); queued jobs keep the old one

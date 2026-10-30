@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <cassert>
+#include <optional>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -59,7 +60,8 @@ uint64_t cTimingHandshakeAuthority::nowNs() {
                       .count());
 }
 
-cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg) : cfg_(std::move(cfg)) {
+cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg)
+    : cfg_(std::move(cfg)), ledger_(cfg_.ledgerAsyncCapacity) {
   if (cfg_.phasesPerCycle < 1) cfg_.phasesPerCycle = 1;
   if (cfg_.phasesPerCycle > 64) cfg_.phasesPerCycle = 64;
   ceiling_ = cfg_.watchdogCeiling.count() > 0 ? cfg_.watchdogCeiling : std::chrono::milliseconds(250);
@@ -209,6 +211,10 @@ bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleT
   c.startStampNs.store(t0, std::memory_order_release);
   c.started.store(true, std::memory_order_release);
   bool ok = true;
+  // P4 tick ledger: this job's sync record (its own slot; the barrier hands it over).
+  cTickLedger::SyncSlot* lslot = cfg_.ledger ? &ledger_.slot(c.ledgerSeq) : nullptr;
+  std::optional<cTickLedger::JobScope> lscope;
+  if (lslot) lscope.emplace(ledger_, *lslot, c.ledgerSeq, c.desc.id, t0);
   try {
     // Rate scaling (JD 2026-10-14): sub-pulls execute in ascending order
     // inside the item's phase slot — they are rounds inside the slot and
@@ -239,6 +245,7 @@ bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleT
     ok = false;
   }
   const uint64_t t1 = nowNs();
+  if (lslot) cTickLedger::finishJob(*lslot, t1);
   c.durationNs.store(t1 - t0, std::memory_order_release);
   c.finished.store(true, std::memory_order_release);
   return ok;
@@ -314,6 +321,7 @@ void cTimingHandshakeAuthority::resetAfterFreeze() {
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivals_.store(0, std::memory_order_relaxed);
   }
+  ledger_.abandonOpenTick();  // P4: the frozen tick never committed
   frozen_.store(false, std::memory_order_release);
   publishCv_.notify_all();
 }
@@ -358,6 +366,8 @@ bool cTimingHandshakeAuthority::start() {
   // priority, F57-1); only the Sim Clock keeps a dedicated thread.
   pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
   jobs_ = std::make_shared<ShardJobs>();
+  ledger_.abandonOpenTick();           // P4: a tick left open by a freeze never commits
+  ledger_.reserve(comps_.size());      // P4: ring sized once, from the ledger's tick arena
   logInfo("threads: timing handshake starting %d shards as jobs on a %u-worker pool", workerCount_, pool_->size());  // Q5b census naming
   return true;
 }
@@ -507,11 +517,13 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   std::vector<Comp*> affine;
   std::vector<char> shardActive(size_t(workerCount_), 0);
   uint32_t activeShards = 0;
+  uint32_t ledgerK = 0;  // P4: due jobs get ledger seq 0..K-1 in registration order
   for (auto& c : comps_) {
     c.started.store(false, std::memory_order_relaxed);
     c.finished.store(false, std::memory_order_relaxed);
     c.durationNs.store(0, std::memory_order_relaxed);
     if (!dueFor(c, phase, cycleTick, group)) continue;
+    c.ledgerSeq = ledgerK++;
     if (c.shard >= 0) {
       if (!shardActive[size_t(c.shard)]) { shardActive[size_t(c.shard)] = 1; ++activeShards; }
     } else if (c.desc.threadAffine) {
@@ -520,6 +532,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   }
 
   const bool haveWorkers = running_.load(std::memory_order_acquire) && jobs_ != nullptr && pool_ != nullptr;
+  if (cfg_.ledger) ledger_.openTick(ledgerK);  // ring slots (T_offset + seq) & MASK
   // Affine work runs BEFORE the phase is published: affine items are the
   // phase prologue (e.g. Signal's mark/prep prepares the very work the pull
   // shards then execute), so workers must not see the phase until every
@@ -611,8 +624,24 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // committed.
   convertPendingFailureIfAny();
 
+  // P4 tick ledger: linear (tick, seq) sweep of this tick's sync records plus the async
+  // records due now (WAIT for late ones, bounded by the watchdog ceiling).
+  if (cfg_.ledger && !ledger_.sweep(openStamp + uint64_t(ceiling_.count()))) {
+    HsFreezeInfo info;
+    info.phase = phase; info.cycleTick = cycleTick;
+    info.openStampNs = openStamp; info.tripStampNs = nowNs();
+    info.elapsedNs = info.tripStampNs - openStamp; info.ceilingNs = uint64_t(ceiling_.count());
+    info.componentId = UINT32_MAX;
+    std::snprintf(info.componentName, sizeof(info.componentName), "%s", "tick-ledger async job");
+    lastFreeze_ = info;
+    frozen_.store(true, std::memory_order_release);
+    return false;
+  }
+
   // Commit hook (single, per authority — the game's buffer flip lands here).
   if (cfg_.commitFn) cfg_.commitFn(phase, cycleTick, group);
+  // COMMITTED: commit_epoch advances here and only here (Archie R7).
+  if (cfg_.ledger) ledger_.commit(); else ledger_.commitEpochOnly();
   committedPhase_.store(phase, std::memory_order_release);
   cThreadCensus::noteCommittedTick(cycleTick);  // JD t3349u item 4: shutdown records carry it
 

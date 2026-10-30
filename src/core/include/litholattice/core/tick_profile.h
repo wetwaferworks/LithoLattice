@@ -91,4 +91,22 @@ struct FrameAgg {
   }
 };
 inline FrameAgg& frames() { static FrameAgg a; return a; }
+
+/// Tick ledger overhead (Thread Handshake P4; authority thread only): bookkeeping ns per
+/// tick (open + barrier sweep, async wait excluded), logged once a second.
+struct LedgerAgg {
+  int64_t sum = 0, mx = 0, t0 = 0;
+  uint64_t n = 0, slots = 0, asyncs = 0;
+  void add(uint64_t ns, uint32_t k, uint64_t a) {
+    sum += int64_t(ns); mx = std::max(mx, int64_t(ns)); ++n; slots += k; asyncs += a;
+    const int64_t now = nowNs();
+    if (!t0) t0 = now;
+    if (now - t0 < 1'000'000'000) return;
+    logInfo("tick profile: ledger %llu ticks, %llu sync / %llu async records, overhead avg %.4f ms max %.4f ms per tick",
+            (unsigned long long)n, (unsigned long long)slots, (unsigned long long)asyncs, ms(sum) / double(n), ms(mx));
+    *this = LedgerAgg{};
+    t0 = now;
+  }
+};
+inline LedgerAgg& ledger() { static LedgerAgg a; return a; }
 }  // namespace litholattice::tickprof
