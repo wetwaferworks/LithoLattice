@@ -1343,7 +1343,14 @@ void cConsoleReg::registerBuiltins(bool debugBuild) {
                       return;
                     }
                     std::string err;
-                    if (!r.setKeyBind(argv[1], joinRest(argv), &err)) r.print(err);
+                    // Archie review C3: the command is argv[2..]; joinRest
+                    // (argv[1..]) folded the key name into it (same bug as alias).
+                    std::string cmd;
+                    for (size_t i = 2; i < argv.size(); ++i) {
+                      if (i > 2) cmd += ' ';
+                      cmd += argv[i];
+                    }
+                    if (!r.setKeyBind(argv[1], cmd, &err)) r.print(err);
                   });
 
   registerCommand("unbind", "unbind <key>: removes a key bind", [](cConsoleReg& r, const ConsoleArgs& argv) {

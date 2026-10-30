@@ -11,6 +11,11 @@
 #if defined(__linux__)
 #include <fcntl.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#include <io.h>  // _commit (Archie review C7)
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace litholattice::storage {
@@ -33,9 +38,23 @@ bool fsyncFile(FILE* f, const char* what, std::string* err) {
     if (err) *err = std::string("fsync failed (") + what + "): " + std::strerror(errno);
     return false;
   }
+#elif defined(_WIN32)
+  // Archie review C7 (2026-10-30): fflush only reaches the OS cache; _commit
+  // forces it to disk (as anvil_region.cpp already does).
+  if (::fflush(f) != 0 || ::_commit(::_fileno(f)) != 0) {
+    if (err) *err = std::string("commit failed (") + what + "): " + std::strerror(errno);
+    return false;
+  }
 #else
   if (::fflush(f) != 0) {
     if (err) *err = std::string("flush failed (") + what + ")";
+    return false;
+  }
+#if defined(__APPLE__) && defined(F_FULLFSYNC)
+  if (::fcntl(::fileno(f), F_FULLFSYNC) == 0) return true;  // full device flush
+#endif
+  if (::fsync(::fileno(f)) != 0) {
+    if (err) *err = std::string("fsync failed (") + what + "): " + std::strerror(errno);
     return false;
   }
 #endif
@@ -200,7 +219,9 @@ bool recoverCrashedWrite(const std::filesystem::path& path,
     if (ec)
       return fail("recoverCrashedWrite: cannot restore " + good.string() + " over " +
                   path.string() + ": " + ec.message());
-    FILE* f = ::fopen(path.string().c_str(), "rb");
+    // Archie review C7: opened for update - _commit/FlushFileBuffers need a
+    // writable handle on Windows (a read-only one fails with EBADF).
+    FILE* f = ::fopen(path.string().c_str(), "rb+");
     if (f) {
       std::string why;
       const bool ok = fsyncFile(f, path.string().c_str(), &why);

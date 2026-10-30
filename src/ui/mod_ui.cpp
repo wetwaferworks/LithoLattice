@@ -108,8 +108,19 @@ void cModPanel::arrange(const Theme& theme) {
 
 void cModPanel::paint(Painter& p) const {
   cWidget::paint(p);   // background + border of the "mod_panel" frame treatment
-  paintChildren(p);   // the mod's content, confined below the badge strip
-  paintBadge(p);      // LAST: nothing the mod owns can cover or remove it
+}
+
+// Archie review C2 (2026-10-30): paintTree() runs paint() then
+// paintChildren(), so painting children inside paint() drew them twice and
+// the second pass landed on top of the badge. Children are painted here,
+// once, clipped to the body (a negative margin can't reach the strip), and
+// the badge is painted LAST: nothing the mod owns can cover or remove it.
+void cModPanel::paintChildren(Painter& p) const {
+  {
+    Painter::ClipScope clip(p, body_->rect());
+    cWidget::paintChildren(p);
+  }
+  paintBadge(p);
 }
 
 void cModPanel::paintBadge(Painter& p) const {

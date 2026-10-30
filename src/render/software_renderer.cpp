@@ -340,9 +340,6 @@ class cSwBandPool {
     // no re-entry into the pool.
     if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands_); ++b) fn(b); return; }
     struct InRun { InRun() { tlInRun_ = true; } ~InRun() { tlInRun_ = false; } } inRun;
-    // Serialize whole frames (game view + MCP vision share the pool) and
-    // apply a thread-count change between frames.
-    std::lock_guard<std::mutex> runLock(runM_);
     // Design B Stage 1: a detached frame in flight owns the pool's frame
     // slot; a synchronous frame waits for it (the design's §4.3 rule: vision
     // serialises behind an in-flight detached frame, as it does today via
@@ -351,14 +348,16 @@ class cSwBandPool {
     // executor running a detached body IS the frame owner (tlDetachedBody_):
     // its run() calls skip the wait and the slot release, which stay with
     // runDetached/executorLoop for the body's whole duration.
-    if (!tlDetachedBody_) {
-      { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); frameActive_ = true; }
-    }
-    struct FrameSlot {
-      cSwBandPool& p;
-      bool held;
-      ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
-    } frameSlot{*this, !tlDetachedBody_};
+    // Archie review C1 (2026-10-30): the frame slot is taken BEFORE runM_,
+    // never while holding it. Holding runM_ across the frameFree_ wait
+    // deadlocked against the executor, whose detached body takes runM_ in
+    // its own run() calls while it owns the slot. One lock order now:
+    // frame slot -> runM_ (run, runDetached, setDetachedMode).
+    if (!tlDetachedBody_) acquireFrameSlot();
+    FrameSlot frameSlot{*this, !tlDetachedBody_};
+    // Serialize whole frames (game view + MCP vision share the pool) and
+    // apply a thread-count change between frames.
+    std::lock_guard<std::mutex> runLock(runM_);
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
     // Design B Stage 1: the executor cannot restart the pool it belongs to
     // (stopAll() would self-join); runDetached applies the change between
@@ -405,8 +404,9 @@ class cSwBandPool {
   // caller-runs-band-0 over the band workers and serialises against an
   // in-flight detached frame through frameActive_ (see run()).
   void setDetachedMode(bool on) {
+    acquireFrameSlot();  // Archie review C1: slot first, then runM_
+    FrameSlot frameSlot{*this, true};
     std::lock_guard<std::mutex> runLock(runM_);
-    { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); }
     if (detachedMode_ == on) return;
     detachedMode_ = on;
     stopAll();
@@ -421,14 +421,20 @@ class cSwBandPool {
   // there is no executor: fn runs inline on the caller and onDone fires
   // before return (the Stage 0 shape), so callers stay correct.
   void runDetached(std::function<void()> fn, std::function<void(std::exception_ptr)> onDone) {
+    acquireFrameSlot();  // Archie review C1: slot first, then runM_
     std::unique_lock<std::mutex> runLock(runM_);
-    { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); frameActive_ = true; }
     // Thread-count changes apply between frames, as in run().
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
     if (want != bands_) { stopAll(); start(want); }
     if (!detachedMode_) {
+      // Archie review C1: the inline body runs as the frame owner, exactly
+      // like the executor: runM_ released, tlDetachedBody_ set, so its own
+      // run() calls neither re-lock runM_ under us nor wait on the slot.
+      runLock.unlock();
       std::exception_ptr err;
+      tlDetachedBody_ = true;
       try { fn(); } catch (...) { err = std::current_exception(); }
+      tlDetachedBody_ = false;
       { std::lock_guard<std::mutex> l(m_); frameActive_ = false; }
       frameFree_.notify_all();
       if (onDone) onDone(err);
@@ -440,6 +446,17 @@ class cSwBandPool {
   }
   ~cSwBandPool() { stopAll(); }
  private:
+  // Archie review C1: frame-slot helpers (the slot is a flag under m_).
+  void acquireFrameSlot() {
+    std::unique_lock<std::mutex> l(m_);
+    frameFree_.wait(l, [&] { return !frameActive_; });
+    frameActive_ = true;
+  }
+  struct FrameSlot {
+    cSwBandPool& p;
+    bool held;
+    ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
+  };
   cSwBandPool() {
     std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());  // Cortana 2026-10-15 1455
     start(swResolveThreads(g_swRequestedThreads.load()));
