@@ -1,6 +1,13 @@
 // IUnifiedMesher refactor step 4 (UML_UNIFIED_MESHER_2026-10-30.md): meshSubChunkPass as a
 // pipeline of stages that run the existing code in the same order. Moved verbatim, no output
 // change (Gate G anchors + LL_CANON_VERIFY at every sub-step). Private to the render library.
+//
+// Step 4d: stage order is cell pass, flush, packedFallback, canonLods, capGuard, perMeshParams.
+// The cell pass (the per-voxel loop: the jobDef table, opaque mask, foliage thinning, the
+// MeshWriter emit lambdas and greedy parking) stays inline in meshSubChunkPass as the first
+// stage. Its lambdas share about 20 locals by reference per voxel, so extracting it would mean
+// a context object on the hottest path with no gain in testability. The stage boundary is
+// where the pass builds cMeshPipeline: everything after the loop is a member here.
 #pragma once
 #include <cstddef>
 #include <memory>
