@@ -1,4 +1,5 @@
 // Cortana 2026-10-15 0825: CHUNK-STALL postLock (SIM-H1 tried 1010, reverted 1035)
+#include <unordered_map>
 #include "litholattice/sim/sim_thread.h"
 #include "litholattice/sim/control_stream.h"
 #include <cstdio>
@@ -305,6 +306,14 @@ void cSimThread::flushDirty() {
   uint32_t batchN = 0;
   for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) ++batchN; }
   const uint64_t batchId = ++flushBatch_;
+  if (cowColumnsEnabled()) {  // render pipeline M5: publish every dirty sub once (per column), then pin
+    std::unordered_map<uint64_t, uint64_t> masks;
+    for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) masks[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy; }
+    std::vector<std::pair<uint64_t, uint64_t>> ordered(masks.begin(), masks.end());
+    std::sort(ordered.begin(), ordered.end());
+    for (const auto& [key, mask] : ordered)
+      chunks_.cowTable().publish(chunks_, blocks_, int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)), mask);
+  }
   for (int64_t k : dirtySubs_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
@@ -320,13 +329,14 @@ void cSimThread::flushDirty() {
       }
     }
     if (!buf) buf = std::make_unique<MeshInput>();
-    snapshotForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf,
-                           MeshEdge::Clamp);  // P8: clamp-to-edge at unloaded borders
+    pinForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf,
+                      MeshEdge::Clamp, 0);  // P8 clamp-to-edge; M5: pinned CoW, worker gathers
     buf->batch = batchId; buf->batchSize = batchN;  // Cortana 2026-10-15 1350
     MeshInput* raw = buf.release();
     const std::shared_ptr<MeshInputPool> pool = meshPool_;
     submit_(std::shared_ptr<MeshInput>(raw, [pool](MeshInput* p) {
       std::unique_ptr<MeshInput> u(p);
+      u->pin.reset();  // M5: never retain pinned snapshots in the pool
       std::lock_guard l(pool->m);
       if (pool->free.size() < 64) pool->free.push_back(std::move(u));
       // else: pool full, drop it (bounds retained memory)

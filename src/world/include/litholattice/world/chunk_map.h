@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <cassert>
 #include "litholattice/world/chunk.h"
+#include "litholattice/world/column_table.h"  // render pipeline M5
 
 namespace litholattice {
 
@@ -110,6 +111,7 @@ class ChunkMap {
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;
+    cow_->drop(cx, cz);  // M5: a replaced column is republished on its next pin
     columns_[ChunkKey::make(cx, cz)] = std::move(col);
     if (editListener_) editListener_(cx, cz);
   }
@@ -120,6 +122,7 @@ class ChunkMap {
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
     const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;
+    cow_->drop(cx, cz);  // M5
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
   }
@@ -131,17 +134,22 @@ class ChunkMap {
     if (it == columns_.end()) return nullptr;
     std::unique_ptr<ChunkColumn> col = std::move(it->second);
     columns_.erase(it);
+    cow_->drop(cx, cz);  // M5
     if (editListener_) editListener_(cx, cz);
     return col;
   }
   bool contains(int cx, int cz) const { return columns_.find(ChunkKey::make(cx, cz)) != columns_.end(); }
   auto& columns() { return columns_; }
   const auto& columns() const { return columns_; }
+  /// Render pipeline M5: published copy-on-write column snapshots for mesh workers
+  /// (column_table.h). Mutated only by the map's current owner thread (internally locked).
+  ColumnTable& cowTable() const { return *cow_; }
 
  private:
   std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> columns_;
   const cBlockReg* registry_ = nullptr;
   std::function<void(int cx, int cz)> editListener_;
+  std::unique_ptr<ColumnTable> cow_ = std::make_unique<ColumnTable>();  // M5
 };
 
 }  // namespace litholattice

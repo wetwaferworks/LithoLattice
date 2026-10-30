@@ -352,8 +352,14 @@ struct ChunkStateWord {
 };
 static_assert(std::atomic<uint64_t>::is_always_lock_free, "chunk state word must be lock-free");
 
+inline uint64_t nextColumnInstanceId() {  // render pipeline M5: CoW ColumnTable staleness key
+  static std::atomic<uint64_t> n{0};
+  return n.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 struct ChunkColumn {
   int cx = 0, cz = 0;
+  uint64_t instanceId = nextColumnInstanceId();  ///< M5: unique per column object (evict + reload = new id)
   mutable ChunkStateWord state;  ///< P5 chunk handshake word (atomic bookkeeping; mutable so const readers can advance it)
   // Column eviction bookkeeping (A2 / B-M1, 2026-10-13): `dirty` is set by
   // ChunkMap::set/setState on every mutation of a RESIDENT column, and

@@ -17,6 +17,8 @@ inline int meshPadIndex(int x, int y, int z) { return (y * kMeshPad + z) * kMesh
 /// Air = legacy (tools, captures, tests); Clamp = the sub-chunk's own edge cell.
 enum class MeshEdge : uint8_t { Air = 0, Clamp = 1 };
 
+struct MeshPin;  // column_table.h (render pipeline M5)
+
 struct MeshInput {
   int cx = 0, sy = 0, cz = 0;
   uint32_t epoch = 0;   // dimension load generation (stale results are dropped)
@@ -40,6 +42,9 @@ struct MeshInput {
   // 2026-10-25 (JD, Posts): text of this sub-chunk's own cells (SubChunk::index -> text), copied
   // at snapshot time like the palette. Empty for almost every sub-chunk.
   std::vector<std::pair<uint16_t, std::string>> text;
+  // Render pipeline M5: when set, id/st/mat/matPalette/text are NOT filled yet; the mesh
+  // worker fills them from the pinned CoW column snapshots (gatherPinned) and clears this.
+  std::shared_ptr<const MeshPin> pin;
   const std::string* textAt(int x, int y, int z) const {
     const uint16_t k = uint16_t(SubChunk::index(x, y, z));
     for (const auto& t : text) if (t.first == k) return &t.second;
@@ -60,5 +65,16 @@ void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int
 std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const cBlockReg& reg, int cx, int sy,
                                               int cz, uint32_t epoch, uint64_t seq,
                                               BlockId belowWorld = kAir, MeshEdge edge = MeshEdge::Air);
+
+/// Render pipeline M5 (Archie step 1): owner-thread side. Publishes the own column's subs in
+/// `republishOwnMask` (bit sy), pins the 3x3 neighborhood and sets out.pin (header fields set,
+/// voxel arrays left for the worker). LL_LEGACY_SNAPSHOT=1: falls back to snapshotForMeshingInto.
+/// LL_COW_VERIFY=1 (always in Debug/DebugOpt) compares the gather against the legacy snapshot.
+void pinForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz, uint32_t epoch, uint64_t seq,
+                       BlockId belowWorld, MeshInput& out, MeshEdge edge, uint64_t republishOwnMask);
+/// Worker side: fill a pinned MeshInput from its pins (no-op when out.pin is null).
+void gatherPinned(MeshInput& out);
+/// Voxel arrays, palette and text equal (test / verify helper).
+bool sameMeshInput(const MeshInput& a, const MeshInput& b);
 
 }  // namespace litholattice
