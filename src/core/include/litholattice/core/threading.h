@@ -142,8 +142,12 @@ class cJobPool {
   /// (On a view this goes straight to the backing pool, outside the view's counters.)
   void submitUrgent(std::function<void()> job) {
     if (backing_) { backing_->submitUrgent(std::move(job)); return; }
-    { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; urgent_.push_back(std::move(job)); }
-    urgentCount_.fetch_add(1, std::memory_order_release);
+    {
+      locktiming::TimedGuard l(m_, locktiming::kJobPool);
+      ++inFlight_;
+      urgent_.push_back(std::move(job));
+      urgentCount_.fetch_add(1, std::memory_order_release);  // H3b: under m_, before a worker can pop it
+    }
     cv_.notify_one();
   }
   /// P4: one stage-bounded slice of background work on lent capacity (see the class note).
@@ -154,6 +158,8 @@ class cJobPool {
   }
   /// True while urgent (shard) jobs wait for a worker. Cooperative work (the cJobSystem
   /// facade's pumps) checks it at every job boundary and hands its worker back.
+  /// Test only: raw urgent counter (must never go negative).
+  int urgentCountForTest() const { return urgentCount_.load(std::memory_order_acquire); }
   bool urgentPending() const {
     return backing_ ? backing_->urgentPending() : urgentCount_.load(std::memory_order_acquire) > 0;
   }

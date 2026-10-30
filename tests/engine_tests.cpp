@@ -456,6 +456,27 @@ void testArchieHandshakeH1H3() {
     std::printf("  tick ledger H1d: scan window after 200 ticks = %llu\n", (unsigned long long)c.asyncScanWindow());
     check(c.asyncScanWindow() <= 4, "tick ledger H1d: a never-completed cancelled record does not grow the sweep window");
   }
+  {  // H3b: urgentCount_ must never be observed negative.
+    int minSeen = 0;
+    for (int round = 0; round < 4 && minSeen >= 0; ++round) {
+      litholattice::cJobPool pool(4);
+      std::atomic<bool> done{false};
+      std::atomic<int> mn{0};
+      std::thread smp([&] {
+        while (!done.load(std::memory_order_relaxed)) {
+          const int v = pool.urgentCountForTest();
+          if (v < mn.load(std::memory_order_relaxed)) mn.store(v, std::memory_order_relaxed);
+        }
+      });
+      for (int i = 0; i < 100000; ++i) pool.submitUrgent([] {});
+      pool.waitIdle();
+      done.store(true);
+      smp.join();
+      if (mn.load() < minSeen) minSeen = mn.load();
+    }
+    std::printf("  job pool H3b: min urgentCount observed = %d\n", minSeen);
+    check(minSeen >= 0, "job pool H3b: urgent counter never goes negative");
+  }
 }
 
 void testJobSystem() {
