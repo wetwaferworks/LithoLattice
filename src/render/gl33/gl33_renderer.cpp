@@ -26,6 +26,7 @@ extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) in
 #include "gl_loader.h"
 #include "gl_program.h"
 #include "gl_texture_array.h"
+#include "GlTboSlabPool.h"  // fix (c): paged canonical TBO
 #include "litholattice/assets/shader_library.h"
 #include "litholattice/core/log.h"
 #include "litholattice/render/block_materials.h"
@@ -491,7 +492,9 @@ class cGL33Renderer final : public IRenderer {
       std::optional<cGlProgram> cp = cvs ? cGlProgram::build(*cvs, fs, &clog) : std::nullopt;
       if (cp) {
         prog_ = std::move(*cp);
-        canonOn_ = true;
+        const char* sl = std::getenv("LL_GL_CANON_SLABS");
+        canonOn_ = canonPool_.init(sl ? std::atoi(sl) : 2);  // fix (c): 64 MiB slabs, preallocated
+        if (canonOn_ && !canonVao_) glGenVertexArrays(1, &canonVao_);
         uCanonMode_ = prog_.uniform("uCanonMode"); uCanonBase_ = prog_.uniform("uCanonBase");
         uCanonFb_ = prog_.uniform("uCanonFb"); uCanonLod_ = prog_.uniform("uCanonLod");
         prog_.use();
@@ -679,68 +682,20 @@ class cGL33Renderer final : public IRenderer {
     }
     erase(key);
     const size_t n = ps.texels.size() / 4;
-    auto first = canonAlloc(n);
-    if (!first) { canonGrow(n); first = canonAlloc(n); }
-    if (!first) return false;
+    const auto range = canonPool_.alloc(n);
+    if (!range) return false;
     Gpu& g = meshes_[key];
-    g.canon = true; g.cFirst = *first; g.cCount = n; g.cFb = GLint(ps.fbQuads);
+    g.canon = true; g.cSlab = range->slab; g.cFirst = range->first; g.cCount = n; g.cFb = GLint(ps.fbQuads);
     g.cVerts = GLsizei(size_t(ps.fbQuads + ps.quads) * 6);
     g.cx = m.cx; g.sy = m.sy; g.cz = m.cz;
     for (int i = 0; i < 4; ++i) { g.pulseP0[i] = m.pulseP0[i]; g.pulseP1[i] = m.pulseP1[i]; g.traceP0[i] = m.traceP0[i]; g.traceP1[i] = m.traceP1[i]; }
-    glBindBuffer(GL_TEXTURE_BUFFER, canonBuf_);
-    glBufferSubData(GL_TEXTURE_BUFFER, GLintptr(g.cFirst * 16), GLsizeiptr(n * 16), ps.texels.data());
+    canonPool_.upload(*range, ps.texels.data(), n);
     canonTexels_ += n;
     ++canonMeshes_;
     return true;
   }
-  std::optional<size_t> canonAlloc(size_t n) {
-    for (auto it = canonFree_.begin(); it != canonFree_.end(); ++it) {
-      if (it->second < n) continue;
-      const size_t first = it->first, rest = it->second - n;
-      canonFree_.erase(it);
-      if (rest) canonFree_.emplace(first + n, rest);
-      return first;
-    }
-    return std::nullopt;
-  }
-  void canonRelease(size_t first, size_t n) {
-    if (!n) return;
-    auto it = canonFree_.emplace(first, n).first;
-    if (const auto next = std::next(it); next != canonFree_.end() && it->first + it->second == next->first) {
-      it->second += next->second; canonFree_.erase(next);
-    }
-    if (it != canonFree_.begin())
-      if (const auto prev = std::prev(it); prev->first + prev->second == it->first) { prev->second += it->second; canonFree_.erase(it); }
-  }
-  void canonGrow(size_t minTexels) {
-    const size_t cap = std::max(canonCap_ ? canonCap_ * 2 : size_t(1) << 20, canonCap_ + minTexels);
-    GLint maxTexels = 0;
-    glGetIntegerv(0x8C2B /* GL_MAX_TEXTURE_BUFFER_SIZE */, &maxTexels);
-    if (maxTexels > 0 && cap > size_t(maxTexels)) { logError("gl33: canonical TBO would exceed GL_MAX_TEXTURE_BUFFER_SIZE (%d)", maxTexels); return; }
-    logInfo("gl33: canonical TBO grow: %zu -> %zu texels (16 B each)", canonCap_, cap);
-    GLuint buf = 0;
-    glGenBuffers(1, &buf);
-    glBindBuffer(GL_COPY_WRITE_BUFFER, buf);
-    glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(cap * 16), nullptr, GL_STATIC_DRAW);
-    if (canonBuf_) {
-      glBindBuffer(GL_COPY_READ_BUFFER, canonBuf_);
-      glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, GLsizeiptr(canonCap_ * 16));
-      glDeleteBuffers(1, &canonBuf_);
-    }
-    canonRelease(canonCap_, cap - canonCap_);
-    canonBuf_ = buf;
-    canonCap_ = cap;
-    if (!canonTex_) glGenTextures(1, &canonTex_);
-    glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
-    glBindTexture(GL_TEXTURE_BUFFER, canonTex_);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, canonBuf_);
-    glActiveTexture(GL_TEXTURE0);
-    if (!canonVao_) glGenVertexArrays(1, &canonVao_);
-  }
-
   void clearChunkMeshes() override {
-    canonFree_.clear();
-    if (canonCap_) canonFree_.emplace(size_t(0), canonCap_);
+    canonPool_.reset();
     canonTexels_ = 0;
     for (auto& [k, g] : meshes_) if (g.vao) { glDeleteBuffers(1, &g.vbo); glDeleteVertexArrays(1, &g.vao); }
     meshes_.clear();
@@ -780,11 +735,7 @@ class cGL33Renderer final : public IRenderer {
     glUniform1f(uGroundTraceTime_, p.groundTraceTimeSec);  // wafer ground traces: same sim clock, independent toggle
     glUniform1f(uGroundTraceOn_, p.groundTraceOn ? 1.f : 0.f);
     textures_.bind();
-    if (canonOn_ && canonTex_) {
-      glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
-      glBindTexture(GL_TEXTURE_BUFFER, canonTex_);
-      glActiveTexture(GL_TEXTURE0);
-    }
+    canonBoundSlab_ = ~uint32_t(0);  // fix (c): the slab TBO is bound per draw, on change
     stats_.drawn = 0;
     // Fix 2026-10-11 (audit): was classic meshes only; count PBR meshes too.
     stats_.meshes = uint32_t(meshes_.size() + pbrMeshes_.size());
@@ -892,6 +843,12 @@ class cGL33Renderer final : public IRenderer {
       effectPrimed = true;
       if (g.canon) {
         if (boundVao != canonVao_) { glBindVertexArray(canonVao_); boundVao = canonVao_; }
+        if (canonBoundSlab_ != g.cSlab) {
+          canonBoundSlab_ = g.cSlab;
+          glActiveTexture(GL_TEXTURE0 + kCanonTexUnit);
+          glBindTexture(GL_TEXTURE_BUFFER, canonPool_.texture(g.cSlab));
+          glActiveTexture(GL_TEXTURE0);
+        }
         glUniform1i(uCanonBase_, GLint(g.cFirst));
         glUniform1i(uCanonFb_, g.cFb);
         glUniform1i(uCanonLod_, 0);
@@ -1106,14 +1063,14 @@ class cGL33Renderer final : public IRenderer {
                  // were built for — rebuilt whenever the vertex range moves.
                  size_t indexFirst = 0; size_t indexBuiltFirst = ~size_t(0); GLsizei indexBuiltCount = 0;
                  // M12 canonical pull mesh (LL_GL_CANON): texel range in the canonical TBO.
-                 bool canon = false; size_t cFirst = 0, cCount = 0; GLint cFb = 0; GLsizei cVerts = 0; };
+                 bool canon = false; uint32_t cSlab = 0; size_t cFirst = 0, cCount = 0; GLint cFb = 0; GLsizei cVerts = 0; };
   // PBR (BinaryQuad) meshes: one VAO+VBO each (never in the arena - see uploadPbrChunkMesh).
   struct PbrGpu { GLuint vao = 0, vbo = 0; GLsizei indexCount = 0; int cx = 0, sy = 0, cz = 0; };
   void erase(int64_t key) {
     auto it = meshes_.find(key);
     if (it == meshes_.end()) return;
     if (it->second.canon) {
-      canonRelease(it->second.cFirst, it->second.cCount);
+      canonPool_.release({it->second.cSlab, it->second.cFirst}, it->second.cCount);
       canonTexels_ -= it->second.cCount;
       meshes_.erase(it);
       return;
@@ -1377,10 +1334,11 @@ class cGL33Renderer final : public IRenderer {
   static constexpr GLint kCanonTexUnit = 5;
   bool canonOn_ = false;
   int canonModeSet_ = 0;
-  GLuint canonBuf_ = 0, canonTex_ = 0, canonVao_ = 0;
-  size_t canonCap_ = 0, canonTexels_ = 0;
+  GLuint canonVao_ = 0;
+  size_t canonTexels_ = 0;
+  gl33::cGlTboSlabPool canonPool_;  // fix (c): paged 64 MiB slabs (was one doubling buffer)
+  uint32_t canonBoundSlab_ = ~uint32_t(0);
   uint64_t canonMeshes_ = 0, canonRejects_ = 0;
-  std::map<size_t, size_t> canonFree_;  // first texel -> count
   GLint uCanonMode_ = -1, uCanonBase_ = -1, uCanonFb_ = -1, uCanonLod_ = -1;
   static constexpr GLint kPbrMatTexUnit = 2;  // material table texture unit (0/1 are classic)
   GLint uPbrVP_ = -1, uPbrOffset_ = -1, uPbrCam_ = -1, uPbrMat_ = -1;
