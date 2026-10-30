@@ -8721,6 +8721,17 @@ void testChunkIngress() {
     check(ok, "P5 MPSC ingress: every item exactly once (ring + overflow)");
     std::printf("  ingress overflow pushes: %llu of %llu\n", (unsigned long long)in.overflowTotal(), (unsigned long long)(kP * kPer));
   }
+  {  // paused render pipeline: the ingress queues far past its ring (no pops), counts bytes, drops nothing
+    struct VecBytes { size_t operator()(const std::vector<uint8_t>& v) const { return v.size(); } };
+    cIngress<std::vector<uint8_t>, VecBytes> in(16);
+    for (int i = 0; i < 1000; ++i) in.push(std::vector<uint8_t>(size_t(100 + i % 7)));
+    size_t expect = 0;
+    for (int i = 0; i < 1000; ++i) expect += size_t(100 + i % 7);
+    check(in.queuedBytes() == expect, "P5 render ingress: queued bytes tracked across ring + overflow while not popped");
+    std::vector<std::vector<uint8_t>> got;
+    in.drainInto(got);
+    check(got.size() == 1000 && in.queuedBytes() == 0, "P5 render ingress: catch-up drain returns every item, bytes back to 0");
+  }
   {
     cSimPromotionBudget b;
     check(b.open(100) == 4, "P5 pop budget: first barrier seeds 4");

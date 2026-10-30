@@ -122,12 +122,22 @@ class cMpscRing {
   alignas(64) size_t deq_ = 0;
 };
 
+/// Default ingress weigher: items carry no byte weight.
+struct IngressNoWeight {
+  template <class T>
+  size_t operator()(const T&) const { return 0; }
+};
+
 /// MPSC ingress: lock-free ring, lossless overflow. Same shape as cHandoffQueue.
-template <class T>
+/// `W` weighs each item in bytes; queuedBytes() is the live total (pushed, not
+/// yet drained), which producers' owners use for backpressure - the ingress
+/// itself never refuses or drops an item.
+template <class T, class W = IngressNoWeight>
 class cIngress {
  public:
   explicit cIngress(size_t capacity = 1024) : ring_(capacity) {}
   void push(T v) {
+    bytes_.fetch_add(W{}(v), std::memory_order_relaxed);
     if (ring_.tryPush(std::move(v))) return;
     std::lock_guard<std::mutex> l(m_);
     overflow_.push_back(std::move(v));
@@ -138,14 +148,17 @@ class cIngress {
   /// not FIFO (consumers coalesce by key/seq; nothing relies on arrival order).
   void drainInto(std::vector<T>& out) {
     T v{};
-    while (ring_.tryPop(v)) out.push_back(std::move(v));
-    if (overflowN_.load(std::memory_order_acquire) == 0) return;
+    size_t drained = 0;
+    while (ring_.tryPop(v)) { drained += W{}(v); out.push_back(std::move(v)); }
+    if (overflowN_.load(std::memory_order_acquire) == 0) { bytes_.fetch_sub(drained, std::memory_order_relaxed); return; }
     std::lock_guard<std::mutex> l(m_);
-    for (auto& o : overflow_) out.push_back(std::move(o));
+    for (auto& o : overflow_) { drained += W{}(o); out.push_back(std::move(o)); }
+    bytes_.fetch_sub(drained, std::memory_order_relaxed);
     overflowN_.fetch_sub(overflow_.size(), std::memory_order_release);
     overflow_.clear();
   }
   uint64_t overflowTotal() const { return overflowTotal_.load(std::memory_order_relaxed); }
+  size_t queuedBytes() const { return bytes_.load(std::memory_order_relaxed); }
 
  private:
   cMpscRing<T> ring_;
@@ -153,6 +166,7 @@ class cIngress {
   std::vector<T> overflow_;
   std::atomic<size_t> overflowN_{0};
   std::atomic<uint64_t> overflowTotal_{0};
+  std::atomic<size_t> bytes_{0};
 };
 
 /// Sim pop budget (R7): kPerTick promotions per sim tick stepped, banked to kMaxBank.
