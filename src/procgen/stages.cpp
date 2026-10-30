@@ -782,7 +782,7 @@ void cRuinsCarver::carve(StageContext& ctx) const {
     }
     int x = sx, z = sz, stepsUntilTurn = rng.range(3, 8);
     for (int i = 0; i < len; ++i) {
-      if (rng.uniform() >= s_.gapChance && tryPlace(x, sz, sy, s_.trace, true)) {
+      if (rng.uniform() >= s_.gapChance && tryPlace(x, z, sy, s_.trace, true)) {
         const std::array<int, 3> p{x, sy, z};
         if (placed.empty() || placed.back() != p) placed.push_back(p);
       }
