@@ -14,6 +14,7 @@
 #include <vector>
 #include "litholattice/render/cpu_texture_array.h"
 #include "litholattice/render/SwDecodeCache.h"
+#include "litholattice/render/SwCanonStore.h"  // refactor step 3b
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/overlay_geometry.h"
 #include "litholattice/render/pbr_quad_mesh.h"
@@ -309,11 +310,11 @@ class cSoftwareRenderer : public IRenderer {
   // a camera ring crossing re-decodes at the new lod (store-owned: drain/renderFrame only).
   // M10: skirtMask = the draw-side skirt directions decoded (canonSkirtMask); pend = the
   // lod being selected this pass (neighbour masks read it).
-  struct SwCanonSrc { ChunkMesh meta; int lod = -1; int pend = 0; uint8_t skirtMask = 0xFF; };
+  using SwCanonSrc = cSwCanonStore::Entry;  // refactor step 3b: the store is an IMeshUploader
   uint8_t canonSkirtMaskFor(int cx, int sy, int cz, int lod) const;
   bool redecodeCanon(SwCanonSrc& src, int lod);
   void refreshCanonNeighbours(int cx, int sy, int cz);
-  std::map<int64_t, SwCanonSrc> canonSrc_;
+  cSwCanonStore canonStore_;  ///< step 3b: was std::map<int64_t, SwCanonSrc> canonSrc_
   int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
   bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
   void reselectCanonLods(const Vec3& cam);

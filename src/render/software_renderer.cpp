@@ -1796,8 +1796,7 @@ int cSoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
 
 // Mesh key identical to the GL/Vulkan backends.
 static int64_t swMeshKey(int cx, int sy, int cz) {
-  return int64_t((uint64_t(uint32_t(cx)) << 40) ^ (uint64_t(uint32_t(sy)) << 32) ^
-                 uint64_t(uint32_t(cz)));
+  return cSwCanonStore::keyOf(cx, sy, cz);  // step 3b: one key formula
 }
 
 // Ginny (Argon) 2026-10-16 Pass 2 step 3: classify each quad into a face-direction bucket
@@ -1912,15 +1911,15 @@ bool cSoftwareRenderer::canonIngestEnabled() {
   return o < 0 ? v : o == 1;
 }
 int cSoftwareRenderer::canonLodOf(int cx, int sy, int cz) const {
-  auto it = canonSrc_.find(swMeshKey(cx, sy, cz));
-  return it == canonSrc_.end() ? -1 : it->second.lod;
+  auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
+  return it == canonStore_.entries().end() ? -1 : it->second.lod;
 }
 static int swCanonDist(int cx, int cz, int camCx, int camCz) {
   return std::max(std::abs(cx - camCx), std::abs(cz - camCz));
 }
 int cSoftwareRenderer::canonSkirtMaskOf(int cx, int sy, int cz) const {
-  auto it = canonSrc_.find(swMeshKey(cx, sy, cz));
-  return it == canonSrc_.end() ? -1 : int(it->second.skirtMask);
+  auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
+  return it == canonStore_.entries().end() ? -1 : int(it->second.skirtMask);
 }
 // M10 (Archie ruling 2): skirts only toward neighbours drawn at another LOD.
 uint8_t cSoftwareRenderer::canonSkirtMaskFor(int cx, int sy, int cz, int lod) const {
@@ -1928,8 +1927,8 @@ uint8_t cSoftwareRenderer::canonSkirtMaskFor(int cx, int sy, int cz, int lod) co
   int nbr[6];
   for (int f = 0; f < 6; ++f) {
     const int64_t k = swMeshKey(cx + kD[f][0], sy + kD[f][1], cz + kD[f][2]);
-    auto it = canonSrc_.find(k);
-    nbr[f] = it != canonSrc_.end() ? it->second.pend : meshes_.count(k) ? -1 : -2;
+    auto it = canonStore_.entries().find(k);
+    nbr[f] = it != canonStore_.entries().end() ? it->second.pend : meshes_.count(k) ? -1 : -2;
   }
   return canonSkirtMask(lod, nbr);
 }
@@ -1951,7 +1950,7 @@ bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
 }
 // Fix (e): an evicted canonical chunk (lod -1) that is in view decodes again at its pending lod.
 void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
-  for (auto& [key, src] : canonSrc_) {
+  for (auto& [key, src] : canonStore_.entries()) {
     if (src.lod >= 0) continue;
     const Vec3 mn{src.meta.cx * 16.f, src.meta.sy * 16.f, src.meta.cz * 16.f};
     if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) continue;
@@ -1963,8 +1962,8 @@ void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
 void cSoftwareRenderer::evictColdDecodes() {
   decodeCache_.collectEvictions(decodeFrame_, decodeEvictScratch_);
   for (int64_t key : decodeEvictScratch_) {
-    auto it = canonSrc_.find(key);
-    if (it == canonSrc_.end()) { decodeCache_.onErased(key); continue; }
+    auto it = canonStore_.entries().find(key);
+    if (it == canonStore_.entries().end()) { decodeCache_.onErased(key); continue; }
     ++storeGen_;
     meshes_.erase(key);
     it->second.lod = -1;
@@ -1975,47 +1974,42 @@ void cSoftwareRenderer::evictColdDecodes() {
 void cSoftwareRenderer::refreshCanonNeighbours(int cx, int sy, int cz) {
   static const int kD[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};  // same column = same lod: no Y seam
   for (const auto& d : kD) {
-    auto it = canonSrc_.find(swMeshKey(cx + d[0], sy, cz + d[1]));
-    if (it != canonSrc_.end() && it->second.lod >= 0) redecodeCanon(it->second, it->second.lod);
+    auto it = canonStore_.entries().find(swMeshKey(cx + d[0], sy, cz + d[1]));
+    if (it != canonStore_.entries().end() && it->second.lod >= 0) redecodeCanon(it->second, it->second.lod);
   }
 }
 void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
   const int ccx = int(std::floor(cam.x / 16.f)), ccz = int(std::floor(cam.z / 16.f));
   if (ccx == canonCamCx_ && ccz == canonCamCz_) return;
   canonCamCx_ = ccx; canonCamCz_ = ccz;
-  if (canonSrc_.empty()) return;
+  if (canonStore_.entries().empty()) return;
   int r1 = 0, r2 = 0;
   canonLodRings(r1, r2);
   // Two passes (M10): pick every lod first so the skirt masks see the new neighbours.
-  for (auto& [key, src] : canonSrc_)
+  for (auto& [key, src] : canonStore_.entries())
     src.pend = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
-  for (auto& [key, src] : canonSrc_)
+  for (auto& [key, src] : canonStore_.entries())
     if (src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
 }
 
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
   if (canonIngestEnabled() && !canonInner_) {
-    if (mesh.verts.empty() || !mesh.canonical || mesh.canonical->magic != canon::kMeshMagic) {
-      if (canonSrc_.erase(key) || mesh.verts.empty()) refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);
+    if (!canonStore_.prepare(mesh)) {  // step 3b: no decodable canonical payload
+      if (canonStore_.entries().erase(key) || mesh.verts.empty()) refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);
     } else {
       int r1 = 0, r2 = 0;
       canonLodRings(r1, r2);
-      SwCanonSrc src;
-      src.meta.cx = mesh.cx; src.meta.sy = mesh.sy; src.meta.cz = mesh.cz;
-      {
-        ChunkMesh tmp = mesh;  // copy the per-chunk params, drop the legacy stream
-        tmp.verts = {};
-        src.meta = std::move(tmp);
-      }
       const int want = canonCamCx_ == (1 << 30) ? 0 : selectCanonLod(swCanonDist(mesh.cx, mesh.cz, canonCamCx_, canonCamCz_), -1, r1, r2);
-      src.lod = -1; src.pend = want;
-      SwCanonSrc& st = canonSrc_[key] = std::move(src);
+      MeshPlacement placed;
+      canonStore_.commit(placed);  // stores the staged entry at key (fresh: lod -1, skirtMask 0xFF)
+      SwCanonSrc& st = canonStore_.entries()[key];
+      st.lod = -1; st.pend = want;
       if (redecodeCanon(st, want) || (st.pend = 0, redecodeCanon(st, 0))) {
         refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);  // M10: their seams may have changed
         return;
       }
-      canonSrc_.erase(key);  // nothing decodable: fall through to the legacy stream
+      canonStore_.entries().erase(key);  // nothing decodable: fall through to the legacy stream
     }
   }
   if (!canonInner_) decodeCache_.onErased(key);  // fix (e): a legacy store or removal is not a cached decode
@@ -2227,7 +2221,7 @@ void cSoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts)
 
 void cSoftwareRenderer::clearChunkMeshes() {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
-  canonSrc_.clear();
+  canonStore_.clear();
   decodeCache_.clear();  // fix (e)
   meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
   pbrMeshes_.clear();
@@ -2953,7 +2947,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // velocity state; decide() then culls per mesh exactly like GL/VK. All
   // prototypes default off, so decide() is the plain margin test.
   cullProto_.beginFrame(p.viewProj, p.yawRad, p.pitchRad, p.timeSec);
-  const bool canonCache = canonIngestEnabled() && !canonSrc_.empty();
+  const bool canonCache = canonIngestEnabled() && !canonStore_.entries().empty();
   if (canonCache) { ++decodeFrame_; redecodeEvictedInView(p); }  // fix (e)
   twinkleMode_ = p.leafTwinkle;  // 2026-10-16 crystal twinkle: render clock only
   shimmerTime_ = float(std::fmod(double(p.timeSec), 3600.0));  // Cortana 2026-10-16: render.shimmer clock
