@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 #include "litholattice/world/chunk.h"
+#include "litholattice/world/open_addr_table.h"
 
 namespace litholattice {
 
@@ -52,16 +53,15 @@ struct MeshPin {
   uint64_t commitEpoch = 0;
   std::array<std::shared_ptr<const ColumnSnap>, 9> cols;
   std::array<bool, 9> present{};
-  // Apron cell STATE read live at pin time (the 1736 border cells outside the own 16^3, in
-  // gather order): the sim mutates some cell state in place without a dirty flag (signal
-  // timers etc.), so neighbor snapshots can lag on state alone. Ids/materials always come
-  // from the snapshots (every block / material write is dirty-flagged).
-  std::array<CellState, (kChunkSize + 2) * (kChunkSize + 2) * (kChunkSize + 2) - kSubChunkVolume> apronSt{};
+  // M9 (Archie ruling 4): no live apron read. Every in-place cell-state edit marks its
+  // sub-chunk stale (noteStale); stale subs are republished in the per-tick batch
+  // (flushStale) or, at the latest, when a pin needs that column. LL_COW_VERIFY checks it.
 };
 
 struct CowStats {
   uint64_t pins = 0, subsPublished = 0, columnsFullPublished = 0, evictedColumns = 0;
   uint64_t verifyChecked = 0, verifyMismatches = 0, retainedBytes = 0, gathers = 0;
+  uint64_t staleNoted = 0, staleFlushed = 0, stalePinned = 0, maxProbe = 0;
 };
 
 class ColumnTable {
@@ -75,13 +75,18 @@ class ColumnTable {
                                      BlockId belowWorld, MeshEdge edge);
   void drop(int cx, int cz);
   size_t columns() const;
+  /// M9: an in-place state edit of sub (cx, sy, cz) (any thread holding the map; locked).
+  void noteStale(int cx, int sy, int cz);
+  /// M9 (ruling 6): take the stale masks (column key -> sub mask) for the per-tick batch.
+  std::vector<std::pair<uint64_t, uint64_t>> takeStale();
 
  private:
   struct Entry { std::shared_ptr<const ColumnSnap> snap; uint64_t lastUse = 0; size_t bytes = 0; };
   std::shared_ptr<const ColumnSnap> publishLocked(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask);
   void enforceBudgetLocked();
   mutable std::mutex m_;
-  std::unordered_map<uint64_t, Entry> entries_;
+  OaTable<Entry> entries_;     // M9: open addressing (ruling 6)
+  OaTable<uint64_t> stale_;    // M9: column key -> stale sub mask
   uint64_t epoch_ = 0, use_ = 0;
   size_t bytes_ = 0;
 };

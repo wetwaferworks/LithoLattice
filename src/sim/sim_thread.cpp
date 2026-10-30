@@ -309,6 +309,10 @@ void cSimThread::flushDirty() {
   if (cowColumnsEnabled()) {  // render pipeline M5: publish every dirty sub once (per column), then pin
     std::unordered_map<uint64_t, uint64_t> masks;
     for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) masks[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy; }
+    // M9 (Archie rulings 4+6): in-place state edits noted since the last tick join this
+    // tick's single batched publish (no live apron read at pin time any more).
+    for (const auto& [key, mask] : chunks_.cowTable().takeStale())
+      if (chunks_.column(int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)))) masks[key] |= mask;
     std::vector<std::pair<uint64_t, uint64_t>> ordered(masks.begin(), masks.end());
     std::sort(ordered.begin(), ordered.end());
     for (const auto& [key, mask] : ordered)

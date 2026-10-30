@@ -81,6 +81,7 @@ class ChunkMap {
     s->set(x & 15, y & 15, z & 15, registry_->stableIdOf(b));
     if (!c->cellText.empty()) c->cellText.erase(ChunkColumn::cellTextKey(x, y, z));  // Posts: text dies with its block
     c->markDirty();  // A2/B-M1: resident-column mutation (eviction save-first)
+    if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // M9
     if (editListener_) editListener_(x >> 4, z >> 4);
     return true;
   }
@@ -89,7 +90,7 @@ class ChunkMap {
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (c && c->subs[y >> 4]) {
       CellState& cell = c->subs[y >> 4]->state[SubChunk::index(x & 15, y & 15, z & 15)];
-      if (cell != v) { cell = v; c->markDirty(); }  // A2/B-M1: state mutation (eviction save-first)
+      if (cell != v) { cell = v; c->markDirty(); if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4); }  // A2/B-M1; M9 ruling 4
     }
   }
   /// 2026-10-25 (JD, Posts): per-cell text. Null when the cell has none (or its column is absent).
@@ -144,6 +145,11 @@ class ChunkMap {
   /// Render pipeline M5: published copy-on-write column snapshots for mesh workers
   /// (column_table.h). Mutated only by the map's current owner thread (internally locked).
   ColumnTable& cowTable() const { return *cow_; }
+  /// M9 (Archie ruling 4): callers that write SubChunk::state through cached raw pointers
+  /// (the signal sim fast paths) report the cell here so the CoW snapshot is republished.
+  void noteStateEdit(int x, int y, int z) const {
+    if (cow_ && y >= 0 && y < kWorldHeight) cow_->noteStale(x >> 4, y >> 4, z >> 4);
+  }
 
  private:
   std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> columns_;

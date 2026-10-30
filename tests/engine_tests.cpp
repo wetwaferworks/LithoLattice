@@ -3969,6 +3969,21 @@ void testRender() {
               selectCanonLod(14, 0, 12, 24) == 1 && selectCanonLod(11, 1, 12, 24) == 1 && selectCanonLod(9, 1, 12, 24) == 0 &&
               selectCanonLod(40, 0, 12, 24) == 2 && selectCanonLod(23, 2, 12, 24) == 2 && selectCanonLod(21, 2, 12, 24) == 1,
           "mesher (M8): LOD ring selection with +-1.5 chunk hysteresis");
+    {  // M9 (ruling 6): open-addressing ColumnTable map agrees with std::unordered_map under churn.
+      OaTable<uint64_t> oa;
+      std::unordered_map<uint64_t, uint64_t> ref;
+      uint64_t x = 0x1234567ull;
+      bool ok = true;
+      for (int i = 0; i < 200000 && ok; ++i) {
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        const uint64_t k = ChunkKey::make(int(x % 97) - 48, int((x >> 20) % 97) - 48);
+        if ((x >> 40) % 3 == 0) { ok = oa.erase(k) == (ref.erase(k) != 0); }
+        else { oa[k] += uint64_t(i); ref[k] += uint64_t(i); }
+      }
+      for (const auto& [k, v] : ref) ok = ok && oa.find(k) && *oa.find(k) == v;
+      ok = ok && oa.size() == ref.size() && oa.maxProbe() < 64;
+      check(ok, "column table (M9): open-addressing map matches unordered_map under insert/erase churn");
+    }
     {  // M8 software uploader: canonical ingest renders the same framebuffer as the legacy stream.
       FrameParams fp;
       fp.width = 96; fp.height = 96;

@@ -11,6 +11,7 @@ namespace litholattice {
 
 namespace {
 std::atomic<int> g_cow{-1};
+std::atomic<uint64_t> g_staleNoted{0}, g_staleFlushed{0}, g_stalePinned{0}, g_maxProbe{0};
 std::atomic<uint64_t> g_pins{0}, g_subs{0}, g_full{0}, g_evict{0}, g_vChecked{0}, g_vMismatch{0}, g_bytes{0}, g_gathers{0};
 size_t budgetBytes() {
   static const size_t b = [] {
@@ -48,6 +49,7 @@ CowStats cowStats() {
   s.pins = g_pins.load(); s.subsPublished = g_subs.load(); s.columnsFullPublished = g_full.load();
   s.evictedColumns = g_evict.load(); s.verifyChecked = g_vChecked.load(); s.verifyMismatches = g_vMismatch.load();
   s.retainedBytes = g_bytes.load(); s.gathers = g_gathers.load();
+  s.staleNoted = g_staleNoted.load(); s.staleFlushed = g_staleFlushed.load(); s.stalePinned = g_stalePinned.load(); s.maxProbe = g_maxProbe.load();
   return s;
 }
 void noteCowVerify(bool match) {
@@ -60,17 +62,18 @@ std::shared_ptr<const ColumnSnap> ColumnTable::publishLocked(const ChunkMap& w, 
   const ChunkColumn* c = w.column(cx, cz);
   const uint64_t key = ChunkKey::make(cx, cz);
   if (!c) {
-    if (auto it = entries_.find(key); it != entries_.end()) { bytes_ -= it->second.bytes; entries_.erase(it); }
+    if (Entry* it = entries_.find(key)) { bytes_ -= it->bytes; entries_.erase(key); }
+    stale_.erase(key);
     return nullptr;
   }
-  auto it = entries_.find(key);
+  Entry* it = entries_.find(key);
   auto snap = std::make_shared<ColumnSnap>();
-  const bool whole = it == entries_.end() || !it->second.snap || it->second.snap->instanceId != c->instanceId;
+  const bool whole = !it || !it->snap || it->snap->instanceId != c->instanceId;
   if (whole) {
     mask = ~uint64_t(0);
     g_full.fetch_add(1, std::memory_order_relaxed);
   } else {
-    snap->subs = it->second.snap->subs;  // CoW: untouched subs are shared
+    snap->subs = it->snap->subs;  // CoW: untouched subs are shared
   }
   snap->instanceId = c->instanceId;
   snap->commitEpoch = ++epoch_;
@@ -97,6 +100,10 @@ std::shared_ptr<const ColumnSnap> ColumnTable::publishLocked(const ChunkMap& w, 
     snap->subs[size_t(sy)] = std::move(ss);
     g_subs.fetch_add(1, std::memory_order_relaxed);
   }
+  if (uint64_t* st = stale_.find(key)) {  // published now: those stale bits are clean
+    *st &= ~mask;
+    if (!*st) stale_.erase(key);
+  }
   Entry& e = entries_[key];
   bytes_ -= e.bytes;
   e.snap = snap;
@@ -111,17 +118,33 @@ void ColumnTable::enforceBudgetLocked() {
   if (bytes_ <= budget) { g_bytes.store(bytes_, std::memory_order_relaxed); return; }
   std::vector<std::pair<uint64_t, uint64_t>> order;  // (lastUse, key)
   order.reserve(entries_.size());
-  for (const auto& [k, e] : entries_) order.emplace_back(e.lastUse, k);
+  entries_.forEach([&](uint64_t k, const Entry& e) { order.emplace_back(e.lastUse, k); });
   std::sort(order.begin(), order.end());
   const size_t target = budget - budget / 8;
   for (const auto& [use, k] : order) {
     if (bytes_ <= target) break;
-    auto it = entries_.find(k);
-    bytes_ -= it->second.bytes;
-    entries_.erase(it);
+    bytes_ -= entries_.find(k)->bytes;
+    entries_.erase(k);
     g_evict.fetch_add(1, std::memory_order_relaxed);
   }
   g_bytes.store(bytes_, std::memory_order_relaxed);
+}
+
+void ColumnTable::noteStale(int cx, int sy, int cz) {
+  if (sy < 0 || sy >= kSubChunks) return;
+  std::lock_guard l(m_);
+  stale_[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy;
+  g_staleNoted.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
+  std::lock_guard l(m_);
+  std::vector<std::pair<uint64_t, uint64_t>> out;
+  out.reserve(stale_.size());
+  stale_.forEach([&](uint64_t k, uint64_t m) { if (m) out.emplace_back(k, m); });
+  stale_.clear();
+  std::sort(out.begin(), out.end());
+  return out;
 }
 
 void ColumnTable::publish(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask) {
@@ -141,35 +164,21 @@ std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockR
       const ChunkColumn* c = w.column(cx + dx, cz + dz);
       p->present[i] = c != nullptr;
       if (!c) continue;
-      auto it = entries_.find(ChunkKey::make(cx + dx, cz + dz));
-      if (it == entries_.end() || !it->second.snap || it->second.snap->instanceId != c->instanceId) {
+      const uint64_t key = ChunkKey::make(cx + dx, cz + dz);
+      Entry* it = entries_.find(key);
+      if (!it || !it->snap || it->snap->instanceId != c->instanceId) {
         p->cols[i] = publishLocked(w, reg, cx + dx, cz + dz, ~uint64_t(0));
+      } else if (const uint64_t* st = stale_.find(key); st && *st) {
+        g_stalePinned.fetch_add(1, std::memory_order_relaxed);
+        p->cols[i] = publishLocked(w, reg, cx + dx, cz + dz, *st);  // stale state: republish first
       } else {
-        it->second.lastUse = ++use_;
-        p->cols[i] = it->second.snap;
+        it->lastUse = ++use_;
+        p->cols[i] = it->snap;
       }
     }
-  {  // live apron state (owner thread; same region order as gatherPinned)
-    size_t n = 0;
-    for (int dy = -1; dy <= 1; ++dy)
-      for (int dz = -1; dz <= 1; ++dz)
-        for (int dx = -1; dx <= 1; ++dx) {
-          if (!dx && !dy && !dz) continue;
-          const bool clamp = edge == MeshEdge::Clamp && (dx || dz) && !p->present[size_t((dz + 1) * 3 + (dx + 1))];
-          const SubChunk* s = w.sub(cx + (clamp ? 0 : dx), sy + dy, cz + (clamp ? 0 : dz));
-          const int x0 = dx < 0 ? 15 : 0, x1 = dx > 0 ? 0 : 15;
-          const int y0 = dy < 0 ? 15 : 0, y1 = dy > 0 ? 0 : 15;
-          const int z0 = dz < 0 ? 15 : 0, z1 = dz > 0 ? 0 : 15;
-          for (int y = y0; y <= y1; ++y)
-            for (int z = z0; z <= z1; ++z)
-              for (int x = x0; x <= x1; ++x) {
-                const int sx = clamp && dx ? (dx < 0 ? 0 : 15) : x;
-                const int sz = clamp && dz ? (dz < 0 ? 0 : 15) : z;
-                p->apronSt[n++] = s ? s->state[size_t(SubChunk::index(sx, y, sz))] : 0;
-              }
-        }
-  }
   p->commitEpoch = epoch_;
+  if (entries_.maxProbe() > g_maxProbe.load(std::memory_order_relaxed) && (g_pins.load(std::memory_order_relaxed) & 1023) == 0)
+    g_maxProbe.store(entries_.maxProbe(), std::memory_order_relaxed);
   enforceBudgetLocked();
   g_pins.fetch_add(1, std::memory_order_relaxed);
   return p;
@@ -177,10 +186,12 @@ std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockR
 
 void ColumnTable::drop(int cx, int cz) {
   std::lock_guard l(m_);
-  if (auto it = entries_.find(ChunkKey::make(cx, cz)); it != entries_.end()) {
-    bytes_ -= it->second.bytes;
-    entries_.erase(it);
+  const uint64_t key = ChunkKey::make(cx, cz);
+  if (Entry* it = entries_.find(key)) {
+    bytes_ -= it->bytes;
+    entries_.erase(key);
   }
+  stale_.erase(key);
 }
 
 size_t ColumnTable::columns() const {
@@ -207,7 +218,6 @@ void gatherPinned(MeshInput& out) {
       const int y = int(k >> 8);
       if ((y >> 4) == sy) out.text.emplace_back(uint16_t(SubChunk::index(int(k & 15), y & 15, int((k >> 4) & 15))), t);
     }
-  size_t an = 0;  // apronSt cursor
   for (int dy = -1; dy <= 1; ++dy)
     for (int dz = -1; dz <= 1; ++dz)
       for (int dx = -1; dx <= 1; ++dx) {
@@ -233,7 +243,7 @@ void gatherPinned(MeshInput& out) {
               else if (w64) b = s->full[size_t(si)];
               else b = s->lut[s->data.blocks.rawIndex(size_t(si))];
               out.id[i] = b;
-              out.st[i] = (dx || dy || dz) ? pin->apronSt[an++] : (s ? s->data.state[size_t(si)] : 0);
+              out.st[i] = s ? s->data.state[size_t(si)] : 0;  // M9: apron state from the snapshots too
               out.mat[i] = s ? s->data.materialFlat(size_t(si)) : 0;
             }
       }
