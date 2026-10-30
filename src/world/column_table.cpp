@@ -249,9 +249,10 @@ void gatherPinned(MeshInput& out) {
       }
 }
 
+static bool verifyForcedOff() { static const bool v = [] { const char* e = std::getenv("LL_VERIFY_OFF"); return e && e[0] == '1'; }(); return v; }  // verify-off switch: LL_VERIFY_OFF=1 / --no-verify disables DebugOpt always-on verifies (benchmarks)
 static bool cowVerifyOn() {
 #if defined(LL_DEBUGOPT_BUILD) || !defined(NDEBUG)
-  return true;
+  return !verifyForcedOff();
 #else
   static const bool v = [] { const char* e = std::getenv("LL_COW_VERIFY"); return e && e[0] == '1'; }();
   return v;

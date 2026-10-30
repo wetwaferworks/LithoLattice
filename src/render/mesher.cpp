@@ -913,10 +913,11 @@ void foliageFocus(int& cx, int& cz) {
 }
 
 // Cortana 2026-10-15 1340: verify-mode state (see mesher.h).
+static bool verifyForcedOff() { const char* e = std::getenv("LL_VERIFY_OFF"); return e && e[0] == '1'; }  // not cached: g_meshVerify initialises before main, --no-verify sets the env later  // verify-off switch: LL_VERIFY_OFF=1 / --no-verify disables DebugOpt always-on verifies (benchmarks)
 #ifdef NDEBUG
 static std::atomic<bool> g_meshVerify{false};
 #else
-static std::atomic<bool> g_meshVerify{true};
+static std::atomic<bool> g_meshVerify{!verifyForcedOff()};
 #endif
 static std::atomic<uint64_t> g_mvChecked{0}, g_mvMismatch{0}, g_mvSkipped{0};
 void setMeshVerify(bool on) { g_meshVerify.store(on, std::memory_order_relaxed); }
@@ -1111,7 +1112,8 @@ bool canonLodsEnabled() {
 }
 static bool canonVerifyOn() {
 #if defined(LL_DEBUGOPT_BUILD) || !defined(NDEBUG)
-  return true;
+  static const bool off = verifyForcedOff();  // first call is after argv parsing (first mesh)
+  return !off;
 #else
   static const bool v = [] { const char* e = std::getenv("LL_CANON_VERIFY"); return e && e[0] == '1'; }();
   return v || meshVerifyEnabled();
