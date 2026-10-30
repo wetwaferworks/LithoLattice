@@ -180,7 +180,13 @@ bool cReliableChannel::receive(const PacketHeader& h, const uint8_t* payload, si
     // Out-of-order future packet: hold for in-order delivery. On overflow
     // shed load -- the sender's RTO will retransmit; dropping here never
     // loses data, it only delays it.
-    if (reorder_.size() < cfg_.maxBuffered) reorder_.emplace(h.seq, std::move(pkt));
+    // Archie review H22b (2026-10-30): only seqs inside the receive window
+    // are held. A far-future seq can never become deliverable before the
+    // sender (window maxInFlight) retransmits it, so holding it only pins
+    // reorder_ slots honest traffic needs.
+    const uint16_t ahead = static_cast<uint16_t>(h.seq - expected_);
+    if (ahead < cfg_.maxBuffered && reorder_.size() < cfg_.maxBuffered)
+      reorder_.emplace(h.seq, std::move(pkt));
   }
   // Else: old duplicate (seq at-or-before cumulativeAck_): drop. Ack
   // processing above already ran, so the sender still learns it arrived.

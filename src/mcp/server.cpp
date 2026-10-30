@@ -15,6 +15,9 @@
 #include <io.h>  // _read (MCP-H2)
 // CancelSynchronousIo (kernel32), declared here to avoid pulling in <windows.h>.
 extern "C" __declspec(dllimport) int __stdcall CancelSynchronousIo(void* hThread);
+#else
+#include <cerrno>
+#include <unistd.h>  // ::read (Archie review H23c)
 #endif
 #include <atomic>
 #include <thread>
@@ -1927,10 +1930,14 @@ bool cFdStdioTransport::readLine(std::string& out) {
     feed(chunk, static_cast<size_t>(n));
   }
 #else
-  while (!lineDone && std::cin) {
+  // Archie review H23c (2026-10-30): std::cin.read(chunk, 8192) blocks until
+  // 8 KB arrive (the MCP-H2 bug, still live off Windows). ::read returns
+  // whatever the pipe has.
+  while (!lineDone) {
     if (stdioStopRequested()) return false;
-    std::cin.read(chunk, sizeof chunk);
-    const std::streamsize n = std::cin.gcount();
+    const ssize_t n = ::read(0, chunk, sizeof chunk);
+    if (n < 0 && errno == EINTR) continue;
+    if (stdioStopRequested()) return false;
     if (n <= 0) break;  // EOF or read error
     feed(chunk, static_cast<size_t>(n));
   }

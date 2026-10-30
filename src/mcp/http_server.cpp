@@ -831,7 +831,13 @@ cMcpHttpServer::ReadOutcome cMcpHttpServer::readRequest(cTcpConn& conn,
   }
   // Phase B: body via Content-Length.
   std::uint64_t contentLength = 0;
-  if (!parseContentLength(out.request, contentLength)) {
+  // Archie review H23a (2026-10-30): only POST needs Content-Length. A
+  // bodyless GET/DELETE without one (the normal shape) used to get 411
+  // here, before routing ever saw it; a present-but-malformed value is
+  // still refused for every method.
+  const bool noBodyAllowed = out.request.method != "POST" &&
+                             out.request.headerValue("content-length").empty();
+  if (!noBodyAllowed && !parseContentLength(out.request, contentLength)) {
     out.errorResp =
         makeErrorResponse(411, "Content-Length is required on POST /mcp");
     out.hasErrorResp = true;

@@ -76,6 +76,9 @@ bool ByteReader::getVarint(int32_t& v) {
   while (b & 0x80) {
     if (shift >= 32) return false;  // malformed: would overflow int32
     if (!getU8(b)) return false;
+    // Archie review H21: the 5th byte (shift 27) carries bits 27..31 only;
+    // higher bits used to be shifted out silently (a malformed value accepted).
+    if (shift == 27 && (b & 0x60) != 0) return false;
     mag |= static_cast<uint32_t>(b & 0x7F) << shift;
     shift += 7;
   }
