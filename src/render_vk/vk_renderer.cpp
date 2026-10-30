@@ -468,7 +468,12 @@ class cVulkanRenderer final : public IRenderer {
     h = int(grabExtent_.height);
     const bool bgra = grabFormat_ == VK_FORMAT_B8G8R8A8_UNORM;
     rgb.resize(size_t(w) * size_t(h) * 3);
-    const uint8_t* src = grabStaging_->mapped();
+    // Showcase capture (2026-10-30): one bulk memcpy out of the (uncached) mapped staging
+    // memory first; per-byte reads straight from it cost ~0.5 s per 1080p frame.
+    static thread_local std::vector<uint8_t> grabCopy;
+    grabCopy.resize(size_t(w) * size_t(h) * 4);
+    std::memcpy(grabCopy.data(), grabStaging_->mapped(), grabCopy.size());
+    const uint8_t* src = grabCopy.data();
     // Vulkan images are top-left origin: rows are already top-first for PNG.
     for (int y = 0; y < h; ++y) {
       const uint8_t* srow = src + size_t(y) * size_t(w) * 4;
