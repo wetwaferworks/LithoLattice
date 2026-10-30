@@ -320,7 +320,8 @@ void cSimThread::flushDirty() {
       }
     }
     if (!buf) buf = std::make_unique<MeshInput>();
-    snapshotForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf);
+    snapshotForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf,
+                           MeshEdge::Clamp);  // P8: clamp-to-edge at unloaded borders
     buf->batch = batchId; buf->batchSize = batchN;  // Cortana 2026-10-15 1350
     MeshInput* raw = buf.release();
     const std::shared_ptr<MeshInputPool> pool = meshPool_;

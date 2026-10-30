@@ -69,6 +69,7 @@
 #include "litholattice/world/chunk_ingress.h"
 #include "litholattice/world/chunk_swarm.h"
 #include "litholattice/render/wafer_reveal.h"  // Thread Handshake P7
+#include "litholattice/world/neighbor_mesh.h"  // Thread Handshake P8
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/render/frame_pacer.h"
@@ -8762,6 +8763,68 @@ void testChunkIngress() {
     const int before = h.grant(16.0, 10.0);
     for (int i = 0; i < 40; ++i) h.noteSlice(2.0);
     check(before == 8 && h.grant(16.0, 10.0) == 2, "P6 slack: an expensive slice shrinks the grant");
+  }
+  {  // P8 neighbor-border meshing (Archie Q3/Q4/Q7/Q8, Q1/Q2 CoW table)
+    ChunkMap w = worldWithColumns(2, &fixtureBlocks());  // columns (0..1, 0..1)
+    w.set(0, 5, 7, kRock);   // own -x edge (neighbor column -1 absent)
+    w.set(0, 5, 0, kRock);   // own (-x,-z) corner
+    w.set(15, 6, 7, kRock);  // own +x edge (neighbor column 1 present, air there)
+    const auto air = snapshotForMeshing(w, fixtureBlocks(), 0, 0, 0, 1, 1, kAir);
+    const auto clp = snapshotForMeshing(w, fixtureBlocks(), 0, 0, 0, 1, 1, kAir, MeshEdge::Clamp);
+    check(air->id[meshPadIndex(0, 6, 8)] == kAir && clp->id[meshPadIndex(0, 6, 8)] == kRock,
+          "P8 clamp-to-edge: a missing neighbor column reads the own edge cell, not air");
+    check(clp->id[meshPadIndex(0, 6, 1)] == kRock && clp->id[meshPadIndex(0, 6, 0)] == kRock,
+          "P8 clamp-to-edge: missing corner neighbors (Moore 8) clamp both axes");
+    check(clp->id[meshPadIndex(17, 7, 8)] == kAir && clp->id[meshPadIndex(16, 7, 8)] == kRock,
+          "P8 clamp-to-edge: a resident neighbor is read as-is (no clamp)");
+    bool same = true;
+    for (int i = 0; i < kMeshPadVolume; ++i) {
+      int x = i % kMeshPad, z = (i / kMeshPad) % kMeshPad;
+      if (x >= 1 && x <= 16 && z >= 1 && z <= 16) same = same && air->id[i] == clp->id[i];
+    }
+    check(same, "P8 clamp-to-edge: interior and vertical apron unchanged");
+    cWorkerScratch& pad = workerScratchForThisThread();
+    buildWorkerScratch(*clp, pad);
+    bool occ = true;
+    for (int i = 0; i < kMeshPadVolume; ++i) {
+      const int x = i % kMeshPad, z = (i / kMeshPad) % kMeshPad, y = i / (kMeshPad * kMeshPad);
+      occ = occ && pad.solid(x, y, z) == (clp->id[i] != kAir);
+    }
+    cWorkerScratch* other = nullptr;
+    std::thread([&] { other = &workerScratchForThisThread(); }).join();
+    // core (0,5,7) is rock: its -X face is hidden by the clamped apron, +X/+Y/-Y/+Z/-Z are exposed
+    const bool faces = !(pad.faceMask[1][5][7] & 1u) && (pad.faceMask[0][5][7] & 1u) && (pad.faceMask[2][5][7] & 1u) &&
+                       !(pad.faceMask[0][5][8] & 1u);
+    check(occ && faces && sizeof(pad.occRows) == 1296 && alignof(cWorkerScratch) == 64 && other != &pad,
+          "P8 worker scratch: 1,296-byte occupancy rows + face masks match the 18^3 apron, one per thread");
+    bool moore = true;
+    for (int i = 0; i < 8; ++i) moore = moore && moore8Bit(kMoore8[i][0], kMoore8[i][1]) == i;
+    check(moore && moore8Bit(0, 0) == -1, "P8 Moore 8: Dirty8 bits map 1:1 onto edge + corner neighbors");
+    ChunkStateWord sw;
+    cMeshHashLedger L;
+    const uint64_t col = ChunkKey::make(0, 0);
+    L.noteMeshedBorder(col, ChunkStateWord::borderGen(sw.load()));
+    auto cur = [&](uint64_t) { return ChunkStateWord::borderGen(sw.load()); };
+    const bool q0 = L.quiescent(0, cur) && !L.quiescent(1, cur);
+    sw.bumpBorderGen();  // a neighbor arrived
+    const bool q1 = !L.quiescent(0, cur) && sw.takeDirty(kChunkDirtyNeighbor) == kChunkDirtyNeighbor;
+    L.noteMeshedBorder(col, ChunkStateWord::borderGen(sw.load()));  // re-meshed against it
+    check(q0 && q1 && L.quiescent(0, cur), "P8 BorderGen remesh: a bump un-quiesces until re-meshed against it");
+    cMeshHashLedger a, b;
+    for (int64_t k = 0; k < 50; ++k) a.note(k, uint64_t(k) * 977);
+    for (int64_t k = 49; k >= 0; --k) b.note(k, uint64_t(k) * 977);
+    const bool orderFree = a.combined() == b.combined();
+    b.note(7, 1);
+    check(orderFree && a.combined() != b.combined(), "P8 MeshHash: landing-order independent, content sensitive");
+    cColumnTable v;
+    auto mk = [](int32_t cx, int32_t cz, uint64_t ep) { auto c = std::make_shared<CowColumn>(); c->cx = cx; c->cz = cz; c->commitEpoch = ep; return std::shared_ptr<const CowColumn>(c); };
+    v.publishGen(mk(3, -4, 0));
+    const auto pinned = v.lookupPinned(3, -4);
+    v.stageEdit(mk(3, -4, 1));
+    const bool beforeCommit = v.lookupPinned(3, -4)->commitEpoch == 0;
+    const uint64_t e = v.commitEpoch();
+    check(beforeCommit && v.lookupPinned(3, -4)->commitEpoch == 1 && pinned->commitEpoch == 0 && e == 1 && !v.lookupPinned(4, -4),
+          "P8 CoW: GEN visible at once, edits only at commit_epoch, pinned versions immutable");
   }
   {  // P7 wafer reveal: Chebyshev spiral + pacer
     bool bijective = revealSpiralIndex(0, 0) == 0;

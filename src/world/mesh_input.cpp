@@ -5,7 +5,8 @@
 namespace litholattice {
 
 void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
-                            uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out) {
+                            uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out,
+                            MeshEdge edge) {
   MeshInput* in = &out;
   in->cx = cx; in->sy = sy; in->cz = cz; in->epoch = epoch; in->seq = seq;
   in->matPaletteSize = 0;  // recycled buffers may carry a stale palette size
@@ -23,7 +24,12 @@ void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int
   for (int dy = -1; dy <= 1; ++dy)
     for (int dz = -1; dz <= 1; ++dz)
       for (int dx = -1; dx <= 1; ++dx) {
-        const SubChunk* s = w.sub(cx + dx, sy + dy, cz + dz);
+        // P8 clamp-to-edge (Archie Q3/Q4, all 8 Moore neighbors): a missing neighbor
+        // COLUMN reads the own column's edge cells instead of air. An absent sub-chunk
+        // inside a resident column is real air and stays air.
+        const bool clamp = edge == MeshEdge::Clamp && (dx || dz) && !w.column(cx + dx, cz + dz);
+        const int sdx = clamp ? 0 : dx, sdz = clamp ? 0 : dz;
+        const SubChunk* s = w.sub(cx + sdx, sy + dy, cz + sdz);
         const bool under = (sy + dy) < 0;
         // Resolve the StableId palette to BlockIds once per sub-chunk; voxels
         // below are O(1) raw-index lookups. At 64-bit width the index IS the
@@ -38,7 +44,9 @@ void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int
           for (int z = z0; z <= z1; ++z)
             for (int x = x0; x <= x1; ++x) {
               const int i = meshPadIndex(x + 1 + dx * 16, y + 1 + dy * 16, z + 1 + dz * 16);
-              const int si = SubChunk::index(x, y, z);
+              const int sx = clamp && dx ? (dx < 0 ? 0 : 15) : x;
+              const int sz = clamp && dz ? (dz < 0 ? 0 : 15) : z;
+              const int si = SubChunk::index(sx, y, sz);
               BlockId b;
               if (under || !s) {
                 b = under ? belowWorld : kAir;  // below the world: the fill block
@@ -56,9 +64,10 @@ void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int
 }
 
 std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const cBlockReg& reg, int cx, int sy,
-                                              int cz, uint32_t epoch, uint64_t seq, BlockId belowWorld) {
+                                              int cz, uint32_t epoch, uint64_t seq, BlockId belowWorld,
+                                              MeshEdge edge) {
   auto in = std::make_shared<MeshInput>();
-  snapshotForMeshingInto(w, reg, cx, sy, cz, epoch, seq, belowWorld, *in);
+  snapshotForMeshingInto(w, reg, cx, sy, cz, epoch, seq, belowWorld, *in, edge);
   return in;
 }
 

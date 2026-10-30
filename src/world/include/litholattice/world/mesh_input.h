@@ -13,6 +13,9 @@ namespace litholattice {
 constexpr int kMeshPad = kChunkSize + 2;  // 18
 constexpr int kMeshPadVolume = kMeshPad * kMeshPad * kMeshPad;
 inline int meshPadIndex(int x, int y, int z) { return (y * kMeshPad + z) * kMeshPad + x; }
+/// P8 (Archie Q3): what the apron reads where a neighbor COLUMN is not resident.
+/// Air = legacy (tools, captures, tests); Clamp = the sub-chunk's own edge cell.
+enum class MeshEdge : uint8_t { Air = 0, Clamp = 1 };
 
 struct MeshInput {
   int cx = 0, sy = 0, cz = 0;
@@ -49,12 +52,13 @@ struct MeshInput {
 /// `reg` translates the StableId voxel storage to the BlockId currency of MeshInput
 /// (resolved once per sub-chunk palette, then O(1) per voxel).
 void snapshotForMeshingInto(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
-                            uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out);
+                            uint32_t epoch, uint64_t seq, BlockId belowWorld, MeshInput& out,
+                            MeshEdge edge = MeshEdge::Air);
 
 /// Snapshot of sub-chunk (cx, sy, cz) with its border. Cells below y = 0 read as `belowWorld`
 /// (the dimension's fill block; a solid one keeps the world's bottom faces from being meshed).
 std::shared_ptr<MeshInput> snapshotForMeshing(const ChunkMap& w, const cBlockReg& reg, int cx, int sy,
                                               int cz, uint32_t epoch, uint64_t seq,
-                                              BlockId belowWorld = kAir);
+                                              BlockId belowWorld = kAir, MeshEdge edge = MeshEdge::Air);
 
 }  // namespace litholattice
