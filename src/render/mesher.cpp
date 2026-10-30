@@ -410,7 +410,7 @@ bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   }
   return true;
 }
-std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0};
+std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0};
 
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
@@ -759,7 +759,10 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     UnifiedMeshInput ui;
     ui.matId = umId; ui.materials = umats.data(); ui.materialCount = uint32_t(umats.size()); ui.firstLod = 1;
     if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok && mergeCanonLods(lodMesh, *canonOut))
+    {
       g_umLodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
+      g_umSkirtQuads.fetch_add(uint64_t(lodMesh.lods[1].skirt.count) + lodMesh.lods[2].skirt.count, std::memory_order_relaxed);
+    }
     else
       g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
   }
@@ -881,9 +884,9 @@ bool unifiedMesherEnabled() {
 static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
 UnifiedMesherStats unifiedMesherStats() {
   return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
-          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load()};
+          g_umLodQuads.load(), g_umLodFallback.load(), g_umFbVerts.load(), g_umFbChecked.load(), g_umFbMismatch.load(), g_umSkirtQuads.load()};
 }
-bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out) {
+bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask) {
   out.clear();
   if (cm.magic != canon::kMeshMagic || lod < 0 || lod > 2) return false;
   if (lod == 0) {
@@ -892,10 +895,11 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
   }
   const CanonicalLod& L = cm.lods[size_t(lod)];
   const int s = 1 << lod;
-  auto range = [&](BucketRange r) {
+  auto range = [&](BucketRange r, bool skirt) {
     for (uint32_t i = r.start; i < r.start + r.count && i < cm.quads.size(); ++i) {
       const canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
       if (d.paletteIdx >= cm.palette.size() || d.face > 5 || d.w == 0 || d.h == 0) continue;
+      if (skirt && !((skirtMask >> d.face) & 1u)) continue;  // M10: interior seam, no skirt
       const int f = int(d.face), ua = kTexUAxis[f], va = kTexVAxis[f], na = 3 - ua - va;
       int c[3] = {int(d.ox), int(d.oy), int(d.oz)};
       if (!(d.face & 1u)) c[na] -= 1;
@@ -907,10 +911,18 @@ bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVer
         }
     }
   };
-  for (int f = 0; f < 6; ++f) range(L.face[size_t(f)]);
-  range(L.skirt);
-  range(L.blend);
+  for (int f = 0; f < 6; ++f) range(L.face[size_t(f)], false);
+  range(L.skirt, true);
+  range(L.blend, false);
   return true;
+}
+uint8_t canonSkirtMask(int lod, const int nbrLod[6]) {
+  uint8_t m = 0;
+  for (int f = 0; f < 6; ++f) {
+    if (nbrLod[f] == -2) continue;
+    if ((nbrLod[f] < 0 ? 0 : nbrLod[f]) != lod) m = uint8_t(m | (1u << f));
+  }
+  return lod > 0 ? m : uint8_t(0);
 }
 int selectCanonLod(int d, int current, int ring1, int ring2) {
   auto base = [&](int dd) { return dd < ring1 ? 0 : dd < ring2 ? 1 : 2; };

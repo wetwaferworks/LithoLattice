@@ -2,6 +2,8 @@
 // JD-approved fixes over Archie's sketch.
 #include "litholattice/render/unified_mesher.h"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -107,6 +109,7 @@ UnifiedMesher::Status UnifiedMesher::mesh(const UnifiedMeshInput& in, CanonicalM
         exposed[g0.idx(x, y, z)] = uint8_t(!occAt(x + 1, y, z) || !occAt(x - 1, y, z) || !occAt(x, y + 1, z) ||
                                            !occAt(x, y - 1, z) || !occAt(x, y, z + 1) || !occAt(x, y, z - 1));
   }
+  fine_ = &g0;
   for (int lod = 1; lod <= 2 && !overflow; ++lod) {
     // Top-preserving, hull-conservative downsample (Q36c): a coarse cell is solid if any
     // fine cell is; its material is the topmost fine cell on the visible hull, else the
@@ -165,6 +168,23 @@ void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& o
 
   CanonicalLod& L = out.lods[size_t(lod)];
   std::vector<uint64_t> skirts;
+  static const bool skirtCull = [] { const char* e = std::getenv("LL_SKIRT_CULL"); return !(e && e[0] == '0'); }();
+  // M10 (ruling 2): the coarse skirt cell at (a = ca, axis side pos, other = co) faces the
+  // fine apron patch of s x s cells; hidden iff all of them occlude.
+  const int fs = 16 / dim;
+  auto skirtHidden = [&](int a, int axis, bool pos, int ca, int co) {
+    if (!skirtCull || !fine_ || lod == 0) return false;
+    const int other = 3 - a - axis;
+    int p[3];
+    p[axis] = pos ? 17 : 0;
+    for (int i = 0; i < fs; ++i)
+      for (int j = 0; j < fs; ++j) {
+        p[a] = 1 + ca * fs + i; p[other] = 1 + co * fs + j;
+        const uint16_t m = fine_->mat[fine_->idx(p[0], p[1], p[2])];
+        if (!m || !mats[m].occludes) return false;
+      }
+    return true;
+  };
   blendTmp_.clear();
   uint16_t rows[16];
   uint64_t key[16][16];
@@ -264,8 +284,16 @@ void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& o
               smn[a] = sl; sext[a] = 1;
               smn[axis] = pos ? dim : 0; sext[axis] = 0;
               const int other = 3 - a - axis;
-              smn[other] = other == ua ? u : vr; sext[other] = other == ua ? w : h;
-              emit(sface, smn, sext, sk, canon::kScaleLodSkirt, skirts);
+              const int olo = other == ua ? u : vr, olen = other == ua ? w : h;
+              // M10: emit only the runs whose outward neighbour patch can show a crack.
+              for (int r = 0; r < olen && !overflow;) {
+                if (skirtHidden(a, axis, pos, sl, olo + r)) { ++r; continue; }
+                int r2 = r + 1;
+                while (r2 < olen && !skirtHidden(a, axis, pos, sl, olo + r2)) ++r2;
+                smn[other] = olo + r; sext[other] = r2 - r;
+                emit(sface, smn, sext, sk, canon::kScaleLodSkirt, skirts);
+                r = r2;
+              }
             }
           }
         }

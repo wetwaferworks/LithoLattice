@@ -8,6 +8,7 @@
 #include <vector>
 #include "litholattice/render/canonical_quad.h"
 #include "litholattice/render/unified_mesher.h"
+#include "litholattice/render/mesher.h"
 
 namespace litholattice {
 namespace {
@@ -206,6 +207,35 @@ int testCanonicalMesh() {
     for (int lod = 1; lod <= 2; ++lod) for (int f = 0; f < 6; ++f) all = all && dirs[lod][f];
     cmCheck(all, "LOD skirts: L1 and L2 emit skirts facing all six directions, L0 none");
     cmCheck(m.lods[1].face[2].count > 0 && m.lods[2].face[2].count > 0, "hull downsample keeps the 2-block floor at L1 and L2");
+  }
+  {
+    // M10 (Archie ruling 2): hidden seam strips are culled. Same slabs, but the apron
+    // around the sub-chunk is solid rock: every perimeter seam faces an occluder.
+    Scene sc;
+    for (int x = 1; x <= 16; ++x) for (int z = 1; z <= 16; ++z) { sc.at(x, 1, z) = 1; sc.at(x, 2, z) = 1; }
+    for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 16; ++z) { sc.at(1, y, z) = 2; sc.at(2, y, z) = 2; }
+    CanonicalMesh open; mesher.mesh(sc.input(), open);
+    for (int y = 0; y < 18; ++y) for (int z = 0; z < 18; ++z) for (int x = 0; x < 18; ++x)
+      if (x == 0 || y == 0 || z == 0 || x == 17 || y == 17 || z == 17) sc.at(x, y, z) = 4;
+    CanonicalMesh shut; mesher.mesh(sc.input(), shut);
+    const uint32_t so = open.lods[1].skirt.count + open.lods[2].skirt.count;
+    const uint32_t ss = shut.lods[1].skirt.count + shut.lods[2].skirt.count;
+    cmCheck(so > 0 && ss == 0, "skirt cull: perimeter skirts against a solid neighbour patch are dropped");
+    // Half the +X apron open (z <= 8): only those skirt cells survive on +X.
+    for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 8; ++z) sc.at(17, y, z) = 0;
+    CanonicalMesh half; mesher.mesh(sc.input(), half);
+    bool onlyPx = true; uint32_t px = 0;
+    for (int lod = 1; lod <= 2; ++lod) { const BucketRange r = half.lods[size_t(lod)].skirt;
+      for (uint32_t k = r.start; k < r.start + r.count; ++k) { auto q = canon::unpackQuad(half.quads[k]);
+        onlyPx = onlyPx && q.face == 0 && q.oz < 8 / (1 << lod) + 0u; ++px; } }
+    cmCheck(onlyPx && px > 0, "skirt cull: partially open seam keeps only the open run");
+    // Draw side: skirts only toward neighbours at another LOD.
+    const int same[6] = {1, 1, 1, 1, 1, 1}, ring[6] = {2, 1, 1, 1, -2, -1};
+    cmCheck(canonSkirtMask(1, same) == 0 && canonSkirtMask(1, ring) == 0x21 && canonSkirtMask(0, ring) == 0,
+            "draw-side skirt mask: exterior LOD boundaries only (legacy = L0, nothing = no seam)");
+    std::vector<PackedVertex> all, none;
+    decodeCanonicalMesh(open, 1, all); decodeCanonicalMesh(open, 1, none, 0);
+    cmCheck(all.size() == none.size() + size_t(open.lods[1].skirt.count) * 4, "decode honours the skirt mask");
   }
   {
     // Determinism: the same bytes from 1 and 8 threads, and from a fresh mesher.

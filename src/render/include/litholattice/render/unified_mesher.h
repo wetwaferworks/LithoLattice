@@ -15,6 +15,10 @@
 //       returns Status::PaletteOverflow (logged once by the caller) - never a clamp.
 //   (3) skirts on every L1/L2 quad edge that lies on the sub-chunk perimeter, all six
 //       face directions, in a per-LOD skirt range (coordScale = LOD skirt).
+//       M10 (Archie ruling 2): a skirt cell is culled when every fine apron cell behind
+//       it (the s x s neighbour patch it would face) occludes - such a seam can never
+//       show a crack. LL_SKIRT_CULL=0 keeps every perimeter skirt (overhead A/B). Draw
+//       side keeps only directions whose neighbour is at another LOD (canonSkirtMask).
 //   (4) a match-key grid (raw material, AO, light, uvRot) is filled once per face slice
 //       before merging, so the merge loop is integer compares only.
 // Deterministic by construction: fixed LOD -> face -> slice -> row -> bit order, no
@@ -88,6 +92,7 @@ class UnifiedMesher {
   std::vector<uint32_t> slotStamp_;  // per (material ID, face slot): (stamp << 10) | slot
   uint32_t stamp_ = 0;
   uint32_t lastQuads_[3] = {};
+  const Grid* fine_ = nullptr;  // M10: the L0 apron grid (skirt cull reads its neighbour patch)
   std::vector<uint64_t> blendTmp_;
 };
 

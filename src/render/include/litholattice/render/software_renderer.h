@@ -306,7 +306,12 @@ class cSoftwareRenderer : public IRenderer {
   // (span decode via decodeCanonicalMesh) with draw-side LOD/skirt selection; default off =
   // the legacy PackedVertex stream. canonSrc_ keeps each canonical mesh + its current lod so
   // a camera ring crossing re-decodes at the new lod (store-owned: drain/renderFrame only).
-  struct SwCanonSrc { ChunkMesh meta; int lod = 0; };
+  // M10: skirtMask = the draw-side skirt directions decoded (canonSkirtMask); pend = the
+  // lod being selected this pass (neighbour masks read it).
+  struct SwCanonSrc { ChunkMesh meta; int lod = -1; int pend = 0; uint8_t skirtMask = 0xFF; };
+  uint8_t canonSkirtMaskFor(int cx, int sy, int cz, int lod) const;
+  bool redecodeCanon(SwCanonSrc& src, int lod);
+  void refreshCanonNeighbours(int cx, int sy, int cz);
   std::map<int64_t, SwCanonSrc> canonSrc_;
   int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
   bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
@@ -316,6 +321,8 @@ class cSoftwareRenderer : public IRenderer {
   static void setCanonIngest(bool on);  ///< overrides LL_SW_CANON (tests)
   /// Test hook: the lod the canonical path currently draws for a stored chunk (-1 = legacy).
   int canonLodOf(int cx, int sy, int cz) const;
+  /// Test hook (M10): the draw-side skirt direction mask of a stored canonical chunk.
+  int canonSkirtMaskOf(int cx, int sy, int cz) const;
   /// Test hook: move the LOD reference point without a frame (renderFrame does this).
   void setCanonCamera(const Vec3& cam) { reselectCanonLods(cam); }
  private:

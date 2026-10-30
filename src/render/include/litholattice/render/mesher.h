@@ -98,7 +98,7 @@ void setMeshVerify(bool on);
 /// compare quad sets (decode equivalence).
 void setUnifiedMesher(bool on);
 bool unifiedMesherEnabled();
-struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0; };
+struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0, skirtQuads = 0; };
 /// M6: L1/L2 from the registry feed on the game path (LL_CANON_LODS=0 turns it off).
 bool canonLodsEnabled();
 /// Render pipeline M8 (uploaders): decode one LOD of a canonical mesh to the legacy
@@ -107,7 +107,14 @@ bool canonLodsEnabled();
 /// mode (slot field 0). lod 1/2 = face buckets, skirts, blend; positions x2/x4, one texture
 /// tile per coarse cell (sub-block fallback geometry is not drawn at L1/L2).
 /// Returns false (out empty) for an unpublishable mesh or a bad lod.
-bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out);
+/// M10 (Archie ruling 2): skirtMask bit f keeps the skirts facing direction f (+X -X +Y -Y
+/// +Z -Z); the default keeps all (the mesh-time set). See canonSkirtMask.
+bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask = 0x3F);
+/// M10: draw-side skirt directions for a sub-chunk drawn at `lod`: bit f set iff the
+/// neighbour across face f is drawn at another LOD (true exterior LOD boundary).
+/// nbrLod[f]: 0..2 = canonical lod, -1 = legacy stream (full detail, = L0), -2 = nothing
+/// drawn there (no seam to crack against).
+uint8_t canonSkirtMask(int lod, const int nbrLod[6]);
 /// Draw-side LOD selection (Archie Q38/Q40): Chebyshev chunk distance d against rings
 /// ring1 (L0 -> L1) and ring2 (L1 -> L2), +-1.5 chunk hysteresis (2 in integer chunks)
 /// around the current lod (-1 = no current, pick directly).

@@ -1918,6 +1918,40 @@ int cSoftwareRenderer::canonLodOf(int cx, int sy, int cz) const {
 static int swCanonDist(int cx, int cz, int camCx, int camCz) {
   return std::max(std::abs(cx - camCx), std::abs(cz - camCz));
 }
+int cSoftwareRenderer::canonSkirtMaskOf(int cx, int sy, int cz) const {
+  auto it = canonSrc_.find(swMeshKey(cx, sy, cz));
+  return it == canonSrc_.end() ? -1 : int(it->second.skirtMask);
+}
+// M10 (Archie ruling 2): skirts only toward neighbours drawn at another LOD.
+uint8_t cSoftwareRenderer::canonSkirtMaskFor(int cx, int sy, int cz, int lod) const {
+  static const int kD[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  int nbr[6];
+  for (int f = 0; f < 6; ++f) {
+    const int64_t k = swMeshKey(cx + kD[f][0], sy + kD[f][1], cz + kD[f][2]);
+    auto it = canonSrc_.find(k);
+    nbr[f] = it != canonSrc_.end() ? it->second.pend : meshes_.count(k) ? -1 : -2;
+  }
+  return canonSkirtMask(lod, nbr);
+}
+bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
+  const uint8_t mask = canonSkirtMaskFor(src.meta.cx, src.meta.sy, src.meta.cz, lod);
+  if (lod == src.lod && mask == src.skirtMask) return true;
+  ChunkMesh dm = src.meta;  // verts empty in the stored meta
+  dm.canonical.reset();
+  if (!decodeCanonicalMesh(*src.meta.canonical, lod, dm.verts, mask) || dm.verts.empty()) return false;
+  src.lod = lod; src.pend = lod; src.skirtMask = mask;
+  canonInner_ = true;
+  uploadChunkMesh(dm);
+  canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
+  return true;
+}
+void cSoftwareRenderer::refreshCanonNeighbours(int cx, int sy, int cz) {
+  static const int kD[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};  // same column = same lod: no Y seam
+  for (const auto& d : kD) {
+    auto it = canonSrc_.find(swMeshKey(cx + d[0], sy, cz + d[1]));
+    if (it != canonSrc_.end() && it->second.lod >= 0) redecodeCanon(it->second, it->second.lod);
+  }
+}
 void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
   const int ccx = int(std::floor(cam.x / 16.f)), ccz = int(std::floor(cam.z / 16.f));
   if (ccx == canonCamCx_ && ccz == canonCamCz_) return;
@@ -1925,24 +1959,18 @@ void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
   if (canonSrc_.empty()) return;
   int r1 = 0, r2 = 0;
   canonLodRings(r1, r2);
-  for (auto& [key, src] : canonSrc_) {
-    const int want = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
-    if (want == src.lod) continue;
-    ChunkMesh dm = src.meta;  // verts empty in the stored meta
-    dm.canonical.reset();
-    if (!decodeCanonicalMesh(*src.meta.canonical, want, dm.verts) || dm.verts.empty()) continue;  // keep current lod
-    src.lod = want;
-    canonInner_ = true;
-    uploadChunkMesh(dm);
-    canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
-  }
+  // Two passes (M10): pick every lod first so the skirt masks see the new neighbours.
+  for (auto& [key, src] : canonSrc_)
+    src.pend = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
+  for (auto& [key, src] : canonSrc_)
+    if (!redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod
 }
 
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
   if (canonIngestEnabled() && !canonInner_) {
     if (mesh.verts.empty() || !mesh.canonical || mesh.canonical->magic != canon::kMeshMagic) {
-      canonSrc_.erase(key);
+      if (canonSrc_.erase(key) || mesh.verts.empty()) refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);
     } else {
       int r1 = 0, r2 = 0;
       canonLodRings(r1, r2);
@@ -1954,19 +1982,10 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
         src.meta = std::move(tmp);
       }
       const int want = canonCamCx_ == (1 << 30) ? 0 : selectCanonLod(swCanonDist(mesh.cx, mesh.cz, canonCamCx_, canonCamCz_), -1, r1, r2);
-      ChunkMesh dm = src.meta;
-      dm.canonical.reset();
-      int lod = want;
-      if (!decodeCanonicalMesh(*mesh.canonical, lod, dm.verts) || dm.verts.empty()) {
-        lod = 0;
-        decodeCanonicalMesh(*mesh.canonical, 0, dm.verts);
-      }
-      if (!dm.verts.empty()) {
-        src.lod = lod;
-        canonSrc_[key] = std::move(src);
-        canonInner_ = true;
-        uploadChunkMesh(dm);
-        canonInner_ = false;
+      src.lod = -1; src.pend = want;
+      SwCanonSrc& st = canonSrc_[key] = std::move(src);
+      if (redecodeCanon(st, want) || (st.pend = 0, redecodeCanon(st, 0))) {
+        refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);  // M10: their seams may have changed
         return;
       }
       canonSrc_.erase(key);  // nothing decodable: fall through to the legacy stream
