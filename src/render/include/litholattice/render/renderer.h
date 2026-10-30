@@ -111,6 +111,7 @@ struct PbrChunkMesh;  // pbr_quad_mesh.h (forward: only used as a const ref here
 /// both backends size their shared quad index buffer from it, so they can trust every mesh.
 constexpr uint32_t kMaxQuadsPerMesh = 16384;
 
+struct CanonicalMesh;  // unified_mesher.h (render pipeline M2)
 struct PreparedChunkMeshHandle;  // below IRenderer (Cortana 2026-10-25 upload pass)
 
 struct ChunkMesh {
@@ -145,6 +146,9 @@ struct ChunkMesh {
   /// 2026-10-25 (box): far-LOD scale this mesh was built at (1, 2 or 4); the software renderer
   /// flat-shades / height-culls >= 4x meshes. Other backends ignore it.
   uint8_t lodScale = 1;
+  /// Render pipeline M2 (2026-10-29): the canonical packed mesh (unified-mesher mode only;
+  /// null otherwise). Today it holds the L0 merged faces; uploaders read it from step 4 on.
+  std::shared_ptr<const CanonicalMesh> canonical;
 };
 
 // 2D overlay in pixels (origin top-left). Generic: the renderer knows nothing about the game.

@@ -90,6 +90,16 @@ void foliageFocus(int& cx, int& cz);
 /// --verify-mesh turns it on. A pass whose definition epoch moved between
 /// the two meshes is skipped (counted, not a mismatch).
 void setMeshVerify(bool on);
+/// Render pipeline M2 (2026-10-29, Archie step 3): --unified-mesher / LL_UNIFIED_MESHER=1.
+/// When on, greedy-eligible faces go through the canonical bitwise merge and every mesh
+/// carries ChunkMesh::canonical (L0 face buckets); the PackedVertex stream is decoded from
+/// the canonical quads. Off (default, --legacy-mesher) = the legacy path, unchanged.
+/// Debug/DebugOpt (and LL_CANON_VERIFY=1 or --verify-mesh) re-mesh on the legacy path and
+/// compare quad sets (decode equivalence).
+void setUnifiedMesher(bool on);
+bool unifiedMesherEnabled();
+struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0; };
+UnifiedMesherStats unifiedMesherStats();
 bool meshVerifyEnabled();
 struct MeshVerifyStats { uint64_t checked = 0, mismatches = 0, skipped = 0; };
 MeshVerifyStats meshVerifyStats();

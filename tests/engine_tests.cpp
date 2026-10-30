@@ -3941,7 +3941,22 @@ void testRender() {
   // `slot` from @6 to @12 (restoring the 12-byte GPU attribute prefix). Geometry is
   // identical (25 quads); only the vertex byte layout changed. Old value kept for
   // the record: 0xdcb1c88e3af94693 (and 0x9a6c89e230a77b13 before that).
-  const ChunkMesh scene = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+  // Golden is pinned to the legacy emitter (its vertex order); LL_UNIFIED_MESHER must not move it.
+  setUnifiedMesher(false);
+  ChunkMesh scene = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+  {  // Render pipeline M2: the unified (canonical) path emits the same quads, order aside.
+    setUnifiedMesher(true);
+    const ChunkMesh u = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+    setUnifiedMesher(false);
+    auto sq = [](const ChunkMesh& m) {
+      std::vector<std::string> q;
+      for (size_t i = 0; i + 3 < m.verts.size(); i += 4)
+        q.emplace_back(reinterpret_cast<const char*>(&m.verts[i]), 4 * sizeof(PackedVertex));
+      std::sort(q.begin(), q.end());
+      return q;
+    };
+    check(sq(u) == sq(scene) && u.canonical != nullptr, "mesher (unified): golden scene decodes to the legacy quads and publishes a canonical mesh");
+  }
   const uint64_t h = fnv(scene.verts.data(), scene.verts.size() * sizeof(PackedVertex));
   std::printf("  scene hash %016llx, %zu quads\n", (unsigned long long)h, scene.verts.size() / 4);
   check(h == 0x77c08ffd8158c6d3ULL, "mesher golden: fixed scene hash (update deliberately if the mesh format changes)");

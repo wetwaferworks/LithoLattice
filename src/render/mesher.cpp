@@ -7,6 +7,8 @@
 #include <vector>
 #include "litholattice/core/log.h"  // Cortana 2026-10-16 2335 F55-2
 #include "litholattice/render/mesher.h"
+#include "litholattice/render/unified_mesher.h"  // render pipeline M2
+#include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
 #include "litholattice/render/block_appearance.h"
@@ -211,6 +213,108 @@ void flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out) {
   }
 }
 
+
+// Render pipeline M2 (2026-10-29, Archie migration step 3 on the game path): canonical
+// flush. In unified-mesher mode every greedy-eligible face is parked (on every backend)
+// and this pass merges the parked slices with the bitwise kernel (countr_zero /
+// countr_one over 16-bit rows, integer key compares), writes the CanonicalMesh L0 face
+// buckets (palette slot per look, first-seen, only on emit), and then DECODES the
+// canonical quads back into PackedVertex for today's uploaders: merged quads when the
+// backend prefers greedy meshes, one face per cell otherwise. The legacy vertex stream
+// is therefore produced from the canonical bytes, which is what the decode-equivalence
+// check in meshSubChunk compares against the legacy pass.
+// Look -> palette: layer -> layerId; Emissive -> emissive 15; GroundPulse -> mode flag
+// + pulse = value. A value > 15 cannot ride the palette: that mesh keeps its vertices
+// (built from the keys) but publishes no CanonicalMesh (counted).
+uint64_t canonPaletteOf(uint64_t key, bool& ok) {
+  canon::PaletteFields p;
+  p.layerId = uint16_t((key >> 24) & 0xFFFFu);
+  const uint8_t value = uint8_t((key >> 16) & 0xFFu), mode = uint8_t((key >> 8) & 0xFFu);
+  if (value > 15) ok = false;
+  p.pulse = uint8_t(value & 15u);
+  if (mode == kShadeEmissive) p.emissive = 15;
+  else if (mode == kShadeGroundPulse) p.modeFlags = uint8_t(canon::kModeGroundPulse);
+  else if (mode != kShadeTex) ok = false;
+  return canon::packPalette(p);
+}
+uint64_t canonKeyOf(const canon::DecodedQuad& q, uint64_t pal) {
+  const canon::PaletteFields p = canon::unpackPalette(pal);
+  const uint8_t mode = (p.modeFlags & canon::kModeGroundPulse) ? uint8_t(kShadeGroundPulse)
+                       : p.emissive == 15                    ? uint8_t(kShadeEmissive)
+                                                             : uint8_t(kShadeTex);
+  return (uint64_t(1) << 63) | (uint64_t(p.layerId) << 24) | (uint64_t(p.pulse) << 16) | (uint64_t(mode) << 8) |
+         uint64_t(q.cornerAo & 3u);
+}
+
+void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
+  cm = CanonicalMesh{};
+  bool ok = true;
+  std::vector<uint64_t> lookKeys;  // parallel to cm.palette (first-seen)
+  for (int f = 0; f < 6; ++f) {
+    const uint32_t start = uint32_t(cm.quads.size());
+    const uint16_t used = g.sliceUsed[f];
+    g.sliceUsed[f] = 0;
+    const int ua = kTexUAxis[f], va = kTexVAxis[f], na = 3 - ua - va;
+    for (int s = 0; s < 16; ++s) {
+      if (!(used & (1u << s))) continue;
+      auto& k = g.key[f][s];
+      uint16_t rows[16];
+      for (int iv = 0; iv < 16; ++iv) {
+        uint32_t r = 0;
+        for (int iu = 0; iu < 16; ++iu) r |= uint32_t(k[iv][iu] != 0) << iu;
+        rows[iv] = uint16_t(r);
+      }
+      for (int iv = 0; iv < 16; ++iv)
+        while (rows[iv]) {
+          const int iu = std::countr_zero(rows[iv]);
+          const uint64_t key = k[iv][iu];
+          const int cap = merged ? kGreedyMaxTiles : 1;
+          const int run = std::countr_one(uint32_t(rows[iv]) >> iu);
+          int w = 1;
+          while (w < run && w < cap && k[iv][iu + w] == key) ++w;
+          const uint32_t span = ((1u << w) - 1u) << iu;
+          int h = 1;
+          while (iv + h < 16 && h < cap && (rows[iv + h] & span) == span) {
+            bool same = true;
+            for (int t = 0; t < w && same; ++t) same = k[iv + h][iu + t] == key;
+            if (!same) break;
+            ++h;
+          }
+          for (int dv = 0; dv < h; ++dv) {
+            rows[iv + dv] = uint16_t(rows[iv + dv] & ~span);
+            for (int t = 0; t < w; ++t) k[iv + dv][iu + t] = 0;  // grid is all-zero after the flush
+          }
+          size_t slot = 0;
+          while (slot < lookKeys.size() && lookKeys[slot] != (key & ~uint64_t(3))) ++slot;
+          if (slot == lookKeys.size()) {
+            if (slot >= canon::kMaxPalette) ok = false;
+            lookKeys.push_back(key & ~uint64_t(3));
+            cm.palette.push_back(canonPaletteOf(key, ok));
+          }
+          canon::DecodedQuad q;
+          int o[3]; o[na] = (f & 1) ? s : s + 1; o[ua] = iu; o[va] = iv;
+          q.ox = uint32_t(o[0]); q.oy = uint32_t(o[1]); q.oz = uint32_t(o[2]);
+          q.w = uint32_t(w); q.h = uint32_t(h); q.face = uint32_t(f);
+          q.paletteIdx = uint32_t(slot & 0x3FFu);
+          q.cornerAo = uint32_t(key & 3u) * 0x55u;  // parked faces carry uniform AO
+          q.aoDiagFlip = canon::aoDiagFlipFor(q.cornerAo);
+          q.skyLight = 63;  // lighting is not split yet (step 1): full sky, no block light
+          const uint64_t raw = canon::packQuad(q);
+          cm.quads.push_back(raw);
+          // Decode back to the legacy stream from the canonical bytes.
+          const canon::DecodedQuad d = canon::unpackQuad(raw);
+          const uint64_t dk = ok ? canonKeyOf(d, cm.palette[d.paletteIdx]) : key;
+          int c[3] = {int(d.ox), int(d.oy), int(d.oz)};
+          if (!(d.face & 1u)) c[na] -= 1;
+          emitGreedyQuad(out, int(d.face), c[na], c[ua], c[va], int(d.w), int(d.h), dk);
+        }
+    }
+    cm.lods[0].face[size_t(f)] = BucketRange{start, uint32_t(cm.quads.size()) - start};
+  }
+  cm.lods[0].skirt.start = cm.lods[0].blend.start = uint32_t(cm.quads.size());
+  if (!ok) cm = CanonicalMesh{}, cm.magic = 0;  // magic 0 = not publishable
+}
+
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
   static const int v = [] {
@@ -251,7 +355,7 @@ namespace {
 
 // One meshing pass over the snapshot. meshSubChunk (below) wraps this with
 // the definitions-epoch guard.
-ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
+ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, CanonicalMesh* canonOut = nullptr) {
   ChunkMesh out; out.cx = in.cx; out.sy = in.sy; out.cz = in.cz; out.epoch = in.epoch; out.seq = in.seq; out.batch = in.batch; out.batchSize = in.batchSize;
   const cBlockReg& reg = ctx.blocks;
   const BlockMaterials& mats = ctx.materials;
@@ -319,8 +423,9 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
   // Cortana 2026-10-15 1705: greedy meshing (see GreedyGrid).
   const int greedyEnv = greedyEnvOverride();
   const bool greedy = greedyEnv < 0 ? ctx.greedy : greedyEnv == 1;
+  const bool parkFaces = greedy || canonOut != nullptr;  // render pipeline M2: unified mode parks on every backend
   static thread_local std::unique_ptr<GreedyGrid> greedyGrid;
-  if (greedy) {
+  if (parkFaces) {
     if (!greedyGrid) greedyGrid = std::make_unique<GreedyGrid>();
     else {  // a pass that threw mid-way can leave cells parked: clear in place (no 196 KB stack temporary)
       GreedyGrid& g = *greedyGrid;
@@ -484,7 +589,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
             const int s1 = at(su, 0), s2 = at(0, sv), cr = at(su, sv);
             ao[c] = (s1 && s2) ? 0 : 3 - (s1 + s2 + cr);
           }
-          if (greedy && !slab && greedyEligible(lk, ao)) {  // Cortana 2026-10-15 1705: park for merging
+          if (parkFaces && !slab && greedyEligible(lk, ao)) {  // Cortana 2026-10-15 1705: park for merging
             const int blk[3] = {x, y, z};
             park(*greedyGrid, f, blk, lk, ao[0]);
             continue;
@@ -497,7 +602,8 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx) {
         }
         look.meshExtra(cellC, writer);
       }
-  if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
+  if (canonOut) flushCanonical(*greedyGrid, out.verts, *canonOut, greedy);  // render pipeline M2
+  else if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
   if (out.verts.size() > size_t(kMaxQuadsPerMesh) * 4) {  // cannot happen for 16^3 cubes; guards custom shapes
     logError("mesher: sub-chunk (%d,%d,%d) has %zu quads, trimmed to %u", in.cx, in.sy, in.cz, out.verts.size() / 4,
              kMaxQuadsPerMesh);
@@ -595,9 +701,43 @@ uint64_t meshChecksum(const ChunkMesh& m) {
 
 // Cortana 2026-10-15 1340: the shipped pass reads the stable def copy
 // (cContentReg::StableDefScope) - no registry lock per voxel.
-static ChunkMesh meshSubChunkStable(const MeshInput& in, const MeshContext& ctx) {
+static ChunkMesh meshSubChunkStable(const MeshInput& in, const MeshContext& ctx, CanonicalMesh* canon = nullptr) {
   cContentReg::StableDefScope stable(ctx.blocks.content());
-  return meshSubChunkPass(in, ctx);
+  return meshSubChunkPass(in, ctx, canon);
+}
+
+// Render pipeline M2: unified-mesher switch + decode-equivalence counters (see mesher.h).
+static std::atomic<int> g_unifiedMesher{-1};
+void setUnifiedMesher(bool on) { g_unifiedMesher.store(on ? 1 : 0, std::memory_order_relaxed); }
+bool unifiedMesherEnabled() {
+  int v = g_unifiedMesher.load(std::memory_order_relaxed);
+  if (v < 0) {
+    const char* e = std::getenv("LL_UNIFIED_MESHER");
+    int expect = -1;
+    g_unifiedMesher.compare_exchange_strong(expect, (e && e[0] == '1') ? 1 : 0);
+    v = g_unifiedMesher.load(std::memory_order_relaxed);
+  }
+  return v == 1;
+}
+static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
+UnifiedMesherStats unifiedMesherStats() {
+  return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load()};
+}
+static bool canonVerifyOn() {
+#if defined(LL_DEBUGOPT_BUILD) || !defined(NDEBUG)
+  return true;
+#else
+  static const bool v = [] { const char* e = std::getenv("LL_CANON_VERIFY"); return e && e[0] == '1'; }();
+  return v || meshVerifyEnabled();
+#endif
+}
+// Quad multiset of a vertex stream (4 x 16-byte vertices per quad), sorted: the
+// non-greedy unified stream lists parked faces after the per-cell ones.
+static std::vector<std::array<uint64_t, 8>> sortedQuads(const std::vector<PackedVertex>& v) {
+  std::vector<std::array<uint64_t, 8>> q(v.size() / 4);
+  for (size_t i = 0; i < q.size(); ++i) std::memcpy(q[i].data(), &v[i * 4], 64);
+  std::sort(q.begin(), q.end());
+  return q;
 }
 
 ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
@@ -614,16 +754,39 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
   // the between-ticks contract — so log loudly and keep the second pass
   // rather than loop forever.
   const uint64_t epoch0 = ctx.blocks.content().definitionEpoch();
-  ChunkMesh out = meshSubChunkStable(in, ctx);
+  const bool unified = unifiedMesherEnabled();  // render pipeline M2 (--unified-mesher)
+  auto canon = unified ? std::make_shared<CanonicalMesh>() : nullptr;
+  ChunkMesh out = meshSubChunkStable(in, ctx, canon.get());
   const uint64_t epoch1 = ctx.blocks.content().definitionEpoch();
   if (epoch1 != epoch0) {
-    out = meshSubChunkStable(in, ctx);
+    out = meshSubChunkStable(in, ctx, canon.get());
     const uint64_t epoch2 = ctx.blocks.content().definitionEpoch();
     if (epoch2 != epoch1)
       logError("mesher: block definitions changed twice during one mesh of (%d,%d,%d) "
                "(epochs %llu -> %llu -> %llu); refreshStaged must run between ticks only",
                in.cx, in.sy, in.cz, (unsigned long long)epoch0, (unsigned long long)epoch1,
                (unsigned long long)epoch2);
+  }
+  if (unified) {
+    g_umMeshes.fetch_add(1, std::memory_order_relaxed);
+    if (canonVerifyOn()) {  // decode-equivalence: canonical-decoded stream == legacy stream (as quad sets)
+      const ChunkMesh legacy = meshSubChunkStable(in, ctx);
+      if (ctx.blocks.content().definitionEpoch() == epoch1) {
+        g_umChecked.fetch_add(1, std::memory_order_relaxed);
+        if (sortedQuads(out.verts) != sortedQuads(legacy.verts)) {
+          g_umMismatch.fetch_add(1, std::memory_order_relaxed);
+          logError("unified-mesher: decode MISMATCH sub-chunk (%d,%d,%d): canonical %zu quads vs legacy %zu quads",
+                   in.cx, in.sy, in.cz, out.verts.size() / 4, legacy.verts.size() / 4);
+        }
+      }
+    }
+    if (canon->magic == canon::kMeshMagic) {
+      g_umQuads.fetch_add(canon->quads.size(), std::memory_order_relaxed);
+      g_umBytes.fetch_add(canon->residentBytes(), std::memory_order_relaxed);
+      out.canonical = std::move(canon);
+    } else {
+      g_umUnpublished.fetch_add(1, std::memory_order_relaxed);
+    }
   }
   if (meshVerifyEnabled()) {
     const uint64_t e0 = ctx.blocks.content().definitionEpoch();
