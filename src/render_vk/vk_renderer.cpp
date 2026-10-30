@@ -18,6 +18,8 @@
 #include "vk_swapchain.h"
 #include "vk_texture_array.h"
 #include "vk_vertex_arena.h"
+#include "VkCanonUploader.h"  // refactor step 6 (LL_VK_CANON=1)
+#include "litholattice/render/mesher.h"  // meshVerifyEnabled (step 6 frame check)
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1]
 #include "litholattice/assets/shader_library.h"
 #include "litholattice/core/log.h"
@@ -119,6 +121,12 @@ class cVulkanRenderer final : public IRenderer {
         pull_ = false;
       }
       logInfo("vulkan: Mega-Pipeline Phase 2 vertex pulling %s", pull_ ? "on" : "requested but unavailable (needs LL_VK_MEGA=3, packed12, firstInstance, dynamic storage indexing); off");
+      // Refactor step 6 (Direction JD, design Archie, implementation Cortana): LL_VK_CANON=1 builds the pulled
+      // layout from the canonical mesh (cVkCanonUploader). Default off. With mesh verify on, every built mesh is
+      // also run through buildPulled and compared byte for byte (exit line "vk-canon: ... mismatches N").
+      vkCanon_ = pull_ && cVkCanonUploader::enabled();
+      canonCheck_ = vkCanon_ && meshVerifyEnabled();
+      if (vkCanon_) logInfo("vulkan: step 6 canonical pull uploader on%s", canonCheck_ ? " (frame check vs buildPulled)" : "");
     }
     // Mega-Pipeline Phase 3: LL_VK_BUCKETS=1 (with pulling) draws only the face buckets that can face the camera.
     // Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana. Buckets are the face-sorted ranges
@@ -804,6 +812,9 @@ class cVulkanRenderer final : public IRenderer {
   std::atomic<uint64_t> packMisses_{0};
   std::vector<uint8_t> packScratch_;  ///< main thread only (device-arena staging path)
   bool pull_ = false;     ///< Mega-Pipeline Phase 2 (LL_VK_PULL=1)
+  bool vkCanon_ = false;     ///< refactor step 6 (LL_VK_CANON=1, needs pull_)
+  bool canonCheck_ = false;  ///< step 6: compare against buildPulled (mesh verify on)
+  static cVkCanonUploader& canonUploader() { thread_local cVkCanonUploader u; return u; }
   bool blendSplit_ = true;  ///< Phase 4 B (Archie Q1): with pulling, blended meshes pull their opaque quads (LL_VK_BLENDSPLIT=0: off)
   std::atomic<uint64_t> pullWhy_[kPullReasons] = {};  ///< Phase 4.0: quads by pull outcome (cumulative; LL_VK_PULL=1 only)
   bool buckets_ = false;  ///< Mega-Pipeline Phase 3 (LL_VK_BUCKETS=1)
@@ -825,7 +836,14 @@ class cVulkanRenderer final : public IRenderer {
 #endif
     if (pull_ && (!hasBlend || blendSplit_)) {  // Phase 4 B: blended meshes split (LL_VK_BLENDSPLIT=0 opts out)
       uint32_t why[kPullReasons] = {};  // Phase 4.0 quad-rejection counter (for Archie)
-      buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr, hasBlend ? int(kShadeAlphaBlend) : -1);
+      const int blendMode = hasBlend ? int(kShadeAlphaBlend) : -1;
+      const bool canon = vkCanon_ && canonUploader().build(m, kMaxQuads, blendMode, pm);  // step 6
+      if (canon && canonCheck_) {
+        thread_local PulledMesh ref;
+        buildPulled(m.verts, kMaxQuads, true, ref, nullptr, blendMode);
+        cVkCanonUploader::noteCheck(pm, ref);
+      }
+      if (!canon) buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr, blendMode);
 #if LL_STREAM_COUNTERS
       for (uint32_t r = 1; r < kPullReasons; ++r)
         if (why[r]) pullWhy_[r].fetch_add(why[r], std::memory_order_relaxed);

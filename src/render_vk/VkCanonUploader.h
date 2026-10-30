@@ -27,7 +27,8 @@ class cVkCanonUploader {
   bool build(const ChunkMesh& m, uint32_t maxQuads, int blendMode, PulledMesh& out);
   /// Frame comparison: true when both layouts draw the same bytes.
   static bool sameLayout(const PulledMesh& a, const PulledMesh& b);
-  static void noteCheck(bool match);
+  /// Counts one frame check; describes the first few mismatches on stderr.
+  static void noteCheck(const PulledMesh& canon, const PulledMesh& ref);
   static void printStats();
 
  private:

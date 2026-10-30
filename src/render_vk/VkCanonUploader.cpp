@@ -2,6 +2,7 @@
 #include "VkCanonUploader.h"
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include "litholattice/render/canonical_quad.h"
@@ -33,9 +34,31 @@ void cVkCanonUploader::printStats() {
                (unsigned long long)hits_.load(), (unsigned long long)misses_.load());
 }
 
-void cVkCanonUploader::noteCheck(bool match) {
+void cVkCanonUploader::noteCheck(const PulledMesh& canon, const PulledMesh& ref) {
   checked_.fetch_add(1, std::memory_order_relaxed);
-  if (!match) mismatches_.fetch_add(1, std::memory_order_relaxed);
+  if (sameLayout(canon, ref)) return;
+  if (mismatches_.fetch_add(1, std::memory_order_relaxed) >= 4) return;  // describe the first few only
+  std::fprintf(stderr, "vk-canon mismatch: fallback %zu/%zu palette %zu/%zu quads %zu/%zu buckets", canon.fallback.size(),
+               ref.fallback.size(), canon.palette.size(), ref.palette.size(), canon.quads.size(), ref.quads.size());
+  for (int f = 0; f < 7; ++f) std::fprintf(stderr, " %u/%u", canon.bucket[f], ref.bucket[f]);
+  std::fprintf(stderr, "\n");
+  const size_t nf = std::min(canon.fallback.size(), ref.fallback.size());
+  for (size_t i = 0; i < nf; ++i) {
+    const PackedVertex& x = canon.fallback[i]; const PackedVertex& y = ref.fallback[i];
+    if (std::memcmp(&x, &y, sizeof(x)) != 0) {
+      std::fprintf(stderr, "  fallback[%zu] canon xyz %u %u %u uv %u %u fa %u L %u v %u m %u | ref xyz %u %u %u uv %u %u fa %u L %u v %u m %u\n", i,
+                   x.x, x.y, x.z, x.u, x.v, x.faceAo, x.layerIndex(), x.value, x.mode, y.x, y.y, y.z, y.u, y.v, y.faceAo,
+                   y.layerIndex(), y.value, y.mode);
+      break;
+    }
+  }
+  const size_t nq = std::min(canon.quads.size(), ref.quads.size());
+  for (size_t i = 0; i < nq; ++i)
+    if (canon.quads[i] != ref.quads[i] || canon.quadMat[i] != ref.quadMat[i]) {
+      std::fprintf(stderr, "  quad[%zu] canon %016llx m%u | ref %016llx m%u\n", i, (unsigned long long)canon.quads[i],
+                   canon.quadMat[i], (unsigned long long)ref.quads[i], ref.quadMat[i]);
+      break;
+    }
 }
 
 bool cVkCanonUploader::decline() {
