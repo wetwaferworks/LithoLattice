@@ -1,5 +1,5 @@
 # litholattice_tests: engine-only tests (links no game code). ctest runs one test per module.
-add_executable(litholattice_tests engine_tests.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../src/render/software_test.cpp)
+add_executable(litholattice_tests engine_tests.cpp canonical_mesh_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../src/render/software_test.cpp)
 # PBR tests load the shipped defaults data file by absolute source path.
 target_compile_definitions(litholattice_tests PRIVATE
   LITHOKRAFT_MATERIALS_PATH="${LithoLattice_SOURCE_DIR}/assets/materials/lithokraft.materials")

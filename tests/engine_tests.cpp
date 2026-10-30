@@ -51,6 +51,7 @@
 #include "litholattice/render/block_materials.h"
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/binary_greedy_mesher.h"
+int testCanonicalMeshEntry();  // canonical_mesh_test.cpp (render pipeline step 2-3)
 #include "litholattice/render/micro_mesher.h"
 #include "litholattice/subdiv/octree.h"
 #include "litholattice/subdiv/subdiv_store.h"
@@ -9187,7 +9188,7 @@ int runModule(const std::string& m) {
   const int before = g_fails;
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
   else if (m == "world") { testWorld(); testMarchRay(); testChunkIngress(); }
-  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
+  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); g_fails += testCanonicalMeshEntry(); }
   else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
