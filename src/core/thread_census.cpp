@@ -76,15 +76,45 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
   return b;
 }
 
-std::string oversubscriptionWarning(const ThreadBudget& b) {
-  const unsigned planned = b.mainThreads + b.simClock + b.renderSpawned + b.pool;
-  if (planned <= b.hw) return {};
+unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned) { return b.pool + renderSpawned; }
+
+static const char* sourceName(CoresSource s) {
+  return s == CoresSource::Cli ? "--cores" : s == CoresSource::Env ? "LITHO_CORES" : "hardware";
+}
+
+std::string threadTally(const ThreadBudget& b) {
   char buf[320];
   std::snprintf(buf, sizeof buf,
-                "threads: %u planned threads exceed %u effective cores (Class A dedicated: main %u + sim clock %u + "
-                "render bands %u; Class B pool: %u workers, shards run as its jobs; System I/O threads not budgeted); "
-                "oversubscribing, no pinning (ruling 6)",
-                planned, b.hw, b.mainThreads, b.simClock, b.renderSpawned, b.pool);
+                "threads: census %u cores (%s; hardware reports %u): compute workers %u = shared pool %u + "
+                "render bands %u spawned; dedicated main %u + sim clock %u; system/I-O threads not budgeted",
+                b.hw, sourceName(b.source), b.hwRaw, computeWorkers(b, b.renderSpawned), b.pool, b.renderSpawned,
+                b.mainThreads, b.simClock);
+  return buf;
+}
+
+std::string oversubscriptionWarning(const ThreadBudget& b, bool renderExplicit, unsigned renderSpawned) {
+  const bool coresExplicit = b.source != CoresSource::Hardware;
+  if (!coresExplicit && !renderExplicit) return {};  // automatic settings never warn (t3353u)
+  const unsigned rs = renderExplicit ? renderSpawned : b.renderSpawned;
+  const unsigned compute = computeWorkers(b, rs);
+  const unsigned hwCores = std::max(1u, b.hwRaw);
+  const ThreadBudget a = computeThreadBudget(hwCores);  // what automatic settings plan here
+  const unsigned autoCompute = computeWorkers(a, a.renderSpawned);
+  if (compute <= std::max(hwCores, autoCompute)) return {};
+  char buf[320];
+  std::snprintf(buf, sizeof buf,
+                "threads: explicit %s%s%s plans %u compute workers (shared pool %u + render bands %u) on %u hardware "
+                "cores (automatic settings plan %u); oversubscribing, no pinning (ruling 6)",
+                coresExplicit ? sourceName(b.source) : "", coresExplicit && renderExplicit ? " + " : "",
+                renderExplicit ? "--render-threads" : "", compute, b.pool, rs, hwCores, autoCompute);
+  return buf;
+}
+
+std::string poolInvariantViolation(size_t livePooled, const ThreadBudget& b) {
+  if (livePooled <= b.pool) return {};
+  char buf[200];
+  std::snprintf(buf, sizeof buf, "threads: invariant violated: %zu live pool worker records exceed the census pool of %u",
+                livePooled, b.pool);
   return buf;
 }
 
@@ -119,7 +149,8 @@ cThreadCensus& cThreadCensus::instance() {
     auto* cc = new (storage) cThreadCensus(r.cores, r.source);
     cc->budget_.hwRaw = hw;  // telemetry: what the hardware reported
     g_booted.store(true);
-    const std::string w = oversubscriptionWarning(cc->budget_);  // JD t3349u item 8
+    logInfo("%s", threadTally(cc->budget_).c_str());  // t3353u: the tally is a summary, not a warning
+    const std::string w = oversubscriptionWarning(cc->budget_);  // explicit --cores / LITHO_CORES only
     if (!w.empty()) logWarn("%s", w.c_str());
     return cc;
   }();
@@ -130,6 +161,16 @@ unsigned cThreadCensus::hwReads() { return g_hwReads.load(std::memory_order_rela
 
 cThreadCensus::cThreadCensus(unsigned hwRaw, CoresSource source) : budget_(computeThreadBudget(hwRaw)) {
   budget_.source = source;
+}
+
+unsigned cThreadCensus::renderBands(unsigned req) const {
+  const unsigned n = resolveRenderBands(req, budget_.hw, kCensusWasm);
+  if (req) {  // t3353u: an explicit --render-threads may warn, once per process
+    static std::atomic<bool> warned{false};
+    const std::string w = oversubscriptionWarning(budget_, true, n > 0 ? n - 1 : 0);
+    if (!w.empty() && !warned.exchange(true)) logWarn("%s", w.c_str());
+  }
+  return n;
 }
 
 void cThreadCensus::noteCommittedTick(uint64_t tick) { g_lastCommittedTick.store(tick, std::memory_order_relaxed); }

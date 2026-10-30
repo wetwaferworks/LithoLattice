@@ -88,10 +88,21 @@ struct ThreadBudget {
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm = kCensusWasm);
 
-/// JD t3349u item 8: planned threads (Class A main + sim clock + spawned render bands,
-/// Class B pool) against the effective core count. Empty when they fit, else a one-line
-/// warning with the per-class breakdown. instance() logs it once at boot.
-std::string oversubscriptionWarning(const ThreadBudget& b);
+/// Archie t3353u (via JD): only COMPUTE workers count toward oversubscription, i.e. the
+/// shared pool plus the spawned render bands. Main, the sim clock and every System / I/O
+/// thread (MCP/HTTP, web drain, audio, input, world store) are never counted: the
+/// cores-2 reserve exists to give them headroom.
+unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned);
+/// The full tally for the census summary (instance() logs it at info level on every boot).
+std::string threadTally(const ThreadBudget& b);
+/// Automatic settings never warn. Non-empty only when an explicit override (--cores /
+/// LITHO_CORES via b.source, or an explicit --render-threads giving renderSpawned) pushes
+/// compute workers past both the hardware cores (b.hwRaw) and what automatic settings
+/// would plan on that hardware. instance() / renderBands() log it at most once each.
+std::string oversubscriptionWarning(const ThreadBudget& b, bool renderExplicit = false, unsigned renderSpawned = 0);
+/// Invariant after the pool merges (t3353u): live Class B worker records never exceed the
+/// budget pool. Empty when it holds; cJobPool::shared() logs a WARN otherwise.
+std::string poolInvariantViolation(size_t livePooled, const ThreadBudget& b);
 
 /// JD t3349u item 4: retire() with this tick records the last committed Timing Handshake
 /// tick (cThreadCensus::lastCommittedTick()) instead of 0.
@@ -142,7 +153,8 @@ class cThreadCensus {
   static uint64_t lastCommittedTick();
 
   /// Band count for a renderer request against this census (ruling 5).
-  unsigned renderBands(unsigned req) const { return resolveRenderBands(req, budget_.hw, kCensusWasm); }
+  /// An explicit req that oversubscribes (see oversubscriptionWarning) logs one WARN.
+  unsigned renderBands(unsigned req) const;
 
   const ThreadBudget& budget() const { return budget_; }
 

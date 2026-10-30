@@ -8465,12 +8465,21 @@ void testThreadCensusRulings() {
   check(resolveRenderBands(3, 8, false) == 3 && resolveRenderBands(100, 16, false) == 64 && resolveRenderBands(8, 4, false) == 8 &&
             resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 16,
         "census bands: an explicit request is honoured as given, capped only at 64 (JD t3349u item 7)");
-  {
-    const std::string w = oversubscriptionWarning(computeThreadBudget(8));
-    ThreadBudget fits; fits.hw = 64;
-    check(!w.empty() && w.find("main 1") != std::string::npos && w.find("render bands 6") != std::string::npos &&
-              w.find("pool: 6 workers") != std::string::npos && oversubscriptionWarning(fits).empty(),
-          "census: oversubscription warning carries the per-class breakdown, silent when it fits (item 8)");
+  {  // Archie t3353u: compute workers only; automatic settings never warn
+    const ThreadBudget a = computeThreadBudget(12);
+    ThreadBudget cli = computeThreadBudget(32); cli.hwRaw = 12; cli.source = CoresSource::Cli;
+    ThreadBudget same = computeThreadBudget(12); same.source = CoresSource::Env;
+    bool autoQuiet = true;
+    for (unsigned hw : {1u, 2u, 4u, 8u, 12u, 16u, 64u, 128u}) autoQuiet = autoQuiet && oversubscriptionWarning(computeThreadBudget(hw)).empty();
+    const std::string w = oversubscriptionWarning(cli);
+    const std::string wr = oversubscriptionWarning(a, true, 63);
+    check(autoQuiet && oversubscriptionWarning(same).empty() && oversubscriptionWarning(a, true, 10).empty() && !w.empty() &&
+              w.find("--cores") != std::string::npos && w.find("shared pool 30") != std::string::npos &&
+              w.find("render bands 15") != std::string::npos && !wr.empty() && wr.find("--render-threads") != std::string::npos,
+          "census: automatic settings never warn; only an explicit override past the hardware does (t3353u)");
+    check(threadTally(a).find("compute workers 20") != std::string::npos && computeWorkers(a, a.renderSpawned) == 20 &&
+              poolInvariantViolation(10, a).empty() && !poolInvariantViolation(11, a).empty(),
+          "census: the tally counts compute workers only (pool + render bands); pool invariant check");
   }
   {
     const uint64_t prev = cThreadCensus::lastCommittedTick();
