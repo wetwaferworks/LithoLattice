@@ -12,6 +12,7 @@ namespace litholattice {
 
 struct GreedyGrid;
 class cWorkerScratch;
+class IBlockAppearance;
 
 class cMeshPipeline {
  public:
@@ -25,6 +26,9 @@ class cMeshPipeline {
   /// Stage: Packed12 fallback of the per-cell stream (M7) and the M11 palette split.
   /// legacyVerts = stream size before the flush.
   void packedFallback(size_t legacyVerts, FallbackReasonStats::Local& fbr, cWorkerScratch& ws);
+  /// Stage: M6 L1/L2 LODs from UnifiedMesher over the per-job material table, merged into
+  /// the canonical mesh. look / fancyLeaves are the pass's values for this job.
+  void canonLods(cWorkerScratch& ws, const IBlockAppearance& look, bool fancyLeaves);
   /// Stage: trim an oversized legacy stream (cannot happen for 16^3 cubes; guards custom shapes).
   void capGuard();
   /// Stage: per-mesh draw params (wafer ground pulse, Trace-mix pulse colour, ground traces).

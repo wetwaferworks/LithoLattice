@@ -53,7 +53,7 @@ constexpr Face kFaces[6] = {
   {{ 0, 0,-1}, {0, 1, 0}, {1, 0, 0}},  // -Z (north)
 };
 constexpr int kCorner[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
-constexpr int kFaceDir[6] = {1, 3, -1, -1, 2, 0};  // world face -> horizontal dir (N0 E1 S2 W3)
+// kFaceDir: see MesherDetail.h (refactor step 4c, shared with the LOD stage)
 
 struct Look {
   uint16_t layer = 0;  // Cortana 2026-10-15 1628: CA-03 [ENGINE]
@@ -457,6 +457,7 @@ namespace {
 // light engine feeds the mesh path yet (lightApron 0), so L1/L2 carry full sky like L0.
 // The UnifiedMesher palette is merged into the L0 palette (dedup by packed entry) and
 // its quads re-indexed; on palette overflow the mesh keeps L0 only (counted).
+}  // namespace (refactor step 4: shared with MeshPipeline.cpp, see MesherDetail.h)
 bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   const size_t palBefore = dst.palette.size();
   std::vector<uint32_t> remap(src.palette.size());
@@ -484,6 +485,7 @@ bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
   }
   return true;
 }
+namespace {
 }  // namespace (refactor step 4: counters shared with MeshPipeline.cpp)
 std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0}, g_umSkirtQuads{0}, g_umSplits{0};
 namespace {
@@ -795,68 +797,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   const size_t legacyVerts = out.verts.size();  // render pipeline M7: per-cell stream before the canonical flush
   pipe.flush(greedyGrid, greedy);
   pipe.packedFallback(legacyVerts, fbr, ws);
-  if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
-    cWorkerScratch::Lod& wl = ws.lod();  // refactor step 2: was function-static thread_locals
-    std::vector<uint32_t>& keyGen = wl.keyGen;
-    std::vector<uint16_t>& keyLocal = wl.keyLocal;
-    std::vector<UnifiedMaterial>& umats = wl.umats;
-    uint16_t (&umId)[kMeshPadVolume] = wl.umId;
-    std::unique_ptr<UnifiedMesher>& um = wl.um;
-    CanonicalMesh& lodMesh = wl.lodMesh;
-    if (!um) um = std::make_unique<UnifiedMesher>();
-    umats.assign(1, UnifiedMaterial{});  // 0 = air
-    umats[0].occludes = false;
-    bool tableOk = true;
-    for (int i = 0; i < kMeshPadVolume && tableOk; ++i) {
-      umId[i] = 0;
-      const BlockId b = in.id[i];
-      if (b == kAir) continue;
-      const BlockDef& d = jobDef(b);
-      if (d.shape != Shape::Cube || look.shapedRender(d) || (d.flags & kAttachable)) continue;
-      const CellState st = in.st[i];
-      const bool active = look.active(d, st);
-      const int facing = (d.flags & kDirectional) ? stFacing(st) : 0;
-      const uint32_t key = uint32_t(b) | (uint32_t(active) << 16) | (uint32_t(facing & 3) << 17);
-      if (keyGen[key] != gen) {
-        if (umats.size() >= 65535) { tableOk = false; break; }
-        keyGen[key] = gen;
-        keyLocal[key] = uint16_t(umats.size());
-        UnifiedMaterial um1;
-        um1.occludes = opaque[i] != 0;
-        um1.perFace = true;
-        const bool leaf = (d.flags & kLeaves) != 0;
-        for (int f = 0; f < 6; ++f) {
-          FaceSlot slot;
-          if (f == 2) slot = FaceSlot::Top;
-          else if (f == 3) slot = FaceSlot::Bottom;
-          else {
-            const int dd = kFaceDir[f];
-            slot = dd == facing ? FaceSlot::Front : dd == dirBack(facing) ? FaceSlot::Back : dd == dirRight(facing) ? FaceSlot::Right : FaceSlot::Left;
-          }
-          const FaceMaterial fm = mats.face(b, slot, leaf ? !fancyLeaves : active);
-          canon::PaletteFields p;
-          p.layerId = fm.layer;
-          if (fm.animated()) { p.modeFlags |= uint8_t(canon::kModeAnimated); p.pulse = uint8_t(fm.animation & 15u); }
-          if (leaf && fancyLeaves) p.modeFlags |= uint8_t(canon::kModeLeafWind | canon::kModeCutout);
-          else if (d.flags & kTransparent) p.modeFlags |= uint8_t(canon::kModeGlassDither);
-          um1.faces[size_t(f)] = p;
-        }
-        um1.palette = um1.faces[2];
-        umats.push_back(um1);
-      }
-      umId[i] = keyLocal[key];
-    }
-    UnifiedMeshInput ui;
-    ui.matId = umId; ui.materials = umats.data(); ui.materialCount = uint32_t(umats.size()); ui.firstLod = 1;
-    if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok &&
-        (mergeCanonLods(lodMesh, *canonOut) || (canonOut->next && mergeCanonLods(lodMesh, *canonOut->next))))
-    {
-      g_umLodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
-      g_umSkirtQuads.fetch_add(uint64_t(lodMesh.lods[1].skirt.count) + lodMesh.lods[2].skirt.count, std::memory_order_relaxed);
-    }
-    else
-      g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
-  }
+  pipe.canonLods(ws, look, fancyLeaves);  // render pipeline M6 (refactor step 4c)
   pipe.capGuard();
   pipe.perMeshParams();
   return out;
