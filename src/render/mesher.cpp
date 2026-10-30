@@ -10,6 +10,7 @@
 #include "litholattice/render/unified_mesher.h"  // render pipeline M2
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
+#include "MeshPipeline.h"  // refactor step 4: meshSubChunkPass stages
 #include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
@@ -855,36 +856,11 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     else
       g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
   }
-  if (out.verts.size() > size_t(kMaxQuadsPerMesh) * 4) {  // cannot happen for 16^3 cubes; guards custom shapes
-    logError("mesher: sub-chunk (%d,%d,%d) has %zu quads, trimmed to %u", in.cx, in.sy, in.cz, out.verts.size() / 4,
-             kMaxQuadsPerMesh);
-    out.verts.resize(size_t(kMaxQuadsPerMesh) * 4);
+  {  // refactor step 4: the tail stages, same order
+    cMeshPipeline pipe(in, ctx, out, canonOut);
+    pipe.capGuard();
+    pipe.perMeshParams();
   }
-  // Wafer ground pulse: the column's weight-blended params ride the mesh, so the
-  // backends can push them per draw call (biome weights are worldgen-static, so
-  // baking at mesh time costs nothing per frame). Null provider = zero params.
-  if (ctx.pulseParams) ctx.pulseParams(in.cx, in.cz, out.pulseP0, out.pulseP1);
-  // Cortana 2026-10-15 1600 (MIXED; credit: JD idea): Trace-mix pulse colour.
-  // Count the red (StripTint0) and blue (StripTint1) Trace quads in this mesh
-  // and blend the pulse colour by their ratio: all-blue pulses blue, all-red
-  // pulses red, a mix pulses at the weighted mean. The biome colour's peak
-  // brightness is kept, so the tuned amplitude still reads the same. This runs
-  // once per (re)mesh, so it is recomputed only when the chunk's blocks
-  // (and so its Trace) change. A mesh with no Trace keeps the biome colour.
-  // Render-only: no sim state is read or written, so the hash can't move.
-  {
-    uint32_t nRed = 0, nBlue = 0;
-    for (size_t i = 0; i < out.verts.size(); i += 4) {
-      nRed += out.verts[i].mode == kShadeStripTint0;
-      nBlue += out.verts[i].mode == kShadeStripTint1;
-    }
-    const float rgb[3] = {out.pulseP1[0], out.pulseP1[1], out.pulseP1[2]};
-    traceMixPulseColor(nRed, nBlue, rgb, out.pulseP1);
-  }
-  // Wafer ground traces (JD 2026-10-11): same pattern as the pulse - the
-  // column's weight-blended trace params ride the mesh for per-draw push.
-  // Null provider = zero params (no traces).
-  if (ctx.traceParams) ctx.traceParams(in.cx, in.cz, out.traceP0, out.traceP1);
   return out;
 }
 
