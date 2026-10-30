@@ -84,7 +84,9 @@ uint32_t cSpriteReg::adoptImage(const SpriteDef& def, Image image, bool singleFr
     fail(err, std::string("sprite '") + def.name + "': source image is empty");
     return 0;
   }
-  if (def.frameCount > 1 && image.height() % static_cast<int>(def.frameCount) != 0) {
+  // Archie review H20a: a huge frameCount cast to int went negative (-1 passed the % check).
+  if (def.frameCount > 1 && (def.frameCount > static_cast<uint32_t>(image.height()) ||
+                             image.height() % static_cast<int>(def.frameCount) != 0)) {
     fail(err, std::string("sprite '") + def.name + "': strip height " +
                   std::to_string(image.height()) + " is not divisible by frameCount " +
                   std::to_string(def.frameCount));

@@ -41,9 +41,11 @@ size_t cOcclusionThread::addQuery(float lx, float ly, float lz,
   std::lock_guard<std::mutex> lock(queriesMu_);
   // Find a free slot or append.
   for (size_t i = 0; i < queries_.size(); ++i) {
-    bool expected = false;
-    if (queries_[i]->active.compare_exchange_strong(expected, true,
-                                                    std::memory_order_acq_rel)) {
+    // Archie review H28a: the CAS published active=true BEFORE the positions
+    // (the occlusion thread could read a live slot with stale coordinates).
+    // Claimers all hold queriesMu_, so a plain check suffices; the release
+    // store below is the only publication.
+    if (!queries_[i]->active.load(std::memory_order_acquire)) {
       // Slot claimed (no other thread can see it as active until we publish
       // below). Write the positions first, then publish with a release
       // store: the occlusion thread's acquire load of `active` pairs with

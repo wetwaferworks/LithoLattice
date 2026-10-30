@@ -321,6 +321,7 @@ std::unique_ptr<ICarver> loadCavernCarver(cLoader& l, const Json& j,
   s.squashY = float(j.getNum("squash_y", s.squashY));
   s.minY = int(j.getNum("min_y", s.minY));
   s.maxY = int(j.getNum("max_y", s.maxY));
+  if (s.maxY < s.minY) s.maxY = s.minY;  // Archie review H27b: range(min,max) needs min <= max
   s.surfaceMargin = int(j.getNum("surface_margin", s.surfaceMargin));
   s.noiseFreq = float(j.getNum("noise_freq", s.noiseFreq));
   s.coreFrac = float(j.getNum("core_frac", s.coreFrac));
@@ -350,6 +351,7 @@ std::unique_ptr<ICarver> loadCarver(cLoader& l, const Json& j, const std::vector
   s.maxRadius = float(j.getNum("max_radius", s.maxRadius));
   s.minY = int(j.getNum("min_y", s.minY));
   s.maxY = int(j.getNum("max_y", s.maxY));
+  if (s.maxY < s.minY) s.maxY = s.minY;  // Archie review H27b: range(min,max) needs min <= max
   s.surfaceMargin = int(j.getNum("surface_margin", s.surfaceMargin));
   s.branchChance = float(j.getNum("branch_chance", s.branchChance));
   s.maxBranches = int(j.getNum("max_branches", s.maxBranches));
@@ -832,6 +834,7 @@ std::unique_ptr<IFeature> loadFeature(cLoader& l, const Json& j, const std::vect
   s.size = int(j.getNum("size", s.size));
   s.minY = int(j.getNum("min_y", s.minY));
   s.maxY = int(j.getNum("max_y", s.maxY));
+  if (s.maxY < s.minY) s.maxY = s.minY;  // Archie review H27b: range(min,max) needs min <= max
   return std::make_unique<cOreVeinFeature>(s);
 }
 

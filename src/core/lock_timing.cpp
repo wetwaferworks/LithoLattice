@@ -65,12 +65,14 @@ void frameEnd() {
   const double waitAvg = double(gWinWait) * 1e-6 / n;
   char sites[256], holders[160];
   int o = 0;
-  for (int i = 0; i < kSiteCount; ++i)
-    o += std::snprintf(sites + o, sizeof sites - size_t(o), "%s%s %.3f (%.1f acq, %.2f cont)", i ? ", " : "", kSiteName[i],
-                       double(gWinSite[i]) * 1e-6 / n, double(gSiteAcq[i]) / n, double(gSiteCont[i]) / n);
+  // Archie review H5: o is clamped after each snprintf (on truncation it
+  // returns the would-be length, and sites + o ran past the buffer).
+  for (int i = 0; i < kSiteCount && o < int(sizeof sites) - 1; ++i)
+    o = std::min(int(sizeof sites) - 1, o + std::snprintf(sites + o, sizeof sites - size_t(o), "%s%s %.3f (%.1f acq, %.2f cont)", i ? ", " : "", kSiteName[i],
+                       double(gWinSite[i]) * 1e-6 / n, double(gSiteAcq[i]) / n, double(gSiteCont[i]) / n));
   o = 0;
-  for (int i = 1; i < kHolderCount; ++i)
-    o += std::snprintf(holders + o, sizeof holders - size_t(o), "%s%s %.3f", i > 1 ? ", " : "", kHolderName[i], double(gWinHolder[i]) * 1e-6 / n);
+  for (int i = 1; i < kHolderCount && o < int(sizeof holders) - 1; ++i)
+    o = std::min(int(sizeof holders) - 1, o + std::snprintf(holders + o, sizeof holders - size_t(o), "%s%s %.3f", i > 1 ? ", " : "", kHolderName[i], double(gWinHolder[i]) * 1e-6 / n));
   logInfo("lock timing: %d frames: main wait ms/frame avg %.3f p99 %.3f max %.3f, longest single wait %.3f ms, share %.1f%% of frame %.2f ms, "
           "acq/frame %.1f contended/frame %.2f | by lock ms/frame: %s | block holders ms/frame: %s",
           int(n), waitAvg, pct(gFrameWaitMs, 0.99), pct(gFrameWaitMs, 1.0), double(gWinMax) * 1e-6,

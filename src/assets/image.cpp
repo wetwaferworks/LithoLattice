@@ -65,6 +65,11 @@ std::optional<Image> Image::decodeSvg(std::span<const uint8_t> bytes, int width,
   src.push_back('\0');
   NSVGimage* svg = nsvgParse(src.data(), "px", 96.0f);
   if (!svg) return fail("SVG parse failed");
+  // Archie review H26: std::clamp passes NaN through; int(ceil(NaN)) is UB.
+  if (!std::isfinite(svg->width) || !std::isfinite(svg->height)) {
+    nsvgDelete(svg);
+    return fail("SVG has no drawable size");
+  }
   int w = width, h = height;
   if (w <= 0 || h <= 0) {  // intrinsic size
     // Clamp in FLOAT before converting (P3-3, Appendix E M5): converting a

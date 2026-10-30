@@ -1165,7 +1165,8 @@ void cTraceTreeFeature::place(StageContext& ctx, Rng&) const {
               const MaterialId tip = r.uniform() < s_.redTipChance ? s_.tipRed : s_.tipBlue;
               for (int i = 1; i <= trunkH; ++i) setIntoAir(ctx, bx, surfY + i, bz, s_.trunk);
               setIntoAir(ctx, bx, surfY + trunkH + 1, bz, tip);  // glowing tip crowning the trunk
-              const int nBr = r.range(s_.minBranches, s_.maxBranches);
+              // Archie review H27a: dirs has 8 entries; a config maxBranches > 8 overran it.
+              const int nBr = std::clamp(r.range(s_.minBranches, s_.maxBranches), 0, 8);
               int dirs[8] = {0, 1, 2, 3, 4, 5, 6, 7};
               for (int i = 0; i < nBr; ++i) {  // partial Fisher-Yates: nBr distinct directions
                 const int j = i + r.range(0, 7 - i);

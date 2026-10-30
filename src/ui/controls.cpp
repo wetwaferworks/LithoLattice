@@ -254,7 +254,14 @@ Rect cNumberField::plusRect() const { return {rect().right() - rect().h, rect().
 
 void cNumberField::commitTyping() {
   if (typing_.empty()) return;
-  const int v = std::stoi(typing_);
+  // Archie review H29e: "-" or an out-of-range number made stoi throw.
+  int v = 0;
+  try {
+    v = std::stoi(typing_);
+  } catch (const std::exception&) {
+    typing_.clear();
+    return;  // keep the current value
+  }
   typing_.clear();
   setValue(v, true);
 }
