@@ -421,6 +421,25 @@ void testArchieHandshakeH1H3() {
     tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
     check(tripped && b.lastTickHash() == a.lastTickHash(), "tick ledger H1c: a frozen sweep keeps due async records for the rerun");
   }
+  {  // H1a: a stale job of a frozen tick that spawns after the abandon must not leak into the rerun.
+    L a, b;
+    std::vector<uint64_t> ha, hb;
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(a, 1, &ha); a.asyncComplete(ha[0], 5); a.sweep(kNever); a.commit();
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    b.openTick(1);
+    uint64_t stale = L::kNoHandle;
+    {
+      L::JobScope js(b, b.slot(0), 0, 7, 0);
+      b.abandonOpenTick();           // watchdog froze the tick while this job still ran
+      stale = L::asyncBegin(1);      // ...and the stale job spawns afterwards
+    }
+    b.asyncComplete(stale, 99);
+    tick1(b, 1, &hb); b.asyncComplete(hb[0], 5); b.sweep(kNever); b.commit();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    check(b.lastTickHash() == a.lastTickHash(), "tick ledger H1a: async spawned by a stale job of an abandoned tick never commits");
+  }
 }
 
 void testJobSystem() {

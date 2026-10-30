@@ -109,12 +109,14 @@ class cTickLedger {
   struct JobScope {
     SyncSlot* prev;
     cTickLedger* prevLedger;
-    JobScope(cTickLedger& l, SyncSlot& s, uint32_t seq, uint32_t componentId, uint64_t telNs) : prev(tCur()), prevLedger(tLedger()) {
+    uint64_t prevGen;
+    JobScope(cTickLedger& l, SyncSlot& s, uint32_t seq, uint32_t componentId, uint64_t telNs) : prev(tCur()), prevLedger(tLedger()), prevGen(tGen()) {
+      tGen() = l.abandonGen_.load(std::memory_order_seq_cst);  // H1a: which open-tick life this job belongs to
       s.tick = l.currentTick(); s.seq = seq; s.componentId = componentId;
       s.payloadHash = 0; s.asyncSpawned = 0; s.telStartNs = telNs;
       tCur() = &s; tLedger() = &l;
     }
-    ~JobScope() { tCur() = prev; tLedger() = prevLedger; }
+    ~JobScope() { tCur() = prev; tLedger() = prevLedger; tGen() = prevGen; }
     JobScope(const JobScope&) = delete;
     JobScope& operator=(const JobScope&) = delete;
   };
@@ -143,7 +145,14 @@ class cTickLedger {
     r.dueTick = s->tick + (latencyTicks < 1 ? 1 : latencyTicks);
     r.payloadHash = 0;
     r.observedReturnTick = 0;
-    r.state.store(kPending, std::memory_order_release);
+    r.state.store(kPending, std::memory_order_seq_cst);
+    // H1a: a stale job of a tick abandoned by a freeze (before or while it got here) cancels
+    // its own record. Paired seq_cst with abandonOpenTick: either it sees kPending or we see
+    // the bumped generation.
+    if (l->abandonGen_.load(std::memory_order_seq_cst) != tGen()) {
+      uint32_t p = kPending;
+      r.state.compare_exchange_strong(p, kCancelled, std::memory_order_acq_rel);
+    }
     return h;
   }
   /// Any thread: the async job finished with this payload hash.
@@ -236,13 +245,14 @@ class cTickLedger {
   /// async jobs it spawned are cancelled (their completion just frees the record).
   void abandonOpenTick() {
     if (!open_) return;
+    abandonGen_.fetch_add(1, std::memory_order_seq_cst);  // H1a: late asyncBegin self-cancels
     const uint64_t tick = epoch_;
-    const uint64_t head = asyncHead_.load(std::memory_order_acquire);
+    const uint64_t head = asyncHead_.load(std::memory_order_seq_cst);
     for (uint64_t i = asyncLow_; i < head; ++i) {
       AsyncRec& r = async_[i & asyncMask_];
-      if (r.spawnTick != tick) continue;
-      uint32_t st = kPending;
-      if (r.state.compare_exchange_strong(st, kCancelled, std::memory_order_acq_rel)) { ++stats_.asyncCancelled; continue; }
+      uint32_t st = r.state.load(std::memory_order_seq_cst);  // H1a: read fields only once published
+      if ((st != kPending && st != kDone) || r.spawnTick != tick) continue;
+      if (st == kPending && r.state.compare_exchange_strong(st, kCancelled, std::memory_order_acq_rel)) { ++stats_.asyncCancelled; continue; }
       if (st == kDone) { r.state.store(kFree, std::memory_order_release); ++stats_.asyncCancelled; }
     }
     open_ = false;
@@ -268,6 +278,7 @@ class cTickLedger {
   static uint64_t lnow() { return uint64_t(tickprof::nowNs()); }
   static SyncSlot*& tCur() { thread_local SyncSlot* s = nullptr; return s; }
   static cTickLedger*& tLedger() { thread_local cTickLedger* l = nullptr; return l; }
+  static uint64_t& tGen() { thread_local uint64_t g = 0; return g; }
 
   cTickArena arena_;
   SyncSlot* ring_ = nullptr;
@@ -275,6 +286,7 @@ class cTickLedger {
   AsyncRec* async_ = nullptr;
   uint32_t asyncMask_ = 0;
   std::atomic<uint64_t> asyncHead_{0};
+  std::atomic<uint64_t> abandonGen_{0};  // H1a: bumped by abandonOpenTick
   uint64_t asyncLow_ = 0;
   uint64_t tOffset_ = 0;
   uint32_t k_ = 0;
