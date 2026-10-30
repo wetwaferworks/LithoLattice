@@ -31,6 +31,10 @@ struct UnifiedMaterial {
   canon::PaletteFields palette{};
   bool occludes = true;  ///< opaque full cube: hides neighbour faces and casts AO
   uint8_t uvRot = 0;
+  /// M6 (registry feed): per-face looks. When set, face direction f (+X -X +Y -Y +Z -Z)
+  /// takes faces[f] as its palette entry (one palette slot per used (material, face)).
+  bool perFace = false;
+  std::array<canon::PaletteFields, 6> faces{};
 };
 
 struct BucketRange { uint32_t start = 0, count = 0; };
@@ -63,6 +67,7 @@ struct UnifiedMeshInput {
   const uint16_t* light = nullptr;               ///< may be null (full sky, no block light)
   const UnifiedMaterial* materials = nullptr;    ///< indexed by matId
   uint32_t materialCount = 0;
+  int firstLod = 0;  ///< M6: 1 = build L1/L2 only (the game path emits L0 from the registry pass)
   static constexpr int apronIdx(int x, int y, int z) noexcept { return (y * 18 + z) * 18 + x; }
 };
 
@@ -78,9 +83,9 @@ class UnifiedMesher {
  private:
   struct Grid;  // (dim+2)^3 mat/light grid for one LOD
   void buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& overflow);
-  int paletteSlot(uint16_t mat, CanonicalMesh& out);
+  int paletteSlot(uint16_t mat, uint32_t face, CanonicalMesh& out);
   const UnifiedMeshInput* in_ = nullptr;
-  std::vector<uint32_t> slotStamp_;  // per material ID: (stamp << 10) | slot
+  std::vector<uint32_t> slotStamp_;  // per (material ID, face slot): (stamp << 10) | slot
   uint32_t stamp_ = 0;
   uint32_t lastQuads_[3] = {};
   std::vector<uint64_t> blendTmp_;

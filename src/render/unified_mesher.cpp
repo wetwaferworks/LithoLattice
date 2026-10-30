@@ -62,15 +62,17 @@ struct UnifiedMesher::Grid {
   int idx(int x, int y, int z) const noexcept { return (y * n() + z) * n() + x; }
 };
 
-UnifiedMesher::UnifiedMesher() : slotStamp_(65536, 0u) {}
+UnifiedMesher::UnifiedMesher() : slotStamp_(size_t(65536) * 8, 0u) {}
 
-int UnifiedMesher::paletteSlot(uint16_t mat, CanonicalMesh& out) {
-  const uint32_t e = slotStamp_[mat];
+int UnifiedMesher::paletteSlot(uint16_t mat, uint32_t face, CanonicalMesh& out) {
+  const UnifiedMaterial& um = in_->materials[mat];
+  const size_t key = size_t(mat) * 8 + (um.perFace ? face : 7u);
+  const uint32_t e = slotStamp_[key];
   if ((e >> 10) == stamp_) return int(e & 0x3FFu);
   if (out.palette.size() >= canon::kMaxPalette) return -1;
   const uint32_t slot = uint32_t(out.palette.size());
-  out.palette.push_back(canon::packPalette(in_->materials[mat].palette));
-  slotStamp_[mat] = (stamp_ << 10) | slot;
+  out.palette.push_back(canon::packPalette(um.perFace ? um.faces[face] : um.palette));
+  slotStamp_[key] = (stamp_ << 10) | slot;
   return int(slot);
 }
 
@@ -89,7 +91,7 @@ UnifiedMesher::Status UnifiedMesher::mesh(const UnifiedMeshInput& in, CanonicalM
     g0.light[i] = in.light ? uint16_t(in.light[i] & 0xFFFu) : uint16_t(63u << 6);
   }
   bool overflow = false;
-  buildLod(g0, 0, out, overflow);
+  if (in.firstLod <= 0) buildLod(g0, 0, out, overflow);
   // Hull exposure for the LOD material pick: an occluding fine cell next to a
   // non-occluding one (apron included) is on the visible hull.
   static thread_local uint8_t exposed[18 * 18 * 18];
@@ -170,7 +172,7 @@ void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& o
   auto emit = [&](uint32_t face, const int mn[3], const int ext[3], uint64_t k, uint32_t scale,
                   std::vector<uint64_t>& dst) {
     const uint16_t m = uint16_t((k >> 0) & 0xFFFFu);
-    const int slot = paletteSlot(m, out);
+    const int slot = paletteSlot(m, face, out);
     if (slot < 0) { overflow = true; return; }
     canon::DecodedQuad q;
     q.ox = uint32_t(mn[0]); q.oy = uint32_t(mn[1]); q.oz = uint32_t(mn[2]);

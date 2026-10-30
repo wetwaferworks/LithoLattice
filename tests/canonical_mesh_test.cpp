@@ -219,6 +219,30 @@ int testCanonicalMesh() {
     bool same = true; for (uint64_t h : got) same = same && h == ref;
     cmCheck(same && ref != 0, "MeshHash identical across 8 threads and fresh meshers");
   }
+  {  // M6: per-face looks (registry feed) and the L1/L2-only mode used by the game path
+    Scene sc; sc.at(8, 8, 8) = 1;
+    sc.mats[1].perFace = true;
+    for (int f = 0; f < 6; ++f) sc.mats[1].faces[size_t(f)].layerId = uint16_t(100 + f);
+    CanonicalMesh m; const auto st = mesher.mesh(sc.input(), m);
+    std::set<uint32_t> pal;
+    bool faceOk = st == UnifiedMesher::Status::Ok;
+    for (int lod = 0; lod < 3; ++lod)
+      for (int f = 0; f < 6; ++f) {
+        const auto r = m.lods[size_t(lod)].face[size_t(f)];
+        for (uint32_t i = r.start; i < r.start + r.count; ++i) {
+          const auto q = canon::unpackQuad(m.quads[i]);
+          pal.insert(q.paletteIdx);
+          faceOk = faceOk && canon::unpackPalette(m.palette[q.paletteIdx]).layerId == uint16_t(100 + f);
+        }
+      }
+    cmCheck(faceOk && m.palette.size() == 6 && pal.size() == 6, "per-face looks: each face direction takes its own palette entry, shared across LODs");
+    UnifiedMeshInput in = sc.input(); in.firstLod = 1;
+    CanonicalMesh m1; const auto st1 = mesher.mesh(in, m1);
+    uint32_t n0 = 0, n1 = 0;
+    for (auto r : m1.lods[0].face) n0 += r.count;
+    for (auto r : m1.lods[1].face) n1 += r.count;
+    cmCheck(st1 == UnifiedMesher::Status::Ok && n0 == 0 && n1 == 6, "firstLod 1: no L0 quads, L1 built");
+  }
   return g_cmFails;
 }
 

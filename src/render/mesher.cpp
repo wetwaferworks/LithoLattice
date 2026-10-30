@@ -315,6 +315,43 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
   if (!ok) cm = CanonicalMesh{}, cm.magic = 0;  // magic 0 = not publishable
 }
 
+// Render pipeline M6 (step 3 on the game path: registry feed into UnifiedMesher). L1/L2
+// come from UnifiedMesher over a per-job material table built from the registry: one
+// local material per (block, active, facing), per-face looks from BlockMaterials (the
+// same FaceSlot mapping as the L0 pass). Plain full cubes only; custom / cross / slab /
+// attachable / shaped cells read as air at L1/L2 (sub-block detail, Q26). Light: no
+// light engine feeds the mesh path yet (lightApron 0), so L1/L2 carry full sky like L0.
+// The UnifiedMesher palette is merged into the L0 palette (dedup by packed entry) and
+// its quads re-indexed; on palette overflow the mesh keeps L0 only (counted).
+bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
+  const size_t palBefore = dst.palette.size();
+  std::vector<uint32_t> remap(src.palette.size());
+  for (size_t i = 0; i < src.palette.size(); ++i) {
+    size_t j = 0;
+    while (j < dst.palette.size() && dst.palette[j] != src.palette[i]) ++j;
+    if (j == dst.palette.size()) {
+      if (j >= canon::kMaxPalette) { dst.palette.resize(palBefore); return false; }
+      dst.palette.push_back(src.palette[i]);
+    }
+    remap[i] = uint32_t(j);
+  }
+  const uint32_t base = uint32_t(dst.quads.size());
+  for (int lod = 1; lod <= 2; ++lod) {
+    CanonicalLod l = src.lods[size_t(lod)];
+    for (auto& r : l.face) r.start += base;
+    l.skirt.start += base; l.blend.start += base;
+    dst.lods[size_t(lod)] = l;
+  }
+  dst.quads.reserve(dst.quads.size() + src.quads.size());
+  for (uint64_t q : src.quads) {
+    canon::DecodedQuad d = canon::unpackQuad(q);
+    d.paletteIdx = remap[d.paletteIdx];
+    dst.quads.push_back(canon::packQuad(d));
+  }
+  return true;
+}
+std::atomic<uint64_t> g_umLodQuads{0}, g_umLodFallback{0};
+
 // -1: no override; 0/1: LL_MESH_GREEDY forces greedy off/on (A/B and captures).
 int greedyEnvOverride() {
   static const int v = [] {
@@ -604,6 +641,63 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
       }
   if (canonOut) flushCanonical(*greedyGrid, out.verts, *canonOut, greedy);  // render pipeline M2
   else if (greedy) flushGreedy(*greedyGrid, out.verts);  // Cortana 2026-10-15 1705
+  if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
+    static thread_local std::vector<uint32_t> keyGen(size_t(1) << 19, 0u);
+    static thread_local std::vector<uint16_t> keyLocal(size_t(1) << 19, uint16_t(0));
+    static thread_local std::vector<UnifiedMaterial> umats;
+    static thread_local uint16_t umId[kMeshPadVolume];
+    static thread_local std::unique_ptr<UnifiedMesher> um;
+    static thread_local CanonicalMesh lodMesh;
+    if (!um) um = std::make_unique<UnifiedMesher>();
+    umats.assign(1, UnifiedMaterial{});  // 0 = air
+    umats[0].occludes = false;
+    bool tableOk = true;
+    for (int i = 0; i < kMeshPadVolume && tableOk; ++i) {
+      umId[i] = 0;
+      const BlockId b = in.id[i];
+      if (b == kAir) continue;
+      const BlockDef& d = jobDef(b);
+      if (d.shape != Shape::Cube || look.shapedRender(d) || (d.flags & kAttachable)) continue;
+      const CellState st = in.st[i];
+      const bool active = look.active(d, st);
+      const int facing = (d.flags & kDirectional) ? stFacing(st) : 0;
+      const uint32_t key = uint32_t(b) | (uint32_t(active) << 16) | (uint32_t(facing & 3) << 17);
+      if (keyGen[key] != gen) {
+        if (umats.size() >= 65535) { tableOk = false; break; }
+        keyGen[key] = gen;
+        keyLocal[key] = uint16_t(umats.size());
+        UnifiedMaterial um1;
+        um1.occludes = opaque[i] != 0;
+        um1.perFace = true;
+        const bool leaf = (d.flags & kLeaves) != 0;
+        for (int f = 0; f < 6; ++f) {
+          FaceSlot slot;
+          if (f == 2) slot = FaceSlot::Top;
+          else if (f == 3) slot = FaceSlot::Bottom;
+          else {
+            const int dd = kFaceDir[f];
+            slot = dd == facing ? FaceSlot::Front : dd == dirBack(facing) ? FaceSlot::Back : dd == dirRight(facing) ? FaceSlot::Right : FaceSlot::Left;
+          }
+          const FaceMaterial fm = mats.face(b, slot, leaf ? !fancyLeaves : active);
+          canon::PaletteFields p;
+          p.layerId = fm.layer;
+          if (fm.animated()) { p.modeFlags |= uint8_t(canon::kModeAnimated); p.pulse = uint8_t(fm.animation & 15u); }
+          if (leaf && fancyLeaves) p.modeFlags |= uint8_t(canon::kModeLeafWind | canon::kModeCutout);
+          else if (d.flags & kTransparent) p.modeFlags |= uint8_t(canon::kModeGlassDither);
+          um1.faces[size_t(f)] = p;
+        }
+        um1.palette = um1.faces[2];
+        umats.push_back(um1);
+      }
+      umId[i] = keyLocal[key];
+    }
+    UnifiedMeshInput ui;
+    ui.matId = umId; ui.materials = umats.data(); ui.materialCount = uint32_t(umats.size()); ui.firstLod = 1;
+    if (tableOk && um->mesh(ui, lodMesh) == UnifiedMesher::Status::Ok && mergeCanonLods(lodMesh, *canonOut))
+      g_umLodQuads.fetch_add(lodMesh.quads.size(), std::memory_order_relaxed);
+    else
+      g_umLodFallback.fetch_add(1, std::memory_order_relaxed);
+  }
   if (out.verts.size() > size_t(kMaxQuadsPerMesh) * 4) {  // cannot happen for 16^3 cubes; guards custom shapes
     logError("mesher: sub-chunk (%d,%d,%d) has %zu quads, trimmed to %u", in.cx, in.sy, in.cz, out.verts.size() / 4,
              kMaxQuadsPerMesh);
@@ -721,7 +815,12 @@ bool unifiedMesherEnabled() {
 }
 static std::atomic<uint64_t> g_umMeshes{0}, g_umChecked{0}, g_umMismatch{0}, g_umUnpublished{0}, g_umQuads{0}, g_umBytes{0};
 UnifiedMesherStats unifiedMesherStats() {
-  return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load()};
+  return {g_umMeshes.load(), g_umChecked.load(), g_umMismatch.load(), g_umUnpublished.load(), g_umQuads.load(), g_umBytes.load(),
+          g_umLodQuads.load(), g_umLodFallback.load()};
+}
+bool canonLodsEnabled() {
+  static const bool v = [] { const char* e = std::getenv("LL_CANON_LODS"); return !(e && e[0] == '0'); }();
+  return v;
 }
 static bool canonVerifyOn() {
 #if defined(LL_DEBUGOPT_BUILD) || !defined(NDEBUG)
