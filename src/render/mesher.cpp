@@ -9,6 +9,7 @@
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/unified_mesher.h"  // render pipeline M2
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
+#include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
 #include <bit>
 #include "litholattice/render/trace_ramps.h"  // Cortana 2026-10-15 1600: Trace-mix pulse colour
 #include "litholattice/render/block_materials.h"
@@ -138,10 +139,7 @@ constexpr int kTexUAxis[6] = {2, 2, 0, 0, 0, 0};  // faceUV(): axis texture-u is
 constexpr int kTexVAxis[6] = {1, 1, 2, 2, 1, 1};  // faceUV(): axis texture-v is taken from
 constexpr int kGreedyMaxTiles = 15;
 
-struct GreedyGrid {
-  uint64_t key[6][16][16][16] = {};  // [face][slice][iv][iu]; 0 = empty
-  uint16_t sliceUsed[6] = {};        // bit s: slice s holds at least one parked face
-};
+// GreedyGrid: see GreedyGrid.h (refactor step 2).
 
 bool greedyEligible(const Look& lk, const int ao[4]) {
   return (lk.mode == kShadeTex || lk.mode == kShadeEmissive || lk.mode == kShadeGroundPulse) && lk.rot == 0 &&
@@ -248,8 +246,8 @@ uint64_t canonKeyOf(const canon::DecodedQuad& q, uint64_t pal) {
          uint64_t(q.cornerAo & 3u);
 }
 
-thread_local std::vector<uint32_t> t_qSlot, t_fSlot;  // M11: wide palette slots (split input)
 void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged) {
+  std::vector<uint32_t>& t_qSlot = cWorkerScratch::forThisThread().qSlot;  // M11 (refactor step 2: scratch-owned)
   cm = CanonicalMesh{};
   t_qSlot.clear();
   bool ok = true;
@@ -334,6 +332,7 @@ void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh
 // The 24-bit strength-buffer slot is not carried (no shader reads it; see the Step 1
 // note in the pass). decodeFallbackVertex is the exact inverse with slot = 0.
 bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm) {
+  std::vector<uint32_t>& t_fSlot = cWorkerScratch::forThisThread().fSlot;  // M11 (refactor step 2: scratch-owned)
   cm.fallback.clear();
   cm.fallback.reserve(n);
   t_fSlot.clear();
@@ -529,10 +528,11 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   // more threads ran. Each distinct id is now fetched ONCE per job (a
   // consistent snapshot for the whole pass; the epoch guard still re-meshes
   // after a hot-swap) and voxels read a flat flags table.
-  static thread_local std::vector<uint32_t> jobGen(size_t(1) << 16, 0u);
-  static thread_local std::vector<uint16_t> jobSlot(size_t(1) << 16, uint16_t(0));
-  static thread_local std::vector<BlockDef> jobDefs;
-  static thread_local uint32_t gen = 0;
+  cWorkerScratch& ws = cWorkerScratch::forThisThread();  // refactor step 2: was function-static thread_locals
+  std::vector<uint32_t>& jobGen = ws.jobGen;
+  std::vector<uint16_t>& jobSlot = ws.jobSlot;
+  std::vector<BlockDef>& jobDefs = ws.jobDefs;
+  uint32_t& gen = ws.gen;
   if (++gen == 0) { std::fill(jobGen.begin(), jobGen.end(), 0u); gen = 1; }
   jobDefs.clear();
   // Cortana 2026-10-15 1410 (Elfie §2.1): jobDef() returns a reference into
@@ -548,7 +548,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     }
     return jobDefs[jobSlot[id]];
   };
-  static thread_local uint8_t opaque[kMeshPadVolume];
+  uint8_t (&opaque)[kMeshPadVolume] = ws.opaque;
   const bool fancyLeaves = leavesFancy();  // 2026-10-16 (JD leaf pass)
   // 2026-10-18 (Crew Canopy, F-B): sparse-leaf thinning (render.foliage_density).
   // Inert unless fancy leaves + sparse mode. The pad-wide near test skips every
@@ -587,7 +587,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   const int greedyEnv = greedyEnvOverride();
   const bool greedy = greedyEnv < 0 ? ctx.greedy : greedyEnv == 1;
   const bool parkFaces = greedy || canonOut != nullptr;  // render pipeline M2: unified mode parks on every backend
-  static thread_local std::unique_ptr<GreedyGrid> greedyGrid;
+  std::unique_ptr<GreedyGrid>& greedyGrid = ws.greedyGrid;
   if (parkFaces) {
     if (!greedyGrid) greedyGrid = std::make_unique<GreedyGrid>();
     else {  // a pass that threw mid-way can leave cells parked: clear in place (no 196 KB stack temporary)
@@ -789,17 +789,18 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
     }
     else *canonOut = CanonicalMesh{}, canonOut->magic = 0;  // not publishable (counted as unpublished)
     if (canonOut->magic == canon::kMeshMagic && canonOut->palette.size() > canon::kMaxPalette) {  // M11: split, no legacy
-      if (splitCanonicalTwo(*canonOut, t_qSlot, t_fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
+      if (splitCanonicalTwo(*canonOut, ws.qSlot, ws.fSlot)) g_umSplits.fetch_add(1, std::memory_order_relaxed);
       else *canonOut = CanonicalMesh{}, canonOut->magic = 0;
     }
   }
   if (canonOut && canonOut->magic == canon::kMeshMagic && canonLodsEnabled()) {  // render pipeline M6
-    static thread_local std::vector<uint32_t> keyGen(size_t(1) << 19, 0u);
-    static thread_local std::vector<uint16_t> keyLocal(size_t(1) << 19, uint16_t(0));
-    static thread_local std::vector<UnifiedMaterial> umats;
-    static thread_local uint16_t umId[kMeshPadVolume];
-    static thread_local std::unique_ptr<UnifiedMesher> um;
-    static thread_local CanonicalMesh lodMesh;
+    cWorkerScratch::Lod& wl = ws.lod();  // refactor step 2: was function-static thread_locals
+    std::vector<uint32_t>& keyGen = wl.keyGen;
+    std::vector<uint16_t>& keyLocal = wl.keyLocal;
+    std::vector<UnifiedMaterial>& umats = wl.umats;
+    uint16_t (&umId)[kMeshPadVolume] = wl.umId;
+    std::unique_ptr<UnifiedMesher>& um = wl.um;
+    CanonicalMesh& lodMesh = wl.lodMesh;
     if (!um) um = std::make_unique<UnifiedMesher>();
     umats.assign(1, UnifiedMaterial{});  // 0 = air
     umats[0].occludes = false;
