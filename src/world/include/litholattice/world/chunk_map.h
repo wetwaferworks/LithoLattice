@@ -106,14 +106,16 @@ class ChunkMap {
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (!c) return false;
     const uint32_t k = ChunkColumn::cellTextKey(x, y, z);
-    if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); }
+    if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); else return true; }
     else { c->cellText[k] = std::move(text); c->markDirty(); }
+    if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // Archie review H7: snapshot carries cellText
     return true;
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;
     cow_->drop(cx, cz);  // M5: a replaced column is republished on its next pin
     columns_[ChunkKey::make(cx, cz)] = std::move(col);
+    ++structureGen_;  // Archie review C5
     if (editListener_) editListener_(cx, cz);
   }
   /// Column eviction (A2 / B-M1): removes the column at (cx, cz) and frees
@@ -123,6 +125,7 @@ class ChunkMap {
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
     const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;
+    if (gone) ++structureGen_;  // Archie review C5
     cow_->drop(cx, cz);  // M5
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
@@ -135,10 +138,15 @@ class ChunkMap {
     if (it == columns_.end()) return nullptr;
     std::unique_ptr<ChunkColumn> col = std::move(it->second);
     columns_.erase(it);
+    ++structureGen_;  // Archie review C5
     cow_->drop(cx, cz);  // M5
     if (editListener_) editListener_(cx, cz);
     return col;
   }
+  /// Archie review C5 (2026-10-30): bumped by every insert/erase/extract, so
+  /// a holder of raw ChunkColumn pointers can tell the column set changed
+  /// even when the count did not (evict K + insert K, reload, replace).
+  uint64_t structureGen() const { return structureGen_; }
   bool contains(int cx, int cz) const { return columns_.find(ChunkKey::make(cx, cz)) != columns_.end(); }
   auto& columns() { return columns_; }
   const auto& columns() const { return columns_; }
@@ -153,6 +161,7 @@ class ChunkMap {
 
  private:
   std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> columns_;
+  uint64_t structureGen_ = 0;  // Archie review C5
   const cBlockReg* registry_ = nullptr;
   std::function<void(int cx, int cz)> editListener_;
   std::unique_ptr<ColumnTable> cow_ = std::make_unique<ColumnTable>();  // M5

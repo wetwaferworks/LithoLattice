@@ -25,7 +25,7 @@ uint64_t runRandomTicks(const ChunkMap& world, const cBlockReg& reg, const std::
   const RandomTickCache::Col* cols = nullptr;
   size_t ncols = 0;
   if (cache && cache->pcx == pcx && cache->pcz == pcz && cache->radius == radius && cache->round == round && cache->diamond == diamond &&
-      cache->columnCount == world.columns().size()) {
+      cache->columnCount == world.columns().size() && cache->mapGen == world.structureGen()) {  // Archie review C5
     cols = cache->cols.data();
     ncols = cache->cols.size();
   } else {
@@ -39,6 +39,7 @@ uint64_t runRandomTicks(const ChunkMap& world, const cBlockReg& reg, const std::
     if (cache) {
       cache->pcx = pcx; cache->pcz = pcz; cache->radius = radius; cache->round = round; cache->diamond = diamond;
       cache->columnCount = world.columns().size();
+      cache->mapGen = world.structureGen();
       cache->cols = scratch;
     }
     cols = scratch.data();

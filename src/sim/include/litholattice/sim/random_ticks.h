@@ -29,6 +29,7 @@ struct RandomTickCache {
   bool round = false;  ///< F56-7
   bool diamond = false;  ///< diamond (Manhattan) tick area (JD 2026-10-23)
   size_t columnCount = 0;
+  uint64_t mapGen = ~0ull;  ///< Archie review C5: ChunkMap::structureGen() at build
   struct Col {
     int cx = 0, cz = 0;
     const ChunkColumn* col = nullptr;

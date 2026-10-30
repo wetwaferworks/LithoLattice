@@ -58,16 +58,21 @@ cExtensionRuntime::TickOutcome cExtensionRuntime::tick(
       break;
   }
   budget.beginTick();
+  // Archie review C6 (2026-10-30): onTick may load/unload mods (sync()
+  // rebuilds budgets_), and `path` may alias a map-owned string. Work from a
+  // copy and re-find the budget afterwards instead of holding a reference.
+  const std::string key = path;
   try {
     onTick();
   } catch (const std::exception& e) {
-    onCrash(path, e.what());
+    onCrash(key, e.what());
     return TickOutcome::kCrashed;
   } catch (...) {
-    onCrash(path, "unknown exception");
+    onCrash(key, "unknown exception");
     return TickOutcome::kCrashed;
   }
-  budget.endTick();
+  const auto after = budgets_.find(key);
+  if (after != budgets_.end()) after->second.endTick();
   return TickOutcome::kTicked;
 }
 
@@ -75,7 +80,8 @@ void cExtensionRuntime::advanceTick() {
   for (auto& [path, budget] : budgets_) budget.advanceTick();
 }
 
-void cExtensionRuntime::onCrash(const std::string& path, const char* reason) {
+void cExtensionRuntime::onCrash(const std::string& pathIn, const char* reason) {
+  const std::string path = pathIn;  // Archie review C6: survives unloadMod/sync
   // Contain: mark it, run its onUnload exactly once, and unload its subtree.
   // cExtensionLoader::unloadMod invokes onUnload for every node it removes
   // (children-first) and never deletes save data; siblings and the parent

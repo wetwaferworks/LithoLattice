@@ -583,7 +583,7 @@ Image generateTextureReference(const TextureRecipe& recipe, uint64_t seed, int s
   return generateImpl(recipe, seed, size, /*optimized=*/false);
 }
 
-const Image& generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size) {
+Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size) {
   // Key on the CLAMPED size (P3-3, Appendix E L1): generateTexture clamps
   // to 4096, so size=4096 and size=8192 previously cached the same image
   // twice under different keys.
