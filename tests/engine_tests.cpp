@@ -8576,10 +8576,18 @@ void testThreadCensus() {
       {8, 4, 7, 6, 6, false},  {16, 4, 15, 14, 14, false}, {32, 4, 16, 30, 30, false},
   };
   bool mathOk = true;
+  // 2026-10-30: layout-aware. Under LL_THREAD_BUDGET / LL_HS_LOCKFREE / LL_HS_LAYOUT=original the
+  // pool is cores minus every dedicated thread (main + clock + extra), floor 1.
+  auto capPool = [](unsigned hw, unsigned legacy) {
+    const ThreadBudget c = computeThreadBudget(hw);
+    if (!c.capped) return legacy;
+    const unsigned ded = 2u + c.dedicatedExtra;
+    return std::clamp(c.hw > ded ? c.hw - ded : 1u, 1u, kMaxPoolWorkers);
+  };
   for (const Want& w : wants) {
     const ThreadBudget b = computeThreadBudget(w.hw);
     const bool ok = b.hw == w.hw && b.simShards == w.shards && b.renderBands == w.bands &&
-                    b.renderSpawned == w.bands - 1 && b.pool == w.pool && b.activeCap == w.cap &&
+                    b.renderSpawned == w.bands - 1 && b.pool == capPool(w.hw, w.pool) && b.activeCap == capPool(w.hw, w.cap) &&
                     b.smallMachine == w.small && b.simClock == 1 && b.mainThreads == 1;
     std::printf("  census hw=%-2u: sim clock 1, shards %u, render bands %u (%u spawned), pool %u, cap %u%s -> %u spawned\n",
                 w.hw, b.simShards, b.renderBands, b.renderSpawned, b.pool, b.activeCap, b.smallMachine ? ", small" : "",
@@ -8597,7 +8605,7 @@ void testThreadCensus() {
   check(same, "thread census: shard and band counts equal the Timing Handshake and renderer auto rules");
   // Small machines: the pool never takes the dedicated cores.
   bool small = true;
-  for (unsigned hw = 1; hw <= 4; ++hw) { const ThreadBudget b = computeThreadBudget(hw); small = small && b.pool == std::max(1u, hw > 2 ? hw - 2 : 0u); }
+  for (unsigned hw = 1; hw <= 4; ++hw) { const ThreadBudget b = computeThreadBudget(hw); small = small && b.pool == capPool(hw, std::max(1u, hw > 2 ? hw - 2 : 0u)); }
   check(small, "thread census: on <= 4 cores dedicated threads claim first, pool shrinks (floor 1)");
   // hardware_concurrency is read once.
   const ThreadBudget& b1 = cThreadCensus::instance().budget();
@@ -8661,9 +8669,13 @@ void testThreadCensusRulings() {
   check(resolveCores(0, "0", 12).cores == 12 && resolveCores(0, "x4", 12).cores == 12 && resolveCores(0, "", 0).cores == 1,
         "census cores: invalid / zero env ignored, unknown hardware -> 1");
   bool poolOk = true;
-  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 16u, 32u, 64u, 128u})
-    poolOk = poolOk && computeThreadBudget(hw).pool == std::clamp(hw > 2 ? hw - 2 : 1u, 1u, kMaxPoolWorkers);
-  check(poolOk && computeThreadBudget(4).pool == 2 && computeThreadBudget(2).pool == 1 && computeThreadBudget(1).pool == 1 &&
+  const bool capped = computeThreadBudget(12).capped;  // 2026-10-30: layout-aware (cores minus dedicated)
+  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 16u, 32u, 64u, 128u}) {
+    const ThreadBudget c = computeThreadBudget(hw);
+    const unsigned ded = capped ? 2u + c.dedicatedExtra : 2u;
+    poolOk = poolOk && c.pool == std::clamp(hw > ded ? hw - ded : 1u, 1u, kMaxPoolWorkers);
+  }
+  check(poolOk && (capped || computeThreadBudget(4).pool == 2) && computeThreadBudget(2).pool == 1 && computeThreadBudget(1).pool == 1 &&
             computeThreadBudget(128).pool == kMaxPoolWorkers,
         "census pool: clamp(cores-2, 1, MAX_POOL_WORKERS); 4 cores -> 2, 1-2 cores -> 1");
   check(resolveRenderBands(0, 12, false) == 11 && resolveRenderBands(0, 2, false) == 2 && resolveRenderBands(0, 64, false) == 16,
@@ -8681,11 +8693,12 @@ void testThreadCensusRulings() {
     const std::string w = oversubscriptionWarning(cli);
     const std::string wr = oversubscriptionWarning(a, true, 63);
     check(autoQuiet && oversubscriptionWarning(same).empty() && oversubscriptionWarning(a, true, 10).empty() && !w.empty() &&
-              w.find("--cores") != std::string::npos && w.find("shared pool 30") != std::string::npos &&
+              w.find("--cores") != std::string::npos && w.find("shared pool " + std::to_string(cli.pool) + " ") != std::string::npos &&
               w.find("render bands 15") != std::string::npos && !wr.empty() && wr.find("--render-threads") != std::string::npos,
           "census: automatic settings never warn; only an explicit override past the hardware does (t3353u)");
-    check(threadTally(a).find("compute workers 20") != std::string::npos && computeWorkers(a, a.renderSpawned) == 20 &&
-              poolInvariantViolation(10, a).empty() && !poolInvariantViolation(11, a).empty(),
+    const unsigned cw = a.pool + a.renderSpawned;  // 20 by default; layout-aware under the cap
+    check(threadTally(a).find("compute workers " + std::to_string(cw) + " ") != std::string::npos && computeWorkers(a, a.renderSpawned) == cw &&
+              (a.capped || cw == 20) && poolInvariantViolation(a.pool, a).empty() && !poolInvariantViolation(a.pool + 1, a).empty(),
           "census: the tally counts compute workers only (pool + render bands); pool invariant check");
   }
   {
@@ -8794,7 +8807,9 @@ void testLendReclaim() {
     { cJobPool w(pool, cJobPool::Lane::Background, 2); for (int i = 0; i < 50; ++i) w.submit([&] { ++m; }); }
     check(m == 50, "pool view: destruction drains queued background jobs");
   }
-  check(pool.reserve() == std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u) &&
+  // 2026-10-30: the lock-free pool (LL_POOL_LOCKFREE) reserves nothing (shards inline or on their own threads).
+  const unsigned wantReserve = pool.lockFree() ? 0u : std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u);
+  check(pool.reserve() == wantReserve &&
             pool.lendCap() == pool.size() - pool.reserve() && pool.lendCap() >= 1,
         "pool lend: reserve = min(shards, workers-1), lendCap = workers - reserve >= 1");
 
@@ -8868,7 +8883,10 @@ void testLendReclaim() {
               (unsigned long long)(s1.epochs - s0.epochs), (unsigned long long)(s1.bgStartedInEpoch - s0.bgStartedInEpoch));
   check(ok, "reclaim: every phase committed under gen saturation");
   check(s1.bgPeak <= s1.lendCap, "reclaim: background never holds more than lendCap workers");
-  check(s1.reclaimsWithLent > s0.reclaimsWithLent, "reclaim: epochs opened while gen slices were lent (reclaim exercised)");
+  if (pool.lockFree())  // 2026-10-30: no epochs on the lock-free pool, nothing to reclaim; background still ran
+    check(s1.epochs == s0.epochs && slices.load() > 0, "reclaim: lock-free pool opens no epochs and background slices still run");
+  else
+    check(s1.reclaimsWithLent > s0.reclaimsWithLent, "reclaim: epochs opened while gen slices were lent (reclaim exercised)");
   if (s1.reserve >= unsigned(shards))
     check(pct(sat, 0.99) < 2000.0, "reclaim: shard start p99 under gen saturation stays below one 2 ms gen slice (never queued behind gen)");
 }

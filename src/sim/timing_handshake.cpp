@@ -641,6 +641,29 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       for (auto& c : comps_)
         if (c.shard >= 0 && dueFor(c, phase, cycleTick, group)) runItem(c, phase, cycleTick);
       convertPendingFailureIfAny();  // C3: inline path converts before commit
+      // 2026-10-30: original layout (started, shards inline on the tick thread) has no worker to
+      // watch, so the watchdog judges the finished phase: over the ceiling -> FREEZE, no commit,
+      // commit_epoch untouched (same contract as the threaded watchdog). Never-started stays as is.
+      if (inlineLayout_ && running_.load(std::memory_order_acquire)) {
+        const uint64_t t = nowNs();
+        if (t - openStamp > uint64_t(ceiling_.count())) {
+          HsFreezeInfo info;
+          info.phase = phase; info.cycleTick = cycleTick;
+          info.openStampNs = openStamp; info.tripStampNs = t;
+          info.elapsedNs = t - openStamp; info.ceilingNs = uint64_t(ceiling_.count());
+          const Comp* pick = nullptr;
+          uint64_t worst = 0;
+          for (auto& c : comps_) {
+            if (c.shard < 0 || !dueFor(c, phase, cycleTick, group)) continue;
+            const uint64_t d = c.durationNs.load(std::memory_order_relaxed);
+            if (!pick || d > worst) { worst = d; pick = &c; }
+          }
+          if (pick) { info.componentId = pick->desc.id; std::snprintf(info.componentName, sizeof(info.componentName), "%s", pick->desc.name ? pick->desc.name : ""); }
+          lastFreeze_ = info;
+          frozen_.store(true, std::memory_order_release);
+          return false;  // no commit, no force-advance
+        }
+      }
     } else {
       const uint64_t waitStart = nowNs();
       std::unique_lock lk(m_, std::defer_lock);
