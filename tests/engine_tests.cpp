@@ -27,6 +27,7 @@
 #include <sched.h>
 #endif
 #include "litholattice/core/tick_arena.h"
+#include "litholattice/core/slice_free_list.h"
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/counter_hash.h"
 #if !defined(_WIN32)
@@ -196,6 +197,7 @@ uint64_t fnv(const void* p, size_t n, uint64_t h = 1469598103934665603ULL) {
 }
 
 void testTickArena();  // defined below testCore
+void testSliceFreeList();  // Voxy #5
 void testDetSched();   // defined below testRandomTicks
 void testTraceJitCompose();  // defined below testDetSched
 void testSignalPropagate();  // defined below testTraceJitCompose
@@ -300,6 +302,7 @@ void testCore() {
   }
   testJobSystem();
   testTickArena();
+  testSliceFreeList();
   testArchieHandshakeH1H3();
 }
 
@@ -648,6 +651,60 @@ void testJobSystem() {
     js.waitIdle();
     check(n == 100 && js.workerCount() == cThreadCensus::instance().budget().pool,
           "jobsystem: default config takes the census pool ceiling clamp(cores-2, 1, 64), unpinned");
+  }
+}
+
+void testSliceFreeList() {  // Voxy #5: lock-free arena free list (headless; no Vulkan device)
+  using litholattice::cSliceFreeList;
+  check(cSliceFreeList::classOf(0) == 0 && cSliceFreeList::classOf(1) == 0 && cSliceFreeList::classOf(2) == 1 &&
+            cSliceFreeList::classOf(3) == 2 && cSliceFreeList::classOf(4) == 2 && cSliceFreeList::classOf(5) == 3 &&
+            cSliceFreeList::classOf(uint64_t(1) << 20) == 20,
+        "slice free list: classOf is ceil log2");
+  {
+    cSliceFreeList f(4);
+    check(!f.pop(3), "slice free list: empty class pops nothing");
+    check(f.push(3, 7, 640) && f.push(3, 8, 1280) && f.push(5, 1, 64), "slice free list: push");
+    auto a = f.pop(3), b = f.pop(3);
+    check(a && b && a->block == 8 && a->offset == 1280 && b->block == 7 && b->offset == 640 && !f.pop(3),
+          "slice free list: LIFO per class, classes independent");
+    check(f.push(1, 0, 0) && f.push(1, 0, 64) && f.push(1, 0, 128) && !f.push(1, 0, 192),
+          "slice free list: pool exhaustion reported");
+    check(!f.push(cSliceFreeList::kClasses, 0, 0) && !f.pop(cSliceFreeList::kClasses), "slice free list: class bound");
+    f.reset();
+    check(!f.pop(1) && !f.pop(5) && f.push(2, 0, 0), "slice free list: reset");
+  }
+  {  // stress: 8 threads pop+push the same slices; nothing lost, nothing duplicated
+    constexpr uint32_t kSlices = 4096, kThreads = 8, kIters = 200000;
+    cSliceFreeList f(kSlices);
+    for (uint32_t i = 0; i < kSlices; ++i) f.push(i % 4, i, uint64_t(i) * 64);
+    std::atomic<uint32_t> bad{0};
+    std::vector<std::thread> ts;
+    for (uint32_t t = 0; t < kThreads; ++t)
+      ts.emplace_back([&, t] {
+        uint32_t held[8]; uint32_t heldCls[8]; uint32_t n = 0;
+        for (uint32_t k = 0; k < kIters; ++k) {
+          const uint32_t cls = (k + t) % 4;
+          if (n < 8 && (k & 1) == 0) {
+            if (auto e = f.pop(cls)) {
+              if (e->offset != uint64_t(e->block) * 64 || e->block % 4 != cls) bad.fetch_add(1);
+              held[n] = e->block; heldCls[n] = cls; ++n;
+            }
+          } else if (n) {
+            --n;
+            if (!f.push(heldCls[n], held[n], uint64_t(held[n]) * 64)) bad.fetch_add(1);
+          }
+        }
+        while (n) { --n; if (!f.push(heldCls[n], held[n], uint64_t(held[n]) * 64)) bad.fetch_add(1); }
+      });
+    for (auto& th : ts) th.join();
+    std::vector<uint8_t> seen(kSlices, 0);
+    uint32_t total = 0;
+    for (uint32_t c = 0; c < 4; ++c)
+      while (auto e = f.pop(c)) {
+        if (e->block >= kSlices || seen[e->block]++) bad.fetch_add(1);
+        ++total;
+      }
+    check(bad.load() == 0 && total == kSlices, "slice free list: 8-thread stress keeps every slice exactly once");
   }
 }
 

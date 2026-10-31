@@ -124,7 +124,7 @@ struct PackedMaterials {
   static int bitsFor(size_t n) {
     int bits = 0;
     while ((size_t(1) << bits) < n) ++bits;
-    // Q3/Q6 (opt-in, LL_PACK_POW2=1): round the index width up to 1/2/4/8 so no
+    // Q3/Q6 (default on per JD 2026-10-31; LL_PACK_POW2=0 kill switch): round the index width up to 1/2/4/8 so no
     // cell straddles a u64 word. Read-once flag; dense bytes are unchanged.
     if (packPow2() && bits > 0) {
       int p = 1;
@@ -136,7 +136,7 @@ struct PackedMaterials {
   static bool packPow2() {
     static const bool on = [] {
       const char* e = std::getenv("LL_PACK_POW2");
-      return e && e[0] == '1';
+      return !(e && e[0] == '0');
     }();
     return on;
   }
