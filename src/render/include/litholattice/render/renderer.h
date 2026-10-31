@@ -70,6 +70,8 @@ enum ShadeMode : uint8_t {
   kShadeTraceTint,    // 2026-10-16 (Wafer beta art): base texel + grey tint mask (R) x Trace colour;
                       // value bits 0-4 = tint slot 0..31 (MaterialBindings::kTintSlots = 32; shader reads vVal & 31; bit 5 unused; Cortana 2026-10-16 2335 F55-3), bit 6 = blue Trace,
                       // bit 7 = powered (full ramp + emissive). Off = the ramp's low end.
+  kShadeDigits,       // 2026-10-31 (JD): seven-segment readout overlay (Latchor box); value bits 0-6 = number, bit 7 = lit
+  kShadeDigitsRep,    // 2026-10-31 (JD): same, Repeator readout box (delay 4/8/16/32)
 };
 // Cortana 2026-10-16 [ENGINE] (JD foliage LOD): the top two bits of PackedVertex::mode tag LOD
 // geometry; the low 6 bits are the ShadeMode. Untagged quads always draw. A sub-chunk whose

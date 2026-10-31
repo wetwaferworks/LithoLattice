@@ -12,6 +12,7 @@ const int MODE_PIPS = 8, MODE_CELLS = 9, MODE_ANIMATED = 10, MODE_GLASS = 11, MO
 const int MODE_ALPHABLEND = 12;  // Cortana 2026-10-15 1900: kShadeAlphaBlend (Elfie review LOW-1)
 const int MODE_GROUND_PULSE = 16;  // mirror kShadeGroundPulse (renderer.h)
 const int MODE_LEAF = 17;
+const int MODE_DIGITS = 19, MODE_DIGITS_REP = 20;  // mirror kShadeDigits / kShadeDigitsRep (2026-10-31)
 const int MODE_TRACE_TINT = 18;  // mirror kShadeTraceTint (2026-10-16 Wafer beta art)  // mirror kShadeLeaf (2026-10-16 JD leaf pass): alpha test 0.5 + crystal twinkle
 // ---- Wafer ground pulse (JD-locked 2026-10-11; biome blending 2026-10-11) ----
 // The wafer's heartbeat: time-driven emissive add for kShadeGroundPulse quads.
@@ -268,7 +269,7 @@ void main() {
     float idx = floor(m.r * 255.0 + 0.5);
     float on = step(0.5, idx) * step(idx, float(vVal));
     const vec3 MEM_GLOW = vec3(0.545, 0.396, 0.867);   // #8B65DD
-    vec3 lit = mix(MEM_GLOW, vec3(0.784, 0.663, 0.965) /*#C8A9F6*/, dot(base, vec3(0.333)));
+    vec3 lit = MEM_GLOW * mix(0.8, 1.0, dot(base, vec3(0.333)));   // flat #8B65DD per preview (white cells -> full purple)
     base = mix(base, lit, on);
     emissive += on * 0.6;   // scalar emissive here; base is already purple, so the glow is on*purple*0.6
   } else if (vMode == MODE_ANIMATED) {                                    // animated face (frame strip)
@@ -286,6 +287,27 @@ void main() {
     if (!((uFx.x & 64) != 0 && vMode == MODE_ALPHABLEND))
 #endif
     if (floor(a * 255.0) <= BAYER[q.y * 4 + q.x] * 17.0) discard;
+  } else if (vMode == MODE_DIGITS || vMode == MODE_DIGITS_REP) {     // 2026-10-31 (JD): seven-segment value readout
+    // Latchor 1-64 (MODE_DIGITS) / Repeator delay 4-32 (MODE_DIGITS_REP), drawn on an overlay of the top in
+    // the base texture's own UV (same rotation as the base). Box (128 space, 22x14): Latchor x87 y39,
+    // Repeator x91 y101; tens at local x 0..9, ones at 12..21; each digit 10x14 (seg7 atlas rows, bit0 = left).
+    // vVal bits 0-6 = value, bit 7 = lit (powered). Static textures; only vVal changes per tick (GL + Vulkan).
+    const int SEG7[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
+    const int SEG7_GHOST[14] = int[14](252,252,771,771,771,771,252,252,771,771,771,771,252,252);
+    ivec2 lp = ivec2(floor(uvW * 128.0)) - (vMode == MODE_DIGITS_REP ? ivec2(91, 101) : ivec2(87, 39));
+    if (lp.x < 0 || lp.y < 0 || lp.x > 21 || lp.y > 13 || (lp.x > 9 && lp.x < 12)) discard;
+    int dv = vVal & 127;
+    bool ones = lp.x >= 12;
+    int gx = ones ? lp.x - 12 : lp.x;
+    int dg = ones ? dv % 10 : (dv / 10) % 10;
+    bool lit = (ones || dv >= 10) && ((SEG7[dg * 14 + lp.y] >> gx) & 1) != 0;
+    bool ghost = ((SEG7_GHOST[lp.y] >> gx) & 1) != 0;
+    if (!lit && !ghost) discard;
+    const vec3 DIGIT = vec3(0.839, 0.745, 0.980);   // #D6BEFA
+    const vec3 WINDOW = vec3(9.0, 7.0, 20.0) / 255.0;
+    bool hot = (vVal & 128) != 0;
+    base = mix(WINDOW, DIGIT, lit ? (hot ? 1.0 : 0.55) : 40.0 / 255.0);
+    emissive = lit && hot ? 0.6 : 0.1;
   } else if (vMode == MODE_READOUT) {                                    // 7-segment readout (catchor match value)
     const int SEG[10] = int[10](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);
     vec4 m = mask(vLayer, rotUV(uvW, (4 - gRot) & 3));
