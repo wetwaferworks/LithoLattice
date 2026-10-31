@@ -1,6 +1,7 @@
 // Chunk storage: 16x16 columns, world height 0..767 split into 48 sub-chunks of 16^3
 // (all-air sub-chunks are null and skipped by worldgen, meshing and the sim).
 #pragma once
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <map>
@@ -123,7 +124,21 @@ struct PackedMaterials {
   static int bitsFor(size_t n) {
     int bits = 0;
     while ((size_t(1) << bits) < n) ++bits;
+    // Q3/Q6 (opt-in, LL_PACK_POW2=1): round the index width up to 1/2/4/8 so no
+    // cell straddles a u64 word. Read-once flag; dense bytes are unchanged.
+    if (packPow2() && bits > 0) {
+      int p = 1;
+      while (p < bits) p <<= 1;
+      bits = p;
+    }
     return bits;
+  }
+  static bool packPow2() {
+    static const bool on = [] {
+      const char* e = std::getenv("LL_PACK_POW2");
+      return e && e[0] == '1';
+    }();
+    return on;
   }
   size_t wordCount() const { return (size_t(kSubChunkVolume) * size_t(width_) + 63) / 64; }
   uint64_t indexMask() const { return (uint64_t(1) << width_) - 1; }  // width_ <= 8
