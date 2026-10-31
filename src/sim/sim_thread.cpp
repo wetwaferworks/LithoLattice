@@ -13,6 +13,7 @@
 #include "litholattice/core/time.h"
 #include "litholattice/core/timer_resolution.h"
 #include "litholattice/core/fail_fast.h"
+#include "litholattice/core/thread_readout.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/tick_profile.h"  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
 
@@ -661,7 +662,11 @@ void cSimThread::run() {
     bool raycastDone = false;
     bool passCut = false;
     {
+      const bool rdOn = cThreadReadout::enabled();  // LL_THREAD_READOUT (read-only; tick thread is this slot's only writer)
+      const uint64_t rdT0 = rdOn ? cThreadReadout::nowNs() : 0;
       std::lock_guard l(blockMutex_);
+      const uint64_t rdT1 = rdOn ? cThreadReadout::nowNs() : 0;
+      struct RdPass { bool on; uint64_t t0, t1; ~RdPass() { if (on) cNamedThreadLoad::instance().pass(cNamedThreadLoad::kTick, t1 - t0, cThreadReadout::nowNs() - t1); } } rdPass{rdOn, rdT0, rdT1};
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
 
       // ---- control PRE phase (control serialization): drain every control

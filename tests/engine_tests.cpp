@@ -8807,11 +8807,29 @@ void testLendReclaim() {
     { cJobPool w(pool, cJobPool::Lane::Background, 2); for (int i = 0; i < 50; ++i) w.submit([&] { ++m; }); }
     check(m == 50, "pool view: destruction drains queued background jobs");
   }
-  // 2026-10-30: the lock-free pool (LL_POOL_LOCKFREE) reserves nothing (shards inline or on their own threads).
-  const unsigned wantReserve = pool.lockFree() ? 0u : std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u);
-  check(pool.reserve() == wantReserve &&
-            pool.lendCap() == pool.size() - pool.reserve() && pool.lendCap() >= 1,
-        "pool lend: reserve = min(shards, workers-1), lendCap = workers - reserve >= 1");
+  // 2026-10-31 (JD t3584u): the exact-reserve check is retired under the lock-free pool. Its reserve
+  // depends on whether shard jobs exist (0 in the inline 3-thread layout, simShards otherwise), so only
+  // the invariants are checked there; priority is covered by the two-lane preemption test below.
+  const unsigned maxReserve = std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u);
+  const bool reserveOk = pool.lockFree() ? pool.reserve() <= maxReserve : pool.reserve() == maxReserve;
+  check(reserveOk && pool.lendCap() == pool.size() - pool.reserve() && pool.lendCap() >= 1,
+        pool.lockFree() ? "pool lend (lock-free): reserve <= min(shards, workers-1), lendCap = workers - reserve >= 1"
+                        : "pool lend: reserve = min(shards, workers-1), lendCap = workers - reserve >= 1");
+  {  // 2026-10-31 two-lane preemption: an urgent job starts ahead of a saturated background (meshing) lane.
+    constexpr int kBg = 240;
+    std::atomic<int> bgDone{0}, bgAtUrgent{-1};
+    std::atomic<bool> urgentRan{false};
+    for (int i = 0; i < kBg; ++i)
+      pool.submitBackground([&] { std::this_thread::sleep_for(std::chrono::milliseconds(2)); bgDone.fetch_add(1, std::memory_order_acq_rel); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));  // lane saturated, most slices still queued
+    pool.submitUrgent([&] { bgAtUrgent.store(bgDone.load(std::memory_order_acquire), std::memory_order_release); urgentRan.store(true, std::memory_order_release); });
+    const auto t0 = std::chrono::steady_clock::now();
+    while (bgDone.load(std::memory_order_acquire) < kBg && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    while (!urgentRan.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    std::printf("  two-lane preemption: urgent started after %d of %d background slices (%s pool)\n", bgAtUrgent.load(), kBg, pool.lockFree() ? "lock-free" : "locked");
+    check(urgentRan.load() && bgAtUrgent.load() >= 0 && bgAtUrgent.load() < kBg / 2,
+          "two-lane preemption: an urgent job starts before half of a queued background (meshing) burst has run");
+  }
 
   cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
   const int shards = int(cThreadCensus::instance().budget().simShards);

@@ -13,6 +13,7 @@
 #include <string>
 
 #include "litholattice/core/log.h"
+#include "litholattice/core/named_thread_load.h"
 
 namespace litholattice {
 
@@ -35,9 +36,12 @@ class cThreadReadout {
   }
   void idle(unsigned i, uint64_t ns) { s_[i].idle.fetch_add(ns, std::memory_order_relaxed); }
   void steal(unsigned i) { s_[i].steals.fetch_add(1, std::memory_order_relaxed); }
-  void depth(int d) {
-    int m = maxDepth_.load(std::memory_order_relaxed);
-    while (d > m && !maxDepth_.compare_exchange_weak(m, d, std::memory_order_relaxed)) {}
+  enum Lane : unsigned { kNormal = 0, kUrgent = 1, kBackground = 2 };
+  void depth(int d) { depth(kNormal, d); }
+  void depth(Lane lane, int d) {
+    std::atomic<int>& a = lane == kNormal ? maxDepth_ : laneDepth_[lane];
+    int m = a.load(std::memory_order_relaxed);
+    while (d > m && !a.compare_exchange_weak(m, d, std::memory_order_relaxed)) {}
   }
   /// Worker 0 calls this each loop; logs at most every 5 s (one CAS winner).
   void maybeDump(const char* who) {
@@ -50,7 +54,7 @@ class cThreadReadout {
   void dump(const char* who, uint64_t now) {
     const double wall = double(now - t0_) / 1e9;
     std::string line = std::string("readout ") + who + ": wall " + std::to_string(int(wall)) + "s maxQueue " +
-                       std::to_string(maxDepth_.load(std::memory_order_relaxed)) + " |";
+                       std::to_string(maxDepth_.load(std::memory_order_relaxed)) + " maxUrgent " + std::to_string(laneDepth_[kUrgent].load(std::memory_order_relaxed)) + " maxBackground " + std::to_string(laneDepth_[kBackground].load(std::memory_order_relaxed)) + " |";
     for (unsigned i = 0; i < n_; ++i) {
       const Slot& s = s_[i];
       char b[160];
@@ -60,6 +64,7 @@ class cThreadReadout {
                     double(s.worst.load(std::memory_order_relaxed)) / 1e6, (unsigned long long)s.steals.load(std::memory_order_relaxed));
       line += b;
     }
+    line += cNamedThreadLoad::instance().summary(wall);
     logInfo("%s", line.c_str());
   }
 
@@ -71,6 +76,7 @@ class cThreadReadout {
   std::unique_ptr<Slot[]> s_;
   uint64_t t0_ = 0;
   std::atomic<int> maxDepth_{0};
+  std::atomic<int> laneDepth_[3] = {};
   std::atomic<uint64_t> lastDump_{0};
 };
 

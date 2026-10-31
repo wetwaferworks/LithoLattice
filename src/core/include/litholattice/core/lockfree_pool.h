@@ -72,13 +72,14 @@ class cLockFreePool {
   void submitUrgent(std::function<void()> f) {
     Job j = new std::function<void()>(std::move(f));
     inFlight_.fetch_add(1, std::memory_order_acq_rel);
+    if (readout_) readout_->depth(cThreadReadout::kUrgent, int(urgent_.pending()) + 1);
     if (!urgent_.tryPush(j)) pushNormal(j);  // ring full: spill (never drop, never block)
     wake(false);
   }
   void submitBackground(std::function<void()> f) {
     Job j = new std::function<void()>(std::move(f));
     inFlight_.fetch_add(1, std::memory_order_acq_rel);
-    bgCount_.fetch_add(1, std::memory_order_acq_rel);
+    { const int d = int(bgCount_.fetch_add(1, std::memory_order_acq_rel)) + 1; if (readout_) readout_->depth(cThreadReadout::kBackground, d); }
     bg_.push(std::move(j));
     wake(false);
   }
