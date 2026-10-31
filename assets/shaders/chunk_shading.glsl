@@ -12,7 +12,7 @@ const int MODE_PIPS = 8, MODE_CELLS = 9, MODE_ANIMATED = 10, MODE_GLASS = 11, MO
 const int MODE_ALPHABLEND = 12;  // Cortana 2026-10-15 1900: kShadeAlphaBlend (Elfie review LOW-1)
 const int MODE_GROUND_PULSE = 16;  // mirror kShadeGroundPulse (renderer.h)
 const int MODE_LEAF = 17;
-const int MODE_DIGITS = 19, MODE_DIGITS_REP = 20;  // mirror kShadeDigits / kShadeDigitsRep (2026-10-31)
+const int MODE_DIGITS = 19, MODE_DIGITS_REP = 20, MODE_DIGITS_RND = 21;  // mirror kShadeDigits / kShadeDigitsRep (2026-10-31)
 const int MODE_TRACE_TINT = 18;  // mirror kShadeTraceTint (2026-10-16 Wafer beta art)  // mirror kShadeLeaf (2026-10-16 JD leaf pass): alpha test 0.5 + crystal twinkle
 // ---- Wafer ground pulse (JD-locked 2026-10-11; biome blending 2026-10-11) ----
 // The wafer's heartbeat: time-driven emissive add for kShadeGroundPulse quads.
@@ -287,14 +287,14 @@ void main() {
     if (!((uFx.x & 64) != 0 && vMode == MODE_ALPHABLEND))
 #endif
     if (floor(a * 255.0) <= BAYER[q.y * 4 + q.x] * 17.0) discard;
-  } else if (vMode == MODE_DIGITS || vMode == MODE_DIGITS_REP) {     // 2026-10-31 (JD): seven-segment value readout
+  } else if (vMode == MODE_DIGITS || vMode == MODE_DIGITS_REP || vMode == MODE_DIGITS_RND) {     // 2026-10-31 (JD): seven-segment value readout
     // Latchor 1-64 (MODE_DIGITS) / Repeator delay 4-32 (MODE_DIGITS_REP), drawn on an overlay of the top in
     // the base texture's own UV (same rotation as the base). Box (128 space, 22x14): Latchor x87 y39,
     // Repeator x91 y101; tens at local x 0..9, ones at 12..21; each digit 10x14 (seg7 atlas rows, bit0 = left).
     // vVal bits 0-6 = value, bit 7 = lit (powered). Static textures; only vVal changes per tick (GL + Vulkan).
     const int SEG7[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
     const int SEG7_GHOST[14] = int[14](252,252,771,771,771,771,252,252,771,771,771,771,252,252);
-    ivec2 lp = ivec2(floor(uvW * 128.0)) - (vMode == MODE_DIGITS_REP ? ivec2(91, 101) : ivec2(87, 39));
+    ivec2 lp = ivec2(floor(uvW * 128.0)) - (vMode == MODE_DIGITS_REP ? ivec2(91, 101) : vMode == MODE_DIGITS_RND ? ivec2(53, 57) : ivec2(87, 39));
     if (lp.x < 0 || lp.y < 0 || lp.x > 21 || lp.y > 13 || (lp.x > 9 && lp.x < 12)) discard;
     int dv = vVal & 127;
     bool ones = lp.x >= 12;

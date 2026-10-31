@@ -72,6 +72,7 @@ enum ShadeMode : uint8_t {
                       // bit 7 = powered (full ramp + emissive). Off = the ramp's low end.
   kShadeDigits,       // 2026-10-31 (JD): seven-segment readout overlay (Latchor box); value bits 0-6 = number, bit 7 = lit
   kShadeDigitsRep,    // 2026-10-31 (JD): same, Repeator readout box (delay 4/8/16/32)
+  kShadeDigitsRnd,    // 2026-10-31 (JD): same, Randor readout box (range N, 128-space x53 y57)
 };
 // Cortana 2026-10-16 [ENGINE] (JD foliage LOD): the top two bits of PackedVertex::mode tag LOD
 // geometry; the low 6 bits are the ShadeMode. Untagged quads always draw. A sub-chunk whose
