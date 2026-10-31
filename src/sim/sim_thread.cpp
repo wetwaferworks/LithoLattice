@@ -164,6 +164,7 @@ void cSimThread::handleHandshakeFreeze() {
 
 cSimThread::~cSimThread() {
   stop();
+  cancelBoundaryJob();  // a job that never reached a tick boundary dies with the sim
   if (handshakeWorkersOutstanding()) {
     // C2: never destroy an authority a live pull worker still
     // dereferences (its WorkFn captures reach this cSimThread and the
@@ -200,6 +201,21 @@ std::vector<uint8_t> cSimThread::drainPlaceReceipts() {
   std::vector<uint8_t> out;
   out.swap(receipts_);
   return out;
+}
+
+bool cSimThread::postBoundaryJob(std::function<void()> fn) {
+  if (!running_.load(std::memory_order_acquire)) return false;
+  auto* j = new BoundaryJob{std::move(fn)};
+  BoundaryJob* expect = nullptr;
+  if (!boundaryJob_.compare_exchange_strong(expect, j, std::memory_order_acq_rel)) { delete j; return false; }
+  notifyWake();  // a parked (paused) loop runs one pass and picks it up
+  return true;
+}
+
+bool cSimThread::cancelBoundaryJob() {
+  BoundaryJob* j = boundaryJob_.exchange(nullptr, std::memory_order_acq_rel);
+  delete j;
+  return j != nullptr;
 }
 
 void cSimThread::runBetweenTicks(std::function<void()> fn) {
@@ -668,6 +684,10 @@ void cSimThread::run() {
       const uint64_t rdT1 = rdOn ? cThreadReadout::nowNs() : 0;
       struct RdPass { bool on; uint64_t t0, t1; ~RdPass() { if (on) cNamedThreadLoad::instance().pass(cNamedThreadLoad::kTick, t1 - t0, cThreadReadout::nowNs() - t1); } } rdPass{rdOn, rdT0, rdT1};
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
+      // 2026-10-31 (JD, Save World): tick-boundary job (postBoundaryJob). One relaxed-cost
+      // acquire load per pass when idle; never runs while handshake work is in flight.
+      if (boundaryJob_.load(std::memory_order_acquire) && !(handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())))
+        if (BoundaryJob* j = boundaryJob_.exchange(nullptr, std::memory_order_acq_rel)) { j->fn(); delete j; }
 
       // ---- control PRE phase (control serialization): drain every control
       // source's submissions once per iteration and stamp each event with
