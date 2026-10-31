@@ -89,6 +89,14 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
       b.capped = true; b.dedicatedExtra = dedicated - 2u; b.layoutOriginal = orig;
     }
   }
+  // Step 10 (JD 2026-10-31, default off): LL_DED_LAYOUT=6|8 dedicated layouts. 3 permanent
+  // threads (main, tick, control+event: run with LL_HS_LAYOUT=original), a dedicated render
+  // thread (LL_THREEWAY=1) and 2 dedicated mesh/vertex workers (the game's own lock-free
+  // job pool, main.cpp). The shared pool keeps 2 workers for layout 8 and its 1-worker floor
+  // for layout 6 (idle there: shards run inline on the tick thread).
+  if (const char* d = std::getenv("LL_DED_LAYOUT")) {
+    if (d[0] == '6' || d[0] == '8') { b.pool = d[0] == '8' ? 2u : 1u; b.capped = true; }
+  }
   b.activeCap = b.pool;
   return b;
 }
