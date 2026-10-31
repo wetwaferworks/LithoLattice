@@ -398,6 +398,7 @@ class cSoftwareRenderer : public IRenderer {
   const PbrFragmentContext* pbrContext_ = nullptr;  ///< PBR context (registry/lights/camera); may be null
 
   cCpuTextureArray textures_;
+  int memMask_ = 0;  ///< 2026-10-31 Memor seg7 mask layer (kShadeCells)
   std::array<int, 32> tintMask_{}; std::array<int, 2> stripPal_{};  ///< 2026-10-16 kShadeTraceTint
   std::array<int, 4> leafGlow_{};  ///< 2026-10-16 crystal twinkle glow layers
   int twinkleMode_ = 2; uint32_t twinklePhase_ = 0;

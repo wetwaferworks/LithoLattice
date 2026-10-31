@@ -1137,6 +1137,43 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     }
     return out;
   };
+  // 2026-10-31 (JD, CloudAtlas memor-seg7 v2): kShadeCells, CPU mirror of chunk_shading.glsl MODE_CELLS:
+  // two-digit 7-seg 0..64 from 128-space texel coords, ghost 8 (alpha 40), ring squares (mask R == 3)
+  // lit #8B65DD / #C8A9F6 highlight when the value > 0; lit parts take +0.6 emissive (integer texel math).
+  auto memorShade = [this](const FragmentInput& f, uint32_t shaded) -> uint32_t {
+    if (memMask_ <= 0 || uint32_t(memMask_) >= f.texLayers || !f.texData || f.varyings.layer >= f.texLayers) return shaded;
+    static const uint16_t kSeg[140] = {252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252};
+    const uint32_t tx = uint32_t(swTile(f.varyings.u) * f.texScale) & f.texMask, ty = uint32_t(swTile(f.varyings.v) * f.texScale) & f.texMask;
+    const uint32_t ti = swTexelIndex(f, tx, ty);
+    const uint32_t mk = f.texData[size_t(memMask_) * f.texArea + ti];
+    const int r = int((mk >> 16) & 0xFF), v = std::clamp(int(tlQuadValue & 127), 0, 64);
+    uint32_t col = 0; float em = 0.f; float ghostA = 0.f;
+    if (r == 3) {
+      if (v > 0) { col = (((mk >> 8) & 0xFF) == 0 || (mk & 0xFF) == 0) ? 0xC8A9F6u : 0x8B65DDu; em = 0.6f; }
+    } else {
+      const int sc = std::max(1, int(f.texScale));
+      const int X = int(tx) * 128 / sc, Y = int(ty) * 128 / sc;
+      const int slot = (Y >= 50 && Y < 78) ? ((X >= 42 && X < 62) ? 1 : (X >= 66 && X < 86) ? 2 : 0) : 0;
+      if (slot) {
+        const int gx = (X - (slot == 1 ? 42 : 66)) / 2, gy = (Y - 50) / 2;
+        const int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
+        if (d >= 0 && ((kSeg[d * 14 + gy] >> gx) & 1)) { col = 0xD6BEFAu; em = 0.6f; }
+        else if ((kSeg[8 * 14 + gy] >> gx) & 1) { col = 0x3C268Eu; ghostA = 40.f / 255.f; }
+      }
+    }
+    if (!col) return shaded;
+    const uint32_t t = f.texData[size_t(f.varyings.layer) * f.texArea + ti];
+    const float tl = float(std::max({(t >> 16) & 0xFFu, (t >> 8) & 0xFFu, t & 0xFFu})) / 255.f;
+    const float sl = float(std::max({(shaded >> 16) & 0xFFu, (shaded >> 8) & 0xFFu, shaded & 0xFFu})) / 255.f;
+    const float light = tl > 0.f ? std::min(1.f, sl / tl) : 1.f;
+    uint32_t out = 0xFF000000u;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+      const float b = float((t >> sh) & 0xFF) / 255.f, tc = float((col >> sh) & 0xFF) / 255.f;
+      const float o = ghostA > 0.f ? b + (tc - b) * ghostA : tc, lit = o * light, val = lit + (o - lit) * em;
+      out |= uint32_t(std::clamp(val, 0.f, 1.f) * 255.f + 0.5f) << sh;
+    }
+    return out;
+  };
   const bool fx = groundFx && groundFx_.active();
   // Cortana 2026-10-15 1320: the pulse emissive is a pure function of the
   // fragment's CHUNK (sin + pow per pixel before); memoize the last chunk.
@@ -1397,6 +1434,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           else if (tlQuadMode >= kShadePalette16 && tlQuadMode <= kShadePalette64) color = lampShade(fin, color);
           else if (tlQuadMode == kShadeLeaf && twinkleMode_ > 0 && tlQuadValue > 0) color = leafTwinkle(fin, color);
           else if (tlQuadMode == kShadeTraceTint) color = traceTintShade(fin, color);
+          else if (tlQuadMode == kShadeCells) color = memorShade(fin, color);  // 2026-10-31 Memor seg7
           // Cortana 2026-10-16 (render.shimmer): lithography shimmer on POWERED Trace - a slow
           // diagonal brightness wave on the render clock (LL_RENDER_TIME pins it). Render-only.
           if (shimmerOn_ && tlQuadValue > 0 && (strip || (tlQuadMode == kShadeTraceTint && ((tlQuadValue & 0x80) || (llP2PerfOff() & 8))))) {  // 1520: powered only
@@ -1855,6 +1893,7 @@ void cSoftwareRenderer::setMaterials(const BlockMaterials& materials) {
   lampPal_ = b.tierPalette; lampMask_ = b.tierMask; lampRim_ = b.tierRim;
   leafGlow_ = b.leafGlow;  // 2026-10-16 crystal twinkle
   tintMask_ = b.tintMask; stripPal_ = b.stripPalette;  // 2026-10-16 kShadeTraceTint
+  memMask_ = b.cellMask;  // 2026-10-31 Memor seg7
 }
 
 int cSoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {

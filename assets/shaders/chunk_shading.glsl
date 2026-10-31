@@ -263,15 +263,39 @@ void main() {
     int idx = int(floor(m.r * 255.0 / 28.0 + 0.5));
     if (idx >= 1 && idx <= vVal) base = mix(base, PIP_LIT, m.g);
   } else if (vMode == MODE_CELLS) {                                     // memory cell value
-    vec4 m = mask(uMemMask, rotUV(uvW, (4 - gRot) & 3));
-    // 2026-10-31 (JD yes via CloudAtlas): 64-bit top display. Mask R = raw bit index 1..64 (0 = not a
-    // bit), nearest texelFetch, lod 0, UNORM. Only the stored value (vVal, 0..64) changes per tick.
-    float idx = floor(m.r * 255.0 + 0.5);
-    float on = step(0.5, idx) * step(idx, float(vVal));
+    // 2026-10-31 (JD, CloudAtlas memor-seg7-display v2): two-digit purple 7-seg readout 0..64 plus a
+    // 20-square bit ring. Mask R: 1 tens, 2 ones, 3 ring square (G/B square-local 0..7). Digits come
+    // from the tile UV in 128 space (size-independent, sharp at 128/64/32): tens x42..61, ones x66..85,
+    // y50..77, glyph pixel = 2x2. Ghost 8 under every slot (alpha 40); tens is ghost-only below 10.
+    // Ring lit when the stored value > 0: #8B65DD, #C8A9F6 highlight on the square's top row / left
+    // column; its glow goes to emissive (bloom) only, not into the albedo. Only vVal changes per tick.
+    vec2 tuvC = rotUV(uvW, (4 - gRot) & 3);
+    vec4 m = mask(uMemMask, tuvC);
+    int r = int(floor(m.r * 255.0 + 0.5));
+    int v = clamp(vVal & 127, 0, 64);
     const vec3 MEM_GLOW = vec3(0.545, 0.396, 0.867);   // #8B65DD
-    vec3 lit = MEM_GLOW * mix(0.8, 1.0, dot(base, vec3(0.333)));   // flat #8B65DD per preview (white cells -> full purple)
-    base = mix(base, lit, on);
-    emissive += on * 0.6;   // scalar emissive here; base is already purple, so the glow is on*purple*0.6
+    const vec3 MEM_HI = vec3(0.784, 0.663, 0.965);     // #C8A9F6
+    const vec3 MEM_DIGIT = vec3(0.839, 0.745, 0.980);  // #D6BEFA
+    const vec3 MEM_GHOST = vec3(0.235, 0.149, 0.557);  // #3C268E
+    if (r == 3) {
+      if (v > 0) {
+        int gx = int(floor(m.g * 255.0 + 0.5)), gy = int(floor(m.b * 255.0 + 0.5));
+        base = (gx == 0 || gy == 0) ? MEM_HI : MEM_GLOW;
+        emissive += 0.6;
+      }
+    } else {
+      ivec2 t = ivec2(floor(tuvC * 128.0));
+      int slot = (t.y >= 50 && t.y < 78) ? ((t.x >= 42 && t.x < 62) ? 1 : (t.x >= 66 && t.x < 86) ? 2 : 0) : 0;
+      if (slot != 0) {
+        const int SEG7M[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
+        ivec2 g = (t - ivec2(slot == 1 ? 42 : 66, 50)) / 2;   // glyph px 0..9, 0..13
+        int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
+        bool on = d >= 0 && ((SEG7M[d * 14 + g.y] >> g.x) & 1) != 0;
+        bool ghost = ((SEG7M[8 * 14 + g.y] >> g.x) & 1) != 0;
+        if (on) { base = MEM_DIGIT; emissive += 0.6; }
+        else if (ghost) base = mix(base, MEM_GHOST, 40.0 / 255.0);
+      }
+    }
   } else if (vMode == MODE_ANIMATED) {                                    // animated face (frame strip)
     int i = clamp(vVal, 0, MAX_ANIMS - 1), len = max(uAnimLen[i], 1);
     int f = uAnimSeq[clamp(uAnimStart[i] + int(uTime * 1000.0 / max(uAnimMs[i], 1.0)) % len, 0, 63)];
