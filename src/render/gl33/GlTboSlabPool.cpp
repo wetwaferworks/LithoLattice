@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include "litholattice/core/log.h"
+#include "litholattice/core/memory_ledger.h"
 
 #ifndef GL_RGBA32UI
 #define GL_RGBA32UI 0x8D70
@@ -12,7 +13,7 @@ namespace litholattice::gl33 {
 cGlTboSlabPool::~cGlTboSlabPool() {
   for (Slab& s : slabs_) {
     if (s.tex) glDeleteTextures(1, &s.tex);
-    if (s.buf) glDeleteBuffers(1, &s.buf);
+    if (s.buf) { glDeleteBuffers(1, &s.buf); cMemoryLedger::sub(cMemoryLedger::kGlTboBytes, int64_t(kSlabTexels * kTexelBytes)); }
   }
 }
 
@@ -41,6 +42,7 @@ bool cGlTboSlabPool::addSlab() {
   glBindTexture(GL_TEXTURE_BUFFER, s.tex);
   glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, s.buf);
   s.free.reset(kSlabTexels);
+  cMemoryLedger::add(cMemoryLedger::kGlTboBytes, int64_t(kSlabTexels * kTexelBytes));  // Gate 0
   slabs_.push_back(std::move(s));
   return true;
 }

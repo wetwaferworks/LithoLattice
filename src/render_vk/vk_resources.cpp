@@ -36,6 +36,7 @@ std::optional<Buffer> Buffer::create(const cVulkanDevice& dev, VkDeviceSize size
   auto mem = allocate(dev, req, required, preferred);
   if (!mem) return std::nullopt;
   b.memory_ = std::move(*mem);
+  b.charge_ = cMemoryCharge(cMemoryLedger::kVkDeviceBytes, int64_t(req.size));
   if (!check(vkBindBufferMemory(dev.device(), buf, b.memory_.get(), 0), "vkBindBufferMemory")) return std::nullopt;
   if (required & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
     void* p = nullptr;
@@ -57,6 +58,7 @@ std::optional<Image> Image::create(const cVulkanDevice& dev, const VkImageCreate
   auto mem = allocate(dev, req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
   if (!mem) return std::nullopt;
   img.memory_ = std::move(*mem);
+  img.charge_ = cMemoryCharge(cMemoryLedger::kVkDeviceBytes, int64_t(req.size));
   if (!check(vkBindImageMemory(dev.device(), handle, img.memory_.get(), 0), "vkBindImageMemory")) return std::nullopt;
   auto vi = make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
   vi.image = handle;

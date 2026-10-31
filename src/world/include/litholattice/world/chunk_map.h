@@ -5,6 +5,7 @@
 #include <cassert>
 #include "litholattice/world/chunk.h"
 #include "litholattice/world/column_table.h"  // render pipeline M5
+#include "litholattice/core/memory_ledger.h"  // Gate 0 readout
 
 namespace litholattice {
 
@@ -114,7 +115,9 @@ class ChunkMap {
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;
     cow_->drop(cx, cz);  // M5: a replaced column is republished on its next pin
-    columns_[ChunkKey::make(cx, cz)] = std::move(col);
+    auto& slot = columns_[ChunkKey::make(cx, cz)];
+    if (!slot) cMemoryLedger::add(cMemoryLedger::kChunkColumns, 1);  // Gate 0 (replace keeps the count)
+    slot = std::move(col);
     ++structureGen_;  // Archie review C5
     if (editListener_) editListener_(cx, cz);
   }
@@ -125,7 +128,7 @@ class ChunkMap {
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
     const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;
-    if (gone) ++structureGen_;  // Archie review C5
+    if (gone) { ++structureGen_; cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1); }  // Archie review C5; Gate 0
     cow_->drop(cx, cz);  // M5
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
@@ -139,6 +142,7 @@ class ChunkMap {
     std::unique_ptr<ChunkColumn> col = std::move(it->second);
     columns_.erase(it);
     ++structureGen_;  // Archie review C5
+    cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1);  // Gate 0
     cow_->drop(cx, cz);  // M5
     if (editListener_) editListener_(cx, cz);
     return col;
