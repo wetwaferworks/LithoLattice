@@ -5,6 +5,7 @@
 #include <cassert>
 #include "litholattice/world/chunk.h"
 #include "litholattice/world/column_table.h"  // render pipeline M5
+#include "litholattice/world/column_edge_shell.h"  // Q12 far demote
 #include "litholattice/core/memory_ledger.h"  // Gate 0 readout
 
 namespace litholattice {
@@ -47,17 +48,25 @@ class ChunkMap {
   }
   // World-coordinate access (owner thread only: main before the sim starts, sim after).
   BlockId get(int x, int y, int z) const {
-    const SubChunk* s = sub(x >> 4, y >> 4, z >> 4);
-    if (!s) return kAir;
-    const StableId sid = s->at(x & 15, y & 15, z & 15);
+    if (y < 0 || (y >> 4) >= kSubChunks) return kAir;
+    const ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c) return kAir;
+    const SubChunk* s = c->subs[size_t(y >> 4)].get();
+    StableId sid;
+    if (s) sid = s->at(x & 15, y & 15, z & 15);
+    else if (c->edgeShell) sid = c->edgeShell->at(y >> 4, x & 15, y & 15, z & 15);  // Q12: demoted ring
+    else return kAir;
     if (isAirStableId(sid)) return kAir;
     assert(registry_ && "ChunkMap::get without setRegistry()");
     const auto id = registry_->findByStableId(sid);
     return id ? *id : kAir;  // unreachable in a consistent world; air is the safe answer
   }
   CellState getState(int x, int y, int z) const {
-    const SubChunk* s = sub(x >> 4, y >> 4, z >> 4);
-    return s ? s->state[SubChunk::index(x & 15, y & 15, z & 15)] : 0;
+    if (y < 0 || (y >> 4) >= kSubChunks) return 0;
+    const ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c) return 0;
+    if (const SubChunk* s = c->subs[size_t(y >> 4)].get()) return s->state[SubChunk::index(x & 15, y & 15, z & 15)];
+    return c->edgeShell ? c->edgeShell->stateAt(y >> 4, x & 15, y & 15, z & 15) : 0;  // Q12
   }
   /// Highest non-air y in world column (x, z), or -1 if empty or not generated.
   int surfaceY(int x, int z) const {
@@ -76,6 +85,7 @@ class ChunkMap {
     if (y < 0 || y >= kWorldHeight) return false;
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (!c) return false;
+    if (c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return false; }  // Q12: demoted columns are read-only
     auto& s = c->subs[y >> 4];
     if (!s) { if (b == kAir) return true; s = std::make_unique<SubChunk>(); }
     assert(registry_ && "ChunkMap::set without setRegistry()");
@@ -89,6 +99,7 @@ class ChunkMap {
   void setState(int x, int y, int z, CellState v) {
     if (y < 0 || y >= kWorldHeight) return;
     ChunkColumn* c = column(x >> 4, z >> 4);
+    if (c && c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return; }  // Q12
     if (c && c->subs[y >> 4]) {
       CellState& cell = c->subs[y >> 4]->state[SubChunk::index(x & 15, y & 15, z & 15)];
       if (cell != v) { cell = v; c->markDirty(); if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4); }  // A2/B-M1; M9 ruling 4
@@ -106,11 +117,27 @@ class ChunkMap {
     if (y < 0 || y >= kWorldHeight) return false;
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (!c) return false;
+    if (c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return false; }  // Q12
     const uint32_t k = ChunkColumn::cellTextKey(x, y, z);
     if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); else return true; }
     else { c->cellText[k] = std::move(text); c->markDirty(); }
     if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // Archie review H7: snapshot carries cellText
     return true;
+  }
+  /// Q12 far demote: replaces the column's sub-chunks with its 1-cell edge shell (plus the
+  /// Voxy-#1 far LOD when withLod) and hands the freed body back for deferred free. Null when
+  /// not resident or already demoted. Owner thread only; the caller owns eligibility.
+  std::unique_ptr<ChunkColumn> demote(int cx, int cz, bool withLod) {
+    ChunkColumn* c = column(cx, cz);
+    if (!c || c->edgeShell) return nullptr;
+    c->edgeShell = cColumnEdgeShell::build(*c, registry_, withLod);
+    auto body = std::make_unique<ChunkColumn>();
+    body->cx = cx;
+    body->cz = cz;
+    body->subs.swap(c->subs);
+    if (cow_) cow_->drop(cx, cz);  // republished (whole, from the shell) on its next pin
+    ++structureGen_;               // sub pointers changed (random-tick cache, Archie C5)
+    return body;
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;

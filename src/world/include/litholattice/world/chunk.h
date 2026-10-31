@@ -357,6 +357,8 @@ inline uint64_t nextColumnInstanceId() {  // render pipeline M5: CoW ColumnTable
   return n.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
+class cColumnEdgeShell;  // Q12 far demote (column_edge_shell.h)
+
 struct ChunkColumn {
   int cx = 0, cz = 0;
   uint64_t instanceId = nextColumnInstanceId();  ///< M5: unique per column object (evict + reload = new id)
@@ -389,6 +391,9 @@ struct ChunkColumn {
   // every column; saved as the optional "PTXT" payload. ChunkMap::set drops a cell's text when
   // its block changes, so text never outlives the block that owns it.
   std::map<uint32_t, std::string> cellText;
+  // Q12 (Gate 1, LL_FAR_DEMOTE): non-null == demoted. subs are all freed; get()/getState() and the
+  // CoW publisher read the 1-cell edge ring from here, interior reads air; writes are refused.
+  std::shared_ptr<const cColumnEdgeShell> edgeShell;
   static constexpr uint32_t cellTextKey(int lx, int y, int lz) { return (uint32_t(y) << 8) | (uint32_t(lz & 15) << 4) | uint32_t(lx & 15); }
 };
 

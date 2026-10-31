@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include "litholattice/world/chunk_map.h"
 #include "litholattice/world/mesh_input.h"
+#include "litholattice/world/column_edge_shell.h"  // Q12
 
 namespace litholattice {
 
@@ -82,6 +83,12 @@ std::shared_ptr<const ColumnSnap> ColumnTable::publishLocked(const ChunkMap& w, 
   for (int sy = 0; sy < kSubChunks; ++sy) {
     if (!(mask >> sy & 1)) continue;
     const SubChunk* s = c->subs[size_t(sy)].get();
+    std::unique_ptr<SubChunk> shellSub;  // Q12: a demoted column publishes its edge ring (interior air)
+    if (!s && c->edgeShell && c->edgeShell->hasSub(sy)) {
+      shellSub = std::make_unique<SubChunk>();
+      c->edgeShell->expand(sy, *shellSub);
+      s = shellSub.get();
+    }
     if (!s) { snap->subs[size_t(sy)] = nullptr; continue; }
     auto ss = std::make_shared<SubSnap>();
     ss->data.blocks = s->blocks;

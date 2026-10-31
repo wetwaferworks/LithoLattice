@@ -196,6 +196,7 @@ void main() {
     float tm = mask(uTintMask[vVal & 31], uvW).r;
     bool on = (vVal & 128) != 0;
     vec3 tint = texelFetch(uPal, ivec2(on ? 64 : 0, uWirePal[(vVal >> 6) & 1]), 0).rgb;
+    if ((vVal & 32) != 0) tint = vec3(0.545, 0.396, 0.867);  // 2026-10-31: Switch-fed purple (#8B65DD)
     // 2026-10-16 (JD, Discovered by J.D.): grey until powered - no tint when off (was the ramp's red start).
     if (on) { base = mix(base, tint, tm); emissive = 0.85 * tm; }
   } else if (vMode == MODE_WIRE0 || vMode == MODE_WIRE1) {                       // wire
@@ -262,10 +263,14 @@ void main() {
     if (idx >= 1 && idx <= vVal) base = mix(base, PIP_LIT, m.g);
   } else if (vMode == MODE_CELLS) {                                     // memory cell value
     vec4 m = mask(uMemMask, rotUV(uvW, (4 - gRot) & 3));
-    int idx = int(floor((m.r * 255.0 + 1.0) / 4.0 + 0.5));
-    bool lit = idx >= 1 && idx <= vVal;
-    float lum = max(t.r, max(t.g, t.b));
-    base = mix(base, lit ? CELL_LIT * lum : CELL_OFF, m.g);
+    // 2026-10-31 (JD yes via CloudAtlas): 64-bit top display. Mask R = raw bit index 1..64 (0 = not a
+    // bit), nearest texelFetch, lod 0, UNORM. Only the stored value (vVal, 0..64) changes per tick.
+    float idx = floor(m.r * 255.0 + 0.5);
+    float on = step(0.5, idx) * step(idx, float(vVal));
+    const vec3 MEM_GLOW = vec3(0.545, 0.396, 0.867);   // #8B65DD
+    vec3 lit = mix(MEM_GLOW, vec3(0.784, 0.663, 0.965) /*#C8A9F6*/, dot(base, vec3(0.333)));
+    base = mix(base, lit, on);
+    emissive += on * 0.6;   // scalar emissive here; base is already purple, so the glow is on*purple*0.6
   } else if (vMode == MODE_ANIMATED) {                                    // animated face (frame strip)
     int i = clamp(vVal, 0, MAX_ANIMS - 1), len = max(uAnimLen[i], 1);
     int f = uAnimSeq[clamp(uAnimStart[i] + int(uTime * 1000.0 / max(uAnimMs[i], 1.0)) % len, 0, 63)];
