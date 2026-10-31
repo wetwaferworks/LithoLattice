@@ -361,6 +361,13 @@ class cTimingHandshakeAuthority {
     std::atomic<int> running{0};
   };
   static void runShardJob(cTimingHandshakeAuthority* self, const std::shared_ptr<ShardJobs>& st, int shard, uint64_t seq);
+  // 2026-10-30 (JD t3557u): lock-free variant (LL_HS_LOCKFREE=1). Dedicated shard threads poll
+  // publishSeq_ (spin, then atomic wait); arrivals CAS one packed atomic word; no mutex,
+  // condition variable or pool on the tick path. LL_HS_LAYOUT=original runs shard work inline on
+  // the tick thread (JD's three-thread intent: main, tick, control/event).
+  void lfWorkerLoop(int shard);
+  static uint64_t arrivalKey(uint64_t generation, uint64_t seq) { return ((generation & 0xFFFFull) << 48) | ((seq & 0xFFFFFFFFull) << 16); }
+  uint32_t arrivedCount() const;
   // Executes one component. Exception boundary (P0a / review C3): a throw
   // from the WorkFn is caught here, recorded via recordFailure(), and
   // reported by returning false — it never escapes a worker thread
@@ -461,6 +468,11 @@ class cTimingHandshakeAuthority {
   std::mutex failureM_;
   PendingFailure pendingFailure_;
 
+  bool lockfree_ = false;             // LL_HS_LOCKFREE=1 (or LL_HS_LAYOUT=original)
+  bool inlineLayout_ = false;         // LL_HS_LAYOUT=original: shard work inline on the tick thread
+  std::atomic<uint64_t> arrivalWord_{0};  // lock-free barrier: key(gen, seq) << 16 | arrivals
+  std::atomic<uint64_t> statsSeq_{0};     // lock-free stats: odd while the fold writes
+  std::vector<std::thread> lfThreads_;
   mutable std::mutex m_;
   std::condition_variable publishCv_;  // workers block here (hybrid poll)
   std::condition_variable barrierCv_;  // authority waits here for arrivals

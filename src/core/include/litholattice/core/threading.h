@@ -13,10 +13,12 @@
 #include <iterator>
 #include <string>
 #include <mutex>
+#include <memory>
 #include <new>
 #include <thread>
 #include <vector>
 #include "litholattice/core/log.h"
+#include "litholattice/core/lockfree_pool.h"  // LL_POOL_LOCKFREE=1 (JD t3560u)
 #include "litholattice/core/thread_census.h"     // Thread Handshake P3: the shared backing pool
 #include "litholattice/core/timer_resolution.h"  // raiseCurrentThreadForSim (shard work, F57-1)
 
@@ -110,6 +112,7 @@ class cJobPool {
 
   explicit cJobPool(unsigned n, void (*threadInit)() = nullptr) {
     lendCap_ = n;  // a plain pool lends everything (no reserve) until configureLending()
+    if (cLockFreePool::enabled()) { lf_ = std::make_unique<cLockFreePool>(n, threadInit); return; }  // JD t3560u
     workers_.reserve(n);
     for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this, threadInit] { if (threadInit) threadInit(); run(); });
   }
@@ -124,6 +127,7 @@ class cJobPool {
       idle_.wait(l, [this] { return inFlight_ == 0 && pumps_ == 0; });
       return;
     }
+    if (lf_) { lf_.reset(); return; }  // drains queued jobs, joins its workers
     { std::lock_guard l(m_); stop_ = true; }
     cv_.notify_all();
     for (auto& t : workers_) t.join();
@@ -133,6 +137,7 @@ class cJobPool {
 
   void submit(std::function<void()> job) {
     if (backing_) { viewSubmit(std::move(job)); return; }
+    if (lf_) { lf_->submit(std::move(job)); return; }
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; jobs_.push_back(std::move(job)); }  // 0.0.1.60 timing (diagnostic)
     cv_.notify_one();
   }
@@ -142,6 +147,7 @@ class cJobPool {
   /// (On a view this goes straight to the backing pool, outside the view's counters.)
   void submitUrgent(std::function<void()> job) {
     if (backing_) { backing_->submitUrgent(std::move(job)); return; }
+    if (lf_) { lf_->submitUrgent(std::move(job)); return; }
     {
       locktiming::TimedGuard l(m_, locktiming::kJobPool);
       ++inFlight_;
@@ -153,6 +159,7 @@ class cJobPool {
   /// P4: one stage-bounded slice of background work on lent capacity (see the class note).
   void submitBackground(std::function<void()> job) {
     if (backing_) { backing_->submitBackground(std::move(job)); return; }
+    if (lf_) { lf_->submitBackground(std::move(job)); return; }
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; bg_.push_back(std::move(job)); }
     cv_.notify_one();
   }
@@ -161,27 +168,30 @@ class cJobPool {
   /// Test only: raw urgent counter (must never go negative).
   int urgentCountForTest() const { return urgentCount_.load(std::memory_order_acquire); }
   bool urgentPending() const {
-    return backing_ ? backing_->urgentPending() : urgentCount_.load(std::memory_order_acquire) > 0;
+    return backing_ ? backing_->urgentPending() : lf_ ? lf_->urgentPending() : urgentCount_.load(std::memory_order_acquire) > 0;
   }
 
   /// P4 lend / reclaim. reserve = workers never lent to the background lane (the shard
   /// jobs' guaranteed capacity); clamped so at least one worker can always be lent.
   void configureLending(unsigned reserve) {
     { std::lock_guard l(m_);
-      const unsigned n = unsigned(workers_.size());
+      const unsigned n = lf_ ? lf_->size() : unsigned(workers_.size());
       reserve_ = n > 1 ? std::min(reserve, n - 1) : 0;
       lendCap_ = n - reserve_; }
+    if (lf_) { lf_->setLendCap(lendCap_); return; }
     cv_.notify_all();
   }
   /// A Timing Handshake epoch (one runPhase) opens: background capacity is reclaimed
   /// until endEpoch(). Lent workers finish their current slice and come back.
   void beginEpoch() {
+    if (lf_) return;  // lock-free pool: no epochs (no shard jobs on the pool in JD's layout)
     std::lock_guard l(m_);
     ++epochs_;
     ++stats_.epochs;
     if (bgActive_ > 0) ++stats_.reclaimsWithLent;
   }
   void endEpoch() {
+    if (lf_) return;
     { std::lock_guard l(m_); if (epochs_ > 0) --epochs_; }
     cv_.notify_all();  // the lane reopens: lend idle workers again
   }
@@ -213,7 +223,7 @@ class cJobPool {
   static cJobPool& shared();
   /// Worker threads; a view reports the most of its jobs that can run at once.
   unsigned size() const {
-    if (!backing_) return unsigned(workers_.size());
+    if (!backing_) return lf_ ? lf_->size() : unsigned(workers_.size());
     const unsigned b = lane_ == Lane::Background ? backing_->lendCap() : backing_->size();
     return std::min(viewCap_, b);
   }
@@ -242,11 +252,13 @@ class cJobPool {
   }
   /// Blocks (no polling) until every job submitted so far has finished.
   void waitIdle() const {
+    if (lf_) { lf_->waitIdle(); return; }
     std::unique_lock l(m_);
     idle_.wait(l, [this] { return inFlight_ == 0; });
   }
   /// Jobs that ended with an exception since the pool was created.
-  uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
+  uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed) + (lf_ ? lf_->failedJobs() : 0); }
+  bool lockFree() const { return lf_ != nullptr; }
 
  private:
   // ---- view (P4) ----
@@ -372,6 +384,7 @@ class cJobPool {
     }
   }
   std::vector<std::thread> workers_;
+  std::unique_ptr<cLockFreePool> lf_;  // LL_POOL_LOCKFREE=1: every lane is lock-free (JD t3560u)
   std::deque<std::function<void()>> jobs_;    // normal lane (a view: its own queue)
   std::deque<std::function<void()>> urgent_;  // P3: submitUrgent(), ahead of jobs_, guarded by m_
   std::deque<std::function<void()>> bg_;      // P4: background lane (lent capacity), guarded by m_
@@ -416,8 +429,11 @@ inline cJobPool& cJobPool::shared() {
     alignas(cJobPool) static unsigned char storage[sizeof(cJobPool)];
     auto* pool = new (storage) cJobPool(n, &raiseCurrentThreadForSim);
     { std::lock_guard l(pool->m_); pool->maxActive_ = 0; }  // P4: normal lane unthrottled; views carry the cap
-    pool->configureLending(c.budget().simShards);             // P4: shard jobs' reserve
+    { const char* lf = std::getenv("LL_HS_LOCKFREE"); const char* ly = std::getenv("LL_HS_LAYOUT");  // 2026-10-30: lock-free/original run no shard jobs on the pool
+      const bool noShardJobs = (lf && lf[0] == '1') || (ly && std::string(ly) == "original");
+      pool->configureLending(noShardJobs ? 0u : c.budget().simShards); }  // P4: shard jobs' reserve
     for (unsigned i = 0; i < n; ++i) c.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, uint16_t(i), "pool");
+    if (pool->lockFree()) logInfo("threads: shared job pool is LOCK-FREE (LL_POOL_LOCKFREE=1): Chase-Lev deques + stealing, urgent ring, atomic wake");
     logInfo("threads: shared job pool up: %u workers (clamp(cores-2, 1, %u)); lends up to %u to background, "
             "reserves %u for shard jobs", n, kMaxPoolWorkers, pool->lendCap(), pool->reserve());
     const std::string inv = poolInvariantViolation(c.live(ThreadClass::Pooled), c.budget());  // t3353u

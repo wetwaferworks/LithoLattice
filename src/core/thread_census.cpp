@@ -1,5 +1,6 @@
 // Thread Handshake P1: see thread_census.h. Record-only; nothing takes its counts yet.
 #include "litholattice/core/thread_census.h"
+#include <cstring>
 
 #include <algorithm>
 #include <cstdio>
@@ -72,6 +73,22 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
   b.renderSpawned = b.renderBands - 1;
   // Class B (Archie ruling 3/4): clamp(cores - 2, 1, kMaxPoolWorkers) on every size.
   b.pool = std::clamp(b.hw > 2 ? b.hw - 2 : 1u, 1u, kMaxPoolWorkers);
+  // 2026-10-30 (JD t3557u) LL_THREAD_BUDGET=1 (implied by LL_HS_LOCKFREE=1 / LL_HS_LAYOUT=original):
+  // total compute threads <= cores. Dedicated: main + sim clock, plus the lock-free shard threads
+  // (LL_HS_LOCKFREE) or the control/event thread (original layout). The pool gets the rest.
+  // Render bands are spawned lazily by the software renderer only, so Vulkan spends none.
+  {
+    const char* tb = std::getenv("LL_THREAD_BUDGET");
+    const char* lf = std::getenv("LL_HS_LOCKFREE");
+    const char* ly = std::getenv("LL_HS_LAYOUT");
+    const bool orig = ly && std::strcmp(ly, "original") == 0;
+    const bool lock = lf && lf[0] == '1';
+    if ((tb && tb[0] == '1') || lock || orig) {
+      const unsigned dedicated = 2u + (orig ? 1u : lock ? b.simShards : 0u);
+      b.pool = std::clamp(b.hw > dedicated ? b.hw - dedicated : 1u, 1u, kMaxPoolWorkers);
+      b.capped = true; b.dedicatedExtra = dedicated - 2u; b.layoutOriginal = orig;
+    }
+  }
   b.activeCap = b.pool;
   return b;
 }
@@ -150,6 +167,15 @@ cThreadCensus& cThreadCensus::instance() {
     cc->budget_.hwRaw = hw;  // telemetry: what the hardware reported
     g_booted.store(true);
     logInfo("%s", threadTally(cc->budget_).c_str());  // t3353u: the tally is a summary, not a warning
+    if (cc->budget_.capped) {  // 2026-10-30 (JD t3557u): budget never exceeds the core count (--cores > LITHO_CORES > hardware)
+      const ThreadBudget& b = cc->budget_;
+      const unsigned total = 2u + b.dedicatedExtra + b.pool;
+      logInfo("threads: budget capped at %u cores (%s): main 1 + sim clock 1 + %s %u + on-demand pool %u = %u; render bands run on the pool (software renderer spawns %u lazily)",
+              b.hw, sourceName(b.source), b.layoutOriginal ? "control/event" : "lock-free shards", b.dedicatedExtra, b.pool, total, b.renderSpawned);
+      if (total > b.hw)
+        logWarn("threads: budget %u exceeds %u cores (%s): main 1 + sim clock 1 + dedicated %u + pool %u (pool floor 1); oversubscribing, no pinning",
+                total, b.hw, sourceName(b.source), b.dedicatedExtra, b.pool);
+    }
     const std::string w = oversubscriptionWarning(cc->budget_);  // explicit --cores / LITHO_CORES only
     if (!w.empty()) logWarn("%s", w.c_str());
     return cc;

@@ -29,6 +29,11 @@
 // Slot writes come from the worker running that job (handed over by the barrier mutex).
 // asyncBegin runs inside a job; asyncComplete may be called from any thread.
 #pragma once
+#include <cstdlib>
+#include <string>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -43,6 +48,16 @@
 #include "litholattice/core/tick_profile.h"
 
 namespace litholattice {
+
+/// 2026-10-30 (JD t3557u): LL_HS_LOCKFREE=1 / LL_HS_LAYOUT=original swap the ledger's yield spin for a pause spin.
+inline bool lockfreeSpin() {
+  static const bool on = [] {
+    const char* a = std::getenv("LL_HS_LOCKFREE");
+    const char* b = std::getenv("LL_HS_LAYOUT");
+    return (a && a[0] == '1') || (b && std::string(b) == "original");
+  }();
+  return on;
+}
 
 class cTickLedger {
  public:
@@ -199,7 +214,13 @@ class cTickLedger {
         ++stats_.asyncLate;
         while ((st = r.state.load(std::memory_order_acquire)) == kPending) {
           if (lnow() > deadlineNs) return false;
-          std::this_thread::yield();
+          if (lockfreeSpin()) {  // LL_HS_LOCKFREE: pause-spin, no OS yield on the tick thread
+#if defined(_M_X64) || defined(__x86_64__)
+            _mm_pause();
+#endif
+          } else {
+            std::this_thread::yield();
+          }
         }
         waitNs += lnow() - w0;
       }

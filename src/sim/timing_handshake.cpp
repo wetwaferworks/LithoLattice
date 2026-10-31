@@ -11,12 +11,23 @@
 #include <cassert>
 #include <optional>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/log.h"
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#include <immintrin.h>
+#define LL_HS_RELAX() _mm_pause()
+#else
+#define LL_HS_RELAX() ((void)0)
+#endif
 
 namespace litholattice {
+
+namespace {
+bool hsEnvOn(const char* k, const char* v = "1") { const char* e = std::getenv(k); return e && std::strcmp(e, v) == 0; }
+}  // namespace
 
 namespace {
 // Sub-pull context (A-H1 mechanism-lite): the frame of the item this
@@ -65,6 +76,8 @@ cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg)
   if (cfg_.phasesPerCycle < 1) cfg_.phasesPerCycle = 1;
   if (cfg_.phasesPerCycle > 64) cfg_.phasesPerCycle = 64;
   ceiling_ = cfg_.watchdogCeiling.count() > 0 ? cfg_.watchdogCeiling : std::chrono::milliseconds(250);
+  inlineLayout_ = hsEnvOn("LL_HS_LAYOUT", "original");
+  lockfree_ = inlineLayout_ || hsEnvOn("LL_HS_LOCKFREE");
   if (cfg_.workerThreads > 0) {
     workerCount_ = cfg_.workerThreads;
   } else {
@@ -316,7 +329,10 @@ void cTimingHandshakeAuthority::resetAfterFreeze() {
   // CH-H1: bump the generation under m_ first — a stale worker's barrier
   // arrival revalidates (seq, generation) under the same mutex, so it can
   // no longer be counted toward the next phase — then clear the latch.
-  {
+  if (lockfree_) {  // lock-free: the generation is part of the arrival key, so stale arrivals cannot match
+    generation_.fetch_add(1, std::memory_order_acq_rel);
+    arrivalWord_.store(0, std::memory_order_release);
+  } else {
     std::lock_guard lk(m_);
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivals_.store(0, std::memory_order_relaxed);
@@ -345,8 +361,10 @@ bool cTimingHandshakeAuthority::start() {
     // stale last publication as new work and re-executed it outside any
     // tick/barrier. The generation bump additionally invalidates any
     // snapshot a worker from a previous life could still be holding.
-    std::lock_guard lk(m_);
+    std::unique_lock lk(m_, std::defer_lock);
+    if (!lockfree_) lk.lock();
     generation_.fetch_add(1, std::memory_order_acq_rel);
+    arrivalWord_.store(0, std::memory_order_release);
     {
       const uint64_t zero[kPubWords] = {0, 0, 0, 0, 0};
       pub_.write(zero);
@@ -364,6 +382,22 @@ bool cTimingHandshakeAuthority::start() {
   // Thread Handshake P3 (ruling 2): no threads here. Each publication submits one
   // barrier-synced job per active shard to the backing pool (whose workers run at sim
   // priority, F57-1); only the Sim Clock keeps a dedicated thread.
+  if (inlineLayout_) {  // original layout: no shard workers at all; runPhase executes shards inline
+    ledger_.abandonOpenTick();
+    ledger_.reserve(comps_.size());
+    logInfo("threads: timing handshake layout=original: %d shards inline on the tick thread, no locks, no pool", workerCount_);
+    return true;
+  }
+  if (lockfree_) {
+    jobs_ = std::make_shared<ShardJobs>();  // haveWorkers marker only; no pool jobs are submitted
+    pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
+    ledger_.abandonOpenTick();
+    ledger_.reserve(comps_.size());
+    lfThreads_.reserve(size_t(workerCount_));
+    for (int s = 0; s < workerCount_; ++s) lfThreads_.emplace_back([this, s] { lfWorkerLoop(s); });
+    logInfo("threads: timing handshake LOCK-FREE: %d dedicated shard threads, atomic arrival barrier, no mutex on the tick path", workerCount_);
+    return true;
+  }
   pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
   jobs_ = std::make_shared<ShardJobs>();
   ledger_.abandonOpenTick();           // P4: a tick left open by a freeze never commits
@@ -374,6 +408,17 @@ bool cTimingHandshakeAuthority::start() {
 
 bool cTimingHandshakeAuthority::stop() {
   if (!startedOnce_ && !jobs_) return true;
+  if (lockfree_) {
+    stop_.store(true, std::memory_order_release);
+    publishSeq_.fetch_add(1, std::memory_order_acq_rel);  // wake idle shard threads (no new tuple: they re-poll and see stop_)
+    publishSeq_.notify_all();
+    for (auto& t : lfThreads_) if (t.joinable()) t.join();
+    lfThreads_.clear();
+    jobs_.reset();
+    pool_ = nullptr;
+    running_.store(false);
+    return true;
+  }
   stop_.store(true, std::memory_order_release);
   publishCv_.notify_all();
   barrierCv_.notify_all();
@@ -432,6 +477,14 @@ bool cTimingHandshakeAuthority::canTick(uint32_t shard, uint64_t& phaseOut) cons
 }
 
 HsStats cTimingHandshakeAuthority::statsSnapshot() const {
+  if (lockfree_) {
+    for (;;) {
+      const uint64_t a = statsSeq_.load(std::memory_order_acquire);
+      if (a & 1) { LL_HS_RELAX(); continue; }
+      HsStats copy = stats_;
+      if (statsSeq_.load(std::memory_order_acquire) == a) return copy;
+    }
+  }
   std::lock_guard lk(statsM_);
   return stats_;
 }
@@ -481,7 +534,12 @@ void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap
       // arrivals_ under the same mutex when it publishes, so a stale arrival can never
       // be counted toward a later phase's barrier.
       bool counted = false;
-      {
+      if (lockfree_) {
+        const uint64_t key = arrivalKey(snap.generation, snap.seq);
+        shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
+        uint64_t w = arrivalWord_.load(std::memory_order_acquire);
+        while ((w & ~0xFFFFull) == key && !arrivalWord_.compare_exchange_weak(w, w + 1, std::memory_order_acq_rel, std::memory_order_acquire)) LL_HS_RELAX();
+      } else {
         std::lock_guard lk(m_);
         if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
             generation_.load(std::memory_order_relaxed) == snap.generation) {
@@ -492,6 +550,9 @@ void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap
       }
       if (counted) barrierCv_.notify_all();
     }
+  } else if (lockfree_) {
+    if (publishSeq_.load(std::memory_order_acquire) == snap.seq && generation_.load(std::memory_order_acquire) == snap.generation)
+      shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
   } else {
     std::lock_guard lk(m_);
     if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
@@ -509,7 +570,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // background capacity until this phase commits (or freezes): no background slice starts
   // while shard jobs wait or into the shard reserve; lent workers return at their next
   // slice boundary.
-  cJobPoolEpoch epoch(running_.load(std::memory_order_acquire) ? pool_ : nullptr);
+  cJobPoolEpoch epoch(!lockfree_ && running_.load(std::memory_order_acquire) ? pool_ : nullptr);
   const uint64_t openStamp = nowNs();  // published with the tuple below (seqlock), not alone
 
   // Due set, in registration (id) order; active shards = shards with at
@@ -546,25 +607,28 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
 
   uint64_t seq = 0;
   {
-    std::lock_guard lk(m_);
+    std::unique_lock lk(m_, std::defer_lock);
+    if (!lockfree_) lk.lock();
     arrivals_.store(0, std::memory_order_relaxed);
     seq = publishSeq_.load(std::memory_order_relaxed) + 1;
+    if (lockfree_) arrivalWord_.store(arrivalKey(generation_.load(std::memory_order_acquire), seq), std::memory_order_release);
     const uint64_t words[kPubWords] = {phase, cycleTick, uint64_t(group), openStamp, seq};
     pub_.write(words);  // whole tuple first (seqlock) ...
     publishSeq_.store(seq, std::memory_order_release);  // ... then the wake counter
   }
-  publishCv_.notify_all();
+  if (lockfree_) publishSeq_.notify_all(); else publishCv_.notify_all();
 
   // Thread Handshake P3: one barrier-synced job per active shard, front of the pool's line
   // and unthrottled. Inactive shards are marked done for this publication here, as their
   // idle poll used to do.
   if (haveWorkers) {
     {
-      std::lock_guard lk(m_);
+      std::unique_lock lk(m_, std::defer_lock);
+      if (!lockfree_) lk.lock();
       for (int s = 0; s < workerCount_; ++s)
         if (!shardActive[size_t(s)]) shardDoneSeq_[size_t(s)].store(seq, std::memory_order_release);
     }
-    for (int s = 0; s < workerCount_; ++s)
+    for (int s = 0; s < workerCount_ && !lockfree_; ++s)
       if (shardActive[size_t(s)])
         pool_->submitUrgent([self = this, st = jobs_, s, seq] { runShardJob(self, st, s, seq); });
   }
@@ -579,13 +643,18 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       convertPendingFailureIfAny();  // C3: inline path converts before commit
     } else {
       const uint64_t waitStart = nowNs();
-      std::unique_lock lk(m_);
-      while (arrivals_.load(std::memory_order_acquire) < activeShards) {
-        if (barrierCv_.wait_for(lk, std::chrono::milliseconds(1)) == std::cv_status::timeout) {
+      std::unique_lock lk(m_, std::defer_lock);
+      if (!lockfree_) lk.lock();
+      uint32_t spins = 0;
+      while (arrivedCount() < activeShards) {
+        bool check;
+        if (lockfree_) { LL_HS_RELAX(); check = (++spins & 1023u) == 0; }  // watchdog check every 1024 pauses
+        else check = barrierCv_.wait_for(lk, std::chrono::milliseconds(1)) == std::cv_status::timeout;
+        if (check) {
           const uint64_t t = nowNs();
           // 0.0.1.57 F57-2 (R21): the last shard may have arrived between the timed-out wait and this check;
           // re-test the barrier before declaring a stall.
-          if (arrivals_.load(std::memory_order_acquire) >= activeShards) break;
+          if (arrivedCount() >= activeShards) break;
           if (t - openStamp > uint64_t(ceiling_.count())) {
             // Watchdog: FREEZE. Name the slowest unfinished component:
             // the started-but-unfinished item with the earliest start
@@ -671,7 +740,9 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   const uint64_t dur = nowNs() - openStamp;
   // A-M6: the fold is the stats writer; hold statsM_ so a cross-thread
   // statsSnapshot() never copies a half-folded struct (vector included).
-  std::lock_guard statsLk(statsM_);
+  std::unique_lock statsLk(statsM_, std::defer_lock);
+  if (!lockfree_) statsLk.lock();
+  else statsSeq_.fetch_add(1, std::memory_order_acq_rel);  // odd: fold in progress (readers retry)
   stats_.phases += 1;
   stats_.barrierWaitNsTotal += barrierWaitNs;
   stats_.qpcViolations = qpcViolations_.load(std::memory_order_relaxed);
@@ -724,7 +795,29 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       }
     }
   }
+  if (lockfree_) statsSeq_.fetch_add(1, std::memory_order_release);  // even: fold done
   return true;
+}
+
+uint32_t cTimingHandshakeAuthority::arrivedCount() const {
+  return lockfree_ ? uint32_t(arrivalWord_.load(std::memory_order_acquire) & 0xFFFFull) : arrivals_.load(std::memory_order_acquire);
+}
+
+void cTimingHandshakeAuthority::lfWorkerLoop(int shard) {
+  raiseCurrentThreadForSim();
+  uint64_t seen = 0;
+  while (!stop_.load(std::memory_order_acquire)) {
+    const uint64_t s = publishSeq_.load(std::memory_order_acquire);
+    if (s != seen) {
+      PublishedPhase snap;
+      if (pollPhase(uint32_t(shard), seen, snap)) { seen = snap.seq; serveShard(shard, snap); }
+      else { LL_HS_RELAX(); if (publishSeq_.load(std::memory_order_acquire) == s && readPublished(snap) && snap.seq == seen) seen = s; }
+      continue;
+    }
+    bool changed = false;  // idle: short pause-spin, then an atomic (address) wait; never a mutex
+    for (int i = 0; i < 4096 && !changed; ++i) { LL_HS_RELAX(); changed = publishSeq_.load(std::memory_order_acquire) != s; }
+    if (!changed) publishSeq_.wait(s, std::memory_order_acquire);
+  }
 }
 
 void cTimingHandshakeAuthority::resetStats() {

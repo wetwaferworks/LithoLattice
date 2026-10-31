@@ -79,6 +79,9 @@ struct ThreadBudget {
   unsigned pool = 1;           ///< pooled workers (single physical backing: cJobPool, P3)
   unsigned activeCap = 1;      ///< adaptive cap seed: max pooled workers active at once
   CoresSource source = CoresSource::Hardware;  ///< where hw came from (ruling 5)
+  bool capped = false;           ///< 2026-10-30 (JD t3557u): LL_THREAD_BUDGET / lock-free / original layout
+  unsigned dedicatedExtra = 0;   ///< dedicated threads beyond main + sim clock (shards or control/event)
+  bool layoutOriginal = false;
   /// Cores the always-running dedicated threads hold (main + sim clock).
   unsigned dedicatedCores() const { return mainThreads + simClock; }
   /// Every OS thread the engine would own at boot (main excluded: it already exists).
