@@ -30,6 +30,7 @@
 #include "litholattice/core/chase_lev.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/mpsc_queue.h"
+#include "litholattice/core/thread_readout.h"
 #include "litholattice/core/urgent_ring.h"
 
 namespace litholattice {
@@ -46,6 +47,7 @@ class cLockFreePool {
   cLockFreePool(unsigned n, void (*threadInit)()) {
     n = std::max(1u, n);
     lendCap_.store(n, std::memory_order_relaxed);
+    if (cThreadReadout::enabled()) readout_ = std::make_unique<cThreadReadout>(n);  // LL_THREAD_READOUT
     workers_.reserve(n);
     for (unsigned i = 0; i < n; ++i) workers_.push_back(std::make_unique<Worker>());
     for (unsigned i = 0; i < n; ++i)
@@ -63,7 +65,7 @@ class cLockFreePool {
 
   void submit(std::function<void()> f) {
     Job j = new std::function<void()>(std::move(f));
-    inFlight_.fetch_add(1, std::memory_order_acq_rel);
+    { const int d = inFlight_.fetch_add(1, std::memory_order_acq_rel) + 1; if (readout_) readout_->depth(d); }
     pushNormal(j);
     wake(false);
   }
@@ -145,7 +147,7 @@ class cLockFreePool {
     const size_t n = workers_.size();
     for (size_t d = 1; d < n; ++d) {
       Worker& v = *workers_[(self + d) % n];
-      if (v.deque.steal(out)) { steals_.fetch_add(1, std::memory_order_relaxed); return true; }
+      if (v.deque.steal(out)) { steals_.fetch_add(1, std::memory_order_relaxed); if (readout_) readout_->steal(self); return true; }
       if (takeInject(v, out)) return true;
     }
     if (takeBackground(out)) { bg = true; return true; }
@@ -159,13 +161,20 @@ class cLockFreePool {
       const uint32_t g = gen_.load(std::memory_order_acquire);
       Job j = nullptr;
       bool bg = false;
-      if (find(self, j, bg)) { exec(j, bg); continue; }
+      if (readout_ && self == 0) readout_->maybeDump("pool");
+      if (find(self, j, bg)) {
+        if (readout_) { const uint64_t a = cThreadReadout::nowNs(); exec(j, bg); readout_->job(self, cThreadReadout::nowNs() - a); }
+        else exec(j, bg);
+        continue;
+      }
       if (stop_.load(std::memory_order_acquire)) return;
       bool changed = false;
       for (int i = 0; i < 2048 && !changed; ++i) { relax(); changed = gen_.load(std::memory_order_acquire) != g; }
       if (changed) continue;
       sleepers_.fetch_add(1, std::memory_order_acq_rel);
+      const uint64_t idle0 = readout_ ? cThreadReadout::nowNs() : 0;
       if (gen_.load(std::memory_order_acquire) == g && !stop_.load(std::memory_order_acquire)) gen_.wait(g, std::memory_order_acquire);
+      if (readout_) readout_->idle(self, cThreadReadout::nowNs() - idle0);
       sleepers_.fetch_sub(1, std::memory_order_acq_rel);
     }
   }
@@ -195,6 +204,7 @@ class cLockFreePool {
   std::atomic<size_t> rr_{0};
   std::atomic<bool> stop_{false};
   std::atomic<uint64_t> failed_{0}, steals_{0};
+  std::unique_ptr<cThreadReadout> readout_;  // LL_THREAD_READOUT=1 only; null otherwise
 };
 
 }  // namespace litholattice
