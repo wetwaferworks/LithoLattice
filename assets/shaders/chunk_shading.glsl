@@ -390,7 +390,8 @@ void main() {
 #ifdef LITHO_VK_FX
   // Pulsing glow: mask G = phase, on the sim clock (tick-synced) but render-only.
   float fxPulse = 1.0;
-  if ((uFx.x & 8) != 0 && emissive > 0.0)
+  // 2026-10-31 (JD): colour lamps 16 / 32 / 64 (modes 5..7) glow steadily: no fx pulse.
+  if ((uFx.x & 8) != 0 && emissive > 0.0 && !(vMode >= 5 && vMode <= 7))
     fxPulse = 0.72 + 0.28 * sin(6.28318530718 * (uFxP.z * uFxP.w - fxGlowPhase - dot(vWorld, vec3(0.031, 0.017, 0.023))));
   col = mix(col, col * fxPulse * 1.12, emissive);
   if ((uFx.x & 32) != 0) {  // exponential-squared distance fog, thinning with height
