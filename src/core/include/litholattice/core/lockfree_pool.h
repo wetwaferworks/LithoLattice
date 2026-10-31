@@ -83,6 +83,8 @@ class cLockFreePool {
     bg_.push(std::move(j));
     wake(false);
   }
+  /// Gate 1: true on a worker thread of ANY cLockFreePool (fork-join callers run inline there).
+  static bool onAnyWorker() { return tlsOwner() != nullptr && selfIndex() >= 0; }
   bool urgentPending() const { return urgent_.pending() > 0; }
   void setLendCap(unsigned c) { lendCap_.store(std::max(1u, c), std::memory_order_release); wake(true); }
   unsigned lendCap() const { return lendCap_.load(std::memory_order_acquire); }

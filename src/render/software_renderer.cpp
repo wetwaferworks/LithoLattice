@@ -364,6 +364,7 @@ class cSwBandPool {
     // frames instead — it re-checks on every submit.
     if (want != bands_ && !tlDetachedBody_) { stopAll(); start(want); }
     if (bands_ <= 1) { fn(0); return; }
+    if (folded_) { runFolded(fn); return; }  // Gate 1: bands ride the shared lock-free pool
     // Several cSoftwareRenderer instances share the pool (the game view and
     // the MCP vision capture for the Daemon's pilots): one frame at a time.
     // run() returns only after every band has finished, so the framebuffer
@@ -445,7 +446,49 @@ class cSwBandPool {
     cv_.notify_all();
   }
   ~cSwBandPool() { stopAll(); }
+  /// Gate 1 (Archie Q0-Q17): fold the render bands into the shared job pool. Opt-in: LL_RENDER_POOL=1
+  /// with the lock-free shared pool (LL_POOL_LOCKFREE=1); otherwise the dedicated band threads
+  /// stay (fold raised tick p99 ~10x in the Gate 1 A/B: bands starve shard jobs). Render-only: no hash.
+  static bool foldWanted() {
+    static const bool on = [] {
+      const char* e = std::getenv("LL_RENDER_POOL");
+      if (!(e && e[0] == '1')) return false;  // opt-in: Gate 1 A/B showed tick p99 1.4 -> 13-14 ms when bands share the pool
+      return cJobPool::shared().lockFree();
+    }();
+    return on;
+  }
  private:
+  // Gate 1: one frame's band fan-out over the shared pool. No mutex, no condvar: an atomic
+  // countdown (release per band, acquire by the caller) plus std::atomic::wait. The state is
+  // shared_ptr-owned so a band's final notify never touches a returned caller's stack. Bands
+  // go on the NORMAL lane so Timing Handshake shard jobs (urgent ring) always run first. A
+  // caller that is itself a pool worker runs every band inline (no worker waits on workers).
+  struct FoldState {
+    std::atomic<unsigned> remaining{0};
+    std::atomic<bool> failed{false};
+    std::exception_ptr err;  // written once by the band that wins `failed`
+  };
+  void runFolded(const std::function<void(unsigned)>& fn) {
+    if (cLockFreePool::onAnyWorker()) { for (unsigned b = 0; b < bands_; ++b) fn(b); return; }
+    auto st = std::make_shared<FoldState>();
+    st->remaining.store(bands_ - 1, std::memory_order_relaxed);
+    const std::function<void(unsigned)>* f = &fn;
+    for (unsigned b = 1; b < bands_; ++b)
+      cJobPool::shared().submit([st, f, b] {
+        tlInRun_ = true;
+        try { (*f)(b); } catch (...) {
+          if (!st->failed.exchange(true, std::memory_order_acq_rel)) st->err = std::current_exception();
+        }
+        tlInRun_ = false;
+        if (st->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) st->remaining.notify_all();
+      });
+    std::exception_ptr mine;
+    try { fn(0); } catch (...) { mine = std::current_exception(); }
+    for (unsigned v; (v = st->remaining.load(std::memory_order_acquire)) != 0;) st->remaining.wait(v, std::memory_order_acquire);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    std::exception_ptr err = mine ? mine : st->err;
+    if (err) std::rethrow_exception(err);
+  }
   // Archie review C1: frame-slot helpers (the slot is a flag under m_).
   void acquireFrameSlot() {
     std::unique_lock<std::mutex> l(m_);
@@ -483,6 +526,11 @@ class cSwBandPool {
     if (detachedMode_) {
       threads_.emplace_back([this] { executorLoop(); });
       records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
+    }
+    folded_ = n > 1 && foldWanted();
+    if (folded_) {
+      logInfo("software renderer: %u render bands folded into the shared job pool (Gate 1; 0 band threads spawned)", n);
+      return;  // the detached executor (if any) is still spawned above
     }
     for (unsigned i = 1; i < bands_; ++i) {
       threads_.emplace_back([this, i, g] { loop(i, g); });
@@ -540,6 +588,7 @@ class cSwBandPool {
     }
   }
   unsigned bands_ = 1;
+  bool folded_ = false;  // Gate 1: set by start() (runM_ held / constructor)
   std::vector<std::thread> threads_;
   cThreadRecordSet records_;  // Thread Handshake P2: band workers + executor (Class A)
   std::mutex m_, runM_;
