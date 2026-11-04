@@ -12,6 +12,7 @@ namespace litholattice {
 
 namespace {
 std::atomic<int> g_cow{-1};
+std::atomic<uint64_t> g_lfForeign{0};  // 2026-11-01 LL_LF_COWTABLE
 std::atomic<uint64_t> g_staleNoted{0}, g_staleFlushed{0}, g_stalePinned{0}, g_maxProbe{0};
 std::atomic<uint64_t> g_pins{0}, g_subs{0}, g_full{0}, g_evict{0}, g_vChecked{0}, g_vMismatch{0}, g_bytes{0}, g_gathers{0};
 size_t budgetBytes() {
@@ -50,7 +51,7 @@ CowStats cowStats() {
   s.pins = g_pins.load(); s.subsPublished = g_subs.load(); s.columnsFullPublished = g_full.load();
   s.evictedColumns = g_evict.load(); s.verifyChecked = g_vChecked.load(); s.verifyMismatches = g_vMismatch.load();
   s.retainedBytes = g_bytes.load(); s.gathers = g_gathers.load();
-  s.staleNoted = g_staleNoted.load(); s.staleFlushed = g_staleFlushed.load(); s.stalePinned = g_stalePinned.load(); s.maxProbe = g_maxProbe.load();
+  s.lfForeignOwner = g_lfForeign.load(); s.staleNoted = g_staleNoted.load(); s.staleFlushed = g_staleFlushed.load(); s.stalePinned = g_stalePinned.load(); s.maxProbe = g_maxProbe.load();
   return s;
 }
 void noteCowVerify(bool match) {
@@ -137,15 +138,36 @@ void ColumnTable::enforceBudgetLocked() {
   g_bytes.store(bytes_, std::memory_order_relaxed);
 }
 
+void ColumnTable::lfEnter() {
+  const std::thread::id me = std::this_thread::get_id();
+  std::thread::id o = lfOwner_.load(std::memory_order_relaxed);
+  if (o != me) {
+    if (o != std::thread::id() && g_lfForeign.fetch_add(1, std::memory_order_relaxed) == 0)
+      std::fprintf(stderr, "column table (LL_LF_COWTABLE): owner-only call from a second thread (owner handed over?)\n");
+    lfOwner_.store(me, std::memory_order_relaxed);
+  }
+  lfStale_.takeAll([&](uint64_t k, uint64_t m) { stale_[k] |= m; });
+  std::vector<std::pair<uint64_t, uint64_t>> sp;
+  lfSpill_.drainInto(sp);
+  for (const auto& [k, m] : sp) stale_[k] |= m;
+}
+
 void ColumnTable::noteStale(int cx, int sy, int cz) {
   if (sy < 0 || sy >= kSubChunks) return;
+  if (lf_) {  // LL_LF_COWTABLE: any thread, atomics only
+    const uint64_t key = ChunkKey::make(cx, cz), bit = uint64_t(1) << sy;
+    if (!lfStale_.fetchOr(key, bit)) lfSpill_.push({key, bit});
+    g_staleNoted.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
   std::lock_guard l(m_);
   stale_[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy;
   g_staleNoted.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
-  std::lock_guard l(m_);
+  std::unique_lock l(m_, std::defer_lock);
+  if (lf_) lfEnter(); else l.lock();
   std::vector<std::pair<uint64_t, uint64_t>> out;
   out.reserve(stale_.size());
   stale_.forEach([&](uint64_t k, uint64_t m) { if (m) out.emplace_back(k, m); });
@@ -155,16 +177,19 @@ std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
 }
 
 void ColumnTable::publish(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask) {
-  std::lock_guard l(m_);
+  std::unique_lock l(m_, std::defer_lock);
+  if (lf_) lfEnter(); else l.lock();
   publishLocked(w, reg, cx, cz, mask);
   enforceBudgetLocked();
+  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
 }
 
 std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
                                                 BlockId belowWorld, MeshEdge edge) {
   auto p = std::make_shared<MeshPin>();
   p->cx = cx; p->sy = sy; p->cz = cz; p->belowWorld = belowWorld; p->edge = edge;
-  std::lock_guard l(m_);
+  std::unique_lock l(m_, std::defer_lock);
+  if (lf_) lfEnter(); else l.lock();
   for (int dz = -1; dz <= 1; ++dz)
     for (int dx = -1; dx <= 1; ++dx) {
       const size_t i = size_t((dz + 1) * 3 + (dx + 1));
@@ -187,21 +212,25 @@ std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockR
   if (entries_.maxProbe() > g_maxProbe.load(std::memory_order_relaxed) && (g_pins.load(std::memory_order_relaxed) & 1023) == 0)
     g_maxProbe.store(entries_.maxProbe(), std::memory_order_relaxed);
   enforceBudgetLocked();
+  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
   g_pins.fetch_add(1, std::memory_order_relaxed);
   return p;
 }
 
 void ColumnTable::drop(int cx, int cz) {
-  std::lock_guard l(m_);
+  std::unique_lock l(m_, std::defer_lock);
+  if (lf_) lfEnter(); else l.lock();
   const uint64_t key = ChunkKey::make(cx, cz);
   if (Entry* it = entries_.find(key)) {
     bytes_ -= it->bytes;
     entries_.erase(key);
   }
   stale_.erase(key);
+  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
 }
 
 size_t ColumnTable::columns() const {
+  if (lf_) return lfCount_.load(std::memory_order_relaxed);
   std::lock_guard l(m_);
   return entries_.size();
 }

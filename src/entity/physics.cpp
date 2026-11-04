@@ -1,6 +1,7 @@
 #include "litholattice/entity/physics.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace litholattice {
 namespace {
@@ -26,6 +27,18 @@ namespace {
 bool moveCollideStep(Entity& e, const std::function<bool(int x, int y, int z)>& isSolid,
                      float halfWidth, float height, double dt) {
   bool hit = false;
+  // 2026-11-01 (box perf, collision early-out): an axis with zero velocity re-tests the exact box the
+  // previous axis tested (idle / falling-only entities test one box three times). Reuse that answer
+  // when the box is bit-identical - same result, fewer isSolid calls. LL_COLLIDE_MEMO=0: old.
+  static const bool memoOn = [] { const char* ev = std::getenv("LL_COLLIDE_MEMO"); return !(ev && ev[0] == '0'); }();
+  bool memoValid = false, memoHit = false;
+  double mx = 0, my = 0, mz = 0;
+  auto aabbCollides = [&](double x, double y, double z, float hw, float h, const std::function<bool(int, int, int)>& solid) {
+    if (memoOn && memoValid && x == mx && y == my && z == mz) return memoHit;
+    const bool r = litholattice::aabbCollides(x, y, z, hw, h, solid);
+    memoValid = true; memoHit = r; mx = x; my = y; mz = z;
+    return r;
+  };
   // X axis
   {
     const double nx = e.x + e.vx * dt;

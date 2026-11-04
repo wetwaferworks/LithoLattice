@@ -53,6 +53,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdlib>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -214,6 +215,8 @@ class cJobSystem {
   }
 
   uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
+  /// PlayM: queued jobs dropped by a timed shutdown drain (LL_SHUTDOWN_DRAIN_MS).
+  uint64_t droppedJobs() const { return dropped_.load(std::memory_order_relaxed); }
   /// Concurrency cap (P4: pumps on the shared pool, not owned threads).
   unsigned workerCount() const { return cap_; }
   unsigned ioThreadCount() const { return (unsigned)ioThreads_.size(); }
@@ -264,12 +267,24 @@ class cJobSystem {
     LITHO_THREAD_LOG("thread", "shutdown: draining %d worker + %d io jobs in flight",
                      inFlight_.load(std::memory_order_relaxed),
                      ioInFlight_.load(std::memory_order_relaxed));
-    // Drain first (everything already submitted still runs, as before), then stop.
+    // PlayM (JD 10:30): TIMED drain. Everything already submitted still runs while the deadline
+    // (LL_SHUTDOWN_DRAIN_MS, default 10000; 0 = wait forever, the old behaviour) has not passed.
+    // At the deadline the queued, not-yet-started jobs are dropped (counted + logged); jobs already
+    // running are always waited for (a job cannot be interrupted safely).
     {
-      std::unique_lock<std::mutex> l(m_);  // L2
-      idleCv_.wait(l, [this] {
+      auto idle = [this] {
         return inFlight_.load(std::memory_order_acquire) == 0 && ioInFlight_.load(std::memory_order_acquire) == 0;
-      });
+      };
+      std::unique_lock<std::mutex> l(m_);  // L2
+      const long ms = drainMs();
+      if (ms > 0 && !idleCv_.wait_for(l, std::chrono::milliseconds(ms), idle)) {
+        cancel_.store(true, std::memory_order_release);
+        l.unlock();
+        const int dropped = dropQueued();
+        logWarn("job system shutdown: drain passed %ld ms; dropped %d queued job(s), waiting for running ones", ms, dropped);
+        l.lock();
+      }
+      idleCv_.wait(l, idle);
     }
     {  // a pump may still be between its last job and its exit: it touches `this` until then
       std::unique_lock<std::mutex> l(qM_);
@@ -283,6 +298,22 @@ class cJobSystem {
     records_.retireAll();  // joined -> RETURNED
     LITHO_THREAD_LOG("thread", "shutdown: io threads joined, failed=%llu",
                      (unsigned long long)failed_.load(std::memory_order_relaxed));
+  }
+
+  static long drainMs() {
+    static const long v = [] { const char* e = std::getenv("LL_SHUTDOWN_DRAIN_MS"); return e ? std::atol(e) : 10000L; }();
+    return v;
+  }
+  // Drops every queued (not started) worker + io job; releases their in-flight counts.
+  int dropQueued() {
+    std::deque<Job> w, io;
+    { std::lock_guard<std::mutex> l(qM_); for (auto& q : queue_) { for (auto& j : q) w.push_back(std::move(j)); q.clear(); } }
+    { std::lock_guard<std::mutex> l(ioM_); io.swap(ioQueue_); }
+    const int n = int(w.size() + io.size());
+    if (!w.empty() && inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel) == int(w.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
+    if (!io.empty() && ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel) == int(io.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
+    dropped_.fetch_add(uint64_t(n), std::memory_order_relaxed);
+    return n;
   }
 
   void launchPump() { pool_->submit([this] { pump(); }); }
@@ -385,6 +416,8 @@ class cJobSystem {
   std::atomic<int> inFlight_{0};
   std::atomic<int> ioInFlight_{0};
   std::atomic<uint64_t> failed_{0};
+  std::atomic<bool> cancel_{false};    // PlayM: set when the timed shutdown drain expires
+  std::atomic<uint64_t> dropped_{0};   // PlayM: queued jobs dropped by the timed drain
 };
 
 inline thread_local bool cJobSystem::t_onJobThread = false;

@@ -22,6 +22,10 @@
 #include "litholattice/audio/audio_selftest.h"
 #include "litholattice/core/threading.h"
 #include "litholattice/core/job_system.h"
+#include "litholattice/core/lf_handoff.h"    // 2026-11-01 LL_LF_JOBS
+#include "litholattice/core/lf_job_queue.h"
+#include "litholattice/core/lf_job_ring.h"
+#include "litholattice/core/lf_key_table.h"  // 2026-11-01 LL_LF_COWTABLE / LL_LF_SAVE
 #if defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
@@ -269,6 +273,76 @@ void testCore() {
     for (int i = 0; i < 10; ++i) batch.submit([i] { if (i % 5 == 0) throw std::runtime_error("fixture"); });
     const int failed = batch.wait();
     check(all && failed == 2 && pool.failedJobs() == 0, "job pool runs every job; a batch counts its throwing jobs, the pool survives");
+  }
+  {  // 2026-11-01 (JD LL_LF_JOBS): MPMC ring, 4 producers x 4 consumers, nothing lost or duplicated.
+    cLfJobRing<uint32_t> ring(64);
+    std::atomic<int> producersLeft{4};
+    std::atomic<uint64_t> sum{0}, count{0};
+    std::vector<std::thread> th;
+    for (int t = 0; t < 4; ++t) th.emplace_back([&, t] {
+      for (uint32_t i = 0; i < 20000; ++i) { const uint32_t v = uint32_t(t) * 20000u + i + 1; unsigned sp = 0; while (!ring.tryPush(v)) cLfJobQueue::backoff(sp); }
+      producersLeft.fetch_sub(1);
+    });
+    for (int t = 0; t < 4; ++t) th.emplace_back([&] {
+      uint32_t v = 0; unsigned sp = 0;
+      for (;;) {
+        if (ring.tryPop(v)) { sum += v; ++count; sp = 0; continue; }
+        if (producersLeft.load() == 0) break;  // leftovers are drained after join
+        cLfJobQueue::backoff(sp);
+      }
+    });
+    for (auto& t : th) t.join();
+    uint32_t v = 0; while (ring.tryPop(v)) { sum += v; ++count; }
+    check(count == 80000 && sum == 80000ull * 80001ull / 2, "LF job ring: 4 producers x 4 consumers, nothing lost or duplicated");
+  }
+  {  // LL_LF_JOBS queue: every job runs, throwing jobs are counted, workers <= hardware threads,
+     // a full ring runs inline, and slot-written parallel results equal the serial ones.
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    cLfJobQueue q(hw + 8, 16);  // asks for too many workers and a tiny ring on purpose
+    std::atomic<int> n{0};
+    for (int i = 0; i < 5000; ++i) q.submit([&n] { n.fetch_add(1, std::memory_order_relaxed); });
+    q.waitIdle();
+    std::printf("  (two LL_LF_JOBS job errors are expected next)\n"); std::fflush(stdout);
+    for (int i = 0; i < 10; ++i) q.submit([i] { if (i % 5 == 0) throw std::runtime_error("fixture"); });
+    q.waitIdle();
+    std::vector<uint64_t> par(4096), ser(4096);
+    auto f = [](uint64_t i) { uint64_t h = i * 0x9E3779B97F4A7C15ull; for (int k = 0; k < 200; ++k) h = (h ^ (h >> 29)) * 0xBF58476D1CE4E5B9ull; return h; };
+    std::atomic<int> pending{4096};
+    for (size_t i = 0; i < par.size(); ++i) q.submit([&, i] { par[i] = f(i); pending.fetch_sub(1, std::memory_order_release); });
+    q.helpUntilZero(pending);
+    for (size_t i = 0; i < ser.size(); ++i) ser[i] = f(i);
+    cLfJobQueue zero(0);
+    std::atomic<int> z{0};
+    zero.submit([&z] { z = 7; });
+    check(n == 5000 && q.failedJobs() == 2 && q.workers() <= hw && par == ser && z == 7,
+          "LF job queue: all jobs run, throws counted, workers <= hardware threads, deterministic slot results, 0 workers runs inline");
+  }
+  {  // 2026-11-01 lock-free key table: 4 threads OR / add over shared keys; takeAll sees every bit once.
+    cLfKeyTable t(4096);  // 2026-11-01 PlayK: 1000 keys in 1024 slots could spill past kMaxProbe
+    std::vector<std::thread> th;
+    for (int p = 0; p < 4; ++p)
+      th.emplace_back([&t, p] { for (uint64_t k = 0; k < 500; ++k) { t.fetchOr(k * 0x9E3779B97F4A7C15ull, uint64_t(1) << p); t.add(~(k + 1), 1); } });  // ~0 is the reserved key
+    for (auto& x : th) x.join();
+    bool ok = true; size_t seen = 0;
+    for (uint64_t k = 0; k < 500; ++k) ok = ok && t.get(~(k + 1)) == 4;
+    t.takeAll([&](uint64_t k, uint64_t v) { ++seen; if (v != 0xF && v != 4) ok = false; (void)k; });
+    size_t after = 0;
+    t.takeAll([&](uint64_t, uint64_t) { ++after; });
+    check(ok && seen == 1000 && after == 0, "LF key table: 4 threads, every bit and count lands once, takeAll empties");
+  }
+  {  // LL_LF_INGRESS handoff: 4 producers, nothing lost, each producer's order kept.
+    cLfHandoff<int> h;
+    std::vector<std::thread> th;
+    for (int t = 0; t < 4; ++t) th.emplace_back([&h, t] { for (int i = 0; i < 10000; ++i) h.push(t * 10000 + i); });
+    std::vector<int> got;
+    for (int k = 0; k < 50; ++k) h.drainInto(got);  // drain while producers run
+    for (auto& t : th) t.join();
+    h.drainInto(got);
+    bool ordered = got.size() == 40000;
+    int last[4] = {-1, -1, -1, -1};
+    long long sum = 0;
+    for (int v : got) { sum += v; const int p = v / 10000; ordered = ordered && v > last[p]; last[p] = v; }
+    check(ordered && sum == 40000LL * 39999 / 2 && h.sizeApprox() == 0, "LF handoff: 4 producers, nothing lost or duplicated, per-producer order kept");
   }
   {
     // Review A-L3: parse success must mean valid JSON — no trailing input

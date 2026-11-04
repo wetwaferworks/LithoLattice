@@ -1,4 +1,7 @@
 // Cortana 2026-10-15 0935/1045: ALT-TAB, LAUNCH-FOCUS
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include "litholattice/platform/window.h"
 #include <vector>
 // Vulkan types (no prototypes) first, so GLFW declares its surface helpers.
@@ -85,7 +88,11 @@ const char* displayModeName(DisplayMode m) {
 
 bool parseDisplayMode(const std::string& s, DisplayMode& out) {
   for (DisplayMode m : {DisplayMode::Windowed, DisplayMode::Maximized, DisplayMode::Borderless, DisplayMode::Fullscreen})
-    if (s == displayModeName(m)) { out = m; return true; }
+    if (s.size() == std::strlen(displayModeName(m)) &&  // 2026-10-31 (JD): case-insensitive; settings save "Borderless"
+        std::equal(s.begin(), s.end(), displayModeName(m),
+                   [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })) {
+      out = m; return true;
+    }
   return false;
 }
 

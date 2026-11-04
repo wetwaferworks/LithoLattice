@@ -269,7 +269,9 @@ void main() {
     // y50..77, glyph pixel = 2x2. Ghost 8 under every slot (alpha 40); tens is ghost-only below 10.
     // Ring lit when the stored value > 0: #8B65DD, #C8A9F6 highlight on the square's top row / left
     // column; its glow goes to emissive (bloom) only, not into the albedo. Only vVal changes per tick.
-    vec2 tuvC = rotUV(uvW, (4 - gRot) & 3);
+    // 2026-10-31 11:20 PM (JD): sample in the ROTATED tile UV so the digits turn with the block
+    // (the unrotated UV pinned them to world north: right for one facing only).
+    vec2 tuvC = uvW;
     vec4 m = mask(uMemMask, tuvC);
     int r = int(floor(m.r * 255.0 + 0.5));
     int v = clamp(vVal & 127, 0, 64);
@@ -334,7 +336,7 @@ void main() {
     emissive = lit && hot ? 0.6 : 0.1;
   } else if (vMode == MODE_READOUT) {                                    // 7-segment readout (catchor match value)
     const int SEG[10] = int[10](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);
-    vec4 m = mask(vLayer, rotUV(uvW, (4 - gRot) & 3));
+    vec4 m = mask(vLayer, uvW);  // 2026-10-31 11:20 PM (JD): rotated UV, turns with the facing (was world-pinned)
     int seg = int(floor(m.r * 255.0 / 16.0 + 0.5));
     int v = vVal & 127;
     bool ones = seg >= 8;

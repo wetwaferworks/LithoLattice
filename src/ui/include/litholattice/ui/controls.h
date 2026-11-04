@@ -22,6 +22,8 @@ class cLabel : public cWidget {
   cLabel& setText(std::string t) { text_ = std::move(t); return *this; }
   cLabel& setColor(Color c) { color_ = c; hasColor_ = true; return *this; }
   cLabel& setCentered(bool c) { centered_ = c; return *this; }
+  /// 2026-11-01 (JD): Minecraft-style drop shadow (dark copy one glyph pixel down-right) for HUD labels.
+  cLabel& setShadow(bool s) { shadow_ = s; return *this; }
   Vec2 measure(const Theme& theme) const override;
   cWidget* hitTest(Vec2 p) override;  ///< only when it has a tooltip
 
@@ -31,7 +33,7 @@ class cLabel : public cWidget {
  private:
   std::string text_;
   Color color_;
-  bool hasColor_ = false, centered_ = false;
+  bool hasColor_ = false, centered_ = false, shadow_ = false;
 };
 
 /// Clickable text button: "click" on release inside, or Enter / Space while focused.

@@ -631,7 +631,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
             int wdx = 0, wdy = 0, wdz = 0;
             attachOffset(af, wdx, wdy, wdz);
             const size_t tiltFrom = out.verts.size();
-            const int turns = (tilt || af == 1 || af == 2) ? look.boxModelTurns(def, st) : 0;  // 2026-10-24: floor / ceiling facing
+            const int turns = look.boxModelTurns(def, st);  // PlayN (JD): the game decides per mount (wall Switches turn too)  // 2026-10-24: floor / ceiling facing
             for (BoxModel::Box box : bm->orientedBoxes(tilt ? 1 : af, turns)) {
               const FaceMaterial& fm = mats.face(b, bm->materials[size_t(box.material)].slot, on);
               FaceLook fl = look.faceLookAt(def, st, FaceSlot::Top, on, in.cx * 16 + x, in.sy * 16 + y,

@@ -22,12 +22,15 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "litholattice/core/lf_handoff.h"  // 2026-11-01 LL_LF_INGRESS
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -139,6 +142,11 @@ class cIngress {
   void push(T v) {
     bytes_.fetch_add(W{}(v), std::memory_order_relaxed);
     if (ring_.tryPush(std::move(v))) return;
+    if (lfIngress()) {  // 2026-11-01 (JD LL_LF_INGRESS=1): lock-free overflow (atomic handoff)
+      lfOverflow_.push(std::move(v));
+      overflowTotal_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
     std::lock_guard<std::mutex> l(m_);
     overflow_.push_back(std::move(v));
     overflowN_.fetch_add(1, std::memory_order_release);
@@ -150,6 +158,13 @@ class cIngress {
     T v{};
     size_t drained = 0;
     while (ring_.tryPop(v)) { drained += W{}(v); out.push_back(std::move(v)); }
+    if (lfIngress()) {
+      const size_t s0 = out.size();
+      lfOverflow_.drainInto(out);
+      for (size_t i = s0; i < out.size(); ++i) drained += W{}(out[i]);
+      bytes_.fetch_sub(drained, std::memory_order_relaxed);
+      return;
+    }
     if (overflowN_.load(std::memory_order_acquire) == 0) { bytes_.fetch_sub(drained, std::memory_order_relaxed); return; }
     std::lock_guard<std::mutex> l(m_);
     for (auto& o : overflow_) { drained += W{}(o); out.push_back(std::move(o)); }
@@ -161,7 +176,12 @@ class cIngress {
   size_t queuedBytes() const { return bytes_.load(std::memory_order_relaxed); }
 
  private:
+  static bool lfIngress() {
+    static const bool on = [] { const char* e = std::getenv("LL_LF_INGRESS"); return !(e && e[0] == '0');  /* PlayL: default ON (JD 2026-11-01) */ }();
+    return on;
+  }
   cMpscRing<T> ring_;
+  cLfHandoff<T> lfOverflow_;  // LL_LF_INGRESS=1 only
   std::mutex m_;
   std::vector<T> overflow_;
   std::atomic<size_t> overflowN_{0};

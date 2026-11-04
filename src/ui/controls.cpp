@@ -48,6 +48,10 @@ void cLabel::paint(Painter& p) const {
     const size_t end = std::min(text_.find('\n', start), text_.size());
     const std::string_view line(text_.data() + start, end - start);
     const float x = centered_ ? c.x + (c.w - float(line.size()) * g.x) * 0.5f : c.x;
+    if (shadow_) {  // 2026-11-01 (JD): always-on drop shadow so the text reads on white floors
+      const float o = p.theme().pixelTextScale(s.textScale);
+      p.text({x + o, y + o}, line, Color{col.r * 0.25f, col.g * 0.25f, col.b * 0.25f, col.a}, s.textScale);
+    }
     p.text({x, y}, line, col, s.textScale);
     y += g.y;
     start = end + 1;

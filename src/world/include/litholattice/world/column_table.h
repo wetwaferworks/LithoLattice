@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -21,6 +22,10 @@
 #include <vector>
 #include "litholattice/world/chunk.h"
 #include "litholattice/world/open_addr_table.h"
+#include "litholattice/core/lf_handoff.h"    // 2026-11-01 LL_LF_COWTABLE
+#include "litholattice/core/lf_key_table.h"
+#include <atomic>
+#include <thread>
 
 namespace litholattice {
 
@@ -62,6 +67,7 @@ struct CowStats {
   uint64_t pins = 0, subsPublished = 0, columnsFullPublished = 0, evictedColumns = 0;
   uint64_t verifyChecked = 0, verifyMismatches = 0, retainedBytes = 0, gathers = 0;
   uint64_t staleNoted = 0, staleFlushed = 0, stalePinned = 0, maxProbe = 0;
+  uint64_t lfForeignOwner = 0;  ///< LL_LF_COWTABLE: owner-only calls seen from a second thread
 };
 
 class ColumnTable {
@@ -79,8 +85,20 @@ class ColumnTable {
   void noteStale(int cx, int sy, int cz);
   /// M9 (ruling 6): take the stale masks (column key -> sub mask) for the per-tick batch.
   std::vector<std::pair<uint64_t, uint64_t>> takeStale();
+  /// 2026-11-01 (JD LL_LF_COWTABLE=1, default off): no mutex. noteStale (any thread) goes to a
+  /// lock-free key table (spill: lock-free handoff); publish / pin / drop / takeStale run on the
+  /// owner thread only (the thread that may mutate the map: sim thread, or main before the sim
+  /// starts) and drain the stale marks first. columns() reads an atomic. Set before first use.
+  void setLockFree(bool on) { lf_ = on; }
+  bool lockFree() const { return lf_; }
 
  private:
+  void lfEnter();  // owner-thread entry on the lock-free path: tripwire + drain stale marks
+  bool lf_ = [] { const char* e = std::getenv("LL_LF_COWTABLE"); return !(e && e[0] == '0');  /* PlayL: default ON (JD 2026-11-01) */ }();
+  cLfKeyTable lfStale_{size_t(1) << 15};
+  cLfHandoff<std::pair<uint64_t, uint64_t>> lfSpill_;
+  std::atomic<size_t> lfCount_{0};
+  std::atomic<std::thread::id> lfOwner_{};
   struct Entry { std::shared_ptr<const ColumnSnap> snap; uint64_t lastUse = 0; size_t bytes = 0; };
   std::shared_ptr<const ColumnSnap> publishLocked(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask);
   void enforceBudgetLocked();
