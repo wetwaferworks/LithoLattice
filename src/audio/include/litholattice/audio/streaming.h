@@ -19,6 +19,7 @@
 // shortfall and reports how many valid frames it wrote - silence instead of a
 // block. finished() tells the game the stream played out completely.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -83,6 +84,7 @@ class cAudioStreamer {
   size_t frameOff_ = 0;           // audio thread only
   DecodeFn decode_;               // set before the worker starts
   std::thread worker_;
+  cThreadRecordSet sysRecord_;  // Thread Handshake P2: system class (outside the budget)
   std::thread::id workerId_;
   std::atomic<bool> running_{false};
   std::atomic<bool> finished_{false};

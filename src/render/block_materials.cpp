@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "litholattice/render/block_materials.h"
 #include <algorithm>
 #include "litholattice/render/block_appearance.h"
@@ -42,8 +43,13 @@ BlockMaterials BlockMaterials::build(const cBlockReg& reg, const cTextureReg& te
     for (size_t i = 1; i < all.size() && i < 65536; ++i) {
       const std::string& n = all[i].name;
       if (n.empty()) continue;
-      const FaceMaterial* nm = m.named(n + "_normal");
-      if (!nm) nm = m.named(n + "_etched_normal");
+      // 2026-11-01 (JD): the crosshatch on Trace is parked: red / blue Trace wire pieces take no
+      // normal / etched map (base texture + strength tint unchanged). LL_TRACE_NOHATCH=0: old.
+      static const bool noHatch = [] { const char* e = std::getenv("LL_TRACE_NOHATCH"); return !(e && e[0] == '0'); }();
+      const bool hatchOff = noHatch && (n.rfind("red_trace", 0) == 0 || n.rfind("blue_trace", 0) == 0) &&
+                            n.find("bulb") == std::string::npos;
+      const FaceMaterial* nm = hatchOff ? nullptr : m.named(n + "_normal");
+      if (!nm && !hatchOff) nm = m.named(n + "_etched_normal");
       const FaceMaterial* gm = m.named(n + "_glow_mask");
       m.fxMap_[i] = (gm ? int(gm->layer) << 16 : 0) | (nm ? int(nm->layer) : 0);
     }

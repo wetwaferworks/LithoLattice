@@ -122,10 +122,8 @@ void cAudioEngine::render(float* out, size_t frames, int channels) {
       size_t head = tapHead_.load(std::memory_order_relaxed);
       for (size_t i = 0; i < n; ++i) tap_[head++ % kTapCapacityFrames] = block[i];
       tapHead_.store(head, std::memory_order_release);
-      // Overflow drops the oldest: keep at most capacity frames.
-      const size_t tail = tapTail_.load(std::memory_order_relaxed);
-      if (head - tail > kTapCapacityFrames)
-        tapTail_.store(head - kTapCapacityFrames, std::memory_order_relaxed);
+      // Overflow drops the oldest: drainTap() clamps tail to head - capacity, so the
+      // producer never writes tapTail_ (H28b: two writers raced on it).
     }
     simd::applyGainClampDuplicate(out + done * size_t(channels), block.data(), n, master_, channels);
     done += n;

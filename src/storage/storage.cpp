@@ -351,6 +351,7 @@ cWorldStore::cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads,
   if (!jobsys_) {
     logInfo("threads: world store starting its own worker thread (no job system)");  // Q5b census naming (2026-10-28)
     thread_ = std::thread([this] { run(); });
+    sysRecord_.add(ThreadClass::System, ThreadRole::Storage, 0, "world-store");
   }
 }
 
@@ -360,6 +361,7 @@ cWorldStore::~cWorldStore() {
   { std::lock_guard l(m_); stop_ = true; }
   cv_.notify_all();
   thread_.join();
+  sysRecord_.retireAll();  // P2: joined -> RETURNED
 }
 
 std::filesystem::path cWorldStore::regionPath(const std::filesystem::path& dir, int rx, int rz) {

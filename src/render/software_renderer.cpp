@@ -6,6 +6,9 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/render/mesher.h"
+#include "litholattice/render/unified_mesher.h"
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/threading.h"
 #include "litholattice/core/f3_trace.h"
 #include <array>
@@ -304,6 +307,8 @@ constexpr unsigned kSwMaxRenderThreads = 64;
 // and main threads), clamped to 2..16. i5-12450H (12 logical) gives 8.
 // An explicit request (CLI / settings renderThreads != 0) still overrides.
 unsigned swAutoRenderThreads(unsigned logical) {
+  return autoRenderBands(logical, kCensusWasm);  // Archie ruling 5: the census owns the rule
+#if 0  // pre-ruling local clamp, kept for reference
   // 2026-10-25 (Archie step 1): strips are pulled dynamically, so no power-of-two need:
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
   const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
@@ -318,14 +323,11 @@ unsigned swAutoRenderThreads(unsigned logical) {
 #else
   return n;
 #endif
+#endif  // pre-ruling local clamp
 }
 unsigned swResolveThreads(unsigned req) {
-  const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-  if (!req) return swAutoRenderThreads(hw);  // auto: not limited by the hw clamp below (2-core floor is 2 by ruling)
-  const unsigned want = std::min(req, kSwMaxRenderThreads);
-  unsigned b = 1;
-  while (b * 2 <= want && b * 2 <= hw) b *= 2;
-  return b;
+  // Archie ruling 5 (t3340u): rounding, the auto rule and the WASM cap live in the census.
+  return cThreadCensus::instance().renderBands(req);
 }
 class cSwBandPool {
  public:
@@ -338,9 +340,6 @@ class cSwBandPool {
     // no re-entry into the pool.
     if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands_); ++b) fn(b); return; }
     struct InRun { InRun() { tlInRun_ = true; } ~InRun() { tlInRun_ = false; } } inRun;
-    // Serialize whole frames (game view + MCP vision share the pool) and
-    // apply a thread-count change between frames.
-    std::lock_guard<std::mutex> runLock(runM_);
     // Design B Stage 1: a detached frame in flight owns the pool's frame
     // slot; a synchronous frame waits for it (the design's §4.3 rule: vision
     // serialises behind an in-flight detached frame, as it does today via
@@ -349,20 +348,23 @@ class cSwBandPool {
     // executor running a detached body IS the frame owner (tlDetachedBody_):
     // its run() calls skip the wait and the slot release, which stay with
     // runDetached/executorLoop for the body's whole duration.
-    if (!tlDetachedBody_) {
-      { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); frameActive_ = true; }
-    }
-    struct FrameSlot {
-      cSwBandPool& p;
-      bool held;
-      ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
-    } frameSlot{*this, !tlDetachedBody_};
+    // Archie review C1 (2026-10-30): the frame slot is taken BEFORE runM_,
+    // never while holding it. Holding runM_ across the frameFree_ wait
+    // deadlocked against the executor, whose detached body takes runM_ in
+    // its own run() calls while it owns the slot. One lock order now:
+    // frame slot -> runM_ (run, runDetached, setDetachedMode).
+    if (!tlDetachedBody_) acquireFrameSlot();
+    FrameSlot frameSlot{*this, !tlDetachedBody_};
+    // Serialize whole frames (game view + MCP vision share the pool) and
+    // apply a thread-count change between frames.
+    std::lock_guard<std::mutex> runLock(runM_);
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
     // Design B Stage 1: the executor cannot restart the pool it belongs to
     // (stopAll() would self-join); runDetached applies the change between
     // frames instead — it re-checks on every submit.
     if (want != bands_ && !tlDetachedBody_) { stopAll(); start(want); }
     if (bands_ <= 1) { fn(0); return; }
+    if (folded_) { runFolded(fn); return; }  // Gate 1: bands ride the shared lock-free pool
     // Several cSoftwareRenderer instances share the pool (the game view and
     // the MCP vision capture for the Daemon's pilots): one frame at a time.
     // run() returns only after every band has finished, so the framebuffer
@@ -403,8 +405,9 @@ class cSwBandPool {
   // caller-runs-band-0 over the band workers and serialises against an
   // in-flight detached frame through frameActive_ (see run()).
   void setDetachedMode(bool on) {
+    acquireFrameSlot();  // Archie review C1: slot first, then runM_
+    FrameSlot frameSlot{*this, true};
     std::lock_guard<std::mutex> runLock(runM_);
-    { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); }
     if (detachedMode_ == on) return;
     detachedMode_ = on;
     stopAll();
@@ -419,14 +422,20 @@ class cSwBandPool {
   // there is no executor: fn runs inline on the caller and onDone fires
   // before return (the Stage 0 shape), so callers stay correct.
   void runDetached(std::function<void()> fn, std::function<void(std::exception_ptr)> onDone) {
+    acquireFrameSlot();  // Archie review C1: slot first, then runM_
     std::unique_lock<std::mutex> runLock(runM_);
-    { std::unique_lock<std::mutex> l(m_); frameFree_.wait(l, [&] { return !frameActive_; }); frameActive_ = true; }
     // Thread-count changes apply between frames, as in run().
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
     if (want != bands_) { stopAll(); start(want); }
     if (!detachedMode_) {
+      // Archie review C1: the inline body runs as the frame owner, exactly
+      // like the executor: runM_ released, tlDetachedBody_ set, so its own
+      // run() calls neither re-lock runM_ under us nor wait on the slot.
+      runLock.unlock();
       std::exception_ptr err;
+      tlDetachedBody_ = true;
       try { fn(); } catch (...) { err = std::current_exception(); }
+      tlDetachedBody_ = false;
       { std::lock_guard<std::mutex> l(m_); frameActive_ = false; }
       frameFree_.notify_all();
       if (onDone) onDone(err);
@@ -437,7 +446,60 @@ class cSwBandPool {
     cv_.notify_all();
   }
   ~cSwBandPool() { stopAll(); }
+  /// Gate 1 (Archie Q0-Q17): fold the render bands into the shared job pool. Opt-in: LL_RENDER_POOL=1
+  /// with the lock-free shared pool (LL_POOL_LOCKFREE=1); otherwise the dedicated band threads
+  /// stay (fold raised tick p99 ~10x in the Gate 1 A/B: bands starve shard jobs). Render-only: no hash.
+  static bool foldWanted() {
+    static const bool on = [] {
+      const char* e = std::getenv("LL_RENDER_POOL");
+      if (!(e && e[0] == '1')) return false;  // opt-in: Gate 1 A/B showed tick p99 1.4 -> 13-14 ms when bands share the pool
+      return cJobPool::shared().lockFree();
+    }();
+    return on;
+  }
  private:
+  // Gate 1: one frame's band fan-out over the shared pool. No mutex, no condvar: an atomic
+  // countdown (release per band, acquire by the caller) plus std::atomic::wait. The state is
+  // shared_ptr-owned so a band's final notify never touches a returned caller's stack. Bands
+  // go on the NORMAL lane so Timing Handshake shard jobs (urgent ring) always run first. A
+  // caller that is itself a pool worker runs every band inline (no worker waits on workers).
+  struct FoldState {
+    std::atomic<unsigned> remaining{0};
+    std::atomic<bool> failed{false};
+    std::exception_ptr err;  // written once by the band that wins `failed`
+  };
+  void runFolded(const std::function<void(unsigned)>& fn) {
+    if (cLockFreePool::onAnyWorker()) { for (unsigned b = 0; b < bands_; ++b) fn(b); return; }
+    auto st = std::make_shared<FoldState>();
+    st->remaining.store(bands_ - 1, std::memory_order_relaxed);
+    const std::function<void(unsigned)>* f = &fn;
+    for (unsigned b = 1; b < bands_; ++b)
+      cJobPool::shared().submit([st, f, b] {
+        tlInRun_ = true;
+        try { (*f)(b); } catch (...) {
+          if (!st->failed.exchange(true, std::memory_order_acq_rel)) st->err = std::current_exception();
+        }
+        tlInRun_ = false;
+        if (st->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) st->remaining.notify_all();
+      });
+    std::exception_ptr mine;
+    try { fn(0); } catch (...) { mine = std::current_exception(); }
+    for (unsigned v; (v = st->remaining.load(std::memory_order_acquire)) != 0;) st->remaining.wait(v, std::memory_order_acquire);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    std::exception_ptr err = mine ? mine : st->err;
+    if (err) std::rethrow_exception(err);
+  }
+  // Archie review C1: frame-slot helpers (the slot is a flag under m_).
+  void acquireFrameSlot() {
+    std::unique_lock<std::mutex> l(m_);
+    frameFree_.wait(l, [&] { return !frameActive_; });
+    frameActive_ = true;
+  }
+  struct FrameSlot {
+    cSwBandPool& p;
+    bool held;
+    ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
+  };
   cSwBandPool() {
     std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());  // Cortana 2026-10-15 1455
     start(swResolveThreads(g_swRequestedThreads.load()));
@@ -447,6 +509,7 @@ class cSwBandPool {
     cv_.notify_all();
     for (auto& t : threads_) if (t.joinable()) t.join();
     threads_.clear();
+    records_.retireAll();  // Thread Handshake P2: joined -> RETURNED
     std::lock_guard<std::mutex> l(m_);
     stop_ = false;
   }
@@ -460,8 +523,19 @@ class cSwBandPool {
     }
     uint64_t g;
     { std::lock_guard<std::mutex> l(m_); g = gen_; }
-    if (detachedMode_) threads_.emplace_back([this] { executorLoop(); });
-    for (unsigned i = 1; i < bands_; ++i) threads_.emplace_back([this, i, g] { loop(i, g); });
+    if (detachedMode_) {
+      threads_.emplace_back([this] { executorLoop(); });
+      records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
+    }
+    folded_ = n > 1 && foldWanted();
+    if (folded_) {
+      logInfo("software renderer: %u render bands folded into the shared job pool (Gate 1; 0 band threads spawned)", n);
+      return;  // the detached executor (if any) is still spawned above
+    }
+    for (unsigned i = 1; i < bands_; ++i) {
+      threads_.emplace_back([this, i, g] { loop(i, g); });
+      records_.add(ThreadClass::Dedicated, ThreadRole::RenderBand, uint16_t(i), "sw-band");
+    }
   }
   // Design B Stage 1: the executor worker. Waits for a published detached
   // body and runs it AS THE FRAME'S CALLER: the executor takes band 0's
@@ -514,7 +588,9 @@ class cSwBandPool {
     }
   }
   unsigned bands_ = 1;
+  bool folded_ = false;  // Gate 1: set by start() (runM_ held / constructor)
   std::vector<std::thread> threads_;
+  cThreadRecordSet records_;  // Thread Handshake P2: band workers + executor (Class A)
   std::mutex m_, runM_;
   std::condition_variable cv_, done_;
   const std::function<void(unsigned)>* fn_ = nullptr;
@@ -1061,6 +1137,43 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     }
     return out;
   };
+  // 2026-10-31 (JD, CloudAtlas memor-seg7 v2): kShadeCells, CPU mirror of chunk_shading.glsl MODE_CELLS:
+  // two-digit 7-seg 0..64 from 128-space texel coords, ghost 8 (alpha 40), ring squares (mask R == 3)
+  // lit #8B65DD / #C8A9F6 highlight when the value > 0; lit parts take +0.6 emissive (integer texel math).
+  auto memorShade = [this](const FragmentInput& f, uint32_t shaded) -> uint32_t {
+    if (memMask_ <= 0 || uint32_t(memMask_) >= f.texLayers || !f.texData || f.varyings.layer >= f.texLayers) return shaded;
+    static const uint16_t kSeg[140] = {252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252};
+    const uint32_t tx = uint32_t(swTile(f.varyings.u) * f.texScale) & f.texMask, ty = uint32_t(swTile(f.varyings.v) * f.texScale) & f.texMask;
+    const uint32_t ti = swTexelIndex(f, tx, ty);
+    const uint32_t mk = f.texData[size_t(memMask_) * f.texArea + ti];
+    const int r = int((mk >> 16) & 0xFF), v = std::clamp(int(tlQuadValue & 127), 0, 64);
+    uint32_t col = 0; float em = 0.f; float ghostA = 0.f;
+    if (r == 3) {
+      if (v > 0) { col = (((mk >> 8) & 0xFF) == 0 || (mk & 0xFF) == 0) ? 0xC8A9F6u : 0x8B65DDu; em = 0.6f; }
+    } else {
+      const int sc = std::max(1, int(f.texScale));
+      const int X = int(tx) * 128 / sc, Y = int(ty) * 128 / sc;
+      const int slot = (Y >= 50 && Y < 78) ? ((X >= 42 && X < 62) ? 1 : (X >= 66 && X < 86) ? 2 : 0) : 0;
+      if (slot) {
+        const int gx = (X - (slot == 1 ? 42 : 66)) / 2, gy = (Y - 50) / 2;
+        const int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
+        if (d >= 0 && ((kSeg[d * 14 + gy] >> gx) & 1)) { col = 0xD6BEFAu; em = 0.6f; }
+        else if ((kSeg[8 * 14 + gy] >> gx) & 1) { col = 0x3C268Eu; ghostA = 40.f / 255.f; }
+      }
+    }
+    if (!col) return shaded;
+    const uint32_t t = f.texData[size_t(f.varyings.layer) * f.texArea + ti];
+    const float tl = float(std::max({(t >> 16) & 0xFFu, (t >> 8) & 0xFFu, t & 0xFFu})) / 255.f;
+    const float sl = float(std::max({(shaded >> 16) & 0xFFu, (shaded >> 8) & 0xFFu, shaded & 0xFFu})) / 255.f;
+    const float light = tl > 0.f ? std::min(1.f, sl / tl) : 1.f;
+    uint32_t out = 0xFF000000u;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+      const float b = float((t >> sh) & 0xFF) / 255.f, tc = float((col >> sh) & 0xFF) / 255.f;
+      const float o = ghostA > 0.f ? b + (tc - b) * ghostA : tc, lit = o * light, val = lit + (o - lit) * em;
+      out |= uint32_t(std::clamp(val, 0.f, 1.f) * 255.f + 0.5f) << sh;
+    }
+    return out;
+  };
   const bool fx = groundFx && groundFx_.active();
   // Cortana 2026-10-15 1320: the pulse emissive is a pure function of the
   // fragment's CHUNK (sin + pow per pixel before); memoize the last chunk.
@@ -1321,6 +1434,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           else if (tlQuadMode >= kShadePalette16 && tlQuadMode <= kShadePalette64) color = lampShade(fin, color);
           else if (tlQuadMode == kShadeLeaf && twinkleMode_ > 0 && tlQuadValue > 0) color = leafTwinkle(fin, color);
           else if (tlQuadMode == kShadeTraceTint) color = traceTintShade(fin, color);
+          else if (tlQuadMode == kShadeCells) color = memorShade(fin, color);  // 2026-10-31 Memor seg7
           // Cortana 2026-10-16 (render.shimmer): lithography shimmer on POWERED Trace - a slow
           // diagonal brightness wave on the render clock (LL_RENDER_TIME pins it). Render-only.
           if (shimmerOn_ && tlQuadValue > 0 && (strip || (tlQuadMode == kShadeTraceTint && ((tlQuadValue & 0x80) || (llP2PerfOff() & 8))))) {  // 1520: powered only
@@ -1430,7 +1544,8 @@ static void varyingsFromPackedVertex(const PackedVertex& v, ShaderVaryings& s) {
   s.ao = g_swAo ? kSwAoLut[(v.faceAo >> 3) & 3] : 1.0f;
   static const float kFaceNormals[6][3] = {
       {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-  const uint8_t face = v.faceAo & 7;
+  // Archie review H16: the field is 3 bits; 6/7 (bad input) would read past kFaceNormals.
+  const uint8_t face = uint8_t((v.faceAo & 7) < 6 ? (v.faceAo & 7) : 0);
   s.nx = kFaceNormals[face][0];
   s.ny = kFaceNormals[face][1];
   s.nz = kFaceNormals[face][2];
@@ -1778,6 +1893,7 @@ void cSoftwareRenderer::setMaterials(const BlockMaterials& materials) {
   lampPal_ = b.tierPalette; lampMask_ = b.tierMask; lampRim_ = b.tierRim;
   leafGlow_ = b.leafGlow;  // 2026-10-16 crystal twinkle
   tintMask_ = b.tintMask; stripPal_ = b.stripPalette;  // 2026-10-16 kShadeTraceTint
+  memMask_ = b.cellMask;  // 2026-10-31 Memor seg7
 }
 
 int cSoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
@@ -1786,8 +1902,7 @@ int cSoftwareRenderer::loadShaders(const ShaderLibrary& /*shaders*/) {
 
 // Mesh key identical to the GL/Vulkan backends.
 static int64_t swMeshKey(int cx, int sy, int cz) {
-  return int64_t((uint64_t(uint32_t(cx)) << 40) ^ (uint64_t(uint32_t(sy)) << 32) ^
-                 uint64_t(uint32_t(cz)));
+  return cSwCanonStore::keyOf(cx, sy, cz);  // step 3b: one key formula
 }
 
 // Ginny (Argon) 2026-10-16 Pass 2 step 3: classify each quad into a face-direction bucket
@@ -1894,9 +2009,117 @@ void cSoftwareRenderer::expandStored(const StoredMesh& m, size_t vertBegin, size
   }
 }
 
+static std::atomic<int> g_swCanonOverride{-1};
+void cSoftwareRenderer::setCanonIngest(bool on) { g_swCanonOverride.store(on ? 1 : 0); }
+bool cSoftwareRenderer::canonIngestEnabled() {
+  static const bool v = [] { const char* e = std::getenv("LL_SW_CANON"); return e && e[0] == '1'; }();
+  const int o = g_swCanonOverride.load(std::memory_order_relaxed);
+  return o < 0 ? v : o == 1;
+}
+int cSoftwareRenderer::canonLodOf(int cx, int sy, int cz) const {
+  auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
+  return it == canonStore_.entries().end() ? -1 : it->second.lod;
+}
+static int swCanonDist(int cx, int cz, int camCx, int camCz) {
+  return std::max(std::abs(cx - camCx), std::abs(cz - camCz));
+}
+int cSoftwareRenderer::canonSkirtMaskOf(int cx, int sy, int cz) const {
+  auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
+  return it == canonStore_.entries().end() ? -1 : int(it->second.skirtMask);
+}
+// M10 (Archie ruling 2): skirts only toward neighbours drawn at another LOD.
+uint8_t cSoftwareRenderer::canonSkirtMaskFor(int cx, int sy, int cz, int lod) const {
+  static const int kD[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  int nbr[6];
+  for (int f = 0; f < 6; ++f) {
+    const int64_t k = swMeshKey(cx + kD[f][0], sy + kD[f][1], cz + kD[f][2]);
+    auto it = canonStore_.entries().find(k);
+    nbr[f] = it != canonStore_.entries().end() ? it->second.pend : meshes_.count(k) ? -1 : -2;
+  }
+  return canonSkirtMask(lod, nbr);
+}
+bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
+  const uint8_t mask = canonSkirtMaskFor(src.meta.cx, src.meta.sy, src.meta.cz, lod);
+  if (lod == src.lod && mask == src.skirtMask) return true;
+  ChunkMesh dm = src.meta;  // verts empty in the stored meta
+  dm.canonical.reset();
+  if (!decodeCanonicalMesh(*src.meta.canonical, lod, dm.verts, mask) || dm.verts.empty()) return false;
+  src.lod = lod; src.pend = lod; src.skirtMask = mask;
+  canonInner_ = true;
+  uploadChunkMesh(dm);
+  canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
+  const int64_t key = swMeshKey(src.meta.cx, src.meta.sy, src.meta.cz);
+  auto it = meshes_.find(key);  // fix (e): account the expanded decode
+  if (it != meshes_.end())
+    decodeCache_.onDecoded(key, it->second.quads.size() * sizeof(StoredQuad) + it->second.verts.size() * sizeof(PackedVertex), decodeFrame_);
+  return true;
+}
+// Fix (e): an evicted canonical chunk (lod -1) that is in view decodes again at its pending lod.
+void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
+  for (auto& [key, src] : canonStore_.entries()) {
+    if (src.lod >= 0) continue;
+    const Vec3 mn{src.meta.cx * 16.f, src.meta.sy * 16.f, src.meta.cz * 16.f};
+    if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) continue;
+    const int want = src.pend >= 0 ? src.pend : 0;
+    if (redecodeCanon(src, want)) decodeCache_.countRedecode();
+  }
+}
+// Fix (e): drop the least-recently-drawn decodes over the cap (never one drawn this frame).
+void cSoftwareRenderer::evictColdDecodes() {
+  decodeCache_.collectEvictions(decodeFrame_, decodeEvictScratch_);
+  for (int64_t key : decodeEvictScratch_) {
+    auto it = canonStore_.entries().find(key);
+    if (it == canonStore_.entries().end()) { decodeCache_.onErased(key); continue; }
+    ++storeGen_;
+    meshes_.erase(key);
+    it->second.lod = -1;
+    decodeCache_.onErased(key);
+    decodeCache_.countEviction();
+  }
+}
+void cSoftwareRenderer::refreshCanonNeighbours(int cx, int sy, int cz) {
+  static const int kD[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};  // same column = same lod: no Y seam
+  for (const auto& d : kD) {
+    auto it = canonStore_.entries().find(swMeshKey(cx + d[0], sy, cz + d[1]));
+    if (it != canonStore_.entries().end() && it->second.lod >= 0) redecodeCanon(it->second, it->second.lod);
+  }
+}
+void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
+  const int ccx = int(std::floor(cam.x / 16.f)), ccz = int(std::floor(cam.z / 16.f));
+  if (ccx == canonCamCx_ && ccz == canonCamCz_) return;
+  canonCamCx_ = ccx; canonCamCz_ = ccz;
+  if (canonStore_.entries().empty()) return;
+  int r1 = 0, r2 = 0;
+  canonLodRings(r1, r2);
+  // Two passes (M10): pick every lod first so the skirt masks see the new neighbours.
+  for (auto& [key, src] : canonStore_.entries())
+    src.pend = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
+  for (auto& [key, src] : canonStore_.entries())
+    if (src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
+}
+
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
-  ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
+  if (canonIngestEnabled() && !canonInner_) {
+    if (!canonStore_.prepare(mesh)) {  // step 3b: no decodable canonical payload
+      if (canonStore_.entries().erase(key) || mesh.verts.empty()) refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);
+    } else {
+      int r1 = 0, r2 = 0;
+      canonLodRings(r1, r2);
+      const int want = canonCamCx_ == (1 << 30) ? 0 : selectCanonLod(swCanonDist(mesh.cx, mesh.cz, canonCamCx_, canonCamCz_), -1, r1, r2);
+      MeshPlacement placed;
+      canonStore_.commit(placed);  // stores the staged entry at key (fresh: lod -1, skirtMask 0xFF)
+      SwCanonSrc& st = canonStore_.entries()[key];
+      st.lod = -1; st.pend = want;
+      if (redecodeCanon(st, want) || (st.pend = 0, redecodeCanon(st, 0))) {
+        refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);  // M10: their seams may have changed
+        return;
+      }
+      canonStore_.entries().erase(key);  // nothing decodable: fall through to the legacy stream
+    }
+  }
+  if (!canonInner_) decodeCache_.onErased(key);  // fix (e): a legacy store or removal is not a cached decode
+  ++storeGen_;  // mesh-store seal (Design B Stage 0): every mutation bumps the generation
   if (mesh.verts.empty()) {  // empty = remove, like the other backends
     meshes_.erase(key);
     return;
@@ -2104,6 +2327,8 @@ void cSoftwareRenderer::uploadEntityMesh(const std::vector<PackedVertex>& verts)
 
 void cSoftwareRenderer::clearChunkMeshes() {
   ++storeGen_;  // mesh-store seal (Design B Stage 0)
+  canonStore_.clear();
+  decodeCache_.clear();  // fix (e)
   meshes_.clear();  // entity verts kept, matching GL/Vulkan clear semantics
   pbrMeshes_.clear();
 }
@@ -2743,6 +2968,7 @@ SwProf g_swProf;
 }  // namespace
 
 void cSoftwareRenderer::renderFrame(const FrameParams& p) {
+  if (canonIngestEnabled()) reselectCanonLods(p.camPos);  // M8 draw-side LOD (store-owned here)
   // Ginny (Argon) 2026-10-16 Pass 2 A/B proof (Cortana): LL_SW_AB=<n> renders frame n with
   // the LL_SW_AB_A mask (default 0 = pre-Pass-2), then again with the active mask, and logs
   // how many pixels differ. Off (zero cost beyond one branch) unless the env var is set.
@@ -2827,6 +3053,8 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // velocity state; decide() then culls per mesh exactly like GL/VK. All
   // prototypes default off, so decide() is the plain margin test.
   cullProto_.beginFrame(p.viewProj, p.yawRad, p.pitchRad, p.timeSec);
+  const bool canonCache = canonIngestEnabled() && !canonStore_.entries().empty();
+  if (canonCache) { ++decodeFrame_; redecodeEvictedInView(p); }  // fix (e)
   twinkleMode_ = p.leafTwinkle;  // 2026-10-16 crystal twinkle: render clock only
   shimmerTime_ = float(std::fmod(double(p.timeSec), 3600.0));  // Cortana 2026-10-16: render.shimmer clock
   twinklePhase_ = p.leafTwinkle == 2 ? uint32_t(int64_t(p.timeSec * 0.8f * 256.0f)) & 255u : 0u;
@@ -2871,7 +3099,9 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
       continue;
     const float dx = mn.x + 8.f - p.camPos.x, dy = mn.y + 8.f - p.camPos.y, dz = mn.z + 8.f - p.camPos.z;
     drawOrder_.emplace_back(dx * dx + dy * dy + dz * dz, &m);
+    if (canonCache) decodeCache_.touch(key, decodeFrame_);  // fix (e)
   }
+  if (canonCache) evictColdDecodes();  // fix (e): only non-drawn entries; drawOrder_ pointers stay valid
   // Elfie 2026-10-17: LOD is now a draw range, not a swap (the mesh pointer sort
   // below makes per-index state fragile, so the range is derived where used).
   // Beyond the switch distance only the untagged prefix is active.

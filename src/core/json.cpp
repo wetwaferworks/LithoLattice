@@ -1,6 +1,7 @@
 #include "litholattice/core/json.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -10,6 +11,26 @@ struct Parser {
   const std::string& s; size_t i = 0; std::string err;
   void ws() { while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) ++i; }
   bool fail(const char* m) { if (err.empty()) err = std::string(m) + " at " + std::to_string(i); return false; }
+  bool hex4(std::uint32_t& cp) {
+    if (s.size() - i < 4) return false;
+    cp = 0;
+    for (int k = 0; k < 4; ++k) {
+      const char h = s[i + size_t(k)];
+      cp <<= 4;
+      if (h >= '0' && h <= '9') cp |= std::uint32_t(h - '0');
+      else if (h >= 'a' && h <= 'f') cp |= std::uint32_t(h - 'a' + 10);
+      else if (h >= 'A' && h <= 'F') cp |= std::uint32_t(h - 'A' + 10);
+      else return false;
+    }
+    i += 4;
+    return true;
+  }
+  static void utf8(std::uint32_t cp, std::string& o) {
+    if (cp < 0x80) { o.push_back(char(cp)); }
+    else if (cp < 0x800) { o.push_back(char(0xC0 | (cp >> 6))); o.push_back(char(0x80 | (cp & 0x3F))); }
+    else if (cp < 0x10000) { o.push_back(char(0xE0 | (cp >> 12))); o.push_back(char(0x80 | ((cp >> 6) & 0x3F))); o.push_back(char(0x80 | (cp & 0x3F))); }
+    else { o.push_back(char(0xF0 | (cp >> 18))); o.push_back(char(0x80 | ((cp >> 12) & 0x3F))); o.push_back(char(0x80 | ((cp >> 6) & 0x3F))); o.push_back(char(0x80 | (cp & 0x3F))); }
+  }
   bool str(std::string& o) {
     if (s[i] != '"') return fail("expected string");
     ++i;
@@ -17,7 +38,29 @@ struct Parser {
       char c = s[i++];
       if (c == '\\' && i < s.size()) {
         const char e = s[i++];
-        if (e == 'n') c = '\n'; else if (e == 't') c = '\t'; else if (e == 'u') { c = '?'; i += 4; } else c = e;
+        if (e == 'n') c = '\n'; else if (e == 't') c = '\t'; else if (e == 'r') c = '\r';
+        else if (e == 'b') c = '\b'; else if (e == 'f') c = '\f';
+        else if (e == 'u') {
+          // H6: bounds + hex validation (never skip past the end / closing quote),
+          // real code-point decoding so dump() output round-trips.
+          std::uint32_t cp = 0;
+          if (!hex4(cp)) return fail("bad \\u escape");
+          if (cp >= 0xD800 && cp <= 0xDBFF) {
+            std::uint32_t lo = 0;
+            const size_t save = i;
+            if (i + 1 < s.size() && s[i] == '\\' && s[i + 1] == 'u') {
+              i += 2;
+              if (hex4(lo) && lo >= 0xDC00 && lo <= 0xDFFF) cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+              else { i = save; cp = 0xFFFD; }
+            } else {
+              cp = 0xFFFD;
+            }
+          } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+            cp = 0xFFFD;
+          }
+          utf8(cp, o);
+          continue;
+        } else c = e;
       }
       o.push_back(c);
     }

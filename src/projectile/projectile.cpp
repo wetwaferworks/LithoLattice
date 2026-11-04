@@ -109,8 +109,10 @@ void cProjectileMgr::tick() {
     const double speed = std::sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
     bool hitBlock = false, stopped = false;
     uint64_t hitEntity = 0;
-    if (speed > 0.0) {
-      const int substeps = std::max(1, int(std::ceil(speed / kMaxSubstepBlocks)));
+    if (speed > 0.0 && std::isfinite(speed)) {
+      // H29d: cap so a runaway speed can't overflow int or stall the tick.
+      const double want = std::ceil(speed / kMaxSubstepBlocks);
+      const int substeps = want < 1.0 ? 1 : (want > 256.0 ? 256 : int(want));
       const double sx = p.vx / substeps, sy = p.vy / substeps, sz = p.vz / substeps;
       const double subLen = speed / substeps;
       for (int i = 0; i < substeps; ++i) {

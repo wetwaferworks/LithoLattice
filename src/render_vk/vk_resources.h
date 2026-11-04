@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include "litholattice/core/memory_charge.h"
 #include "vk_device.h"
 #include "vk_handles.h"
 
@@ -22,6 +23,7 @@ class Buffer {
   uint8_t* mapped() const { return mapped_; }
 
  private:
+  cMemoryCharge charge_;  // Gate 0 ledger (released last)
   UniqueMemory memory_;  // declared first: destroyed after the buffer
   UniqueBuffer buffer_;
   uint8_t* mapped_ = nullptr;
@@ -38,6 +40,7 @@ class Image {
   VkImageView view() const { return view_.get(); }
 
  private:
+  cMemoryCharge charge_;  // Gate 0 ledger
   UniqueMemory memory_;
   UniqueImage image_;
   UniqueImageView view_;

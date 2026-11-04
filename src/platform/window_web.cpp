@@ -56,6 +56,7 @@
 #include <thread>
 
 #include "litholattice/core/log.h"
+#include "litholattice/core/thread_census.h"  // JD t3349u item 2: drain thread record
 
 namespace litholattice {
 
@@ -551,6 +552,7 @@ class WebHtml5InputBackend final : public IInputBackend {
       try {
         logInfo("threads: input mapped-ring drain thread starting");  // Q5b census naming (2026-10-28)
         drainThread_ = std::thread([this] { drainLoop(); });
+        drainRecord_.add(ThreadClass::System, ThreadRole::Web, 0, "web-drain");  // same call as the native System threads
         drainThreadOn_ = true;
         logInfo("input: mapped ring drain at STEP cadence (256/s, dedicated thread; frames no longer gate input)");
       } catch (...) {
@@ -562,7 +564,7 @@ class WebHtml5InputBackend final : public IInputBackend {
 
   ~WebHtml5InputBackend() override {
     drainStop_.store(true, std::memory_order_release);
-    if (drainThread_.joinable()) drainThread_.join();
+    if (drainThread_.joinable()) { drainThread_.join(); drainRecord_.retireAll(); }
   }
 
   std::string_view name() const override { return "web-html5"; }
@@ -727,6 +729,7 @@ class WebHtml5InputBackend final : public IInputBackend {
   bool ringDesyncLogged_ = false;      // drain-side only, under convMutex_
   std::mutex convMutex_;               // serializes ALL conversions (ring thread + legacy drain)
   std::thread drainThread_;            // build 63: step-cadence ring consumer
+  cThreadRecordSet drainRecord_;       // JD t3349u item 2: System record (P2 pattern)
   std::atomic<bool> drainStop_{false};
   bool drainThreadOn_ = false;
 };

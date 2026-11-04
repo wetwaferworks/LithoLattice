@@ -14,6 +14,9 @@
 #include <vector>
 #include "vk_resources.h"
 
+#include <memory>
+#include "litholattice/core/slice_free_list.h"
+
 namespace litholattice::vk {
 
 class cVertexArena {
@@ -73,6 +76,14 @@ class cVertexArena {
     std::map<VkDeviceSize, VkDeviceSize> freeRanges;  ///< offset -> size, non-adjacent
   };
   bool addBlock(VkDeviceSize size);
+  // Voxy #5 (2026-10-31): LL_VK_ARENA_LF (default on, =0 kill switch) replaces the mutex path with a lock-free one:
+  // power-of-two size classes (cSliceFreeList) for freed slices, an atomic bump cursor per block for new ones.
+  std::optional<Slice> allocateLF(VkDeviceSize bytes, uint32_t maxBlock);
+  bool lf_ = false;
+  std::unique_ptr<cSliceFreeList> lfFree_;
+  std::unique_ptr<std::atomic<VkDeviceSize>[]> lfCursor_, lfSize_;
+  std::atomic<bool> lfGrowing_{false};
+  std::atomic<uint64_t> lfDropped_{0};
 
   const cVulkanDevice& dev_;
   std::atomic<Kind> kind_;

@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 #include "litholattice/render/cpu_texture_array.h"
+#include "litholattice/render/SwDecodeCache.h"
+#include "litholattice/render/SwCanonStore.h"  // refactor step 3b
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/overlay_geometry.h"
 #include "litholattice/render/pbr_quad_mesh.h"
@@ -302,6 +304,39 @@ class cSoftwareRenderer : public IRenderer {
   void setPbrContext(const PbrFragmentContext* ctx) { pbrContext_ = ctx; }
 
  private:
+  // Render pipeline M8 (software uploader): LL_SW_CANON=1 ingests ChunkMesh::canonical
+  // (span decode via decodeCanonicalMesh) with draw-side LOD/skirt selection; default off =
+  // the legacy PackedVertex stream. canonSrc_ keeps each canonical mesh + its current lod so
+  // a camera ring crossing re-decodes at the new lod (store-owned: drain/renderFrame only).
+  // M10: skirtMask = the draw-side skirt directions decoded (canonSkirtMask); pend = the
+  // lod being selected this pass (neighbour masks read it).
+  using SwCanonSrc = cSwCanonStore::Entry;  // refactor step 3b: the store is an IMeshUploader
+  uint8_t canonSkirtMaskFor(int cx, int sy, int cz, int lod) const;
+  bool redecodeCanon(SwCanonSrc& src, int lod);
+  void refreshCanonNeighbours(int cx, int sy, int cz);
+  cSwCanonStore canonStore_;  ///< step 3b: was std::map<int64_t, SwCanonSrc> canonSrc_
+  int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
+  bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
+  void reselectCanonLods(const Vec3& cam);
+  // Fix (e), Archie Q5: LRU cap on the expanded decode of canonical chunks (meshes_ entries
+  // made by redecodeCanon). Evicted chunks keep canonSrc_ (lod = -1) and re-decode in view.
+  cSwDecodeCache decodeCache_;
+  uint64_t decodeFrame_ = 0;
+  std::vector<int64_t> decodeEvictScratch_;
+  void redecodeEvictedInView(const FrameParams& p);
+  void evictColdDecodes();
+ public:
+  /// Test hook (fix (e)): the canonical decode cache (resident bytes, evictions, cap).
+  cSwDecodeCache& decodeCacheForTest() { return decodeCache_; }
+  static bool canonIngestEnabled();
+  static void setCanonIngest(bool on);  ///< overrides LL_SW_CANON (tests)
+  /// Test hook: the lod the canonical path currently draws for a stored chunk (-1 = legacy).
+  int canonLodOf(int cx, int sy, int cz) const;
+  /// Test hook (M10): the draw-side skirt direction mask of a stored canonical chunk.
+  int canonSkirtMaskOf(int cx, int sy, int cz) const;
+  /// Test hook: move the LOD reference point without a frame (renderFrame does this).
+  void setCanonCamera(const Vec3& cam) { reselectCanonLods(cam); }
+ private:
   SoftwareFramebuffer fb_;
   std::vector<int> meshRowY0_, meshRowY1_;  ///< RND-H3: per drawn mesh screen row span
   std::vector<float> frameScreen_;  ///< Cortana 2026-10-15 1112: chunk-pass verts transformed once per frame
@@ -363,6 +398,7 @@ class cSoftwareRenderer : public IRenderer {
   const PbrFragmentContext* pbrContext_ = nullptr;  ///< PBR context (registry/lights/camera); may be null
 
   cCpuTextureArray textures_;
+  int memMask_ = 0;  ///< 2026-10-31 Memor seg7 mask layer (kShadeCells)
   std::array<int, 32> tintMask_{}; std::array<int, 2> stripPal_{};  ///< 2026-10-16 kShadeTraceTint
   std::array<int, 4> leafGlow_{};  ///< 2026-10-16 crystal twinkle glow layers
   int twinkleMode_ = 2; uint32_t twinklePhase_ = 0;

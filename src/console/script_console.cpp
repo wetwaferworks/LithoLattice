@@ -1,4 +1,5 @@
 // AngelScript console bindings: permission-gated through the allowlist.
+#include <atomic>
 #include "litholattice/console/script_console.h"
 
 #include <angelscript.h>
@@ -82,6 +83,11 @@ const BindingDecl kConsoleBindings[] = {
 }  // namespace
 
 void registerConsoleScriptBindings() {
+  // 2026-10-31 (JD): the allowlist is process-wide and the declarations are stateless, so they
+  // are registered ONCE per process. A second Game (in-process Load World) used to re-register
+  // them and log "[allowlist] refused duplicate binding". Lock-free latch, no mutex.
+  static std::atomic<bool> registered{false};
+  if (registered.exchange(true, std::memory_order_acq_rel)) return;
   cScriptBindingAllowlist::registerBuiltins();
   for (const BindingDecl& b : kConsoleBindings)
     cScriptBindingAllowlist::registerBinding({b.decl, uint32_t(kPermConsole), b.description});

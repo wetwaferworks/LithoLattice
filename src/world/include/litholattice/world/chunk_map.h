@@ -4,6 +4,9 @@
 #include <unordered_map>
 #include <cassert>
 #include "litholattice/world/chunk.h"
+#include "litholattice/world/column_table.h"  // render pipeline M5
+#include "litholattice/world/column_edge_shell.h"  // Q12 far demote
+#include "litholattice/core/memory_ledger.h"  // Gate 0 readout
 
 namespace litholattice {
 
@@ -45,17 +48,25 @@ class ChunkMap {
   }
   // World-coordinate access (owner thread only: main before the sim starts, sim after).
   BlockId get(int x, int y, int z) const {
-    const SubChunk* s = sub(x >> 4, y >> 4, z >> 4);
-    if (!s) return kAir;
-    const StableId sid = s->at(x & 15, y & 15, z & 15);
+    if (y < 0 || (y >> 4) >= kSubChunks) return kAir;
+    const ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c) return kAir;
+    const SubChunk* s = c->subs[size_t(y >> 4)].get();
+    StableId sid;
+    if (s) sid = s->at(x & 15, y & 15, z & 15);
+    else if (c->edgeShell) sid = c->edgeShell->at(y >> 4, x & 15, y & 15, z & 15);  // Q12: demoted ring
+    else return kAir;
     if (isAirStableId(sid)) return kAir;
     assert(registry_ && "ChunkMap::get without setRegistry()");
     const auto id = registry_->findByStableId(sid);
     return id ? *id : kAir;  // unreachable in a consistent world; air is the safe answer
   }
   CellState getState(int x, int y, int z) const {
-    const SubChunk* s = sub(x >> 4, y >> 4, z >> 4);
-    return s ? s->state[SubChunk::index(x & 15, y & 15, z & 15)] : 0;
+    if (y < 0 || (y >> 4) >= kSubChunks) return 0;
+    const ChunkColumn* c = column(x >> 4, z >> 4);
+    if (!c) return 0;
+    if (const SubChunk* s = c->subs[size_t(y >> 4)].get()) return s->state[SubChunk::index(x & 15, y & 15, z & 15)];
+    return c->edgeShell ? c->edgeShell->stateAt(y >> 4, x & 15, y & 15, z & 15) : 0;  // Q12
   }
   /// Highest non-air y in world column (x, z), or -1 if empty or not generated.
   int surfaceY(int x, int z) const {
@@ -74,21 +85,24 @@ class ChunkMap {
     if (y < 0 || y >= kWorldHeight) return false;
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (!c) return false;
+    if (c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return false; }  // Q12: demoted columns are read-only
     auto& s = c->subs[y >> 4];
     if (!s) { if (b == kAir) return true; s = std::make_unique<SubChunk>(); }
     assert(registry_ && "ChunkMap::set without setRegistry()");
     s->set(x & 15, y & 15, z & 15, registry_->stableIdOf(b));
     if (!c->cellText.empty()) c->cellText.erase(ChunkColumn::cellTextKey(x, y, z));  // Posts: text dies with its block
     c->markDirty();  // A2/B-M1: resident-column mutation (eviction save-first)
+    if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // M9
     if (editListener_) editListener_(x >> 4, z >> 4);
     return true;
   }
   void setState(int x, int y, int z, CellState v) {
     if (y < 0 || y >= kWorldHeight) return;
     ChunkColumn* c = column(x >> 4, z >> 4);
+    if (c && c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return; }  // Q12
     if (c && c->subs[y >> 4]) {
       CellState& cell = c->subs[y >> 4]->state[SubChunk::index(x & 15, y & 15, z & 15)];
-      if (cell != v) { cell = v; c->markDirty(); }  // A2/B-M1: state mutation (eviction save-first)
+      if (cell != v) { cell = v; c->markDirty(); if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4); }  // A2/B-M1; M9 ruling 4
     }
   }
   /// 2026-10-25 (JD, Posts): per-cell text. Null when the cell has none (or its column is absent).
@@ -103,14 +117,35 @@ class ChunkMap {
     if (y < 0 || y >= kWorldHeight) return false;
     ChunkColumn* c = column(x >> 4, z >> 4);
     if (!c) return false;
+    if (c->edgeShell) { cColumnEdgeShell::noteRefusedWrite(); return false; }  // Q12
     const uint32_t k = ChunkColumn::cellTextKey(x, y, z);
-    if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); }
+    if (text.empty()) { if (c->cellText.erase(k)) c->markDirty(); else return true; }
     else { c->cellText[k] = std::move(text); c->markDirty(); }
+    if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // Archie review H7: snapshot carries cellText
     return true;
+  }
+  /// Q12 far demote: replaces the column's sub-chunks with its 1-cell edge shell (plus the
+  /// Voxy-#1 far LOD when withLod) and hands the freed body back for deferred free. Null when
+  /// not resident or already demoted. Owner thread only; the caller owns eligibility.
+  std::unique_ptr<ChunkColumn> demote(int cx, int cz, bool withLod) {
+    ChunkColumn* c = column(cx, cz);
+    if (!c || c->edgeShell) return nullptr;
+    c->edgeShell = cColumnEdgeShell::build(*c, registry_, withLod);
+    auto body = std::make_unique<ChunkColumn>();
+    body->cx = cx;
+    body->cz = cz;
+    body->subs.swap(c->subs);
+    if (cow_) cow_->drop(cx, cz);  // republished (whole, from the shell) on its next pin
+    ++structureGen_;               // sub pointers changed (random-tick cache, Archie C5)
+    return body;
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
     const int cx = col->cx, cz = col->cz;
-    columns_[ChunkKey::make(cx, cz)] = std::move(col);
+    cow_->drop(cx, cz);  // M5: a replaced column is republished on its next pin
+    auto& slot = columns_[ChunkKey::make(cx, cz)];
+    if (!slot) cMemoryLedger::add(cMemoryLedger::kChunkColumns, 1);  // Gate 0 (replace keeps the count)
+    slot = std::move(col);
+    ++structureGen_;  // Archie review C5
     if (editListener_) editListener_(cx, cz);
   }
   /// Column eviction (A2 / B-M1): removes the column at (cx, cz) and frees
@@ -120,17 +155,47 @@ class ChunkMap {
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
     const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;
+    if (gone) { ++structureGen_; cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1); }  // Archie review C5; Gate 0
+    cow_->drop(cx, cz);  // M5
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
   }
+  /// P5 deferred free: like erase(), but hands the column back instead of
+  /// freeing it, so the caller can release the memory outside the sim hold
+  /// (cDeferredFreeQueue). Null when the column was not resident.
+  std::unique_ptr<ChunkColumn> extract(int cx, int cz) {
+    auto it = columns_.find(ChunkKey::make(cx, cz));
+    if (it == columns_.end()) return nullptr;
+    std::unique_ptr<ChunkColumn> col = std::move(it->second);
+    columns_.erase(it);
+    ++structureGen_;  // Archie review C5
+    cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1);  // Gate 0
+    cow_->drop(cx, cz);  // M5
+    if (editListener_) editListener_(cx, cz);
+    return col;
+  }
+  /// Archie review C5 (2026-10-30): bumped by every insert/erase/extract, so
+  /// a holder of raw ChunkColumn pointers can tell the column set changed
+  /// even when the count did not (evict K + insert K, reload, replace).
+  uint64_t structureGen() const { return structureGen_; }
   bool contains(int cx, int cz) const { return columns_.find(ChunkKey::make(cx, cz)) != columns_.end(); }
   auto& columns() { return columns_; }
   const auto& columns() const { return columns_; }
+  /// Render pipeline M5: published copy-on-write column snapshots for mesh workers
+  /// (column_table.h). Mutated only by the map's current owner thread (internally locked).
+  ColumnTable& cowTable() const { return *cow_; }
+  /// M9 (Archie ruling 4): callers that write SubChunk::state through cached raw pointers
+  /// (the signal sim fast paths) report the cell here so the CoW snapshot is republished.
+  void noteStateEdit(int x, int y, int z) const {
+    if (cow_ && y >= 0 && y < kWorldHeight) cow_->noteStale(x >> 4, y >> 4, z >> 4);
+  }
 
  private:
   std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> columns_;
+  uint64_t structureGen_ = 0;  // Archie review C5
   const cBlockReg* registry_ = nullptr;
   std::function<void(int cx, int cz)> editListener_;
+  std::unique_ptr<ColumnTable> cow_ = std::make_unique<ColumnTable>();  // M5
 };
 
 }  // namespace litholattice

@@ -1,4 +1,5 @@
 // Cortana 2026-10-15 0825: CHUNK-STALL postLock (SIM-H1 tried 1010, reverted 1035)
+#include <unordered_map>
 #include "litholattice/sim/sim_thread.h"
 #include "litholattice/sim/control_stream.h"
 #include <cstdio>
@@ -12,6 +13,7 @@
 #include "litholattice/core/time.h"
 #include "litholattice/core/timer_resolution.h"
 #include "litholattice/core/fail_fast.h"
+#include "litholattice/core/thread_readout.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/tick_profile.h"  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
 
@@ -162,6 +164,7 @@ void cSimThread::handleHandshakeFreeze() {
 
 cSimThread::~cSimThread() {
   stop();
+  cancelBoundaryJob();  // a job that never reached a tick boundary dies with the sim
   if (handshakeWorkersOutstanding()) {
     // C2: never destroy an authority a live pull worker still
     // dereferences (its WorkFn captures reach this cSimThread and the
@@ -198,6 +201,21 @@ std::vector<uint8_t> cSimThread::drainPlaceReceipts() {
   std::vector<uint8_t> out;
   out.swap(receipts_);
   return out;
+}
+
+bool cSimThread::postBoundaryJob(std::function<void()> fn) {
+  if (!running_.load(std::memory_order_acquire)) return false;
+  auto* j = new BoundaryJob{std::move(fn)};
+  BoundaryJob* expect = nullptr;
+  if (!boundaryJob_.compare_exchange_strong(expect, j, std::memory_order_acq_rel)) { delete j; return false; }
+  notifyWake();  // a parked (paused) loop runs one pass and picks it up
+  return true;
+}
+
+bool cSimThread::cancelBoundaryJob() {
+  BoundaryJob* j = boundaryJob_.exchange(nullptr, std::memory_order_acq_rel);
+  delete j;
+  return j != nullptr;
 }
 
 void cSimThread::runBetweenTicks(std::function<void()> fn) {
@@ -261,12 +279,14 @@ void cSimThread::start() {
   }
   logInfo("threads: sim thread starting");  // Q5b census naming (2026-10-28)
   thread_ = std::thread([this] { raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
+  threadRecord_.add(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
 }
 
 bool cSimThread::stop() {
   const bool wasRunning = running_.exchange(false);
   if (wasRunning) notifyWake();  // A-M7: a parked paused loop must wake to see the stop
   if (wasRunning && thread_.joinable()) thread_.join();
+  if (!thread_.joinable()) threadRecord_.retireAll();  // P2: joined -> RETURNED
   if (handshake_) return handshake_->stop();  // no-detach bounded join (P0a/C2); false = worker outstanding, poisoned
   return true;
 }
@@ -303,6 +323,18 @@ void cSimThread::flushDirty() {
   uint32_t batchN = 0;
   for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) ++batchN; }
   const uint64_t batchId = ++flushBatch_;
+  if (cowColumnsEnabled()) {  // render pipeline M5: publish every dirty sub once (per column), then pin
+    std::unordered_map<uint64_t, uint64_t> masks;
+    for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) masks[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy; }
+    // M9 (Archie rulings 4+6): in-place state edits noted since the last tick join this
+    // tick's single batched publish (no live apron read at pin time any more).
+    for (const auto& [key, mask] : chunks_.cowTable().takeStale())
+      if (chunks_.column(int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)))) masks[key] |= mask;
+    std::vector<std::pair<uint64_t, uint64_t>> ordered(masks.begin(), masks.end());
+    std::sort(ordered.begin(), ordered.end());
+    for (const auto& [key, mask] : ordered)
+      chunks_.cowTable().publish(chunks_, blocks_, int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)), mask);
+  }
   for (int64_t k : dirtySubs_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
@@ -318,12 +350,14 @@ void cSimThread::flushDirty() {
       }
     }
     if (!buf) buf = std::make_unique<MeshInput>();
-    snapshotForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf);
+    pinForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf,
+                      MeshEdge::Clamp, 0);  // P8 clamp-to-edge; M5: pinned CoW, worker gathers
     buf->batch = batchId; buf->batchSize = batchN;  // Cortana 2026-10-15 1350
     MeshInput* raw = buf.release();
     const std::shared_ptr<MeshInputPool> pool = meshPool_;
     submit_(std::shared_ptr<MeshInput>(raw, [pool](MeshInput* p) {
       std::unique_ptr<MeshInput> u(p);
+      u->pin.reset();  // M5: never retain pinned snapshots in the pool
       std::lock_guard l(pool->m);
       if (pool->free.size() < 64) pool->free.push_back(std::move(u));
       // else: pool full, drop it (bounds retained memory)
@@ -644,8 +678,16 @@ void cSimThread::run() {
     bool raycastDone = false;
     bool passCut = false;
     {
+      const bool rdOn = cThreadReadout::enabled();  // LL_THREAD_READOUT (read-only; tick thread is this slot's only writer)
+      const uint64_t rdT0 = rdOn ? cThreadReadout::nowNs() : 0;
       std::lock_guard l(blockMutex_);
+      const uint64_t rdT1 = rdOn ? cThreadReadout::nowNs() : 0;
+      struct RdPass { bool on; uint64_t t0, t1; ~RdPass() { if (on) cNamedThreadLoad::instance().pass(cNamedThreadLoad::kTick, t1 - t0, cThreadReadout::nowNs() - t1); } } rdPass{rdOn, rdT0, rdT1};
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
+      // 2026-10-31 (JD, Save World): tick-boundary job (postBoundaryJob). One relaxed-cost
+      // acquire load per pass when idle; never runs while handshake work is in flight.
+      if (boundaryJob_.load(std::memory_order_acquire) && !(handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())))
+        if (BoundaryJob* j = boundaryJob_.exchange(nullptr, std::memory_order_acq_rel)) { j->fn(); delete j; }
 
       // ---- control PRE phase (control serialization): drain every control
       // source's submissions once per iteration and stamp each event with

@@ -1,4 +1,7 @@
 // Cortana 2026-10-15 0935/1045: ALT-TAB, LAUNCH-FOCUS
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include "litholattice/platform/window.h"
 #include <vector>
 // Vulkan types (no prototypes) first, so GLFW declares its surface helpers.
@@ -85,7 +88,11 @@ const char* displayModeName(DisplayMode m) {
 
 bool parseDisplayMode(const std::string& s, DisplayMode& out) {
   for (DisplayMode m : {DisplayMode::Windowed, DisplayMode::Maximized, DisplayMode::Borderless, DisplayMode::Fullscreen})
-    if (s == displayModeName(m)) { out = m; return true; }
+    if (s.size() == std::strlen(displayModeName(m)) &&  // 2026-10-31 (JD): case-insensitive; settings save "Borderless"
+        std::equal(s.begin(), s.end(), displayModeName(m),
+                   [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })) {
+      out = m; return true;
+    }
   return false;
 }
 
@@ -127,7 +134,10 @@ void Window::setDisplay(const DisplayDesc& want) {
       // desktop-sized window could keep a frame and leave the taskbar on top. No auto-iconify, so Alt+Tab
       // leaves it in place.
       glfwSetWindowAttrib(win, GLFW_AUTO_ICONIFY, GLFW_FALSE);
-      if (api_ != GraphicsApi::Vulkan) {
+      // 2026-10-31 (JD): the Vulkan monitor-owned idiom was topmost and could not be minimized. Every API now
+      // uses the undecorated, monitor-sized, non-monitor-owned window: minimizes, Alt-Tabs, never topmost.
+      glfwSetWindowAttrib(win, GLFW_FLOATING, GLFW_FALSE);
+      if (true) {
         // 2026-10-25 (JD, capture fix): a monitor-owned GL window is presented by the driver
         // outside DWM composition (exclusive flip), so Print Screen, Snipping Tool and every
         // OBS capture mode see a blank surface on the software / gl33 path. Use an undecorated,

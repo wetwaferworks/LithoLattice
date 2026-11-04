@@ -1,7 +1,9 @@
 #include "litholattice/core/lock_timing.h"
 #include "vk_vertex_arena.h"
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
+#include <thread>
 #include "litholattice/core/log.h"
 
 namespace litholattice::vk {
@@ -40,6 +42,14 @@ cVertexArena::cVertexArena(const cVulkanDevice& dev, Kind kind, VkDeviceSize blo
   if (alignment != alignment_) logError("vulkan: vertex arena alignment %llu unsupported; using %llu", (unsigned long long)alignment, (unsigned long long)alignment_);
   blockSize_ = blockSize_ / alignment_ * alignment_;  // whole slices to the end of a block
   blocks_.resize(kMaxBlocks);  // [C53-2] fixed table: never reallocated while workers read it
+  lfCursor_.reset(new std::atomic<VkDeviceSize>[kMaxBlocks]);
+  lfSize_.reset(new std::atomic<VkDeviceSize>[kMaxBlocks]);
+  for (uint32_t i = 0; i < kMaxBlocks; ++i) { lfCursor_[i].store(0); lfSize_[i].store(0); }
+  if (const char* e = std::getenv("LL_VK_ARENA_LF"); !(e && e[0] == '0')) {  // Voxy #5: on by default (JD 4:18 PM); LL_VK_ARENA_LF=0 kills it
+    lf_ = true;
+    lfFree_ = std::make_unique<cSliceFreeList>(1u << 20);
+    logInfo("vulkan: vertex arena lock-free free list on (LL_VK_ARENA_LF=0 disables; power-of-two slices)");
+  }
   // 0.0.1.51 (Cortana, JD radius 64): keep vertex blocks within 70% of the biggest device-local
   // heap (room for textures, swapchain, bloom targets); past that, blocks go to host-visible
   // system memory the GPU reads over PCIe, so far rings are still drawn instead of dropped.
@@ -85,12 +95,44 @@ bool cVertexArena::addBlock(VkDeviceSize size) {
   Block b;
   b.buffer = std::move(*buf);
   b.freeRanges.emplace(0, size);
+  lfCursor_[count_.load()].store(0, std::memory_order_relaxed);  // Voxy #5
+  lfSize_[count_.load()].store(size, std::memory_order_relaxed);
   blocks_[count_.load()] = std::move(b);  // [C53-2] then publish the count
   count_.fetch_add(1, std::memory_order_release);  // review R5: pairs with the acquire in blockCount()
   return true;
 }
 
+std::optional<cVertexArena::Slice> cVertexArena::allocateLF(VkDeviceSize bytes, uint32_t maxBlock) {
+  const VkDeviceSize units = alignUp(std::max<VkDeviceSize>(bytes, 1), alignment_) / alignment_;
+  const uint32_t cls = cSliceFreeList::classOf(units);
+  if (cls >= cSliceFreeList::kClasses) return std::nullopt;
+  const VkDeviceSize size = alignment_ << cls;
+  if (auto e = lfFree_->pop(cls)) {
+    if (e->block < maxBlock) { usedBytes_ += size; return Slice{e->block, e->offset, size}; }
+    if (!lfFree_->push(cls, e->block, e->offset)) lfDropped_.fetch_add(1, std::memory_order_relaxed);
+  }
+  for (int spin = 0; spin < 100000; ++spin) {
+    const uint32_t n = std::min<uint32_t>(uint32_t(count_.load(std::memory_order_acquire)), maxBlock);
+    for (uint32_t i = n; i-- > 0;) {  // newest first: older blocks are mostly full
+      const VkDeviceSize cap = lfSize_[i].load(std::memory_order_relaxed);
+      if (lfCursor_[i].load(std::memory_order_relaxed) + size > cap) continue;
+      const VkDeviceSize off = lfCursor_[i].fetch_add(size, std::memory_order_relaxed);
+      if (off + size <= cap) { usedBytes_ += size; return Slice{i, off, size}; }
+    }
+    if (count_.load(std::memory_order_acquire) >= std::min<uint32_t>(maxBlock, kMaxBlocks)) return std::nullopt;
+    if (!lfGrowing_.exchange(true, std::memory_order_acquire)) {  // one grower; the rest retry
+      const bool ok = count_.load(std::memory_order_acquire) != n || addBlock(std::max(blockSize_, size));
+      lfGrowing_.store(false, std::memory_order_release);
+      if (!ok) return std::nullopt;
+    } else {
+      std::this_thread::yield();
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes, uint32_t maxBlock) {
+  if (lf_) return allocateLF(bytes, maxBlock);  // Voxy #5
   const VkDeviceSize size = alignUp(std::max<VkDeviceSize>(bytes, 1), alignment_);
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   for (int attempt = 0; attempt < 2; ++attempt) {
@@ -112,6 +154,13 @@ std::optional<cVertexArena::Slice> cVertexArena::allocate(VkDeviceSize bytes, ui
 }
 
 void cVertexArena::free(const Slice& s) {
+  if (lf_) {  // Voxy #5: no coalescing; the slice goes back to its size class
+    usedBytes_ -= s.size;
+    if (!lfFree_->push(cSliceFreeList::classOf(s.size / alignment_), s.block, s.offset) &&
+        lfDropped_.fetch_add(1, std::memory_order_relaxed) == 0)
+      logError("vulkan: vertex arena lock-free free list full; freed slices are dropped");
+    return;
+  }
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   auto& ranges = blocks_[s.block].freeRanges;
   usedBytes_ -= s.size;  // 0.0.1.59 [P59-1]
@@ -130,6 +179,13 @@ void cVertexArena::free(const Slice& s) {
 }
 
 void cVertexArena::clear() {
+  if (lf_) {  // Voxy #5: the caller guarantees the GPU and the workers are idle
+    for (uint32_t i = 0, n = count_.load(); i < n; ++i) { blocks_[i] = Block{}; lfCursor_[i].store(0); lfSize_[i].store(0); }
+    count_ = 0;
+    deviceBytes_ = 0; hostBytes_ = 0; usedBytes_ = 0;
+    lfFree_->reset();
+    return;
+  }
   locktiming::TimedGuard lock(mu_, locktiming::kArena);  // [C53-2]; 0.0.1.60 timing (diagnostic)
   for (uint32_t i = 0, n = count_.load(); i < n; ++i) blocks_[i] = Block{};
   count_ = 0;

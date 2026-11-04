@@ -8,10 +8,23 @@
 // by the GPU upload paths: the software renderer samples mip 0 with its own alpha rules and
 // keeps its pixels bit-identical.
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace litholattice {
+
+// 2026-11-01 (box, Trace crosshatch): the Trace ring / dot masks are read raw with texelFetch
+// (chunk_shading.glsl MODE_WIRE: ra = max(m.g, m.b), dot G), alpha ignored. The bleed above
+// filled their alpha=0 texels with neighbour G/B, so the ring backing (RING_BACK) leaked out as
+// thin diagonal spokes and a diamond lattice over the pad. Index masks are never mip-sampled, so
+// they skip the bleed. LL_MASK_NODILATE=0 restores the old (bled) upload.
+inline bool dilateSkipLayer(const std::string& name) {
+  static const bool on = [] { const char* e = std::getenv("LL_MASK_NODILATE"); return !(e && e[0] == '0'); }();
+  auto ends = [&](const char* s) { const size_t n = std::strlen(s); return name.size() >= n && name.compare(name.size() - n, n, s) == 0; };
+  return on && (ends("_ring_mask") || ends("_dot_mask"));
+}
 
 inline void dilateTransparentRGB(uint8_t* rgba, int w, int h) {
   if (!rgba || w <= 0 || h <= 0) return;

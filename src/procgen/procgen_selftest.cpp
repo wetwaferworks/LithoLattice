@@ -2531,7 +2531,7 @@ void ruinsOpenChecks(Checker& check) {
   // open pass draws no RNG and stamps nothing while openMode is off).
   const uint64_t hDefault = hashBuffer(genDefault->generate(treeChunk(3, -2, dimSeed)));
   std::printf("    ruins default-mode hash: %llx\n", (unsigned long long)hDefault);
-  check(hDefault == 0x8d0168dd575353a1ull,
+  check(hDefault == 0x2e9e952b805f5a1cull,  // re-baselined 2026-10-30 for H27d (ruins trace z fix), JD t3537u
         "ruins open: default mode hash equals the pre-open-mode inlay golden (pinned 2026-10-13)");
   check(hDefault == hashBuffer(build(false)->generate(treeChunk(3, -2, dimSeed))),
         "ruins open: default mode regenerates identically across pipelines");

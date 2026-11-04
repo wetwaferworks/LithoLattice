@@ -15,6 +15,7 @@ cInputPump::cInputPump(std::unique_ptr<IInputBackend> backend, Mode mode,
     running_.store(true, std::memory_order_release);
     logInfo("threads: input system thread starting");  // Q5b census naming (2026-10-28)
     inputThread_ = std::thread([this] { threadLoop(); });
+    sysRecord_.add(ThreadClass::System, ThreadRole::Input, 0, "input");
     LITHO_THREAD_LOG("input", "input thread started (backend='%s')", backend_->name().data());
   } else {
     LITHO_THREAD_LOG("input", "manual mode (backend='%s'): owner drives pumpOnce()",
@@ -26,14 +27,14 @@ cInputPump::~cInputPump() {
   if (inputThread_.joinable()) {
     running_.store(false, std::memory_order_release);
     inputThread_.join();  // disciplined: the input thread is never detached
+    sysRecord_.retireAll();  // P2: joined -> RETURNED
     LITHO_THREAD_LOG("input", "input thread joined");
   }
 }
 
 void cInputPump::threadLoop() {
   ThreadUtil::setName("litho-input");
-  if (const uint64_t mask = cJobSystem::realtimeAffinityMask(); mask != 0)
-    ThreadUtil::pinToCores(mask);  // off the sim workers' cores (see job_system.h policy)
+  // Never pinned (JD t3349u item 9, ruling 6).
   while (running_.load(std::memory_order_acquire)) {
     pollOnce();
     std::this_thread::sleep_for(pollInterval_);

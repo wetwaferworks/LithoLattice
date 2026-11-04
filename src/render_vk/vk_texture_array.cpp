@@ -123,7 +123,8 @@ std::optional<Image> cVkTextureArray::uploadArray(const cTextureReg& textures, u
   for (uint32_t i = 0; i < layers; ++i)
   {  // Cortana 2026-10-15 1530 (ENGINE, CA-01): bleed RGB into alpha=0 texels before the mip blits.
     std::memcpy(staging->mapped() + layerBytes * i, textures.textures()[i].image.pixels().data(), size_t(layerBytes));
-    dilateTransparentRGB(reinterpret_cast<uint8_t*>(staging->mapped() + layerBytes * i), int(tile), int(tile));
+    if (!dilateSkipLayer(textures.textures()[i].name))  // 2026-11-01: masks unbled (LL_MASK_NODILATE)
+      dilateTransparentRGB(reinterpret_cast<uint8_t*>(staging->mapped() + layerBytes * i), int(tile), int(tile));
   }
   // 2026-10-16 (JD leaf pass): coverage-preserving CPU mips for opted-in cutout layers, copied
   // over the blitted levels after the blit chain (texture_coverage.h).

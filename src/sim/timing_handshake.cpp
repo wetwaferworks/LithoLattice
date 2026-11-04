@@ -9,13 +9,25 @@
 #include <cstdio>
 #include <algorithm>
 #include <cassert>
+#include <optional>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/log.h"
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#include <immintrin.h>
+#define LL_HS_RELAX() _mm_pause()
+#else
+#define LL_HS_RELAX() ((void)0)
+#endif
 
 namespace litholattice {
+
+namespace {
+bool hsEnvOn(const char* k, const char* v = "1") { const char* e = std::getenv(k); return e && std::strcmp(e, v) == 0; }
+}  // namespace
 
 namespace {
 // Sub-pull context (A-H1 mechanism-lite): the frame of the item this
@@ -59,15 +71,18 @@ uint64_t cTimingHandshakeAuthority::nowNs() {
                       .count());
 }
 
-cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg) : cfg_(std::move(cfg)) {
+cTimingHandshakeAuthority::cTimingHandshakeAuthority(Config cfg)
+    : cfg_(std::move(cfg)), ledger_(cfg_.ledgerAsyncCapacity) {
   if (cfg_.phasesPerCycle < 1) cfg_.phasesPerCycle = 1;
   if (cfg_.phasesPerCycle > 64) cfg_.phasesPerCycle = 64;
   ceiling_ = cfg_.watchdogCeiling.count() > 0 ? cfg_.watchdogCeiling : std::chrono::milliseconds(250);
+  inlineLayout_ = hsEnvOn("LL_HS_LAYOUT", "original");
+  lockfree_ = inlineLayout_ || hsEnvOn("LL_HS_LOCKFREE");
   if (cfg_.workerThreads > 0) {
     workerCount_ = cfg_.workerThreads;
   } else {
-    const unsigned hw = std::thread::hardware_concurrency();
-    workerCount_ = int(std::min(4u, hw > 1 ? hw - 1 : 1u));
+    // Thread Handshake P2: the count comes from the boot census (same rule: min(4, hw-1)).
+    workerCount_ = int(cThreadCensus::instance().budget().simShards);
     if (workerCount_ < 1) workerCount_ = 1;
   }
   shards_.assign(size_t(workerCount_), {});
@@ -209,6 +224,10 @@ bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleT
   c.startStampNs.store(t0, std::memory_order_release);
   c.started.store(true, std::memory_order_release);
   bool ok = true;
+  // P4 tick ledger: this job's sync record (its own slot; the barrier hands it over).
+  cTickLedger::SyncSlot* lslot = cfg_.ledger ? &ledger_.slot(c.ledgerSeq) : nullptr;
+  std::optional<cTickLedger::JobScope> lscope;
+  if (lslot) lscope.emplace(ledger_, *lslot, c.ledgerSeq, c.desc.id, t0);
   try {
     // Rate scaling (JD 2026-10-14): sub-pulls execute in ascending order
     // inside the item's phase slot — they are rounds inside the slot and
@@ -239,6 +258,7 @@ bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleT
     ok = false;
   }
   const uint64_t t1 = nowNs();
+  if (lslot) cTickLedger::finishJob(*lslot, t1);
   c.durationNs.store(t1 - t0, std::memory_order_release);
   c.finished.store(true, std::memory_order_release);
   return ok;
@@ -286,17 +306,20 @@ void cTimingHandshakeAuthority::convertPendingFailureIfAny() {
 
 bool cTimingHandshakeAuthority::readPublished(PublishedPhase& out) const {
   // CH-H2: seqlock-style revalidation around the publication tuple.
+  // P0.5 review fix 1 (Cryosis (sirlinhart)): the tuple is read through a real
+  // even/odd seqlock, so phase/cycle/group/stamp/seq always come from ONE publication.
   const uint64_t gen1 = generation_.load(std::memory_order_acquire);
-  const uint64_t seq1 = publishSeq_.load(std::memory_order_acquire);
+  uint64_t w[kPubWords];
+  if (!pub_.tryRead(w)) return false;  // a publish/reset is in progress: caller retries
+  const uint64_t seq1 = w[kPubSeq];
   if (seq1 == 0) return false;
-  out.phase = publishedPhase_.load(std::memory_order_acquire);
-  out.cycle = publishedCycle_.load(std::memory_order_acquire);
-  out.group = publishedGroup_.load(std::memory_order_acquire);
-  out.openStampNs = phaseOpenStamp_.load(std::memory_order_acquire);
-  out.dueWork = false;
-  const uint64_t seq2 = publishSeq_.load(std::memory_order_acquire);
   const uint64_t gen2 = generation_.load(std::memory_order_acquire);
-  if (seq1 != seq2 || gen1 != gen2) return false;  // tuple raced a publish/reset: caller retries
+  if (gen1 != gen2) return false;  // raced a start()/resetAfterFreeze(): caller retries
+  out.phase = w[kPubPhase];
+  out.cycle = w[kPubCycle];
+  out.group = uint32_t(w[kPubGroup]);
+  out.openStampNs = w[kPubStamp];
+  out.dueWork = false;
   out.seq = seq1;
   out.generation = gen1;
   return true;
@@ -306,11 +329,15 @@ void cTimingHandshakeAuthority::resetAfterFreeze() {
   // CH-H1: bump the generation under m_ first — a stale worker's barrier
   // arrival revalidates (seq, generation) under the same mutex, so it can
   // no longer be counted toward the next phase — then clear the latch.
-  {
+  if (lockfree_) {  // lock-free: the generation is part of the arrival key, so stale arrivals cannot match
+    generation_.fetch_add(1, std::memory_order_acq_rel);
+    arrivalWord_.store(0, std::memory_order_release);
+  } else {
     std::lock_guard lk(m_);
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivals_.store(0, std::memory_order_relaxed);
   }
+  ledger_.abandonOpenTick();  // P4: the frozen tick never committed
   frozen_.store(false, std::memory_order_release);
   publishCv_.notify_all();
 }
@@ -334,13 +361,15 @@ bool cTimingHandshakeAuthority::start() {
     // stale last publication as new work and re-executed it outside any
     // tick/barrier. The generation bump additionally invalidates any
     // snapshot a worker from a previous life could still be holding.
-    std::lock_guard lk(m_);
+    std::unique_lock lk(m_, std::defer_lock);
+    if (!lockfree_) lk.lock();
     generation_.fetch_add(1, std::memory_order_acq_rel);
+    arrivalWord_.store(0, std::memory_order_release);
+    {
+      const uint64_t zero[kPubWords] = {0, 0, 0, 0, 0};
+      pub_.write(zero);
+    }
     publishSeq_.store(0, std::memory_order_release);
-    publishedPhase_.store(0, std::memory_order_relaxed);
-    publishedCycle_.store(0, std::memory_order_relaxed);
-    publishedGroup_.store(0, std::memory_order_relaxed);
-    phaseOpenStamp_.store(0, std::memory_order_relaxed);
     committedPhase_.store(0, std::memory_order_relaxed);
     arrivals_.store(0, std::memory_order_relaxed);
     for (auto& d : shardDoneSeq_) d.store(0, std::memory_order_relaxed);
@@ -350,54 +379,75 @@ bool cTimingHandshakeAuthority::start() {
     pendingFailure_ = PendingFailure{};
   }
   for (auto& e : workerExited_) e.store(false);
-  workers_.clear();
-  logInfo("threads: timing handshake starting %d pull workers", workerCount_);  // Q5b census naming (2026-10-28)
-  for (int s = 0; s < workerCount_; ++s)
-    workers_.emplace_back([this, s] { raiseCurrentThreadForSim(); workerLoop(s); });  // 0.0.1.57 F57-1 (R21)
+  // Thread Handshake P3 (ruling 2): no threads here. Each publication submits one
+  // barrier-synced job per active shard to the backing pool (whose workers run at sim
+  // priority, F57-1); only the Sim Clock keeps a dedicated thread.
+  if (inlineLayout_) {  // original layout: no shard workers at all; runPhase executes shards inline
+    ledger_.abandonOpenTick();
+    ledger_.reserve(comps_.size());
+    logInfo("threads: timing handshake layout=original: %d shards inline on the tick thread, no locks, no pool", workerCount_);
+    return true;
+  }
+  if (lockfree_) {
+    jobs_ = std::make_shared<ShardJobs>();  // haveWorkers marker only; no pool jobs are submitted
+    pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
+    ledger_.abandonOpenTick();
+    ledger_.reserve(comps_.size());
+    lfThreads_.reserve(size_t(workerCount_));
+    for (int s = 0; s < workerCount_; ++s) lfThreads_.emplace_back([this, s] { lfWorkerLoop(s); });
+    logInfo("threads: timing handshake LOCK-FREE: %d dedicated shard threads, atomic arrival barrier, no mutex on the tick path", workerCount_);
+    return true;
+  }
+  pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
+  jobs_ = std::make_shared<ShardJobs>();
+  ledger_.abandonOpenTick();           // P4: a tick left open by a freeze never commits
+  ledger_.reserve(comps_.size());      // P4: ring sized once, from the ledger's tick arena
+  logInfo("threads: timing handshake starting %d shards as jobs on a %u-worker pool", workerCount_, pool_->size());  // Q5b census naming
   return true;
 }
 
 bool cTimingHandshakeAuthority::stop() {
-  if (!startedOnce_ && workers_.empty()) return true;
+  if (!startedOnce_ && !jobs_) return true;
+  if (lockfree_) {
+    stop_.store(true, std::memory_order_release);
+    publishSeq_.fetch_add(1, std::memory_order_acq_rel);  // wake idle shard threads (no new tuple: they re-poll and see stop_)
+    publishSeq_.notify_all();
+    for (auto& t : lfThreads_) if (t.joinable()) t.join();
+    lfThreads_.clear();
+    jobs_.reset();
+    pool_ = nullptr;
+    running_.store(false);
+    return true;
+  }
   stop_.store(true, std::memory_order_release);
   publishCv_.notify_all();
   barrierCv_.notify_all();
-  if (workers_.empty()) { running_.store(false); return true; }
-  // NO-DETACH bounded join (C2; L7: per-worker deadline, saturating
-  // multiply — previously one global deadline was shared by all workers
-  // and ceiling x 2 could overflow). Each worker gets its own full grace
-  // of ceiling x 2 to leave its component and the poll loop.
+  if (!jobs_) { running_.store(false); return true; }
+  // Thread Handshake P3: shard work is pool jobs. Mark the job state dead (queued jobs turn
+  // into no-ops that never touch this authority), then wait, bounded and never abandoning
+  // live storage (C2), for any job still inside a component. Grace = ceiling x 2,
+  // saturating (L7).
+  jobs_->dead.store(true, std::memory_order_seq_cst);
   const uint64_t ceilNs = uint64_t(ceiling_.count());
   const uint64_t graceNs = ceilNs > UINT64_MAX / 2 ? UINT64_MAX : ceilNs * 2;
-  bool allJoined = true;
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (!workers_[i].joinable()) continue;
-    const uint64_t start = nowNs();
-    const uint64_t deadline = graceNs > UINT64_MAX - start ? UINT64_MAX : start + graceNs;
-    while (!workerExited_[i].load(std::memory_order_acquire) && nowNs() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if (workerExited_[i].load(std::memory_order_acquire)) {
-      workers_[i].join();
-    } else {
-      // Fail loudly and poison (see the header for the full protocol):
-      // the thread object stays joinable in workers_, the worker keeps
-      // running against LIVE storage, and stop() may be retried once the
-      // component returns. Never detach into freed storage.
-      logError("timing-handshake: worker %zu still inside a component at stop(); NOT detaching — "
-               "stop() FAILED, authority poisoned until a retry joins it (no save/start/destroy is safe)",
-               i);
-      allJoined = false;
-    }
-  }
-  if (allJoined) {
-    workers_.clear();
+  const uint64_t start = nowNs();
+  const uint64_t deadline = graceNs > UINT64_MAX - start ? UINT64_MAX : start + graceNs;
+  while (jobs_->running.load(std::memory_order_seq_cst) != 0 && nowNs() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (jobs_->running.load(std::memory_order_seq_cst) == 0) {
+    jobs_.reset();
+    pool_ = nullptr;
     workersOutstanding_.store(false, std::memory_order_release);
     running_.store(false);
     return true;
   }
+  // Fail loudly and poison (see the header for the protocol): the job keeps running
+  // against LIVE storage, and stop() may be retried once the component returns.
+  logError("timing-handshake: a shard job is still inside a component at stop(); stop() FAILED, "
+           "authority poisoned until a retry sees it return (no save/start/destroy is safe)");
   workersOutstanding_.store(true, std::memory_order_release);
-  // running_ stays true: the authority is not stopped while a worker is
-  // outstanding, and start() refuses via workersOutstanding_ above.
+  // running_ stays true: the authority is not stopped while a job is outstanding, and
+  // start() refuses via workersOutstanding_.
   return false;
 }
 
@@ -427,86 +477,88 @@ bool cTimingHandshakeAuthority::canTick(uint32_t shard, uint64_t& phaseOut) cons
 }
 
 HsStats cTimingHandshakeAuthority::statsSnapshot() const {
+  if (lockfree_) {
+    for (;;) {
+      const uint64_t a = statsSeq_.load(std::memory_order_acquire);
+      if (a & 1) { LL_HS_RELAX(); continue; }
+      HsStats copy = stats_;
+      if (statsSeq_.load(std::memory_order_acquire) == a) return copy;
+    }
+  }
   std::lock_guard lk(statsM_);
   return stats_;
 }
 
-void cTimingHandshakeAuthority::workerLoop(int shard) {
-  uint64_t seenSeq = 0;
-  uint64_t idleSinceNs = nowNs();
-  while (!stop_.load(std::memory_order_acquire)) {
-    // A-M3: the worker polls through pollPhase() — the SAME implementation
-    // canTick() exposes — never an inline re-implementation. CH-H2: the
-    // snapshot it returns is revalidated, never a tuple assembled from
-    // separate loads across a publish.
+void cTimingHandshakeAuthority::runShardJob(cTimingHandshakeAuthority* self, const std::shared_ptr<ShardJobs>& st,
+                                            int shard, uint64_t seq) {
+  st->running.fetch_add(1, std::memory_order_seq_cst);
+  // Dekker pair with stop(): it stores dead then reads running; we bump running then read
+  // dead (both seq_cst). Either stop() sees us and waits, or we see dead and skip `self`.
+  if (!st->dead.load(std::memory_order_seq_cst)) {
+    // A-M3: the job reads through pollPhase(), the same poll canTick() exposes. The
+    // publication is stable while its barrier is open, so a torn read only retries.
     PublishedPhase snap;
-    if (pollPhase(uint32_t(shard), seenSeq, snap)) {
-      seenSeq = snap.seq;
-      idleSinceNs = nowNs();
-      const uint64_t ph = snap.phase;
-      const uint64_t ct = snap.cycle;
-      const uint32_t g = snap.group;
-      if (snap.dueWork) {
-        // Clock-monotonicity tripwire (review A-L8, relabelled): both stamps
-        // come from the same shared steady clock and this pull stamp is read
-        // after the open stamp was stored, so pullStamp < openStamp can only
-        // mean the steady clock itself went backwards. This verifies clock
-        // monotonicity — it is NOT a check that two distinct QPC sources
-        // agree (there is only one clock here by design).
-        const uint64_t pullStamp = nowNs();
-        if (pullStamp < snap.openStampNs)
-          qpcViolations_.fetch_add(1, std::memory_order_relaxed);
-        bool stale = false;
-        for (uint32_t id : shards_[size_t(shard)]) {
-          Comp& c = comps_[id];
-          if (!dueFor(c, ph, ct, g)) continue;
-          // CH-H1: revalidate the generation before every item — after a
-          // resetAfterFreeze()/restart this publication is stale and its
-          // remaining items must not execute.
-          if (generation_.load(std::memory_order_acquire) != snap.generation) { stale = true; break; }
-          // C3: on a recorded failure, stop executing this publication's
-          // remaining items (the world may be half-updated) but still
-          // arrive at the barrier below so runPhase can convert the
-          // failure at the phase boundary instead of hanging to the
-          // watchdog ceiling.
-          if (!runItem(c, ph, ct)) break;
-        }
-        if (!stale) {
-          // CH-H1: the arrival itself revalidates (seq, generation) under
-          // m_ — runPhase resets arrivals_ under the same mutex when it
-          // publishes, so a stale arrival can never be counted toward a
-          // later phase's barrier.
-          bool counted = false;
-          {
-            std::lock_guard lk(m_);
-            if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
-                generation_.load(std::memory_order_relaxed) == snap.generation) {
-              shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
-              arrivals_.fetch_add(1, std::memory_order_relaxed);
-              counted = true;
-            }
-          }
-          if (counted) barrierCv_.notify_all();
-        }
+    bool ok = false;
+    for (int i = 0; i < 1000 && !(ok = self->pollPhase(uint32_t(shard), 0, snap)); ++i) std::this_thread::yield();
+    if (ok && snap.seq == seq) self->serveShard(shard, snap);
+  }
+  st->running.fetch_sub(1, std::memory_order_seq_cst);
+}
+
+void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap) {
+  const uint64_t ph = snap.phase;
+  const uint64_t ct = snap.cycle;
+  const uint32_t g = snap.group;
+  if (snap.dueWork) {
+    // Clock-monotonicity tripwire (review A-L8, relabelled): both stamps come from the
+    // same shared steady clock and this pull stamp is read after the open stamp was
+    // stored, so pullStamp < openStamp can only mean the steady clock went backwards.
+    const uint64_t pullStamp = nowNs();
+    if (pullStamp < snap.openStampNs)
+      qpcViolations_.fetch_add(1, std::memory_order_relaxed);
+    bool stale = false;
+    for (uint32_t id : shards_[size_t(shard)]) {
+      Comp& c = comps_[id];
+      if (!dueFor(c, ph, ct, g)) continue;
+      // CH-H1: revalidate the generation before every item; after a
+      // resetAfterFreeze()/restart this publication is stale and its remaining items
+      // must not execute.
+      if (generation_.load(std::memory_order_acquire) != snap.generation) { stale = true; break; }
+      // C3: on a recorded failure, stop executing this publication's remaining items
+      // but still arrive at the barrier so runPhase converts the failure at the phase
+      // boundary instead of hanging to the watchdog ceiling.
+      if (!runItem(c, ph, ct)) break;
+    }
+    if (!stale) {
+      // CH-H1: the arrival revalidates (seq, generation) under m_; runPhase resets
+      // arrivals_ under the same mutex when it publishes, so a stale arrival can never
+      // be counted toward a later phase's barrier.
+      bool counted = false;
+      if (lockfree_) {
+        const uint64_t key = arrivalKey(snap.generation, snap.seq);
+        shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
+        uint64_t w = arrivalWord_.load(std::memory_order_acquire);
+        while ((w & ~0xFFFFull) == key && !arrivalWord_.compare_exchange_weak(w, w + 1, std::memory_order_acq_rel, std::memory_order_acquire)) LL_HS_RELAX();
       } else {
         std::lock_guard lk(m_);
         if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
-            generation_.load(std::memory_order_relaxed) == snap.generation)
+            generation_.load(std::memory_order_relaxed) == snap.generation) {
           shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
+          arrivals_.fetch_add(1, std::memory_order_relaxed);
+          counted = true;
+        }
       }
-      continue;
+      if (counted) barrierCv_.notify_all();
     }
-    if (cfg_.pureSpin) { std::this_thread::yield(); continue; }
-    // Hybrid poll (D9): spin-with-yield for ~50 us, then block on the CV.
-    if (nowNs() - idleSinceNs < 50'000) { std::this_thread::yield(); continue; }
-    std::unique_lock lk(m_);
-    publishCv_.wait_for(lk, std::chrono::milliseconds(1), [&] {
-      return stop_.load(std::memory_order_acquire) ||
-             publishSeq_.load(std::memory_order_acquire) != seenSeq;
-    });
+  } else if (lockfree_) {
+    if (publishSeq_.load(std::memory_order_acquire) == snap.seq && generation_.load(std::memory_order_acquire) == snap.generation)
+      shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
+  } else {
+    std::lock_guard lk(m_);
+    if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
+        generation_.load(std::memory_order_relaxed) == snap.generation)
+      shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
   }
-  if (shard >= 0 && size_t(shard) < workerExited_.size())
-    workerExited_[size_t(shard)].store(true, std::memory_order_release);
 }
 
 bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uint32_t group) {
@@ -514,19 +566,25 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // before anything else in this phase (noreturn: fail-fast abort).
   convertPendingFailureIfAny();
   if (frozen_.load(std::memory_order_acquire)) return false;
-  const uint64_t openStamp = nowNs();
-  phaseOpenStamp_.store(openStamp, std::memory_order_release);
+  // Thread Handshake P4 (Archie t3353u): a new epoch reclaims the shared pool's lent
+  // background capacity until this phase commits (or freezes): no background slice starts
+  // while shard jobs wait or into the shard reserve; lent workers return at their next
+  // slice boundary.
+  cJobPoolEpoch epoch(!lockfree_ && running_.load(std::memory_order_acquire) ? pool_ : nullptr);
+  const uint64_t openStamp = nowNs();  // published with the tuple below (seqlock), not alone
 
   // Due set, in registration (id) order; active shards = shards with at
   // least one due non-affine component.
   std::vector<Comp*> affine;
   std::vector<char> shardActive(size_t(workerCount_), 0);
   uint32_t activeShards = 0;
+  uint32_t ledgerK = 0;  // P4: due jobs get ledger seq 0..K-1 in registration order
   for (auto& c : comps_) {
     c.started.store(false, std::memory_order_relaxed);
     c.finished.store(false, std::memory_order_relaxed);
     c.durationNs.store(0, std::memory_order_relaxed);
     if (!dueFor(c, phase, cycleTick, group)) continue;
+    c.ledgerSeq = ledgerK++;
     if (c.shard >= 0) {
       if (!shardActive[size_t(c.shard)]) { shardActive[size_t(c.shard)] = 1; ++activeShards; }
     } else if (c.desc.threadAffine) {
@@ -534,7 +592,8 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
     }
   }
 
-  const bool haveWorkers = running_.load(std::memory_order_acquire) && !workers_.empty();
+  const bool haveWorkers = running_.load(std::memory_order_acquire) && jobs_ != nullptr && pool_ != nullptr;
+  if (cfg_.ledger) ledger_.openTick(ledgerK);  // ring slots (T_offset + seq) & MASK
   // Affine work runs BEFORE the phase is published: affine items are the
   // phase prologue (e.g. Signal's mark/prep prepares the very work the pull
   // shards then execute), so workers must not see the phase until every
@@ -548,15 +607,31 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
 
   uint64_t seq = 0;
   {
-    std::lock_guard lk(m_);
+    std::unique_lock lk(m_, std::defer_lock);
+    if (!lockfree_) lk.lock();
     arrivals_.store(0, std::memory_order_relaxed);
-    publishedPhase_.store(phase, std::memory_order_relaxed);
-    publishedCycle_.store(cycleTick, std::memory_order_relaxed);
-    publishedGroup_.store(group, std::memory_order_relaxed);
     seq = publishSeq_.load(std::memory_order_relaxed) + 1;
-    publishSeq_.store(seq, std::memory_order_release);
+    if (lockfree_) arrivalWord_.store(arrivalKey(generation_.load(std::memory_order_acquire), seq), std::memory_order_release);
+    const uint64_t words[kPubWords] = {phase, cycleTick, uint64_t(group), openStamp, seq};
+    pub_.write(words);  // whole tuple first (seqlock) ...
+    publishSeq_.store(seq, std::memory_order_release);  // ... then the wake counter
   }
-  publishCv_.notify_all();
+  if (lockfree_) publishSeq_.notify_all(); else publishCv_.notify_all();
+
+  // Thread Handshake P3: one barrier-synced job per active shard, front of the pool's line
+  // and unthrottled. Inactive shards are marked done for this publication here, as their
+  // idle poll used to do.
+  if (haveWorkers) {
+    {
+      std::unique_lock lk(m_, std::defer_lock);
+      if (!lockfree_) lk.lock();
+      for (int s = 0; s < workerCount_; ++s)
+        if (!shardActive[size_t(s)]) shardDoneSeq_[size_t(s)].store(seq, std::memory_order_release);
+    }
+    for (int s = 0; s < workerCount_ && !lockfree_; ++s)
+      if (shardActive[size_t(s)])
+        pool_->submitUrgent([self = this, st = jobs_, s, seq] { runShardJob(self, st, s, seq); });
+  }
 
   uint64_t barrierWaitNs = 0;
   if (activeShards > 0) {
@@ -566,15 +641,43 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       for (auto& c : comps_)
         if (c.shard >= 0 && dueFor(c, phase, cycleTick, group)) runItem(c, phase, cycleTick);
       convertPendingFailureIfAny();  // C3: inline path converts before commit
+      // 2026-10-30: original layout (started, shards inline on the tick thread) has no worker to
+      // watch, so the watchdog judges the finished phase: over the ceiling -> FREEZE, no commit,
+      // commit_epoch untouched (same contract as the threaded watchdog). Never-started stays as is.
+      if (inlineLayout_ && running_.load(std::memory_order_acquire)) {
+        const uint64_t t = nowNs();
+        if (t - openStamp > uint64_t(ceiling_.count())) {
+          HsFreezeInfo info;
+          info.phase = phase; info.cycleTick = cycleTick;
+          info.openStampNs = openStamp; info.tripStampNs = t;
+          info.elapsedNs = t - openStamp; info.ceilingNs = uint64_t(ceiling_.count());
+          const Comp* pick = nullptr;
+          uint64_t worst = 0;
+          for (auto& c : comps_) {
+            if (c.shard < 0 || !dueFor(c, phase, cycleTick, group)) continue;
+            const uint64_t d = c.durationNs.load(std::memory_order_relaxed);
+            if (!pick || d > worst) { worst = d; pick = &c; }
+          }
+          if (pick) { info.componentId = pick->desc.id; std::snprintf(info.componentName, sizeof(info.componentName), "%s", pick->desc.name ? pick->desc.name : ""); }
+          lastFreeze_ = info;
+          frozen_.store(true, std::memory_order_release);
+          return false;  // no commit, no force-advance
+        }
+      }
     } else {
       const uint64_t waitStart = nowNs();
-      std::unique_lock lk(m_);
-      while (arrivals_.load(std::memory_order_acquire) < activeShards) {
-        if (barrierCv_.wait_for(lk, std::chrono::milliseconds(1)) == std::cv_status::timeout) {
+      std::unique_lock lk(m_, std::defer_lock);
+      if (!lockfree_) lk.lock();
+      uint32_t spins = 0;
+      while (arrivedCount() < activeShards) {
+        bool check;
+        if (lockfree_) { LL_HS_RELAX(); check = (++spins & 1023u) == 0; }  // watchdog check every 1024 pauses
+        else check = barrierCv_.wait_for(lk, std::chrono::milliseconds(1)) == std::cv_status::timeout;
+        if (check) {
           const uint64_t t = nowNs();
           // 0.0.1.57 F57-2 (R21): the last shard may have arrived between the timed-out wait and this check;
           // re-test the barrier before declaring a stall.
-          if (arrivals_.load(std::memory_order_acquire) >= activeShards) break;
+          if (arrivedCount() >= activeShards) break;
           if (t - openStamp > uint64_t(ceiling_.count())) {
             // Watchdog: FREEZE. Name the slowest unfinished component:
             // the started-but-unfinished item with the earliest start
@@ -613,9 +716,26 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // committed.
   convertPendingFailureIfAny();
 
+  // P4 tick ledger: linear (tick, seq) sweep of this tick's sync records plus the async
+  // records due now (WAIT for late ones, bounded by the watchdog ceiling).
+  if (cfg_.ledger && !ledger_.sweep(openStamp + uint64_t(ceiling_.count()))) {
+    HsFreezeInfo info;
+    info.phase = phase; info.cycleTick = cycleTick;
+    info.openStampNs = openStamp; info.tripStampNs = nowNs();
+    info.elapsedNs = info.tripStampNs - openStamp; info.ceilingNs = uint64_t(ceiling_.count());
+    info.componentId = UINT32_MAX;
+    std::snprintf(info.componentName, sizeof(info.componentName), "%s", "tick-ledger async job");
+    lastFreeze_ = info;
+    frozen_.store(true, std::memory_order_release);
+    return false;
+  }
+
   // Commit hook (single, per authority — the game's buffer flip lands here).
   if (cfg_.commitFn) cfg_.commitFn(phase, cycleTick, group);
+  // COMMITTED: commit_epoch advances here and only here (Archie R7).
+  if (cfg_.ledger) ledger_.commit(); else ledger_.commitEpochOnly();
   committedPhase_.store(phase, std::memory_order_release);
+  cThreadCensus::noteCommittedTick(cycleTick);  // JD t3349u item 4: shutdown records carry it
 
   // Fold timings into stats; WAIT accounting (hs-design §1.6, rewritten
   // P1-WAIT per review CH-H4 + sweep decision C2 + review A-M2).
@@ -643,7 +763,9 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   const uint64_t dur = nowNs() - openStamp;
   // A-M6: the fold is the stats writer; hold statsM_ so a cross-thread
   // statsSnapshot() never copies a half-folded struct (vector included).
-  std::lock_guard statsLk(statsM_);
+  std::unique_lock statsLk(statsM_, std::defer_lock);
+  if (!lockfree_) statsLk.lock();
+  else statsSeq_.fetch_add(1, std::memory_order_acq_rel);  // odd: fold in progress (readers retry)
   stats_.phases += 1;
   stats_.barrierWaitNsTotal += barrierWaitNs;
   stats_.qpcViolations = qpcViolations_.load(std::memory_order_relaxed);
@@ -696,7 +818,29 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       }
     }
   }
+  if (lockfree_) statsSeq_.fetch_add(1, std::memory_order_release);  // even: fold done
   return true;
+}
+
+uint32_t cTimingHandshakeAuthority::arrivedCount() const {
+  return lockfree_ ? uint32_t(arrivalWord_.load(std::memory_order_acquire) & 0xFFFFull) : arrivals_.load(std::memory_order_acquire);
+}
+
+void cTimingHandshakeAuthority::lfWorkerLoop(int shard) {
+  raiseCurrentThreadForSim();
+  uint64_t seen = 0;
+  while (!stop_.load(std::memory_order_acquire)) {
+    const uint64_t s = publishSeq_.load(std::memory_order_acquire);
+    if (s != seen) {
+      PublishedPhase snap;
+      if (pollPhase(uint32_t(shard), seen, snap)) { seen = snap.seq; serveShard(shard, snap); }
+      else { LL_HS_RELAX(); if (publishSeq_.load(std::memory_order_acquire) == s && readPublished(snap) && snap.seq == seen) seen = s; }
+      continue;
+    }
+    bool changed = false;  // idle: short pause-spin, then an atomic (address) wait; never a mutex
+    for (int i = 0; i < 4096 && !changed; ++i) { LL_HS_RELAX(); changed = publishSeq_.load(std::memory_order_acquire) != s; }
+    if (!changed) publishSeq_.wait(s, std::memory_order_acquire);
+  }
 }
 
 void cTimingHandshakeAuthority::resetStats() {

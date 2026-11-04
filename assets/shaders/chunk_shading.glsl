@@ -12,6 +12,7 @@ const int MODE_PIPS = 8, MODE_CELLS = 9, MODE_ANIMATED = 10, MODE_GLASS = 11, MO
 const int MODE_ALPHABLEND = 12;  // Cortana 2026-10-15 1900: kShadeAlphaBlend (Elfie review LOW-1)
 const int MODE_GROUND_PULSE = 16;  // mirror kShadeGroundPulse (renderer.h)
 const int MODE_LEAF = 17;
+const int MODE_DIGITS = 19, MODE_DIGITS_REP = 20, MODE_DIGITS_RND = 21;  // mirror kShadeDigits / kShadeDigitsRep (2026-10-31)
 const int MODE_TRACE_TINT = 18;  // mirror kShadeTraceTint (2026-10-16 Wafer beta art)  // mirror kShadeLeaf (2026-10-16 JD leaf pass): alpha test 0.5 + crystal twinkle
 // ---- Wafer ground pulse (JD-locked 2026-10-11; biome blending 2026-10-11) ----
 // The wafer's heartbeat: time-driven emissive add for kShadeGroundPulse quads.
@@ -196,6 +197,7 @@ void main() {
     float tm = mask(uTintMask[vVal & 31], uvW).r;
     bool on = (vVal & 128) != 0;
     vec3 tint = texelFetch(uPal, ivec2(on ? 64 : 0, uWirePal[(vVal >> 6) & 1]), 0).rgb;
+    if ((vVal & 32) != 0) tint = vec3(0.545, 0.396, 0.867);  // 2026-10-31: Switch-fed purple (#8B65DD)
     // 2026-10-16 (JD, Discovered by J.D.): grey until powered - no tint when off (was the ramp's red start).
     if (on) { base = mix(base, tint, tm); emissive = 0.85 * tm; }
   } else if (vMode == MODE_WIRE0 || vMode == MODE_WIRE1) {                       // wire
@@ -261,11 +263,41 @@ void main() {
     int idx = int(floor(m.r * 255.0 / 28.0 + 0.5));
     if (idx >= 1 && idx <= vVal) base = mix(base, PIP_LIT, m.g);
   } else if (vMode == MODE_CELLS) {                                     // memory cell value
-    vec4 m = mask(uMemMask, rotUV(uvW, (4 - gRot) & 3));
-    int idx = int(floor((m.r * 255.0 + 1.0) / 4.0 + 0.5));
-    bool lit = idx >= 1 && idx <= vVal;
-    float lum = max(t.r, max(t.g, t.b));
-    base = mix(base, lit ? CELL_LIT * lum : CELL_OFF, m.g);
+    // 2026-10-31 (JD, CloudAtlas memor-seg7-display v2): two-digit purple 7-seg readout 0..64 plus a
+    // 20-square bit ring. Mask R: 1 tens, 2 ones, 3 ring square (G/B square-local 0..7). Digits come
+    // from the tile UV in 128 space (size-independent, sharp at 128/64/32): tens x42..61, ones x66..85,
+    // y50..77, glyph pixel = 2x2. Ghost 8 under every slot (alpha 40); tens is ghost-only below 10.
+    // Ring lit when the stored value > 0: #8B65DD, #C8A9F6 highlight on the square's top row / left
+    // column; its glow goes to emissive (bloom) only, not into the albedo. Only vVal changes per tick.
+    // 2026-10-31 11:20 PM (JD): sample in the ROTATED tile UV so the digits turn with the block
+    // (the unrotated UV pinned them to world north: right for one facing only).
+    vec2 tuvC = uvW;
+    vec4 m = mask(uMemMask, tuvC);
+    int r = int(floor(m.r * 255.0 + 0.5));
+    int v = clamp(vVal & 127, 0, 64);
+    const vec3 MEM_GLOW = vec3(0.545, 0.396, 0.867);   // #8B65DD
+    const vec3 MEM_HI = vec3(0.784, 0.663, 0.965);     // #C8A9F6
+    const vec3 MEM_DIGIT = vec3(0.839, 0.745, 0.980);  // #D6BEFA
+    const vec3 MEM_GHOST = vec3(0.235, 0.149, 0.557);  // #3C268E
+    if (r == 3) {
+      if (v > 0) {
+        int gx = int(floor(m.g * 255.0 + 0.5)), gy = int(floor(m.b * 255.0 + 0.5));
+        base = (gx == 0 || gy == 0) ? MEM_HI : MEM_GLOW;
+        emissive += 0.6;
+      }
+    } else {
+      ivec2 t = ivec2(floor(tuvC * 128.0));
+      int slot = (t.y >= 50 && t.y < 78) ? ((t.x >= 42 && t.x < 62) ? 1 : (t.x >= 66 && t.x < 86) ? 2 : 0) : 0;
+      if (slot != 0) {
+        const int SEG7M[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
+        ivec2 g = (t - ivec2(slot == 1 ? 42 : 66, 50)) / 2;   // glyph px 0..9, 0..13
+        int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
+        bool on = d >= 0 && ((SEG7M[d * 14 + g.y] >> g.x) & 1) != 0;
+        bool ghost = ((SEG7M[8 * 14 + g.y] >> g.x) & 1) != 0;
+        if (on) { base = MEM_DIGIT; emissive += 0.6; }
+        else if (ghost) base = mix(base, MEM_GHOST, 40.0 / 255.0);
+      }
+    }
   } else if (vMode == MODE_ANIMATED) {                                    // animated face (frame strip)
     int i = clamp(vVal, 0, MAX_ANIMS - 1), len = max(uAnimLen[i], 1);
     int f = uAnimSeq[clamp(uAnimStart[i] + int(uTime * 1000.0 / max(uAnimMs[i], 1.0)) % len, 0, 63)];
@@ -281,9 +313,30 @@ void main() {
     if (!((uFx.x & 64) != 0 && vMode == MODE_ALPHABLEND))
 #endif
     if (floor(a * 255.0) <= BAYER[q.y * 4 + q.x] * 17.0) discard;
+  } else if (vMode == MODE_DIGITS || vMode == MODE_DIGITS_REP || vMode == MODE_DIGITS_RND) {     // 2026-10-31 (JD): seven-segment value readout
+    // Latchor 1-64 (MODE_DIGITS) / Repeator delay 4-32 (MODE_DIGITS_REP), drawn on an overlay of the top in
+    // the base texture's own UV (same rotation as the base). Box (128 space, 22x14): Latchor x87 y39,
+    // Repeator x91 y101; tens at local x 0..9, ones at 12..21; each digit 10x14 (seg7 atlas rows, bit0 = left).
+    // vVal bits 0-6 = value, bit 7 = lit (powered). Static textures; only vVal changes per tick (GL + Vulkan).
+    const int SEG7[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
+    const int SEG7_GHOST[14] = int[14](252,252,771,771,771,771,252,252,771,771,771,771,252,252);
+    ivec2 lp = ivec2(floor(uvW * 128.0)) - (vMode == MODE_DIGITS_REP ? ivec2(91, 101) : vMode == MODE_DIGITS_RND ? ivec2(53, 57) : ivec2(87, 39));
+    if (lp.x < 0 || lp.y < 0 || lp.x > 21 || lp.y > 13 || (lp.x > 9 && lp.x < 12)) discard;
+    int dv = vVal & 127;
+    bool ones = lp.x >= 12;
+    int gx = ones ? lp.x - 12 : lp.x;
+    int dg = ones ? dv % 10 : (dv / 10) % 10;
+    bool lit = (ones || dv >= 10) && ((SEG7[dg * 14 + lp.y] >> gx) & 1) != 0;
+    bool ghost = ((SEG7_GHOST[lp.y] >> gx) & 1) != 0;
+    if (!lit && !ghost) discard;
+    const vec3 DIGIT = vec3(0.839, 0.745, 0.980);   // #D6BEFA
+    const vec3 WINDOW = vec3(9.0, 7.0, 20.0) / 255.0;
+    bool hot = (vVal & 128) != 0;
+    base = mix(WINDOW, DIGIT, lit ? (hot ? 1.0 : 0.55) : 40.0 / 255.0);
+    emissive = lit && hot ? 0.6 : 0.1;
   } else if (vMode == MODE_READOUT) {                                    // 7-segment readout (catchor match value)
     const int SEG[10] = int[10](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);
-    vec4 m = mask(vLayer, rotUV(uvW, (4 - gRot) & 3));
+    vec4 m = mask(vLayer, uvW);  // 2026-10-31 11:20 PM (JD): rotated UV, turns with the facing (was world-pinned)
     int seg = int(floor(m.r * 255.0 / 16.0 + 0.5));
     int v = vVal & 127;
     bool ones = seg >= 8;
@@ -363,7 +416,8 @@ void main() {
 #ifdef LITHO_VK_FX
   // Pulsing glow: mask G = phase, on the sim clock (tick-synced) but render-only.
   float fxPulse = 1.0;
-  if ((uFx.x & 8) != 0 && emissive > 0.0)
+  // 2026-10-31 (JD): colour lamps 16 / 32 / 64 (modes 5..7) glow steadily: no fx pulse.
+  if ((uFx.x & 8) != 0 && emissive > 0.0 && !(vMode >= 5 && vMode <= 7))
     fxPulse = 0.72 + 0.28 * sin(6.28318530718 * (uFxP.z * uFxP.w - fxGlowPhase - dot(vWorld, vec3(0.031, 0.017, 0.023))));
   col = mix(col, col * fxPulse * 1.12, emissive);
   if ((uFx.x & 32) != 0) {  // exponential-squared distance fog, thinning with height

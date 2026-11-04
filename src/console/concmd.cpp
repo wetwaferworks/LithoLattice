@@ -864,8 +864,12 @@ cConsoleReg::ExecResult cConsoleReg::execIncDec(const std::string& cvarName, boo
 
 void cConsoleReg::dispatchKeyBinds(const cDeviceState& devices, bool textCapture) {
   if (textCapture || keyBinds_.empty()) return;
-  for (const auto& [_, bind] : keyBinds_) {
-    if (!devices.keyPressed(bind.key)) continue;  // key parsed once at setKeyBind
+  // Archie review H29g (2026-10-30): a bound command can bind/unbind/clear,
+  // which mutates keyBinds_ under a live iterator. Collect first, run after.
+  std::vector<KeyBind> fired;
+  for (const auto& [_, bind] : keyBinds_)
+    if (devices.keyPressed(bind.key)) fired.push_back(bind);  // key parsed once at setKeyBind
+  for (const KeyBind& bind : fired) {
     // Run under the BINDER's authority, never the dispatcher's: a bind
     // planted by a restricted context (agent/mod script) keeps its restricted
     // mask here, so cheat-gated commands stay refused (fail-closed against
@@ -1343,7 +1347,14 @@ void cConsoleReg::registerBuiltins(bool debugBuild) {
                       return;
                     }
                     std::string err;
-                    if (!r.setKeyBind(argv[1], joinRest(argv), &err)) r.print(err);
+                    // Archie review C3: the command is argv[2..]; joinRest
+                    // (argv[1..]) folded the key name into it (same bug as alias).
+                    std::string cmd;
+                    for (size_t i = 2; i < argv.size(); ++i) {
+                      if (i > 2) cmd += ' ';
+                      cmd += argv[i];
+                    }
+                    if (!r.setKeyBind(argv[1], cmd, &err)) r.print(err);
                   });
 
   registerCommand("unbind", "unbind <key>: removes a key bind", [](cConsoleReg& r, const ConsoleArgs& argv) {

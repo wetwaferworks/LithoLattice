@@ -1,16 +1,18 @@
 // Work-stealing job system: the threading backbone for LithoLattice.
 //
-// What it is: N named worker threads, each owning kJobPriorityCount lock-free
-// Chase-Lev deques (one per JobPriority). Idle workers steal from each other
-// (high priority first); a shared overflow queue absorbs the rare case of a full
-// deque. Dedicated I/O threads run blocking jobs so worker threads NEVER block.
+// Thread Handshake P4 (Archie t3353u, via JD): cJobSystem is now a thin SUBMISSION
+// FACADE over cJobPool::shared(). It owns no worker threads: jobs wait in three
+// per-priority FIFOs here and are run by up to `workerThreads` "pumps", each a normal
+// job on the shared pool that drains this system's queues (high priority first) and
+// hands its worker back whenever Timing Handshake shard jobs are waiting
+// (cJobPool::urgentPending). Every worker job here is short and frame-bounded, so no
+// caller needs the background lane; long work goes to cJobPool background views
+// (lend / reclaim, threading.h). Dedicated I/O threads (class System, never budgeted
+// as compute) still run blocking jobs so pool workers NEVER block.
 // A JobFence is the per-stage barrier the deterministic scheduler uses.
 //
-// Relationship to the existing cJobPool (threading.h): cJobPool stays exactly as it
-// is, for simple uses (a correct, obviously-right mutex FIFO; the procgen self-test
-// and several fixtures use it). cJobSystem is the high-performance substrate for the
-// sim, render, audio-adjacent and I/O work. Deliberately NOT a wrapper: the two
-// have different fairness semantics (FIFO vs. work-stealing) and different costs.
+// The work-stealing fleet (per-worker Chase-Lev deques, MPSC inboxes) is retired with
+// the private threads; chase_lev.h / mpsc_queue.h stay as standalone primitives.
 //
 // ---- lock order (strict; read before adding any lock) --------------------------
 // L0  lock-free: Chase-Lev deques, cSpscQueue, atomics (stop_, workGen_,
@@ -51,7 +53,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdlib>
 #include <cassert>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -63,8 +67,11 @@
 #include <vector>
 
 #include "litholattice/core/chase_lev.h"
+#include "litholattice/core/mpsc_queue.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/thread_debug.h"
+#include "litholattice/core/thread_census.h"  // Thread Handshake P3
+#include "litholattice/core/threading.h"      // P4: cJobPool::shared() backs every cJobSystem
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -102,9 +109,9 @@ inline constexpr bool kThreadDebug = false;
 #endif
 
 // ---- thread utilities -----------------------------------------------------------
-/// Platform-guarded thread naming and affinity. Linux: pthread_setname_np /
-/// pthread_setaffinity_np. Elsewhere: setName is a no-op, pinToCores returns false
-/// (and debug-logs the skip). Names are truncated to 15 chars (Linux limit).
+/// Platform-guarded thread naming. Linux: pthread_setname_np; elsewhere a no-op.
+/// Names are truncated to 15 chars (Linux limit). JD t3349u item 9 / Archie ruling 6:
+/// the engine never pins, so the affinity helpers are gone.
 struct ThreadUtil {
   static void setName(const char* name) {
 #if defined(__linux__)
@@ -117,42 +124,20 @@ struct ThreadUtil {
     LITHO_THREAD_LOG("thread", "named '%s'", name);
   }
 
-  /// Pin the calling thread to `mask` (bit c = core c, up to 64 cores).
-  /// Returns false on non-Linux platforms (no-op).
-  static bool pinToCores(uint64_t mask) {
-#if defined(__linux__)
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    for (unsigned c = 0; c < 64; ++c)
-      if (mask & (1ULL << c)) CPU_SET(c, &set);
-    const bool ok = pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
-    LITHO_THREAD_LOG("thread", "affinity mask=0x%llx %s", (unsigned long long)mask,
-                     ok ? "applied" : "FAILED");
-    return ok;
-#else
-    LITHO_THREAD_LOG("thread", "affinity mask=0x%llx ignored (not Linux)",
-                     (unsigned long long)mask);
-    (void)mask;
-    return false;
-#endif
-  }
-
   static unsigned coreCount() {
     const unsigned n = std::thread::hardware_concurrency();
     return n == 0 ? 1 : n;
   }
 };
 
-/// RAII named thread with optional affinity: names itself, pins itself, joins on
-/// destruction (never detached). Used for the input thread; available to audio and
-/// render for their dedicated threads.
+/// RAII named thread: names itself, joins on destruction (never detached). Never
+/// pinned (ruling 6; the affinity mask parameter was removed, JD t3349u item 9).
 class cNamedThread {
  public:
   template <typename Fn>
-  cNamedThread(const char* name, uint64_t affinityMask, Fn&& fn) {
-    thread_ = std::thread([n = std::string(name), affinityMask, f = std::forward<Fn>(fn)]() mutable {
+  cNamedThread(const char* name, Fn&& fn) {
+    thread_ = std::thread([n = std::string(name), f = std::forward<Fn>(fn)]() mutable {
       ThreadUtil::setName(n.c_str());
-      if (affinityMask != 0) ThreadUtil::pinToCores(affinityMask);
       f();
     });
   }
@@ -170,15 +155,12 @@ class cNamedThread {
 class cJobSystem {
  public:
   struct Config {
-    unsigned workerThreads = 0;  ///< 0 = one per core (at least 1, at most kMaxJobThreads)
-    unsigned ioThreads = 1;      ///< dedicated blocking-job threads (clamped to >= 1)
-    /// Affinity masks, bit c = core c. 0 = default policy:
-    /// on Linux with >= 4 cores, workers take cores 1..N-1 and I/O takes core 0,
-    /// keeping realtime-adjacent work (audio/input) off the sim workers' cores.
-    /// On smaller machines / non-Linux: no pinning (best effort, OS schedules).
-    uint64_t workerAffinityMask = 0;
-    uint64_t ioAffinityMask = 0;
-    const char* namePrefix = "litho";  ///< worker names: "<prefix>-w0" ... (<=15 chars total)
+    /// Max jobs of THIS system running at once (its pumps on the shared pool). 0 = the
+    /// census pool ceiling clamp(cores-2, 1, 64), i.e. cJobPool::shared().size().
+    /// P4: no threads are created for workers; this is a concurrency cap only.
+    unsigned workerThreads = 0;
+    unsigned ioThreads = 1;      ///< dedicated blocking-job threads (clamped to >= 1), class System
+    const char* namePrefix = "litho";  ///< io thread names: "<prefix>-io0" ... (<=15 chars total)
   };
 
   // Note: no `= Config{}` default argument here — GCC rejects a nested struct with
@@ -190,39 +172,23 @@ class cJobSystem {
   cJobSystem(const cJobSystem&) = delete;
   cJobSystem& operator=(const cJobSystem&) = delete;
 
-  /// Submit a non-blocking job to the worker pool (stealable, priority-ordered).
-  /// Worker jobs must NEVER block: no I/O, no waiting on game locks, no waitIdle().
+  /// Submit a non-blocking job (priority-ordered). Worker jobs must NEVER block: no I/O,
+  /// no waiting on game locks, no waitIdle().
   void submit(Job job, JobPriority prio = JobPriority::Normal) {
     assert(!stop_.load(std::memory_order_relaxed) && "submit during/after shutdown");
     inFlight_.fetch_add(1, std::memory_order_relaxed);
-    const unsigned target =
-        submitCursor_.fetch_add(1, std::memory_order_relaxed) % (unsigned)workers_.size();
-    const unsigned pi = (unsigned)prio;
-    if (!workers_[target]->deques[pi].pushBottom(std::move(job))) {
-      // Cold path: this deque is full (1024 pending on one worker). Spill to the
-      // shared per-priority overflow; a worker picks it up when its deques run
-      // dry. L1 lock, O(1) push.
-      std::lock_guard<std::mutex> l(overflowM_);
-      overflow_[pi].push_back(std::move(job));
-      LITHO_THREAD_LOG("job", "submit prio=%u worker=%u OVERFLOW depth=%zu", pi, target,
-                       overflow_[pi].size());
-    } else if constexpr (kThreadDebug) {
-      LITHO_THREAD_LOG("job", "submit prio=%u worker=%u depth~%zu", pi, target,
-                       workers_[target]->deques[pi].approxSize());
+    bool launch = false;
+    {
+      std::lock_guard<std::mutex> l(qM_);  // L1 leaf
+      queue_[unsigned(prio)].push_back(std::move(job));
+      if (pumps_ < cap_) { ++pumps_; launch = true; }
     }
-    [[maybe_unused]] const uint64_t g = workGen_.fetch_add(1, std::memory_order_release) + 1;  // wake a sleeper; pairs with the wait predicate
-    LITHO_THREAD_LOG("job", "submit gen->%llu notify_one", (unsigned long long)g);
-    // B8 lost-wakeup issue, fixed 2026-10-23 (see docs/reviews/CODE_REVIEW_2026-10-23_Cortana.md, B8).
-    // The empty lock on m_ before the notify is REQUIRED: a worker tests its wait predicate under m_
-    // and then blocks. A worker between that check and its wait would miss a notify sent without
-    // m_, sleep forever with the job queued, and a fence/waitIdle()/join() then hangs forever.
-    // Proven with all-thread stacks; the tick timing handshake was investigated and ruled out.
-    { std::lock_guard<std::mutex> l(m_); }  // L2, empty: orders us after any in-progress predicate check
-    cv_.notify_one();
+    LITHO_THREAD_LOG("job", "submit prio=%u%s", unsigned(prio), launch ? " +pump" : "");
+    if (launch) launchPump();
   }
 
   /// Submit a job that may block (file/network I/O). Runs on a dedicated I/O
-  /// thread, never on a worker — a blocked worker is a lost sim core.
+  /// thread, never on a pool worker — a blocked worker is a lost sim core.
   void submitIo(Job job) {
     assert(!stop_.load(std::memory_order_relaxed) && "submitIo during/after shutdown");
     ioInFlight_.fetch_add(1, std::memory_order_relaxed);
@@ -249,221 +215,135 @@ class cJobSystem {
   }
 
   uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
-  unsigned workerCount() const { return (unsigned)workers_.size(); }
+  /// PlayM: queued jobs dropped by a timed shutdown drain (LL_SHUTDOWN_DRAIN_MS).
+  uint64_t droppedJobs() const { return dropped_.load(std::memory_order_relaxed); }
+  /// Concurrency cap (P4: pumps on the shared pool, not owned threads).
+  unsigned workerCount() const { return cap_; }
   unsigned ioThreadCount() const { return (unsigned)ioThreads_.size(); }
 
   /// B8 (debug builds only): job-system counters + every thread's trace ring to stderr.
   void debugDump(const char* why) const {
-    LITHO_THREAD_LOG("job", "dump: workGen=%llu inFlight=%d ioInFlight=%d stop=%d", (unsigned long long)workGen_.load(),
-                     inFlight_.load(), ioInFlight_.load(), int(stop_.load()));
+    LITHO_THREAD_LOG("job", "dump: inFlight=%d ioInFlight=%d stop=%d", inFlight_.load(), ioInFlight_.load(),
+                     int(stop_.load()));
     LITHO_THREAD_DUMP(why);
     (void)why;
   }
 
-  /// True when called on a worker or I/O thread of any cJobSystem.
+  /// True when called from inside a job of any cJobSystem (pump or I/O thread).
   static bool onJobThread() { return t_onJobThread; }
 
-  /// Affinity mask the engine's realtime-adjacent threads (audio callback helper,
-  /// input thread) should use: core 0 on Linux with >= 4 cores, else 0 (no pin).
-  /// Workers are pinned away from it by the default config policy.
-  static uint64_t realtimeAffinityMask() {
-#if defined(__linux__)
-    return ThreadUtil::coreCount() >= 4 ? 1ULL : 0ULL;
-#else
-    return 0ULL;
-#endif
-  }
+  /// Owner-rule audit (P0.5 review fix 2). P4: the per-worker deques are gone with the
+  /// private threads, so there is no owner end to violate; always 0.
+  uint64_t ownerViolations() const { return 0; }
 
  private:
-  struct Worker {
-    cChaseLevDeque<Job, kJobDequeCapacity> deques[kJobPriorityCount];
-  };
-
   static thread_local bool t_onJobThread;
 
   void init(const Config& cfg) {
-    unsigned workers = cfg.workerThreads == 0 ? ThreadUtil::coreCount() : cfg.workerThreads;
-    if (workers < 1) workers = 1;
-    if (workers > kMaxJobThreads) workers = kMaxJobThreads;
+    pool_ = &cJobPool::shared();
+    unsigned cap = cfg.workerThreads == 0 ? cThreadCensus::instance().budget().pool : cfg.workerThreads;
+    if (cap < 1) cap = 1;
+    if (cap > kMaxJobThreads) cap = kMaxJobThreads;
+    cap_ = cap;
     unsigned ios = cfg.ioThreads < 1 ? 1 : cfg.ioThreads;
     if (ios > kMaxJobThreads) ios = kMaxJobThreads;
-
-    const uint64_t workerMask = cfg.workerAffinityMask != 0
-                                    ? cfg.workerAffinityMask
-                                    : defaultWorkerMask(workers);
-    const uint64_t ioMask =
-        cfg.ioAffinityMask != 0 ? cfg.ioAffinityMask : defaultIoMask();
-
-    workers_.reserve(workers);
-    for (unsigned i = 0; i < workers; ++i) workers_.push_back(std::make_unique<Worker>());
-    // Per-worker steal-PRNG seeds: identical seeds made every worker's first
-    // steal-victim pick collide (thundering herd on first contention).
-    rngState_.resize(workers);
-    for (unsigned i = 0; i < workers; ++i) rngState_[i] = splitmix32(0x9E3779B9u + i);
-    workerThreads_.reserve(workers);
-    for (unsigned i = 0; i < workers; ++i) {
-      std::string name = std::string(cfg.namePrefix) + "-w" + std::to_string(i);
-      workerThreads_.emplace_back([this, i, name, workerMask] {
-        t_onJobThread = true;
-        ThreadUtil::setName(name.c_str());
-        if (workerMask != 0) ThreadUtil::pinToCores(workerMask);
-        LITHO_THREAD_LOG("thread", "worker %u online (%u workers)", i, workerCount());
-        workerLoop(i);
-        LITHO_THREAD_LOG("thread", "worker %u offline", i);
-      });
-    }
     ioThreads_.reserve(ios);
     for (unsigned i = 0; i < ios; ++i) {
       std::string name = std::string(cfg.namePrefix) + "-io" + std::to_string(i);
-      ioThreads_.emplace_back([this, i, name, ioMask] {
+      ioThreads_.emplace_back([this, i, name] {
         t_onJobThread = true;
         ThreadUtil::setName(name.c_str());
-        if (ioMask != 0) ThreadUtil::pinToCores(ioMask);
         LITHO_THREAD_LOG("thread", "io thread %u online", i);
         ioLoop(i);
         LITHO_THREAD_LOG("thread", "io thread %u offline", i);
       });
     }
-    LITHO_THREAD_LOG("thread", "cJobSystem up: %u workers + %u io threads", workers, ios);
-  }
-
-  static uint64_t defaultWorkerMask(unsigned workers) {
-    // Pin sim workers away from core 0 (reserved for realtime: audio/input/io)
-    // when there are enough cores for it to matter.
-#if defined(__linux__)
-    const unsigned cores = ThreadUtil::coreCount();
-    if (cores >= 4) {
-      uint64_t mask = 0;
-      for (unsigned c = 1; c < cores && c <= workers + 1; ++c) mask |= 1ULL << c;
-      if (mask == 0) mask = ~1ULL;  // paranoia: never an empty mask
-      return mask;
-    }
-#endif
-    (void)workers;
-    return 0ULL;  // no pinning: best effort, the OS schedules
-  }
-
-  static uint64_t defaultIoMask() {
-#if defined(__linux__)
-    if (ThreadUtil::coreCount() >= 4) return 1ULL;  // core 0, with the realtime threads
-#endif
-    return 0ULL;
+    for (unsigned i = 0; i < ios; ++i) records_.add(ThreadClass::System, ThreadRole::Storage, uint16_t(i), "jobsys-io");
+    LITHO_THREAD_LOG("thread", "cJobSystem up: facade cap %u on the %u-worker shared pool + %u io threads", cap_,
+                     pool_->size(), ios);
   }
 
   void shutdown() {
     LITHO_THREAD_LOG("thread", "shutdown: draining %d worker + %d io jobs in flight",
                      inFlight_.load(std::memory_order_relaxed),
                      ioInFlight_.load(std::memory_order_relaxed));
+    // PlayM (JD 10:30): TIMED drain. Everything already submitted still runs while the deadline
+    // (LL_SHUTDOWN_DRAIN_MS, default 10000; 0 = wait forever, the old behaviour) has not passed.
+    // At the deadline the queued, not-yet-started jobs are dropped (counted + logged); jobs already
+    // running are always waited for (a job cannot be interrupted safely).
+    {
+      auto idle = [this] {
+        return inFlight_.load(std::memory_order_acquire) == 0 && ioInFlight_.load(std::memory_order_acquire) == 0;
+      };
+      std::unique_lock<std::mutex> l(m_);  // L2
+      const long ms = drainMs();
+      if (ms > 0 && !idleCv_.wait_for(l, std::chrono::milliseconds(ms), idle)) {
+        cancel_.store(true, std::memory_order_release);
+        l.unlock();
+        const int dropped = dropQueued();
+        logWarn("job system shutdown: drain passed %ld ms; dropped %d queued job(s), waiting for running ones", ms, dropped);
+        l.lock();
+      }
+      idleCv_.wait(l, idle);
+    }
+    {  // a pump may still be between its last job and its exit: it touches `this` until then
+      std::unique_lock<std::mutex> l(qM_);
+      pumpCv_.wait(l, [this] { return pumps_ == 0; });
+    }
     stop_.store(true, std::memory_order_release);
-    workGen_.fetch_add(1, std::memory_order_release);
-    // B8 lost-wakeup issue, fixed 2026-10-23 (see docs/reviews/CODE_REVIEW_2026-10-23_Cortana.md, B8).
-    // The empty locks before the notifies are REQUIRED: a worker (or io thread) between its stop_
-    // predicate check and its wait would miss a notify sent without its mutex and never wake, so
-    // the join below hangs forever (the captured engine_sim hang stacks: main in join, worker in
-    // cv_.wait). The tick timing handshake was investigated and ruled out.
-    { std::lock_guard<std::mutex> l(m_); }    // B8 fix: same missed-wakeup window as submit()
-    { std::lock_guard<std::mutex> l(ioM_); }  // io threads test stop_ under ioM_
-    cv_.notify_all();
+    // B8: the empty lock before the notify is REQUIRED (io threads test stop_ under ioM_).
+    { std::lock_guard<std::mutex> l(ioM_); }
     ioCv_.notify_all();
-    for (auto& t : workerThreads_) t.join();
     for (auto& t : ioThreads_) t.join();
-    LITHO_THREAD_LOG("thread", "shutdown: all threads joined, failed=%llu",
+    records_.retireAll();  // joined -> RETURNED
+    LITHO_THREAD_LOG("thread", "shutdown: io threads joined, failed=%llu",
                      (unsigned long long)failed_.load(std::memory_order_relaxed));
   }
 
-  // Find work for worker `self`: own deques high->low, then steal victims in
-  // pseudo-random order high->low, then the shared overflow. No locks except the
-  // cold overflow path (L1).
-  bool findJob(unsigned self, Job& out) {
-    Worker& w = *workers_[self];
-    for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p) {
-      if (w.deques[p].popBottom(out)) return true;
-    }
-    const unsigned n = (unsigned)workers_.size();
-    unsigned r = rngState_[self] = rngState_[self] * 1664525u + 1013904223u;  // xorshift-ish LCG
-    const unsigned start = n == 0 ? 0 : (r >> 8) % n;
-    for (unsigned i = 0; i < n; ++i) {
-      const unsigned v = (start + i) % n;
-      if (v == self) continue;
-      Worker& vw = *workers_[v];
-      for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p) {
-        if (vw.deques[p].steal(out)) {
-          LITHO_THREAD_LOG("job", "steal worker=%u victim=%u prio=%d", self, v, p);
-          return true;
-        }
-      }
-    }
-    {
-      // Cold path only: per-priority overflow, highest priority first, O(1).
-      std::lock_guard<std::mutex> l(overflowM_);  // L1
-      for (int p = int(JobPriority::High); p >= int(JobPriority::Low); --p) {
-        if (!overflow_[p].empty()) {
-          out = std::move(overflow_[p].back());
-          overflow_[p].pop_back();
-          LITHO_THREAD_LOG("job", "overflow drain worker=%u prio=%d remaining=%zu", self, p,
-                           overflow_[p].size());
-          return true;
-        }
-      }
-    }
-    return false;
+  static long drainMs() {
+    static const long v = [] { const char* e = std::getenv("LL_SHUTDOWN_DRAIN_MS"); return e ? std::atol(e) : 10000L; }();
+    return v;
+  }
+  // Drops every queued (not started) worker + io job; releases their in-flight counts.
+  int dropQueued() {
+    std::deque<Job> w, io;
+    { std::lock_guard<std::mutex> l(qM_); for (auto& q : queue_) { for (auto& j : q) w.push_back(std::move(j)); q.clear(); } }
+    { std::lock_guard<std::mutex> l(ioM_); io.swap(ioQueue_); }
+    const int n = int(w.size() + io.size());
+    if (!w.empty() && inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel) == int(w.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
+    if (!io.empty() && ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel) == int(io.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
+    dropped_.fetch_add(uint64_t(n), std::memory_order_relaxed);
+    return n;
   }
 
-  void workerLoop(unsigned self) {
-    uint64_t gen = workGen_.load(std::memory_order_acquire);
+  void launchPump() { pool_->submit([this] { pump(); }); }
+
+  // One pump: drains this system's queues, high priority first, on a shared-pool worker.
+  // Hands the worker back (re-queues itself) at a job boundary when shard jobs wait.
+  void pump() {
+    const bool prev = t_onJobThread;
+    t_onJobThread = true;
     for (;;) {
       Job job;
-      bool found = false;
-      try {
-        found = findJob(self, job);
-      } catch (const std::exception& e) {
-        // A throwing Job copy in steal()/popBottom (e.g. OOM during the
-        // std::function copy) must not kill the worker thread (review
-        // A-M4: catch ALL exceptions here — a non-std throw escaped this
-        // std-only catch and terminated the process).
-        failed_.fetch_add(1, std::memory_order_relaxed);
-        logError("job system: findJob threw: %s", e.what());
-        // inFlight_ is deliberately NOT decremented, and the scan retries:
-        // popBottom()/steal() copy BEFORE committing their indices, so a
-        // throwing copy consumes NO job — the job is still queued and
-        // still counted in inFlight_. Decrementing here (the review's
-        // literal wording, written against the old copy-after-decrement
-        // deque where the job WAS lost) would double-release the count
-        // when the preserved job later runs through executeJob, letting
-        // waitIdle() return early with work outstanding. Retrying after a
-        // short backoff is what guarantees waitIdle() cannot hang on this
-        // path: the preserved job is picked up by this same scan.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      } catch (...) {
-        failed_.fetch_add(1, std::memory_order_relaxed);
-        logError("job system: findJob threw a non-std exception");
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;  // same copy-before-commit reasoning as the std branch
+      {
+        std::lock_guard<std::mutex> l(qM_);
+        int p = int(JobPriority::High);
+        while (p >= int(JobPriority::Low) && queue_[p].empty()) --p;
+        if (p < int(JobPriority::Low)) {
+          --pumps_;
+          pumpCv_.notify_all();  // under the lock: shutdown may destroy *this right after
+          break;
+        }
+        job = std::move(queue_[p].front());
+        queue_[p].pop_front();
       }
-      if (found) {
-        executeJob(std::move(job), inFlight_, "worker", self);
-        continue;
+      executeJob(std::move(job), inFlight_, "worker", 0);
+      if (pool_->urgentPending()) {  // shard jobs first: give the worker back, keep the pump slot
+        launchPump();
+        break;
       }
-      if (stop_.load(std::memory_order_acquire)) {
-        // Shutdown drain: no sleeping here (that would busy-loop on the cv
-        // predicate); a brief yield while the last jobs land, then exit.
-        if (inFlight_.load(std::memory_order_acquire) == 0) return;
-        std::this_thread::yield();
-        continue;
-      }
-      // No work anywhere: sleep until a submit or shutdown. The predicate
-      // compares workGen_ against the generation seen before the scan, so a
-      // submit that lands between the scan and the wait cannot be missed.
-      LITHO_THREAD_LOG("thread", "worker %u sleep gen=%llu", self, (unsigned long long)gen);
-      std::unique_lock<std::mutex> l(m_);  // L2
-      cv_.wait(l, [this, &gen] {
-        return stop_.load(std::memory_order_acquire) ||
-               workGen_.load(std::memory_order_acquire) != gen;
-      });
-      gen = workGen_.load(std::memory_order_acquire);
-      LITHO_THREAD_LOG("thread", "worker %u wake", self);
     }
+    t_onJobThread = prev;
   }
 
   void ioLoop(unsigned self) {
@@ -488,8 +368,6 @@ class cJobSystem {
   void executeJob(Job&& job, std::atomic<int>& counter, const char* kind, unsigned idx) {
     (void)kind;  // only used by the debug logging below
     (void)idx;
-    // Declared (not defined) when LITHOLATTICE_THREAD_DEBUG is off; the
-    // if-constexpr bodies are discarded there, so [[maybe_unused]] keeps -Wall quiet.
     [[maybe_unused]] uint64_t id = 0, t0 = 0;
     if constexpr (kThreadDebug) {
       id = detail::threadDebugNextJobId();
@@ -519,29 +397,27 @@ class cJobSystem {
     }
   }
 
-  std::vector<std::unique_ptr<Worker>> workers_;
-  std::vector<unsigned> rngState_;  // per-worker steal PRNG state (worker-local use)
-  std::vector<std::thread> workerThreads_;
+  cJobPool* pool_ = nullptr;   // cJobPool::shared(), never destroyed
+  unsigned cap_ = 1;
+  std::deque<Job> queue_[kJobPriorityCount];  // guarded by qM_
+  unsigned pumps_ = 0;                         // guarded by qM_
+  std::mutex qM_;                              // L1 leaf
+  std::condition_variable pumpCv_;             // shutdown waits for pumps_ == 0
   std::vector<std::thread> ioThreads_;
-
-  // Shared per-priority overflow for full-deque spills (cold path): O(1) push/pop,
-  // priority order preserved. Guarded by overflowM_ (L1 leaf).
-  std::vector<Job> overflow_[kJobPriorityCount];
-  std::mutex overflowM_;  // L1
+  cThreadRecordSet records_;  // io threads, class System
 
   std::deque<Job> ioQueue_;
   std::mutex ioM_;                 // L1
   std::condition_variable ioCv_;
 
-  std::mutex m_;                   // L2: sleep/wake handshake + idleCv_ pairing
-  std::condition_variable cv_;      // workers sleep here
+  std::mutex m_;                   // L2: idleCv_ pairing
   std::condition_variable idleCv_;  // waitIdle() sleeps here
   std::atomic<bool> stop_{false};
-  std::atomic<uint64_t> workGen_{0};
   std::atomic<int> inFlight_{0};
   std::atomic<int> ioInFlight_{0};
-  std::atomic<unsigned> submitCursor_{0};
   std::atomic<uint64_t> failed_{0};
+  std::atomic<bool> cancel_{false};    // PlayM: set when the timed shutdown drain expires
+  std::atomic<uint64_t> dropped_{0};   // PlayM: queued jobs dropped by the timed drain
 };
 
 inline thread_local bool cJobSystem::t_onJobThread = false;

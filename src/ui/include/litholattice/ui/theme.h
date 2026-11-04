@@ -37,6 +37,8 @@ class Theme {
   /// Style for a widget class; falls back to "default".
   const Style& style(std::string_view widgetClass) const;
   bool hasStyle(std::string_view widgetClass) const { return styles_.find(widgetClass) != styles_.end(); }
+  /// 2026-10-31 (JD): add or replace one style class (the game's hud_debug, fixed-size F3 text).
+  void setStyle(std::string widgetClass, Style s) { styles_[std::move(widgetClass)] = std::move(s); }
 
   float scale() const { return scale_; }
   void setScale(float s) { scale_ = s; }

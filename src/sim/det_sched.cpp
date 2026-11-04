@@ -96,6 +96,22 @@ void cDeterministicScheduler::drainStage(void* world) {
   drainTmp_.clear();
 }
 
+// P0.5 review fix 4 (external review by Cryosis (sirlinhart), 2026-10-29): a stage whose
+// job threw must commit NOTHING. The old code drained (applied) the stage's command
+// buffers before checking for the failure, so the successful systems' structural
+// commands landed and the failed one's were partly there too. Now the failure is checked
+// first and the stage's buffers are discarded unapplied. Earlier stages of the same tick
+// stay committed (they finished cleanly); in-place world writes a system makes during
+// update() are outside the command-buffer contract and not rolled back here.
+void cDeterministicScheduler::discardStage() {
+  for (auto& b : buffers_) {
+    if (b->empty()) continue;
+    drainTmp_.clear();
+    b->drainInto(drainTmp_);
+  }
+  drainTmp_.clear();
+}
+
 void cDeterministicScheduler::runTick(uint64_t tick, void* world, cJobPool& pool) {
   const uint64_t failedBefore = pool.failedJobs();
   for (size_t s = 0; s < stages_.size(); ++s) {
@@ -108,10 +124,11 @@ void cDeterministicScheduler::runTick(uint64_t tick, void* world, cJobPool& pool
       });
     }
     pool.waitIdle();
-    drainStage(world);
     if (pool.failedJobs() != failedBefore) {
-      throw std::runtime_error("det-sched: a system job threw; tick aborted (world may be half-updated)");
+      discardStage();
+      throw std::runtime_error("det-sched: a system job threw; tick aborted, failed stage not committed");
     }
+    drainStage(world);
   }
 }
 
@@ -127,10 +144,11 @@ void cDeterministicScheduler::runTick(uint64_t tick, void* world, cJobSystem& jo
       });
     }
     const int failed = fence.wait();
-    drainStage(world);
     if (failed != 0) {
-      throw std::runtime_error("det-sched: a system job threw; tick aborted (world may be half-updated)");
+      discardStage();
+      throw std::runtime_error("det-sched: a system job threw; tick aborted, failed stage not committed");
     }
+    drainStage(world);
   }
 }
 

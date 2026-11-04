@@ -84,8 +84,48 @@ foreach(v chunk_ssbo_vert:kSpvChunkSsboVert:chunk.vert:LITHO_MEGA_SSBO
   list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
 endforeach()
 
+# Render pipeline M4 (Archie Q18/Q19, step 2): shared canonical quad decode header
+# (assets/shaders/canonical_quad_decode.glsl). Build-time checks: Vulkan SPIR-V compile of a
+# pulling vertex shader, and GL 3.3 validation of the TBO pulling variant (header spliced in).
+set(LITHOLATTICE_CANON_GLSL ${LithoLattice_SOURCE_DIR}/assets/shaders/canonical_quad_decode.glsl)
+set(out ${LITHOLATTICE_SPV_DIR}/canon_decode_check_vk_vert.h)
+add_custom_command(OUTPUT ${out}
+  COMMAND glslang-standalone -V --target-env vulkan1.0 --quiet -I${LithoLattice_SOURCE_DIR}/assets/shaders
+          --vn kSpvCanonDecodeCheckVkVert -o ${out} ${LITHOLATTICE_VK_SHADER_DIR}/canon_decode_check_vk.vert
+  DEPENDS glslang-standalone ${LITHOLATTICE_VK_SHADER_DIR}/canon_decode_check_vk.vert ${LITHOLATTICE_CANON_GLSL}
+  COMMENT "SPIR-V: vk/canon_decode_check_vk.vert (canonical decode header)"
+  VERBATIM)
+list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
+set(out ${LITHOLATTICE_SPV_DIR}/canon_decode_check_gl33.stamp)
+add_custom_command(OUTPUT ${out}
+  COMMAND ${CMAKE_COMMAND} -DGLSLANG=$<TARGET_FILE:glslang-standalone>
+          -DSRC=${LITHOLATTICE_VK_SHADER_DIR}/canon_decode_check_gl33.vert -DHDR=${LITHOLATTICE_CANON_GLSL}
+          -DOUT=${LITHOLATTICE_SPV_DIR}/canon_decode_check_gl33.vert -DSTAMP=${out}
+          -P ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  DEPENDS glslang-standalone ${LITHOLATTICE_VK_SHADER_DIR}/canon_decode_check_gl33.vert ${LITHOLATTICE_CANON_GLSL}
+          ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  COMMENT "GLSL 330: canonical decode header (TBO pulling)"
+  VERBATIM)
+list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
+
+# Render pipeline M12: the legacy-attribute pull header (canonical_pull_legacy.glsl) used by the
+# GL TBO uploader and the Vulkan pull path: GL 3.3 validation (spliced) + SPIR-V compile.
+set(LITHOLATTICE_PULL_GLSL ${LithoLattice_SOURCE_DIR}/assets/shaders/canonical_pull_legacy.glsl)
+set(out ${LITHOLATTICE_SPV_DIR}/canon_pull_check_gl33.stamp)
+add_custom_command(OUTPUT ${out}
+  COMMAND ${CMAKE_COMMAND} -DGLSLANG=$<TARGET_FILE:glslang-standalone>
+          -DSRC=${LITHOLATTICE_VK_SHADER_DIR}/canon_pull_check_gl33.vert -DHDR=${LITHOLATTICE_PULL_GLSL}
+          -DINC=canonical_pull_legacy.glsl
+          -DOUT=${LITHOLATTICE_SPV_DIR}/canon_pull_check_gl33.vert -DSTAMP=${out}
+          -P ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  DEPENDS glslang-standalone ${LITHOLATTICE_VK_SHADER_DIR}/canon_pull_check_gl33.vert ${LITHOLATTICE_PULL_GLSL}
+          ${LithoLattice_SOURCE_DIR}/cmake/canon_gl_check.cmake
+  COMMENT "GLSL 330: canonical legacy pull header (GL TBO uploader)"
+  VERBATIM)
+list(APPEND LITHOLATTICE_SPV_HEADERS ${out})
+
 add_library(litholattice_render_vk STATIC vk_loader.cpp vk_handles.cpp vk_device.cpp vk_resources.cpp vk_vertex_arena.cpp
-            vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp ${LITHOLATTICE_SPV_HEADERS})
+            vk_swapchain.cpp vk_texture_array.cpp vk_pipelines.cpp vk_renderer.cpp vk_probe.cpp VkCanonUploader.cpp ${LITHOLATTICE_SPV_HEADERS})
 target_include_directories(litholattice_render_vk PUBLIC include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(litholattice_render_vk PUBLIC litholattice_render PRIVATE litholattice_core Vulkan::Headers ${CMAKE_DL_LIBS})
 # Phase 4.0 (Direction JD, research Elfie, implementation Cortana): streaming / culling counters (logging only).

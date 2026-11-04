@@ -25,7 +25,8 @@ namespace litholattice::mcp {
 #ifdef _WIN32
 // UNVERIFIED on Windows (see header note). Shape only.
 using NativeSocket = std::uintptr_t;
-inline constexpr NativeSocket kInvalidSocketValue = static_cast<NativeSocket>(~0u);
+// Archie review H23d: INVALID_SOCKET is ~SOCKET(0) - all 64 bits on Win64.
+inline constexpr NativeSocket kInvalidSocketValue = ~static_cast<NativeSocket>(0);
 #else
 using NativeSocket = int;
 inline constexpr NativeSocket kInvalidSocketValue = -1;

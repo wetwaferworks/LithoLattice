@@ -280,7 +280,9 @@ std::optional<Path> HpaGraph::findPath(Cell from, Cell to, const IMovementMode* 
   cellOf[goal] = to;
   open.push({heur(from), 0, seq++, start});
   bool found = false;
+  int expansions = 0;  // H29a: bound the abstract search
   while (!open.empty()) {
+    if (++expansions > 65536) break;
     const QItem cur = open.top();
     open.pop();
     if (cur.state == goal) { found = true; break; }

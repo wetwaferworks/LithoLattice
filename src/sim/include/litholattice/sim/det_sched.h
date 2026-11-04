@@ -165,6 +165,7 @@ class cDeterministicScheduler {
  private:
   void rebuildStages();
   void drainStage(void* world);
+  void discardStage();  // failed stage: drop every buffered command unapplied
 
   ApplyFn apply_;
   std::vector<std::unique_ptr<ISimSystem>> systems_;

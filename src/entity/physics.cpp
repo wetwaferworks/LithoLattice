@@ -1,6 +1,7 @@
 #include "litholattice/entity/physics.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace litholattice {
 namespace {
@@ -26,12 +27,26 @@ namespace {
 bool moveCollideStep(Entity& e, const std::function<bool(int x, int y, int z)>& isSolid,
                      float halfWidth, float height, double dt) {
   bool hit = false;
+  // 2026-11-01 (box perf, collision early-out): an axis with zero velocity re-tests the exact box the
+  // previous axis tested (idle / falling-only entities test one box three times). Reuse that answer
+  // when the box is bit-identical - same result, fewer isSolid calls. LL_COLLIDE_MEMO=0: old.
+  static const bool memoOn = [] { const char* ev = std::getenv("LL_COLLIDE_MEMO"); return !(ev && ev[0] == '0'); }();
+  bool memoValid = false, memoHit = false;
+  double mx = 0, my = 0, mz = 0;
+  auto aabbCollides = [&](double x, double y, double z, float hw, float h, const std::function<bool(int, int, int)>& solid) {
+    if (memoOn && memoValid && x == mx && y == my && z == mz) return memoHit;
+    const bool r = litholattice::aabbCollides(x, y, z, hw, h, solid);
+    memoValid = true; memoHit = r; mx = x; my = y; mz = z;
+    return r;
+  };
   // X axis
   {
     const double nx = e.x + e.vx * dt;
     if (aabbCollides(nx, e.y, e.z, halfWidth, height, isSolid)) {
-      e.x = e.vx > 0 ? std::floor(nx + halfWidth) - halfWidth - 1e-4
-                     : std::floor(nx - halfWidth) + 1 + halfWidth + 1e-4;
+      // H29c: vx == 0 means already embedded; don't shove toward +x.
+      if (e.vx != 0)
+        e.x = e.vx > 0 ? std::floor(nx + halfWidth) - halfWidth - 1e-4
+                       : std::floor(nx - halfWidth) + 1 + halfWidth + 1e-4;
       e.vx = 0;
       hit = true;
     } else {
@@ -42,8 +57,9 @@ bool moveCollideStep(Entity& e, const std::function<bool(int x, int y, int z)>& 
   {
     const double nz = e.z + e.vz * dt;
     if (aabbCollides(e.x, e.y, nz, halfWidth, height, isSolid)) {
-      e.z = e.vz > 0 ? std::floor(nz + halfWidth) - halfWidth - 1e-4
-                     : std::floor(nz - halfWidth) + 1 + halfWidth + 1e-4;
+      if (e.vz != 0)  // H29c
+        e.z = e.vz > 0 ? std::floor(nz + halfWidth) - halfWidth - 1e-4
+                       : std::floor(nz - halfWidth) + 1 + halfWidth + 1e-4;
       e.vz = 0;
       hit = true;
     } else {

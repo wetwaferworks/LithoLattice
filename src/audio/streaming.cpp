@@ -20,12 +20,14 @@ void cAudioStreamer::play(DecodeFn decode) {
   decode_ = std::move(decode);  // no worker running: game-thread owned again
   running_.store(true, std::memory_order_relaxed);
   worker_ = std::thread(&cAudioStreamer::workerMain, this);
+  sysRecord_.add(ThreadClass::System, ThreadRole::Audio, 0, "audio-stream");
   workerId_ = worker_.get_id();  // Cortana 2026-10-15 1450
 }
 
 void cAudioStreamer::stop() {
   running_.store(false, std::memory_order_relaxed);
   if (worker_.joinable()) worker_.join();
+  sysRecord_.retireAll();  // P2: joined -> RETURNED
   decode_ = nullptr;
   // The worker is joined: no producer can touch queue_ now, so the game
   // thread drains the stale chunks itself (drainInto is mutex-guarded, so

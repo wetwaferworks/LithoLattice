@@ -104,6 +104,9 @@ class cModPanel final : public cPanel {
  protected:
   void arrange(const Theme& theme) override;
   void paint(Painter& p) const override;
+  /// Archie review C2: children painted ONCE (paintTree calls this after
+  /// paint), clipped to the body rect, then the badge on top of everything.
+  void paintChildren(Painter& p) const override;
 
  private:
   void paintBadge(Painter& p) const;

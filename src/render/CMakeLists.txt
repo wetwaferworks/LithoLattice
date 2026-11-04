@@ -19,12 +19,14 @@ add_custom_command(OUTPUT ${LITHOLATTICE_BUILTIN_SHADERS}
   DEPENDS ${LITHOLATTICE_SHADER_FILES} ${LithoLattice_SOURCE_DIR}/cmake/embed_text_files.cmake
   COMMENT "Embedding base shaders")
 
-add_library(litholattice_render STATIC mesher.cpp binary_greedy_mesher.cpp micro_mesher.cpp block_materials.cpp pbr_materials.cpp pbr_brdf.cpp pbr_quad_mesh.cpp overlay_geometry.cpp hud_ui_renderer.cpp software_renderer.cpp software_simd.cpp software_aa.cpp software_ascii.cpp ground_traces.cpp
-            gl33/gl_loader.cpp gl33/gl_program.cpp gl33/gl_texture_array.cpp gl33/gl33_renderer.cpp gl33/software_presenter.cpp gl33/software_presenter_webgl.cpp gl33/gl_web_shims.cpp
+add_library(litholattice_render STATIC mesher.cpp WorkerScratch.cpp MeshPipeline.cpp MesherSelector.cpp FallbackReasonStats.cpp unified_mesher.cpp binary_greedy_mesher.cpp micro_mesher.cpp block_materials.cpp pbr_materials.cpp pbr_brdf.cpp pbr_quad_mesh.cpp overlay_geometry.cpp hud_ui_renderer.cpp software_renderer.cpp SwDecodeCache.cpp SwCanonStore.cpp software_simd.cpp software_aa.cpp software_ascii.cpp ground_traces.cpp
+            gl33/gl_loader.cpp gl33/gl_program.cpp gl33/gl_texture_array.cpp gl33/TexelFreeList.cpp gl33/GlTboSlabPool.cpp gl33/GlTboSlabUploader.cpp gl33/gl33_renderer.cpp gl33/software_presenter.cpp gl33/software_presenter_webgl.cpp gl33/gl_web_shims.cpp
             ${LITHOLATTICE_BUILTIN_SHADERS})
 target_include_directories(litholattice_render PUBLIC include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(litholattice_render PUBLIC litholattice_assets litholattice_world litholattice_ui litholattice_core litholattice_subdiv PRIVATE litholattice_systerian)  # world: read-only block data; ui: IUiRenderer; subdiv: micro-face meshing; systerian: ASCII pipeline glyph codec (software_ascii.cpp)
 litholattice_module_options(litholattice_render)
+# Render pipeline M2: DebugOpt runs the unified-mesher decode-equivalence check.
+target_compile_definitions(litholattice_render PRIVATE $<$<CONFIG:DebugOpt>:LL_DEBUGOPT_BUILD=1>)
 
 # Build 59 (web seam, design note Web-Seam-Design-2026-10-20): the
 # hand-written thin imports (gl33/lk_webio.js — plain verbs, target 0 =

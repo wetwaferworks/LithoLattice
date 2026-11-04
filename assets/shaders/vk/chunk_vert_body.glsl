@@ -7,6 +7,9 @@
 // The 16-bit position is read as xy + z (R16G16 + R16 are guaranteed vertex formats; R16G16B16
 // is optional in Vulkan).
 #include "frame.glsl"
+// Thread Handshake P7 wafer reveal: per-column spawn timestamps around the spawn column.
+// hdr = (now, on, etchSec, riseBlocks); org = (originCx, originCz, half, 0); ts row-major [dz+half][dx+half].
+layout(std430, set = 0, binding = 7) readonly buffer WaferReveal { vec4 uRevealHdr; ivec4 uRevealOrg; float uSpawnTs[]; };
 #if defined(LITHO_MEGA_SSBO)
 // Mega-draw V2b (Direction JD, design Archie, implementation Cortana): per-draw records (5 vec4 each) in a storage
 // buffer (set 0, binding 5) indexed by gl_InstanceIndex (= the indirect command's firstInstance). Only the draw
@@ -104,6 +107,19 @@ void main() {
   vRot = int((aInfo.z >> 5u) & 3u) | (int(aInfo.z & 7u) << 2);  // 0.0.1.52 [A52-1] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): face index in bits 2..4 (LUT normal mapping)
   vUV = vec2(aInfo.xy) / 16.0;
   vLayer = int(aInfo.w | (aLayerHi << 8u)); vVal = int(aShade.x); vMode = int(aShade.y & 63u);
+  bool revealHide = false;
+  if (uRevealHdr.y > 0.5) {  // P7: hide until the column's spawn time, then rise into place
+    ivec2 col = ivec2(floor((uOffset.xz + vec2(8.0)) / 16.0)) - uRevealOrg.xy;
+    int h = uRevealOrg.z;
+    float ts = 1.0e30;
+    if (abs(col.x) <= h && abs(col.y) <= h) ts = uSpawnTs[(col.y + h) * (2 * h + 1) + (col.x + h)];
+    float age = uRevealHdr.x - ts;
+    if (age < 0.0) revealHide = true;
+    else {
+      float k = clamp(age / max(uRevealHdr.z, 1e-3), 0.0, 1.0);
+      vWorld.y -= (1.0 - k) * (1.0 - k) * uRevealHdr.w;
+    }
+  }
   vec4 p = uVP * vec4(vWorld, 1.0);
   gl_Position = vec4(p.x, -p.y, (p.z + p.w) * 0.5, p.w);
   // Cortana 2026-10-16 (JD foliage LOD, renderer.h kShadeLod*): LOD-tagged quads draw by the
@@ -114,4 +130,5 @@ void main() {
     bool far = dot(c, c) > 32.0 * 32.0;
     if ((lod == 64u && far) || (lod == 128u && !far)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   }
+  if (revealHide) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);  // P7: not yet etched (whole triangle clipped)
 }

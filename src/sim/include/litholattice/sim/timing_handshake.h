@@ -15,6 +15,9 @@
 // bystander therefore cannot be flagged for another component's work, for
 // barrier wait, or for authority-thread preemption.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
+#include "litholattice/core/threading.h"      // Thread Handshake P3: shard jobs on cJobPool
+#include <memory>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -29,6 +32,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "litholattice/core/seqlock.h"
+#include "litholattice/sim/tick_ledger.h"  // Thread Handshake P4: tick ledger + commit_epoch
 #include "litholattice/sim/tick_rate.h"
 
 namespace litholattice {
@@ -156,7 +161,16 @@ class cTimingHandshakeAuthority {
     std::chrono::nanoseconds phaseBudgetGroup2{0};
     std::chrono::nanoseconds watchdogCeiling{0};  // 0 = derive: 250 ms (D3)
     uint32_t offenderThreshold = 3;            // overruns before the repeat-offender flag
-    bool pureSpin = false;                     // D9: true = prototype's pure spin poll
+    bool pureSpin = false;                     // D9: true = prototype's pure spin poll (no effect since P3: no polling workers)
+    // Thread Handshake P3 (Archie rulings 2/3): shard work runs as barrier-synced jobs on
+    // this pool; null = cJobPool::shared(), the single physical backing. Must outlive the
+    // authority.
+    cJobPool* pool = nullptr;
+    // Thread Handshake P4: the tick ledger (sync/async hashing rule + commit_epoch). On
+    // by default; false skips all ledger work (overhead A/B only). commit_epoch still
+    // advances on every COMMITTED phase either way.
+    bool ledger = true;
+    uint32_t ledgerAsyncCapacity = 4096;  // async records in flight (rounded up to 2^n)
     // One commit hook, run on the authority thread after each successful
     // barrier, before the phase is folded into stats. Group is the runPhase
     // group so a hook can ignore phases that are not its own.
@@ -203,6 +217,13 @@ class cTimingHandshakeAuthority {
   void setCommitFn(std::function<void(uint64_t, uint64_t, uint32_t)> fn);
 
   int workerCount() const { return workerCount_; }
+  // Thread Handshake P4. commitEpoch(): Archie's monotonic commit_epoch, advanced only at
+  // the barrier when a phase reaches COMMITTED (any thread may read it). ledger(): the
+  // tick ledger; WorkFns use cTickLedger::notePayload / asyncBegin, any thread may call
+  // ledger().asyncComplete; hashes/stats are authority-thread (or stopped) reads.
+  uint64_t commitEpoch() const { return ledger_.commitEpoch(); }
+  cTickLedger& ledger() { return ledger_; }
+  const cTickLedger& ledger() const { return ledger_; }
   int phasesPerCycle() const { return cfg_.phasesPerCycle; }
   std::chrono::nanoseconds watchdogCeiling() const { return ceiling_; }
 
@@ -298,7 +319,7 @@ class cTimingHandshakeAuthority {
           durationNs(o.durationNs.load(std::memory_order_relaxed)),
           started(o.started.load(std::memory_order_relaxed)),
           finished(o.finished.load(std::memory_order_relaxed)),
-          offenderLogged(o.offenderLogged) {}
+          offenderLogged(o.offenderLogged), ledgerSeq(o.ledgerSeq) {}
     Comp& operator=(Comp&& o) noexcept {
       desc = o.desc; fn = std::move(o.fn); shard = o.shard;
       startStampNs.store(o.startStampNs.load(std::memory_order_relaxed));
@@ -306,6 +327,7 @@ class cTimingHandshakeAuthority {
       started.store(o.started.load(std::memory_order_relaxed));
       finished.store(o.finished.load(std::memory_order_relaxed));
       offenderLogged = o.offenderLogged;
+      ledgerSeq = o.ledgerSeq;
       return *this;
     }
     Comp(const Comp&) = delete;
@@ -319,6 +341,7 @@ class cTimingHandshakeAuthority {
     std::atomic<bool> started{false};
     std::atomic<bool> finished{false};
     bool offenderLogged = false;  // authority thread only
+    uint32_t ledgerSeq = 0;       // P4: this phase's ledger seq (set before publish)
   };
   bool dueFor(const Comp& c, uint64_t phase, uint64_t cycle, uint32_t group) const;
   // Effective budgets for a runPhase group (A-M2 + sweep C2).
@@ -328,7 +351,23 @@ class cTimingHandshakeAuthority {
   // cycle is a single phase (one phase per master step), so x1.
   std::chrono::nanoseconds phaseBudgetForGroup(uint32_t group) const;
   std::chrono::nanoseconds cycleBudgetForGroup(uint32_t group) const;
-  void workerLoop(int shard);
+  // Thread Handshake P3: one shard's due items for one publication, then its barrier
+  // arrival (the former workerLoop body). Runs as a pool job.
+  void serveShard(int shard, const PublishedPhase& snap);
+  // Shard job state shared with queued jobs: a job still queued after stop() sees
+  // dead=true and never touches the authority; stop() waits (bounded) for running==0.
+  struct ShardJobs {
+    std::atomic<bool> dead{false};
+    std::atomic<int> running{0};
+  };
+  static void runShardJob(cTimingHandshakeAuthority* self, const std::shared_ptr<ShardJobs>& st, int shard, uint64_t seq);
+  // 2026-10-30 (JD t3557u): lock-free variant (LL_HS_LOCKFREE=1). Dedicated shard threads poll
+  // publishSeq_ (spin, then atomic wait); arrivals CAS one packed atomic word; no mutex,
+  // condition variable or pool on the tick path. LL_HS_LAYOUT=original runs shard work inline on
+  // the tick thread (JD's three-thread intent: main, tick, control/event).
+  void lfWorkerLoop(int shard);
+  static uint64_t arrivalKey(uint64_t generation, uint64_t seq) { return ((generation & 0xFFFFull) << 48) | ((seq & 0xFFFFFFFFull) << 16); }
+  uint32_t arrivedCount() const;
   // Executes one component. Exception boundary (P0a / review C3): a throw
   // from the WorkFn is caught here, recorded via recordFailure(), and
   // reported by returning false — it never escapes a worker thread
@@ -386,8 +425,10 @@ class cTimingHandshakeAuthority {
   // own direct stats() reads need no lock (same thread as the fold).
   mutable std::mutex statsM_;
   HsFreezeInfo lastFreeze_{};
+  cTickLedger ledger_;  // P4 (constructed from cfg_ in the ctor init list order: after cfg_)
 
-  std::vector<std::thread> workers_;
+  cJobPool* pool_ = nullptr;          // P3: set by start(), cleared by a clean stop()
+  std::shared_ptr<ShardJobs> jobs_;   // P3: fresh per start(); queued jobs keep the old one
   std::deque<std::atomic<bool>> workerExited_;
   bool startedOnce_ = false;
   std::atomic<bool> running_{false};
@@ -404,10 +445,11 @@ class cTimingHandshakeAuthority {
   // publication they were executing is stale and must neither finish its
   // item list nor count toward any barrier.
   std::atomic<uint64_t> generation_{0};
-  std::atomic<uint64_t> publishedPhase_{0};
-  std::atomic<uint64_t> publishedCycle_{0};
-  std::atomic<uint32_t> publishedGroup_{0};
-  std::atomic<uint64_t> phaseOpenStamp_{0};
+  // Publication tuple behind a real seqlock (P0.5 review fix 1, external review by
+  // Cryosis (sirlinhart)): words = {phase, cycle, group, openStampNs, seq}. Written
+  // only under m_ (single writer); read lock-free by readPublished().
+  enum : size_t { kPubPhase = 0, kPubCycle, kPubGroup, kPubStamp, kPubSeq, kPubWords };
+  cSeqLockTuple<kPubWords> pub_;
   std::atomic<uint64_t> committedPhase_{0};
   std::atomic<uint32_t> arrivals_{0};
   std::deque<std::atomic<uint64_t>> shardDoneSeq_;
@@ -426,6 +468,11 @@ class cTimingHandshakeAuthority {
   std::mutex failureM_;
   PendingFailure pendingFailure_;
 
+  bool lockfree_ = false;             // LL_HS_LOCKFREE=1 (or LL_HS_LAYOUT=original)
+  bool inlineLayout_ = false;         // LL_HS_LAYOUT=original: shard work inline on the tick thread
+  std::atomic<uint64_t> arrivalWord_{0};  // lock-free barrier: key(gen, seq) << 16 | arrivals
+  std::atomic<uint64_t> statsSeq_{0};     // lock-free stats: odd while the fold writes
+  std::vector<std::thread> lfThreads_;
   mutable std::mutex m_;
   std::condition_variable publishCv_;  // workers block here (hybrid poll)
   std::condition_variable barrierCv_;  // authority waits here for arrivals

@@ -2,6 +2,7 @@
 // distances to the nearest (F1) and second nearest (F2) feature point, with Euclidean, Manhattan
 // or Chebyshev distance. The search covers the 3^dims neighbouring cells and widens only when a
 // farther cell could still hold a closer point, so F1 / F2 are exact (and continuous). White noise: one random value per unit cell.
+#include <cmath>
 #include <limits>
 #include "noise_impl.h"
 
@@ -62,6 +63,7 @@ class cCellularNoise final : public INoise {
     int32_t base[4] = {0, 0, 0, 0};
     float edge = 1.f;  // distance from p to its cell's nearest face
     for (int k = 0; k < dims; ++k) {
+      if (!std::isfinite(p[k])) return 0.f;  // H27c: fastFloor/ring search undefined on NaN/inf
       base[k] = fastFloor(p[k]);
       const float t = p[k] - float(base[k]);
       edge = std::min(edge, std::min(t, 1.f - t));
@@ -73,6 +75,7 @@ class cCellularNoise final : public INoise {
     for (int r = 0;; ++r) {
       const float bound = float(r) - 1.f + edge + 0.5f * (1.f - jitter_);
       if (r > 1 && bound >= (ret_ == CellularReturn::F1 ? f1 : f2)) break;
+      if (r > 64) break;  // H27c: hard cap on the ring search
       visitRing(p, base, dims, r, f1, f2, winCell);
     }
     switch (ret_) {

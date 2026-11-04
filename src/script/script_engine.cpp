@@ -49,6 +49,8 @@ static_assert(sizeof(AllocHeader) % 16 == 0, "AllocHeader must keep the payload 
 }  // namespace
 
 void* cScriptEngine::allocShim(size_t n) {
+  // Archie review H25c: a huge n wrapped sizeof(AllocHeader) + n to a tiny malloc.
+  if (n > static_cast<size_t>(-1) - sizeof(AllocHeader)) return nullptr;
   void* raw = std::malloc(sizeof(AllocHeader) + n);
   if (!raw) return nullptr;
   auto* h = static_cast<AllocHeader*>(raw);
@@ -63,13 +65,13 @@ void* cScriptEngine::allocShim(size_t n) {
     // Charge the ONE counter (F-M1). `owner` is dereferenced only here, at
     // allocation time, while the engine is provably alive (it is executing
     // this mod's hook on this thread) — never at free time (F-M2).
-    h->account->bytes += static_cast<int64_t>(n);
-    if (h->account->bytes > static_cast<int64_t>(owner->memoryQuotaBytes_) &&
+    const int64_t now = h->account->bytes.fetch_add(static_cast<int64_t>(n)) + static_cast<int64_t>(n);
+    if (now > static_cast<int64_t>(owner->memoryQuotaBytes_) &&
         owner->quotaState_ != QuotaState::kSuspended) {
       // The message construction allocates through the operator-new hook:
       // charge those bytes, but do not re-enforce (single suspend, one log).
       QuotaHookGuard guard;
-      owner->suspend("memory quota exceeded: " + std::to_string(h->account->bytes) +
+      owner->suspend("memory quota exceeded: " + std::to_string(now) +
                      " bytes > " + std::to_string(owner->memoryQuotaBytes_) + " byte quota");
     }
   }
@@ -87,8 +89,7 @@ void cScriptEngine::freeShim(void* p) {
   std::shared_ptr<detail::QuotaAccount> account = std::move(h->account);
   h->account.~shared_ptr<detail::QuotaAccount>();
   if (account) {
-    account->bytes -= static_cast<int64_t>(n);
-    if (account->bytes < 0) account->bytes = 0;
+    account->credit(static_cast<int64_t>(n));
   }
   std::free(h);
 }
@@ -103,16 +104,15 @@ void cScriptEngine::quotaCharge(size_t bytes) noexcept {
 }
 
 void cScriptEngine::quotaCredit(size_t bytes) noexcept {
-  quotaAccount_->bytes -= static_cast<int64_t>(bytes);
-  if (quotaAccount_->bytes < 0) quotaAccount_->bytes = 0;
+  quotaAccount_->credit(static_cast<int64_t>(bytes));
 }
 
 // May log (which allocates): the hook calls this only with its reentrancy
 // guard held, so nested allocations charge but do not re-enforce.
 void cScriptEngine::quotaEnforce() {
-  if (quotaAccount_->bytes > static_cast<int64_t>(memoryQuotaBytes_) &&
+  if (quotaAccount_->bytes.load() > static_cast<int64_t>(memoryQuotaBytes_) &&
       quotaState_ != QuotaState::kSuspended) {
-    suspend("memory quota exceeded: " + std::to_string(quotaAccount_->bytes) +
+    suspend("memory quota exceeded: " + std::to_string(quotaAccount_->bytes.load()) +
              " bytes > " + std::to_string(memoryQuotaBytes_) + " byte quota");
   }
 }
@@ -231,6 +231,13 @@ int cScriptEngine::bindGlobalFunction(const char* decl, asSFuncPtr funcPointer, 
 }
 
 void cScriptEngine::beginTick() {
+  // Archie review H25a (2026-10-30): cpuUsedUs_ is cumulative per tick, so
+  // the first hook of every tick was always under budget and reset the
+  // streak - the ladder never reached maxThrottles_. A tick in which hooks
+  // ran and none overran breaks the streak, decided here at the boundary.
+  if (tickHooksRan_ && !tickOverran_) throttleCount_ = 0;
+  tickHooksRan_ = false;
+  tickOverran_ = false;
   cpuUsedUs_ = 0;
   // A clean tick feeds the suspension-policy decay clock: no overrun last tick
   // and the mod was running normally (not throttled, not suspended). Evaluated
@@ -258,7 +265,8 @@ void cScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
   if (quotaState_ == QuotaState::kSuspended) return;
   // Probation halves the effective budget (see cSuspensionPolicy).
   const uint32_t effectiveBudget = suspensionPolicy_.effectiveCpuBudgetUs(modBudgetUs_);
-  if (cpuUsedUs_ <= effectiveBudget) { throttleCount_ = 0; return; }  // clean tick: streak broken
+  tickHooksRan_ = true;
+  if (cpuUsedUs_ <= effectiveBudget) return;  // clean so far (streak decided in beginTick, H25a)
   // Q7 boot grace (Archie exec summary, 2026-10-28, via JD): the
   // onLoad hook runs once at world load and legitimately costs more
   // than one tick's steady-state quota (13.55 ms against 1024 us on
@@ -278,15 +286,18 @@ void cScriptEngine::accountCpu(uint64_t elapsedUs, const char* what) {
     const size_t ws = decl.find_last_of(" \t");
     isOnLoadHook = (ws == std::string::npos ? decl : decl.substr(ws + 1)) == "onLoad";
   }
-  if (isOnLoadHook) {
+  // Archie review H25b: the grace is spent once - a hook named onLoad that
+  // runs every tick gets the full ladder from its second overrun on.
+  if (isOnLoadHook && !onLoadGraceUsed_) {
+    onLoadGraceUsed_ = true;
     if (!onLoadGraceLogged_) {
       onLoadGraceLogged_ = true;
       logInfo("[script] boot grace: onLoad overran the per-tick quota (%llu us > %u us) and was exempted (Q7)",
               static_cast<unsigned long long>(cpuUsedUs_), effectiveBudget);
     }
-    throttleCount_ = 0;
     return;
   }
+  tickOverran_ = true;
   if (suspensionPolicy_.probationActive()) {
     // Zero tolerance on probation: a single overrun suspends immediately,
     // bypassing the throttle ladder.
@@ -328,6 +339,7 @@ void cScriptEngine::resume() {
   throttleTicksRemaining_ = 0;
   throttleCount_ = 0;
   cpuUsedUs_ = 0;
+  tickHooksRan_ = tickOverran_ = false;
   suspendReason_.clear();
   if (suspensionPolicy_.reset())
     logInfo("modsys: mod '%s' manually re-enabled; suspension record cleared",

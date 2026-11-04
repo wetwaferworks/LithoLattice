@@ -20,6 +20,7 @@
 //   (H-AUD-1) — it takes no mutex. Structural mutation (addQuery) still
 //   publishes under a mutex on the game thread, never on the audio thread.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -87,6 +88,7 @@ class cOcclusionThread {
   void threadMain();
 
   std::thread thread_;
+  cThreadRecordSet sysRecord_;  // Thread Handshake P2: system class (outside the budget)
   std::atomic<bool> running_{false};
   std::atomic<OcclusionRate> rate_{OcclusionRate::Full};
   // Structural mutation (addQuery push_back) is mutex-guarded; threadMain

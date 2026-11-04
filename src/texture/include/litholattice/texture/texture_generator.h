@@ -37,7 +37,9 @@ Image generateTextureReference(const TextureRecipe& recipe, uint64_t seed, int s
 /// keyed by (hash of the canonical recipe text, seed, size). Returns pixels
 /// identical to generateTexture. The returned reference stays valid until
 /// the entry is evicted or the cache is otherwise mutated by a later call.
-const Image& generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size);
+/// Archie review H19: returns a copy taken under the cache lock (a reference
+/// could be evicted by a later or concurrent call).
+Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size);
 
 /// Number of entries currently held by the generateTextureCached LRU.
 size_t textureCacheSize();

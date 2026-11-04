@@ -178,6 +178,8 @@ void cSpriteSystem::tick(uint32_t dtTicks) {
         continue;
       }
       e.rateAcc += e.def.ratePerTick;
+      // Archie review H20b: a negative/NaN rate made floor() negative -> uint32 cast UB.
+      if (!(e.rateAcc >= 0.f) || !std::isfinite(e.rateAcc)) e.rateAcc = 0.f;
       const uint32_t n = static_cast<uint32_t>(std::floor(e.rateAcc));
       e.rateAcc -= static_cast<float>(n);
       if (n > 0) emitFromEmitter(e, n);

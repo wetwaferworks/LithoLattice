@@ -240,6 +240,10 @@ std::optional<cRecordStore> cRecordStore::deserialize(const uint8_t* data, size_
     if (static_cast<size_t>(end - p) < dataLen) return fail("truncated data");
     pg.data.insert(pg.data.end(), p, p + dataLen);
     p += dataLen;
+    // Archie review H11 (2026-10-30): the page as a whole must fit, not just
+    // slotCount and dataLen separately (put() never builds an overfull page).
+    if (kPageHeaderSize + size_t(slotCount) * kSlotSize + size_t(dataLen) > kPageSize)
+      return fail("page overfull");
     // Validate slot bounds before trusting the page.
     for (const auto& s : pg.slots) {
       if (static_cast<size_t>(s.offset) + s.length > pg.data.size())
@@ -468,6 +472,13 @@ void cDefragService::pumpCopy() {
 
 void cDefragService::restartScan() {
   ++restarts_;
+  // Archie review H12 (2026-10-30): a restart after reindexBegin() leaves the
+  // index cleared-but-partial; with reindexBegun_ reset below, a cancel/fail
+  // in the new scan would not know. Record it now; a completed reindex heals it.
+  if (reindexBegun_) {
+    indexDirty_ = true;
+    indexDirtyStore_ = sessionStore_;
+  }
   live_.clear();
   scanPage_ = 0;
   copyIdx_ = 0;

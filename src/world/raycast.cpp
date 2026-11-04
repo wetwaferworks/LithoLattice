@@ -43,7 +43,11 @@ bool raycast(const ChunkMap& w, float ox, float oy, float oz, float dx, float dy
   // starting inside a solid block would otherwise miss it entirely.
   {
     const BlockId b0 = w.get(c[0], c[1], c[2]);
-    if (b0 != kAir) { hit[0] = c[0]; hit[1] = c[1]; hit[2] = c[2]; return true; }
+    if (b0 != kAir) {
+      hit[0] = c[0]; hit[1] = c[1]; hit[2] = c[2];
+      prev[0] = c[0]; prev[1] = c[1]; prev[2] = c[2];  // H8: never leave prev unset
+      return true;
+    }
   }
   float t = 0;
   while (t <= maxDist) {
@@ -60,7 +64,8 @@ bool raycast(const ChunkMap& w, float ox, float oy, float oz, float dx, float dy
     } else if (b != kAir && pickShape) {
       constexpr int kMaxBoxes = 16;
       PickBox boxes[kMaxBoxes];
-      const int n = pickShape(w, *blocks, c[0], c[1], c[2], b, boxes, kMaxBoxes);
+      int n = pickShape(w, *blocks, c[0], c[1], c[2], b, boxes, kMaxBoxes);
+      if (n > kMaxBoxes) n = kMaxBoxes;  // H8: never read past the box buffer
       if (n >= 0) {
         bool any = false;
         for (int i = 0; i < n && !any; ++i) {

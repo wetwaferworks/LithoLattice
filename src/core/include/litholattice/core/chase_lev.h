@@ -2,13 +2,13 @@
 // from the bottom (LIFO); any number of thief threads steal from the top (FIFO).
 // This is the per-thread queue behind cJobSystem.
 //
-// OWNERSHIP (read this — it bit us once): the Chase-Lev algorithm requires a
-// single owner thread for pushBottom/popBottom. cJobSystem submits come from ANY
-// thread, so a per-deque mutex (`ownerM_`) serializes the owner operations and
-// restores the invariant. steal() never takes it and stays fully lock-free, so
-// cross-thread load balancing never contends with the owner. The mutex is a leaf
-// (L1 in the job_system.h lock order): it is never held while acquiring another
-// lock or while running a job.
+// OWNERSHIP: the Chase-Lev algorithm requires a single owner thread for
+// pushBottom/popBottom. P0.5 review fix 2 (external review by Cryosis (sirlinhart),
+// 2026-10-29): cJobSystem no longer pushes here from other threads; external submits
+// go to the worker's MPSC injection queue (mpsc_queue.h) and only the owner moves
+// them into this deque. The old per-deque owner mutex is gone. A deque bound to an
+// owner with bindOwner() counts any owner-end call from another thread in
+// ownerViolations() (always on; asserts in debug builds).
 //
 // Correctness notes (the subtle ones — read before touching):
 //  - top_/bottom_ are SIGNED (int64_t). An empty popBottom() transiently stores -1
@@ -36,10 +36,11 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
+#include <thread>
 #include <utility>
 
 #include "litholattice/core/thread_debug.h"
@@ -60,15 +61,14 @@ class cChaseLevDeque {
   cChaseLevDeque(const cChaseLevDeque&) = delete;
   cChaseLevDeque& operator=(const cChaseLevDeque&) = delete;
 
-  // ---- owner operations (serialized by ownerM_) ----------------------------------
-  // Single logical owner: cJobSystem submits arrive from any thread, so the mutex
-  // restores the one-owner-at-a-time invariant the algorithm requires. Uncontended
-  // in the common case (the worker owns its deque); a submitting thread only
-  // contends briefly with that worker's pops.
+  // ---- owner operations (owner thread only) --------------------------------------
+  /// Bind the deque to the calling thread. Unbound deques (tests, fixtures) skip the check.
+  void bindOwner() { owner_.store(std::this_thread::get_id(), std::memory_order_relaxed); }
+  uint64_t ownerViolations() const { return ownerViolations_.load(std::memory_order_relaxed); }
   /// Push onto the bottom. Returns false when full WITHOUT touching `item` (the
   /// caller keeps ownership and spills elsewhere); never blocks, never allocates.
   bool pushBottom(T&& item) {
-    std::lock_guard<std::mutex> l(ownerM_);
+    checkOwner();
     const int64_t b = bottom_.load(std::memory_order_relaxed);
     const int64_t t = top_.load(std::memory_order_acquire);
     if (b - t >= static_cast<int64_t>(kCapacity) - 1) return false;  // full: `item` untouched
@@ -88,11 +88,11 @@ class cChaseLevDeque {
   /// caller's in-flight accounting had already counted it. Now a throwing
   /// copy propagates with bottom_/top_ untouched and the job still queued;
   /// the caller (cJobSystem::workerLoop) catches, counts, and retries.
-  /// Owner operations are serialized by ownerM_, so no other owner can move
+  /// Only the owner calls this, so no other owner can move
   /// bottom_ between the copy and the commit; thieves only take from the
   /// top, and the last-item race is still settled by the seq_cst CAS below.
   bool popBottom(T& out) {
-    std::lock_guard<std::mutex> l(ownerM_);
+    checkOwner();
     const int64_t b = bottom_.load(std::memory_order_relaxed) - 1;
     const int64_t t0 = top_.load(std::memory_order_acquire);
     if (t0 > b) return false;  // empty: nothing to copy, nothing to commit
@@ -167,9 +167,15 @@ class cChaseLevDeque {
   };
   std::unique_ptr<Buffer> buffer_;  // fixed for the deque's lifetime (see note above)
   std::atomic<Buffer*> array_{nullptr};
-  // Serializes the owner operations (pushBottom/popBottom) across submitting
-  // threads. Leaf mutex (L1): never held while acquiring another lock.
-  std::mutex ownerM_;
+  void checkOwner() {
+    const std::thread::id o = owner_.load(std::memory_order_relaxed);
+    if (o != std::thread::id() && o != std::this_thread::get_id()) {
+      ownerViolations_.fetch_add(1, std::memory_order_relaxed);
+      assert(false && "chase-lev: owner-end call from a non-owner thread");
+    }
+  }
+  std::atomic<std::thread::id> owner_{};
+  std::atomic<uint64_t> ownerViolations_{0};
   alignas(64) std::atomic<int64_t> top_{0};     // thieves' end (CAS)
   alignas(64) std::atomic<int64_t> bottom_{0};  // owner's end
 };

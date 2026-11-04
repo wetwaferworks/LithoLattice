@@ -20,13 +20,22 @@
 #include "litholattice/script/script_binding_allowlist.h"
 #include "litholattice/script/suspension_policy.h"
 
+#include <atomic>  // Archie review H25c
+
 namespace litholattice {
 namespace detail {
 /// Quota accounting control block (defined here so both the engine and the
 /// memory hook see it). Allocation headers hold a shared_ptr to this, never a
 /// raw cScriptEngine*, so post-destruction credits can't UAF the engine.
 struct QuotaAccount {
-  int64_t bytes = 0;
+  /// Archie review H25c: atomic - a free on another thread credits the same
+  /// account the hook thread charges.
+  std::atomic<int64_t> bytes{0};
+  void credit(int64_t n) noexcept {
+    // Clamp at zero without a lost update (fetch_sub + CAS floor).
+    int64_t now = bytes.fetch_sub(n, std::memory_order_relaxed) - n;
+    while (now < 0 && !bytes.compare_exchange_weak(now, 0, std::memory_order_relaxed)) {}
+  }
 };
 }
 
@@ -138,7 +147,7 @@ class cScriptEngine {
   /// Script heap bytes currently attributed to this mod.
   /// Derived ONLY from the single shared quota account (review F-M1):
   /// there is no second counter for this value to disagree with.
-  int64_t modMemoryBytes() const { return quotaAccount_->bytes; }
+  int64_t modMemoryBytes() const { return quotaAccount_->bytes.load(); }
   /// CPU microseconds this mod's hooks have consumed in the current tick.
   uint64_t tickCpuUs() const { return cpuUsedUs_; }
 
@@ -239,6 +248,9 @@ class cScriptEngine {
   uint32_t throttleCount_ = 0;  ///< consecutive CPU overruns
   uint64_t cpuUsedUs_ = 0;      ///< this tick's hook CPU time
   bool onLoadGraceLogged_ = false;  ///< Q7: the boot-grace exemption logs once
+  bool onLoadGraceUsed_ = false;    ///< Archie review H25b: the exemption is spent once
+  bool tickHooksRan_ = false;       ///< Archie review H25a: CPU was accounted this tick
+  bool tickOverran_ = false;        ///< Archie review H25a: this tick went over budget
   std::string suspendReason_;
   std::string modId_;                ///< owning mod's id for log lines (empty until set)
   cSuspensionPolicy suspensionPolicy_;  ///< auto-recovery/backoff/probation/escalation

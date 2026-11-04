@@ -5,6 +5,7 @@
 // the game's IWorldSim, and remesh snapshots. No GL, no render types: remeshing is
 // requested through the SubmitMesh callback with an immutable MeshInput.
 #pragma once
+#include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/lock_timing.h"
 #include "litholattice/core/threeway.h"  // LL_THREEWAY (Proposed by JD; co-implemented by JD and Cortana)
 #include <chrono>
@@ -169,6 +170,17 @@ class cSimThread {
   /// Hot-swap refresh uses this: pause one tick, swap block definitions,
   /// resume — no torn reads mid-tick.
   void runBetweenTicks(std::function<void()> fn);
+  /// 2026-10-31 (JD, Save World): lock-free one-slot tick-boundary job. The tick thread runs
+  /// `fn` itself at the start of its next mutation window: between two ticks, with blockMutex_
+  /// already held BY THE TICK THREAD, so no other thread stops, pauses or waits on the sim.
+  /// Publish is one compare-exchange on an atomic pointer; the tick thread claims it with one
+  /// exchange (no lock on either side). Deferred while the handshake is frozen or a pull worker
+  /// is outstanding. Returns false when a job is already pending or the sim is not running.
+  /// The sim never changes state for it: fn must only read the world (snapshots).
+  bool postBoundaryJob(std::function<void()> fn);
+  /// Drops a still-pending boundary job (it never runs). True when one was dropped; false when
+  /// none was pending (it already ran or is running on the tick thread).
+  bool cancelBoundaryJob();
   /// Stream hand-off (2026-10-15): lock the sim between iterations WITHOUT
   /// pausing or stopping it, so the game thread can insert/erase chunk
   /// columns. Returns false (nothing held) when the timing handshake is
@@ -361,6 +373,8 @@ class cSimThread {
   std::atomic<int> readWaiting_{0}, insertWaiting_{0};
   std::atomic<uint64_t> handoffs_{0}, servedReads_{0}, servedInserts_{0};
   std::function<void(uint64_t)> tickHook_;
+  struct BoundaryJob { std::function<void()> fn; };
+  std::atomic<BoundaryJob*> boundaryJob_{nullptr};  ///< see postBoundaryJob (single slot, lock-free)
   std::function<void(uint64_t)> playerHook_;  // player body step (see setPlayerHook)  // LL_HASH_AT_TICK probe (measure only)
   // LL_SIM_STALL_MS=<ms>@<tick>[x<n>] (measure only, default OFF; Proposed by Herominde; implemented by Cortana). At world tick <tick> (then every
   // 128 ticks, n times) the sim thread sleeps <ms> while holding blockMutex_, so streaming inserts and point reads queue up
@@ -410,6 +424,7 @@ class cSimThread {
   std::atomic<uint32_t> domainToggles_{0};
   std::atomic<bool> remeshAll_{false};
   std::thread thread_;
+  cThreadRecordSet threadRecord_;  // Thread Handshake P2: the sim clock (Class A)
   TripleBuffer<SimStats> stats_;
   std::atomic<std::thread::id> statsReader_{};  // Cortana 2026-10-15 1658: F-2 (checked in Debug only)
   float rayEye_[3] = {0.f, -1e9f, 0.f};  ///< 2026-10-25: eye of the last cast ray (placement overlap check)

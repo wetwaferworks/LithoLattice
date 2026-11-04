@@ -108,8 +108,9 @@ inline void applyGainClampDuplicate(float* out, const float* in, size_t n, float
     for (; i + 4 <= n; i += 4) {
       float32x4_t x = vmulq_f32(vld1q_f32(in + i), g);
       x = vmaxq_f32(lo, vminq_f32(hi, x));
-      const float32x2x2_t z = vzip_f32(vget_low_f32(x), vget_high_f32(x));
-      vst1q_f32(out + 2 * i, vcombine_f32(z.val[0], z.val[1]));  // x0,x0,x1,x1,...
+      const float32x4x2_t z = vzipq_f32(x, x);  // H28c: 4 frames -> 8 interleaved floats
+      vst1q_f32(out + 2 * i, z.val[0]);      // x0,x0,x1,x1
+      vst1q_f32(out + 2 * i + 4, z.val[1]);  // x2,x2,x3,x3
     }
     for (; i < n; ++i) {
       const float s = in[i] * gain;

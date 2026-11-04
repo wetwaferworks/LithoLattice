@@ -18,6 +18,8 @@
 #include "vk_swapchain.h"
 #include "vk_texture_array.h"
 #include "vk_vertex_arena.h"
+#include "VkCanonUploader.h"  // refactor step 6 (LL_VK_CANON=1)
+#include "litholattice/render/mesher.h"  // meshVerifyEnabled (step 6 frame check)
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1]
 #include "litholattice/assets/shader_library.h"
 #include "litholattice/core/log.h"
@@ -80,6 +82,9 @@ class cVulkanRenderer final : public IRenderer {
  public:
   // Ginny 2026-10-16 (perf list): greedy-merged chunk faces; chunk_shading.glsl repeats the tile.
   bool prefersGreedyMeshes() const override { return true; }
+  // Thread Handshake P7: wafer reveal (binding 7, uploaded with the frame uniforms).
+  bool supportsWaferReveal() const override { return true; }
+  void setWaferReveal(const WaferRevealFrame& r) override { reveal_ = r; }
   ~cVulkanRenderer() override {
     if (dev_) vkDeviceWaitIdle(dev_->device());
     if (dev_) for (FrameSlot& f : frames_) if (f.timer) vkDestroyQueryPool(dev_->device(), f.timer, nullptr);  // [A52-3]
@@ -116,6 +121,12 @@ class cVulkanRenderer final : public IRenderer {
         pull_ = false;
       }
       logInfo("vulkan: Mega-Pipeline Phase 2 vertex pulling %s", pull_ ? "on" : "requested but unavailable (needs LL_VK_MEGA=3, packed12, firstInstance, dynamic storage indexing); off");
+      // Refactor step 6 (Direction JD, design Archie, implementation Cortana): LL_VK_CANON=1 builds the pulled
+      // layout from the canonical mesh (cVkCanonUploader). Default off. With mesh verify on, every built mesh is
+      // also run through buildPulled and compared byte for byte (exit line "vk-canon: ... mismatches N").
+      vkCanon_ = pull_ && cVkCanonUploader::enabled();
+      canonCheck_ = vkCanon_ && meshVerifyEnabled();
+      if (vkCanon_) logInfo("vulkan: step 6 canonical pull uploader on%s", canonCheck_ ? " (frame check vs buildPulled)" : "");
     }
     // Mega-Pipeline Phase 3: LL_VK_BUCKETS=1 (with pulling) draws only the face buckets that can face the camera.
     // Direction JD, design Archie (Mega-Pipeline brief), implementation Cortana. Buckets are the face-sorted ranges
@@ -461,11 +472,17 @@ class cVulkanRenderer final : public IRenderer {
     const VkFence fence = f.inFlight.get();
     if (vkWaitForFences(dev_->device(), 1, &fence, VK_TRUE, 1000000000ULL) != VK_SUCCESS)
       return false;
+    grabReady_ = false;  // Archie review M2: one grab per requestGrab (no stale re-grab)
     w = int(grabExtent_.width);
     h = int(grabExtent_.height);
     const bool bgra = grabFormat_ == VK_FORMAT_B8G8R8A8_UNORM;
     rgb.resize(size_t(w) * size_t(h) * 3);
-    const uint8_t* src = grabStaging_->mapped();
+    // Showcase capture (2026-10-30): one bulk memcpy out of the (uncached) mapped staging
+    // memory first; per-byte reads straight from it cost ~0.5 s per 1080p frame.
+    static thread_local std::vector<uint8_t> grabCopy;
+    grabCopy.resize(size_t(w) * size_t(h) * 4);
+    std::memcpy(grabCopy.data(), grabStaging_->mapped(), grabCopy.size());
+    const uint8_t* src = grabCopy.data();
     // Vulkan images are top-left origin: rows are already top-first for PNG.
     for (int y = 0; y < h; ++y) {
       const uint8_t* srow = src + size_t(y) * size_t(w) * 4;
@@ -494,6 +511,7 @@ class cVulkanRenderer final : public IRenderer {
     UniqueFence inFlight;
     UniqueSemaphore imageAcquired;
     std::optional<Buffer> uniforms, overlay;
+    std::optional<Buffer> reveal;  ///< Thread Handshake P7: wafer reveal header + spawn timestamps
     // Sprite pass vertex stream (JD wiring 2026-10-13): per-slot so a frame
     // in flight never races the next frame's upload; grow-only like GL33.
     std::optional<Buffer> sprites;
@@ -605,7 +623,9 @@ class cVulkanRenderer final : public IRenderer {
       f.imageAcquired = UniqueSemaphore(d, sem);
       f.uniforms = Buffer::create(*dev_, sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisible);
       f.overlay = Buffer::create(*dev_, kOverlayBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible);
-      if (!f.uniforms || !f.overlay) return false;
+      f.reveal = Buffer::create(*dev_, kRevealBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostVisible);
+      if (!f.uniforms || !f.overlay || !f.reveal) return false;
+      std::memset(f.reveal->mapped(), 0, kRevealBytes);  // header .y = 0: reveal off
       if (arena_->kind() != cVertexArena::Kind::Host) {
         f.staging = Buffer::create(*dev_, kStagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, hostVisible);
         if (!f.staging) return false;
@@ -623,7 +643,7 @@ class cVulkanRenderer final : public IRenderer {
     const VkDevice d = dev_->device();
     const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kFramesInFlight},
-                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight * (1 + kMaxPullBlocks)}};  // mega-draw V2b + Phase 2 arena array
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight * (2 + kMaxPullBlocks)}};  // + P7 reveal  // mega-draw V2b + Phase 2 arena array
     auto ci = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     ci.maxSets = kFramesInFlight;
     ci.poolSizeCount = uint32_t(std::size(sizes));
@@ -682,6 +702,16 @@ class cVulkanRenderer final : public IRenderer {
       w[kBindingFont].pImageInfo = &font;
       w[kBindingSpriteAtlas].pImageInfo = &spriteAtlas;
       vkUpdateDescriptorSets(dev_->device(), 5, w, 0, nullptr);
+      // Thread Handshake P7: the chunk vertex shader declares binding 7 statically, so it is always written.
+      const VkDescriptorBufferInfo rv{f.reveal->handle(), 0, kRevealBytes};
+      VkWriteDescriptorSet rw{};
+      rw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      rw.dstSet = f.set;
+      rw.dstBinding = kBindingWaferReveal;
+      rw.descriptorCount = 1;
+      rw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      rw.pBufferInfo = &rv;
+      vkUpdateDescriptorSets(dev_->device(), 1, &rw, 0, nullptr);
     }
   }
 
@@ -783,6 +813,9 @@ class cVulkanRenderer final : public IRenderer {
   std::atomic<uint64_t> packMisses_{0};
   std::vector<uint8_t> packScratch_;  ///< main thread only (device-arena staging path)
   bool pull_ = false;     ///< Mega-Pipeline Phase 2 (LL_VK_PULL=1)
+  bool vkCanon_ = false;     ///< refactor step 6 (LL_VK_CANON=1, needs pull_)
+  bool canonCheck_ = false;  ///< step 6: compare against buildPulled (mesh verify on)
+  static cVkCanonUploader& canonUploader() { thread_local cVkCanonUploader u; return u; }
   bool blendSplit_ = true;  ///< Phase 4 B (Archie Q1): with pulling, blended meshes pull their opaque quads (LL_VK_BLENDSPLIT=0: off)
   std::atomic<uint64_t> pullWhy_[kPullReasons] = {};  ///< Phase 4.0: quads by pull outcome (cumulative; LL_VK_PULL=1 only)
   bool buckets_ = false;  ///< Mega-Pipeline Phase 3 (LL_VK_BUCKETS=1)
@@ -804,7 +837,14 @@ class cVulkanRenderer final : public IRenderer {
 #endif
     if (pull_ && (!hasBlend || blendSplit_)) {  // Phase 4 B: blended meshes split (LL_VK_BLENDSPLIT=0 opts out)
       uint32_t why[kPullReasons] = {};  // Phase 4.0 quad-rejection counter (for Archie)
-      buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr, hasBlend ? int(kShadeAlphaBlend) : -1);
+      const int blendMode = hasBlend ? int(kShadeAlphaBlend) : -1;
+      const bool canon = vkCanon_ && canonUploader().build(m, kMaxQuads, blendMode, pm);  // step 6
+      if (canon && canonCheck_) {
+        thread_local PulledMesh ref;
+        buildPulled(m.verts, kMaxQuads, true, ref, nullptr, blendMode);
+        cVkCanonUploader::noteCheck(pm, ref);
+      }
+      if (!canon) buildPulled(m.verts, kMaxQuads, true, pm, LL_STREAM_COUNTERS ? why : nullptr, blendMode);
 #if LL_STREAM_COUNTERS
       for (uint32_t r = 1; r < kPullReasons; ++r)
         if (why[r]) pullWhy_[r].fetch_add(why[r], std::memory_order_relaxed);
@@ -909,8 +949,12 @@ class cVulkanRenderer final : public IRenderer {
     for (const auto& c : f.copies) vkCmdCopyBuffer(cmd, c.src, c.dst, 1, &c.region);  // [A52-4]
     auto mb = make<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    // Archie review H15: pulled meshes read these buffers as storage in the
+    // vertex shader, not as vertex attributes - cover both consumers.
+    mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
     f.copies.clear();
   }
 
@@ -930,7 +974,21 @@ class cVulkanRenderer final : public IRenderer {
     });
   }
 
+  // Thread Handshake P7: std430 { vec4 hdr (now, on, etchSec, riseBlocks); ivec4 org (cx, cz, half, 0); float ts[65*65]; }
+  static constexpr VkDeviceSize kRevealBytes = 32 + sizeof(float) * kRevealSide * kRevealSide;
+  WaferRevealFrame reveal_;
+  void writeReveal(const FrameSlot& f) {
+    auto* b = static_cast<unsigned char*>(f.reveal->mapped());
+    const bool on = reveal_.active && reveal_.spawnTs.size() == size_t(kRevealSide) * kRevealSide;
+    const float hdr[4] = {reveal_.nowSec, on ? 1.f : 0.f, reveal_.etchSec, reveal_.riseBlocks};
+    const int32_t org[4] = {reveal_.originCx, reveal_.originCz, kRevealHalf, 0};
+    std::memcpy(b, hdr, 16);
+    std::memcpy(b + 16, org, 16);
+    if (on) std::memcpy(b + 32, reveal_.spawnTs.data(), sizeof(float) * reveal_.spawnTs.size());
+  }
+
   void writeUniforms(const FrameSlot& f, const FrameParams& p) {
+    writeReveal(f);
     FrameUniforms u = materials_;
     std::memcpy(u.viewProj, p.viewProj.m, sizeof u.viewProj);
     u.cam[0] = p.camPos.x; u.cam[1] = p.camPos.y; u.cam[2] = p.camPos.z;

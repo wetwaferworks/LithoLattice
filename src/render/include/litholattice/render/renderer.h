@@ -70,6 +70,9 @@ enum ShadeMode : uint8_t {
   kShadeTraceTint,    // 2026-10-16 (Wafer beta art): base texel + grey tint mask (R) x Trace colour;
                       // value bits 0-4 = tint slot 0..31 (MaterialBindings::kTintSlots = 32; shader reads vVal & 31; bit 5 unused; Cortana 2026-10-16 2335 F55-3), bit 6 = blue Trace,
                       // bit 7 = powered (full ramp + emissive). Off = the ramp's low end.
+  kShadeDigits,       // 2026-10-31 (JD): seven-segment readout overlay (Latchor box); value bits 0-6 = number, bit 7 = lit
+  kShadeDigitsRep,    // 2026-10-31 (JD): same, Repeator readout box (delay 4/8/16/32)
+  kShadeDigitsRnd,    // 2026-10-31 (JD): same, Randor readout box (range N, 128-space x53 y57)
 };
 // Cortana 2026-10-16 [ENGINE] (JD foliage LOD): the top two bits of PackedVertex::mode tag LOD
 // geometry; the low 6 bits are the ShadeMode. Untagged quads always draw. A sub-chunk whose
@@ -95,6 +98,7 @@ inline void selectLod(const std::vector<PackedVertex>& in, bool far, std::vector
 }  // namespace litholattice
 
 #include "litholattice/render/pbr_lights.h"  // AnalyticLight for FrameParams::pbrLights
+#include "litholattice/render/wafer_reveal.h"  // Thread Handshake P7
 #include "litholattice/render/pbr_transparency_tiers.h"  // PbrTransparencyTier for setPbrTier
 
 namespace litholattice {
@@ -110,6 +114,7 @@ struct PbrChunkMesh;  // pbr_quad_mesh.h (forward: only used as a const ref here
 /// both backends size their shared quad index buffer from it, so they can trust every mesh.
 constexpr uint32_t kMaxQuadsPerMesh = 16384;
 
+struct CanonicalMesh;  // unified_mesher.h (render pipeline M2)
 struct PreparedChunkMeshHandle;  // below IRenderer (Cortana 2026-10-25 upload pass)
 
 struct ChunkMesh {
@@ -144,6 +149,9 @@ struct ChunkMesh {
   /// 2026-10-25 (box): far-LOD scale this mesh was built at (1, 2 or 4); the software renderer
   /// flat-shades / height-culls >= 4x meshes. Other backends ignore it.
   uint8_t lodScale = 1;
+  /// Render pipeline M2 (2026-10-29): the canonical packed mesh (unified-mesher mode only;
+  /// null otherwise). Today it holds the L0 merged faces; uploaders read it from step 4 on.
+  std::shared_ptr<const CanonicalMesh> canonical;
 };
 
 // 2D overlay in pixels (origin top-left). Generic: the renderer knows nothing about the game.
@@ -332,6 +340,10 @@ class IRenderer {
   /// mode flag: classic chunk programs draw PackedVertex uploads, chunk_pbr draws
   /// PbrChunkMesh uploads - both maps can coexist in one frame.
   virtual bool supportsPbrPath() const { return false; }  ///< chunk_pbr built and usable
+  /// Thread Handshake P7: the wafer reveal (per-column spawn timestamps). Backends without it
+  /// (GL / software) ignore the call and say so here, so the game can skip the reveal.
+  virtual bool supportsWaferReveal() const { return false; }
+  virtual void setWaferReveal(const WaferRevealFrame&) {}
   // Cortana 2026-10-15 1705: greedy meshing [ENGINE]
   /// True when the backend tiles chunk UVs beyond 1 per block (greedy-merged quads).
   /// GPU backends clamp (CLAMP_TO_EDGE) and keep per-block quads. Constant; any thread.

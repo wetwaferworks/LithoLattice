@@ -17,10 +17,11 @@ int occluders(const ChunkMap& w, const std::function<bool(BlockId)>& opaque, Vec
   const float ddx = dx == 0 ? 1e30f : 1.f / std::abs(dx), ddy = dy == 0 ? 1e30f : 1.f / std::abs(dy), ddz = dz == 0 ? 1e30f : 1.f / std::abs(dz);
   int hits = 0;
   for (int steps = 0; steps < 512; ++steps) {
-    if (tx < ty && tx < tz) { x += sx; tx += ddx; }
-    else if (ty < tz) { y += sy; ty += ddy; }
-    else { z += sz; tz += ddz; }
-    if (std::min({tx - ddx, ty - ddy, tz - ddz}) > 1.f) break;
+    float tEnter;  // H29b: entry t of the cell just stepped into (zero axes no longer pin it to 0)
+    if (tx < ty && tx < tz) { x += sx; tEnter = tx; tx += ddx; }
+    else if (ty < tz) { y += sy; tEnter = ty; ty += ddy; }
+    else { z += sz; tEnter = tz; tz += ddz; }
+    if (tEnter > 1.f) break;
     if (x == ex && y == ey && z == ez) break;
     if (y >= 0 && y < kWorldHeight && opaque(w.get(x, y, z)) && ++hits >= stopAt) break;
   }

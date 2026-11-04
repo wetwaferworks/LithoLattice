@@ -22,11 +22,16 @@
 #include "litholattice/audio/audio_selftest.h"
 #include "litholattice/core/threading.h"
 #include "litholattice/core/job_system.h"
+#include "litholattice/core/lf_handoff.h"    // 2026-11-01 LL_LF_JOBS
+#include "litholattice/core/lf_job_queue.h"
+#include "litholattice/core/lf_job_ring.h"
+#include "litholattice/core/lf_key_table.h"  // 2026-11-01 LL_LF_COWTABLE / LL_LF_SAVE
 #if defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
 #endif
 #include "litholattice/core/tick_arena.h"
+#include "litholattice/core/slice_free_list.h"
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/counter_hash.h"
 #if !defined(_WIN32)
@@ -51,6 +56,7 @@
 #include "litholattice/render/block_materials.h"
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/binary_greedy_mesher.h"
+int testCanonicalMeshEntry();  // canonical_mesh_test.cpp (render pipeline step 2-3)
 #include "litholattice/render/micro_mesher.h"
 #include "litholattice/subdiv/octree.h"
 #include "litholattice/subdiv/subdiv_store.h"
@@ -66,6 +72,10 @@
 #include "litholattice/render/pbr_gl_upload.h"
 #include "litholattice/render/pbr_quad_mesh.h"
 #include "litholattice/core/math.h"
+#include "litholattice/world/chunk_ingress.h"
+#include "litholattice/world/chunk_swarm.h"
+#include "litholattice/render/wafer_reveal.h"  // Thread Handshake P7
+#include "litholattice/world/neighbor_mesh.h"  // Thread Handshake P8
 #include "litholattice/render/cull_prototypes.h"
 #include "litholattice/render/software_renderer.h"
 #include "litholattice/render/frame_pacer.h"
@@ -84,6 +94,7 @@
 #include <fstream>
 #include <sstream>
 #include "litholattice/sim/sim_thread.h"
+#include "litholattice/sim/tick_ledger.h"
 #include "litholattice/storage/storage.h"
 #include "litholattice/storage/anvil_region.h"
 #include "litholattice/storage/file_contract.h"
@@ -123,6 +134,9 @@
 #include "litholattice/render/software_test.h"
 #include "litholattice/render_vk/sprite_vertices.h"  // B2: Vulkan sprite conversion contract
 #include "litholattice/render_vk/packed_vertex12.h"  // 0.0.1.59 [P59-1] Packed12 round trip
+#include "litholattice/core/seqlock.h"  // P0.5 review fix 1 (Cryosis (sirlinhart))
+#include "litholattice/core/thread_census.h"  // Thread Handshake P1
+#include "litholattice/mcp/http_server.h"       // Thread Handshake P3: MCP thread hook (item 1)
 
 using namespace litholattice;
 
@@ -187,10 +201,12 @@ uint64_t fnv(const void* p, size_t n, uint64_t h = 1469598103934665603ULL) {
 }
 
 void testTickArena();  // defined below testCore
+void testSliceFreeList();  // Voxy #5
 void testDetSched();   // defined below testRandomTicks
 void testTraceJitCompose();  // defined below testDetSched
 void testSignalPropagate();  // defined below testTraceJitCompose
 void testJobSystem();  // defined below testCore
+void testArchieHandshakeH1H3();  // defined below testCore
 void testFileContract();  // defined below testAnvilRegion
 void testAsyncIo();       // defined below testFileContract
 void testModSandbox();    // defined below testAsyncIo
@@ -258,6 +274,76 @@ void testCore() {
     const int failed = batch.wait();
     check(all && failed == 2 && pool.failedJobs() == 0, "job pool runs every job; a batch counts its throwing jobs, the pool survives");
   }
+  {  // 2026-11-01 (JD LL_LF_JOBS): MPMC ring, 4 producers x 4 consumers, nothing lost or duplicated.
+    cLfJobRing<uint32_t> ring(64);
+    std::atomic<int> producersLeft{4};
+    std::atomic<uint64_t> sum{0}, count{0};
+    std::vector<std::thread> th;
+    for (int t = 0; t < 4; ++t) th.emplace_back([&, t] {
+      for (uint32_t i = 0; i < 20000; ++i) { const uint32_t v = uint32_t(t) * 20000u + i + 1; unsigned sp = 0; while (!ring.tryPush(v)) cLfJobQueue::backoff(sp); }
+      producersLeft.fetch_sub(1);
+    });
+    for (int t = 0; t < 4; ++t) th.emplace_back([&] {
+      uint32_t v = 0; unsigned sp = 0;
+      for (;;) {
+        if (ring.tryPop(v)) { sum += v; ++count; sp = 0; continue; }
+        if (producersLeft.load() == 0) break;  // leftovers are drained after join
+        cLfJobQueue::backoff(sp);
+      }
+    });
+    for (auto& t : th) t.join();
+    uint32_t v = 0; while (ring.tryPop(v)) { sum += v; ++count; }
+    check(count == 80000 && sum == 80000ull * 80001ull / 2, "LF job ring: 4 producers x 4 consumers, nothing lost or duplicated");
+  }
+  {  // LL_LF_JOBS queue: every job runs, throwing jobs are counted, workers <= hardware threads,
+     // a full ring runs inline, and slot-written parallel results equal the serial ones.
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    cLfJobQueue q(hw + 8, 16);  // asks for too many workers and a tiny ring on purpose
+    std::atomic<int> n{0};
+    for (int i = 0; i < 5000; ++i) q.submit([&n] { n.fetch_add(1, std::memory_order_relaxed); });
+    q.waitIdle();
+    std::printf("  (two LL_LF_JOBS job errors are expected next)\n"); std::fflush(stdout);
+    for (int i = 0; i < 10; ++i) q.submit([i] { if (i % 5 == 0) throw std::runtime_error("fixture"); });
+    q.waitIdle();
+    std::vector<uint64_t> par(4096), ser(4096);
+    auto f = [](uint64_t i) { uint64_t h = i * 0x9E3779B97F4A7C15ull; for (int k = 0; k < 200; ++k) h = (h ^ (h >> 29)) * 0xBF58476D1CE4E5B9ull; return h; };
+    std::atomic<int> pending{4096};
+    for (size_t i = 0; i < par.size(); ++i) q.submit([&, i] { par[i] = f(i); pending.fetch_sub(1, std::memory_order_release); });
+    q.helpUntilZero(pending);
+    for (size_t i = 0; i < ser.size(); ++i) ser[i] = f(i);
+    cLfJobQueue zero(0);
+    std::atomic<int> z{0};
+    zero.submit([&z] { z = 7; });
+    check(n == 5000 && q.failedJobs() == 2 && q.workers() <= hw && par == ser && z == 7,
+          "LF job queue: all jobs run, throws counted, workers <= hardware threads, deterministic slot results, 0 workers runs inline");
+  }
+  {  // 2026-11-01 lock-free key table: 4 threads OR / add over shared keys; takeAll sees every bit once.
+    cLfKeyTable t(4096);  // 2026-11-01 PlayK: 1000 keys in 1024 slots could spill past kMaxProbe
+    std::vector<std::thread> th;
+    for (int p = 0; p < 4; ++p)
+      th.emplace_back([&t, p] { for (uint64_t k = 0; k < 500; ++k) { t.fetchOr(k * 0x9E3779B97F4A7C15ull, uint64_t(1) << p); t.add(~(k + 1), 1); } });  // ~0 is the reserved key
+    for (auto& x : th) x.join();
+    bool ok = true; size_t seen = 0;
+    for (uint64_t k = 0; k < 500; ++k) ok = ok && t.get(~(k + 1)) == 4;
+    t.takeAll([&](uint64_t k, uint64_t v) { ++seen; if (v != 0xF && v != 4) ok = false; (void)k; });
+    size_t after = 0;
+    t.takeAll([&](uint64_t, uint64_t) { ++after; });
+    check(ok && seen == 1000 && after == 0, "LF key table: 4 threads, every bit and count lands once, takeAll empties");
+  }
+  {  // LL_LF_INGRESS handoff: 4 producers, nothing lost, each producer's order kept.
+    cLfHandoff<int> h;
+    std::vector<std::thread> th;
+    for (int t = 0; t < 4; ++t) th.emplace_back([&h, t] { for (int i = 0; i < 10000; ++i) h.push(t * 10000 + i); });
+    std::vector<int> got;
+    for (int k = 0; k < 50; ++k) h.drainInto(got);  // drain while producers run
+    for (auto& t : th) t.join();
+    h.drainInto(got);
+    bool ordered = got.size() == 40000;
+    int last[4] = {-1, -1, -1, -1};
+    long long sum = 0;
+    for (int v : got) { sum += v; const int p = v / 10000; ordered = ordered && v > last[p]; last[p] = v; }
+    check(ordered && sum == 40000LL * 39999 / 2 && h.sizeApprox() == 0, "LF handoff: 4 producers, nothing lost or duplicated, per-producer order kept");
+  }
   {
     // Review A-L3: parse success must mean valid JSON — no trailing input
     // after the top value, and no strtod-only number spellings.
@@ -274,12 +360,24 @@ void testCore() {
     ok = ok && !Json::parse("[1, 0x10]", j);
     ok = ok && !Json::parse("01", j);        // leading zero is not JSON
     ok = ok && !Json::parse("1.", j);        // fraction needs a digit
+    // H6: \u escapes are bounds/hex checked and decoded; dump() round-trips controls.
+    ok = ok && !Json::parse("\"\\u12\"", j);       // truncated: must not eat the closing quote
+    ok = ok && !Json::parse("\"ab\\u\"", j);
+    ok = ok && !Json::parse("\"\\uZZZZ\"", j);
+    ok = ok && Json::parse("\"\\u0041\\u00e9\\ud83d\\ude00\"", j) && j.str == "A\xC3\xA9\xF0\x9F\x98\x80";
+    {
+      Json r;
+      ok = ok && Json::parse("\"a\\r\\b\\f\\u0001z\"", j) && j.str == std::string("a\r\b\f\x01z");
+      ok = ok && Json::parse(j.dump(), r) && r.str == j.str;
+    }
     ok = ok && !Json::parse("[truex]", j);   // literal must end the token
     ok = ok && Json::parse("-0.5e+10", j) && j.num == -0.5e10;
     check(ok, "core: Json::parse rejects trailing input, NaN/Infinity/hex-float spellings, and malformed numbers");
   }
   testJobSystem();
   testTickArena();
+  testSliceFreeList();
+  testArchieHandshakeH1H3();
 }
 
 void testFailFast() {
@@ -367,6 +465,95 @@ void testFailFast() {
     check(reported, "fail-fast: the report reached stderr before the abort");
   }
 #endif
+}
+
+// Archie review H1a/H1c/H1d (tick ledger freeze paths) and H3b (urgent counter).
+namespace arhs {
+using L = litholattice::cTickLedger;
+void tick1(L& l, int spawn, std::vector<uint64_t>* hs) {
+  l.openTick(1);
+  {
+    L::JobScope js(l, l.slot(0), 0, 7, 0);
+    for (int i = 0; i < spawn; ++i) { const uint64_t h = L::asyncBegin(1); if (hs) hs->push_back(h); }
+    L::finishJob(l.slot(0), 0);
+  }
+}
+}  // namespace arhs
+void testArchieHandshakeH1H3() {
+  using arhs::L;
+  using arhs::tick1;
+  constexpr uint64_t kNever = UINT64_MAX;
+  {  // H1c: a sweep that times out must not free (lose) due records it already folded.
+    L a, b;
+    std::vector<uint64_t> ha, hb;
+    tick1(a, 2, &ha); a.sweep(kNever); a.commit();
+    a.asyncComplete(ha[0], 11); a.asyncComplete(ha[1], 22);
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(b, 2, &hb); b.sweep(kNever); b.commit();
+    b.asyncComplete(hb[0], 11);
+    tick1(b, 0, nullptr);
+    const bool tripped = !b.sweep(0);  // record 1 still pending: watchdog trip
+    b.asyncComplete(hb[1], 22);
+    b.abandonOpenTick();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    check(tripped && b.lastTickHash() == a.lastTickHash(), "tick ledger H1c: a frozen sweep keeps due async records for the rerun");
+  }
+  {  // H1a: a stale job of a frozen tick that spawns after the abandon must not leak into the rerun.
+    L a, b;
+    std::vector<uint64_t> ha, hb;
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(a, 1, &ha); a.asyncComplete(ha[0], 5); a.sweep(kNever); a.commit();
+    tick1(a, 0, nullptr); a.sweep(kNever); a.commit();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    b.openTick(1);
+    uint64_t stale = L::kNoHandle;
+    {
+      L::JobScope js(b, b.slot(0), 0, 7, 0);
+      b.abandonOpenTick();           // watchdog froze the tick while this job still ran
+      stale = L::asyncBegin(1);      // ...and the stale job spawns afterwards
+    }
+    b.asyncComplete(stale, 99);
+    tick1(b, 1, &hb); b.asyncComplete(hb[0], 5); b.sweep(kNever); b.commit();
+    tick1(b, 0, nullptr); b.sweep(kNever); b.commit();
+    check(b.lastTickHash() == a.lastTickHash(), "tick ledger H1a: async spawned by a stale job of an abandoned tick never commits");
+  }
+  {  // H1d: a cancelled record that never completes must not pin the sweep's low watermark.
+    L c(4096);
+    c.openTick(1);
+    {
+      L::JobScope js(c, c.slot(0), 0, 7, 0);
+      (void)L::asyncBegin(1);  // its job never calls asyncComplete
+      L::finishJob(c.slot(0), 0);
+    }
+    c.abandonOpenTick();
+    for (int i = 0; i < 200; ++i) {
+      std::vector<uint64_t> h;
+      tick1(c, 1, &h); c.asyncComplete(h[0], uint64_t(i)); c.sweep(kNever); c.commit();
+    }
+    std::printf("  tick ledger H1d: scan window after 200 ticks = %llu\n", (unsigned long long)c.asyncScanWindow());
+    check(c.asyncScanWindow() <= 4, "tick ledger H1d: a never-completed cancelled record does not grow the sweep window");
+  }
+  {  // H3b: urgentCount_ must never be observed negative.
+    int minSeen = 0;
+    for (int round = 0; round < 4 && minSeen >= 0; ++round) {
+      litholattice::cJobPool pool(4);
+      std::atomic<bool> done{false};
+      std::atomic<int> mn{0};
+      std::thread smp([&] {
+        while (!done.load(std::memory_order_relaxed)) {
+          const int v = pool.urgentCountForTest();
+          if (v < mn.load(std::memory_order_relaxed)) mn.store(v, std::memory_order_relaxed);
+        }
+      });
+      for (int i = 0; i < 100000; ++i) pool.submitUrgent([] {});
+      pool.waitIdle();
+      done.store(true);
+      smp.join();
+      if (mn.load() < minSeen) minSeen = mn.load();
+    }
+    std::printf("  job pool H3b: min urgentCount observed = %d\n", minSeen);
+    check(minSeen >= 0, "job pool H3b: urgent counter never goes negative");
+  }
 }
 
 void testJobSystem() {
@@ -531,27 +718,68 @@ void testJobSystem() {
     }
     check(ok, "jobsystem: 20x shutdown with in-flight work drains and joins cleanly");
   }
-#if defined(__linux__)
-  {
-    cJobSystem::Config cfg; cfg.workerThreads = 2; cfg.workerAffinityMask = 0x1;  // core 0 only
-    cJobSystem js(cfg);
-    std::atomic<int> ran{0}, pinned{0};
-    for (int i = 0; i < 8; ++i) js.submit([&] {
-      ++ran;
-      cpu_set_t s; CPU_ZERO(&s);
-      if (pthread_getaffinity_np(pthread_self(), sizeof(s), &s) == 0 && CPU_ISSET(0, &s)) ++pinned;
-    });
-    js.waitIdle();
-    check(ran == 8 && pinned == 8, "jobsystem: Linux affinity mask applied to worker threads");
-  }
-  {
-    cJobSystem js;  // default policy: no pinning on this 2-core VM, must run clean
+  {  // JD t3349u item 9: affinity removed (ruling 6, never pin); default size = census pool ceiling
+    cJobSystem js;
     std::atomic<int> n{0};
     for (int i = 0; i < 100; ++i) js.submit([&] { ++n; });
     js.waitIdle();
-    check(n == 100, "jobsystem: default affinity policy runs clean (no pinning on small machines)");
+    check(n == 100 && js.workerCount() == cThreadCensus::instance().budget().pool,
+          "jobsystem: default config takes the census pool ceiling clamp(cores-2, 1, 64), unpinned");
   }
-#endif
+}
+
+void testSliceFreeList() {  // Voxy #5: lock-free arena free list (headless; no Vulkan device)
+  using litholattice::cSliceFreeList;
+  check(cSliceFreeList::classOf(0) == 0 && cSliceFreeList::classOf(1) == 0 && cSliceFreeList::classOf(2) == 1 &&
+            cSliceFreeList::classOf(3) == 2 && cSliceFreeList::classOf(4) == 2 && cSliceFreeList::classOf(5) == 3 &&
+            cSliceFreeList::classOf(uint64_t(1) << 20) == 20,
+        "slice free list: classOf is ceil log2");
+  {
+    cSliceFreeList f(4);
+    check(!f.pop(3), "slice free list: empty class pops nothing");
+    check(f.push(3, 7, 640) && f.push(3, 8, 1280) && f.push(5, 1, 64), "slice free list: push");
+    auto a = f.pop(3), b = f.pop(3);
+    check(a && b && a->block == 8 && a->offset == 1280 && b->block == 7 && b->offset == 640 && !f.pop(3),
+          "slice free list: LIFO per class, classes independent");
+    check(f.push(1, 0, 0) && f.push(1, 0, 64) && f.push(1, 0, 128) && !f.push(1, 0, 192),
+          "slice free list: pool exhaustion reported");
+    check(!f.push(cSliceFreeList::kClasses, 0, 0) && !f.pop(cSliceFreeList::kClasses), "slice free list: class bound");
+    f.reset();
+    check(!f.pop(1) && !f.pop(5) && f.push(2, 0, 0), "slice free list: reset");
+  }
+  {  // stress: 8 threads pop+push the same slices; nothing lost, nothing duplicated
+    constexpr uint32_t kSlices = 4096, kThreads = 8, kIters = 200000;
+    cSliceFreeList f(kSlices);
+    for (uint32_t i = 0; i < kSlices; ++i) f.push(i % 4, i, uint64_t(i) * 64);
+    std::atomic<uint32_t> bad{0};
+    std::vector<std::thread> ts;
+    for (uint32_t t = 0; t < kThreads; ++t)
+      ts.emplace_back([&, t] {
+        uint32_t held[8]; uint32_t heldCls[8]; uint32_t n = 0;
+        for (uint32_t k = 0; k < kIters; ++k) {
+          const uint32_t cls = (k + t) % 4;
+          if (n < 8 && (k & 1) == 0) {
+            if (auto e = f.pop(cls)) {
+              if (e->offset != uint64_t(e->block) * 64 || e->block % 4 != cls) bad.fetch_add(1);
+              held[n] = e->block; heldCls[n] = cls; ++n;
+            }
+          } else if (n) {
+            --n;
+            if (!f.push(heldCls[n], held[n], uint64_t(held[n]) * 64)) bad.fetch_add(1);
+          }
+        }
+        while (n) { --n; if (!f.push(heldCls[n], held[n], uint64_t(held[n]) * 64)) bad.fetch_add(1); }
+      });
+    for (auto& th : ts) th.join();
+    std::vector<uint8_t> seen(kSlices, 0);
+    uint32_t total = 0;
+    for (uint32_t c = 0; c < 4; ++c)
+      while (auto e = f.pop(c)) {
+        if (e->block >= kSlices || seen[e->block]++) bad.fetch_add(1);
+        ++total;
+      }
+    check(bad.load() == 0 && total == kSlices, "slice free list: 8-thread stress keeps every slice exactly once");
+  }
 }
 
 void testTickArena() {
@@ -3946,7 +4174,107 @@ void testRender() {
   // `slot` from @6 to @12 (restoring the 12-byte GPU attribute prefix). Geometry is
   // identical (25 quads); only the vertex byte layout changed. Old value kept for
   // the record: 0xdcb1c88e3af94693 (and 0x9a6c89e230a77b13 before that).
-  const ChunkMesh scene = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+  // Golden is pinned to the legacy emitter (its vertex order); LL_UNIFIED_MESHER must not move it.
+  setUnifiedMesher(false);
+  ChunkMesh scene = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+  {  // Render pipeline M2: the unified (canonical) path emits the same quads, order aside.
+    setUnifiedMesher(true);
+    const ChunkMesh u = mesh({{{1, 1, 1}, kRock}, {{2, 1, 1}, kRock}, {{1, 2, 1}, kHalf}, {{4, 1, 4}, kPlant}, {{15, 15, 15}, kRock}});
+    setUnifiedMesher(false);
+    auto sq = [](const ChunkMesh& m) {
+      std::vector<std::string> q;
+      for (size_t i = 0; i + 3 < m.verts.size(); i += 4)
+        q.emplace_back(reinterpret_cast<const char*>(&m.verts[i]), 4 * sizeof(PackedVertex));
+      std::sort(q.begin(), q.end());
+      return q;
+    };
+    check(sq(u) == sq(scene) && u.canonical != nullptr, "mesher (unified): golden scene decodes to the legacy quads and publishes a canonical mesh");
+    // Render pipeline M8: the uploader reference decode (L0) is the published stream exactly.
+    std::vector<PackedVertex> dv;
+    bool same = u.canonical && decodeCanonicalMesh(*u.canonical, 0, dv) && dv.size() == u.verts.size();
+    for (size_t i = 0; same && i < dv.size(); ++i) {
+      PackedVertex a = dv[i], b = u.verts[i];
+      a.slot = b.slot = 0;
+      same = std::memcmp(&a, &b, sizeof a) == 0;
+    }
+    check(same, "mesher (M8): decodeCanonicalMesh(L0) reproduces ChunkMesh::verts in order");
+    check(selectCanonLod(3, -1, 12, 24) == 0 && selectCanonLod(12, 0, 12, 24) == 0 && selectCanonLod(13, 0, 12, 24) == 0 &&
+              selectCanonLod(14, 0, 12, 24) == 1 && selectCanonLod(11, 1, 12, 24) == 1 && selectCanonLod(9, 1, 12, 24) == 0 &&
+              selectCanonLod(40, 0, 12, 24) == 2 && selectCanonLod(23, 2, 12, 24) == 2 && selectCanonLod(21, 2, 12, 24) == 1,
+          "mesher (M8): LOD ring selection with +-1.5 chunk hysteresis");
+    {  // M9 (ruling 6): open-addressing ColumnTable map agrees with std::unordered_map under churn.
+      OaTable<uint64_t> oa;
+      std::unordered_map<uint64_t, uint64_t> ref;
+      uint64_t x = 0x1234567ull;
+      bool ok = true;
+      for (int i = 0; i < 200000 && ok; ++i) {
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        const uint64_t k = ChunkKey::make(int(x % 97) - 48, int((x >> 20) % 97) - 48);
+        if ((x >> 40) % 3 == 0) { ok = oa.erase(k) == (ref.erase(k) != 0); }
+        else { oa[k] += uint64_t(i); ref[k] += uint64_t(i); }
+      }
+      for (const auto& [k, v] : ref) ok = ok && oa.find(k) && *oa.find(k) == v;
+      ok = ok && oa.size() == ref.size() && oa.maxProbe() < 64;
+      check(ok, "column table (M9): open-addressing map matches unordered_map under insert/erase churn");
+    }
+    {  // M8 software uploader: canonical ingest renders the same framebuffer as the legacy stream.
+      FrameParams fp;
+      fp.width = 96; fp.height = 96;
+      fp.viewProj = Mat4{};
+      fp.viewProj.m[0] = 0.125f; fp.viewProj.m[5] = 0.125f; fp.viewProj.m[10] = 0.03125f;
+      fp.viewProj.m[12] = -1.f; fp.viewProj.m[13] = -1.f; fp.viewProj.m[14] = 0.f; fp.viewProj.m[15] = 1.f;
+      fp.camPos = {8.f, 8.f, 8.f};
+      fp.crosshair = false;
+      auto shot = [&](bool canonOn, int* lodOut) {
+        cSoftwareRenderer::setCanonIngest(canonOn);
+        cSoftwareRenderer sr;
+        sr.resize(96, 96);
+        sr.setPerPixelShading(true);
+        sr.setModelDither(false);
+        sr.uploadChunkMesh(u);
+        sr.renderFrame(fp);
+        if (lodOut) *lodOut = sr.canonLodOf(0, 0, 0);
+        return sr.framebuffer().pixels;
+      };
+      int lodLegacy = 0, lodCanon = -1;
+      const std::vector<uint32_t> a = shot(false, &lodLegacy), b = shot(true, &lodCanon);
+      cSoftwareRenderer::setCanonIngest(false);
+      size_t lit = 0;
+      for (uint32_t px : a) lit += px != a[0];
+      size_t ndiff = 0;
+      for (size_t i = 0; i < a.size() && i < b.size(); ++i) ndiff += a[i] != b[i];
+      std::printf("  M8 sw: lodLegacy %d lodCanon %d lit %zu diff %zu (%zu/%zu px)\n", lodLegacy, lodCanon, lit, ndiff, a.size(), b.size());
+      check(lodLegacy == -1 && lodCanon == 0 && a == b && lit > 0,
+            "software (M8): LL_SW_CANON ingest of the canonical mesh is pixel-identical to the legacy stream");
+      {  // Fix (e), Archie Q5: an LRU-capped decode cache evicts out-of-view decodes, re-decodes in view, same pixels.
+        cSoftwareRenderer::setCanonIngest(true);
+        cSoftwareRenderer sr;
+        sr.resize(96, 96);
+        sr.setPerPixelShading(true);
+        sr.setModelDither(false);
+        sr.decodeCacheForTest().setCapBytes(1);
+        ChunkMesh far = u;
+        far.cx = 100;
+        sr.uploadChunkMesh(u);
+        sr.uploadChunkMesh(far);
+        sr.renderFrame(fp);
+        const std::vector<uint32_t> c1 = sr.framebuffer().pixels;
+        const bool farEvicted = sr.canonLodOf(100, 0, 0) == -1 && sr.canonLodOf(0, 0, 0) == 0;
+        FrameParams away = fp;
+        away.viewProj.m[12] = 50.f;  // nothing in view: (0,0,0) goes cold and is evicted
+        sr.renderFrame(away);
+        const bool nearEvicted = sr.canonLodOf(0, 0, 0) == -1;
+        sr.renderFrame(fp);
+        const std::vector<uint32_t> c2 = sr.framebuffer().pixels;
+        const auto& dc = sr.decodeCacheForTest();
+        std::printf("  fix e sw cache: evictions %llu redecodes %llu resident %zu B\n", (unsigned long long)dc.evictions(),
+                    (unsigned long long)dc.redecodes(), dc.residentBytes());
+        cSoftwareRenderer::setCanonIngest(false);
+        check(farEvicted && nearEvicted && c1 == a && c2 == a && dc.evictions() >= 2 && dc.redecodes() >= 1 && sr.canonLodOf(0, 0, 0) == 0,
+              "software (fix e): capped canonical decode cache evicts cold chunks and re-decodes in view, pixel-identical");
+      }
+    }
+  }
   const uint64_t h = fnv(scene.verts.data(), scene.verts.size() * sizeof(PackedVertex));
   std::printf("  scene hash %016llx, %zu quads\n", (unsigned long long)h, scene.verts.size() / 4);
   check(h == 0x77c08ffd8158c6d3ULL, "mesher golden: fixed scene hash (update deliberately if the mesh format changes)");
@@ -4301,6 +4629,17 @@ class FoldSystem : public ISimSystem {
   }
 };
 
+/// Pushes payload 99, then throws on tick 0 only (partial-commit rollback test).
+class PushThenThrowSystem : public ISimSystem {
+ public:
+  const char* name() const override { return "T"; }
+  std::vector<ResourceAccess> access() const override { return {writeRes(kLog + 2)}; }
+  void update(SchedTickContext& ctx) override {
+    ctx.commands.push(StructuralCommand{StructuralCommand::Kind::Spawn, 0, 99, {}});
+    if (ctx.tick == 0) throw std::runtime_error("fixture: system fails mid-stage");
+  }
+};
+
 /// Pushes Spawn commands with fixed payloads (drain-order test).
 class PushSystem : public ISimSystem {
  public:
@@ -4469,6 +4808,41 @@ void testDetSched() {
     const uint64_t h4 = runWorldJs(4, ticks), h8 = runWorldJs(8, ticks);
     const bool okJs = ref == h1 && h1 == h2 && h2 == h4 && h4 == h8 && ref != 0;
     check(okJs, "det-sched: cJobSystem backend hashes bit-identical to JobPool on 1, 2, 4, 8 workers");
+  }
+
+  // --- P0.5 review fix 4 (external review by Cryosis (sirlinhart)): a failed stage
+  //     commits nothing, and its discarded commands never leak into the next tick ---
+  {
+    bool okPool = true, okJs = true;
+    for (unsigned threads : {1u, 2u, 8u, 16u}) {
+      for (int backend = 0; backend < 2; ++backend) {
+        SchedWorld w;
+        size_t applies = 0;
+        cDeterministicScheduler sched([&](void* wp, size_t sysId, const StructuralCommand& c) {
+          ++applies;
+          static_cast<SchedWorld*>(wp)->drainLog.push_back((sysId << 32) | c.payload);
+        });
+        sched.addSystem(std::make_unique<PushSystem>("P", kLog, std::vector<uint64_t>{11, 12}));
+        sched.addSystem(std::make_unique<PushThenThrowSystem>());
+        sched.addSystem(std::make_unique<PushSystem>("Q", kLog + 1, std::vector<uint64_t>{21}));
+        const uint64_t before = schedWorldHash(w);
+        bool threw = false;
+        std::unique_ptr<cJobPool> pool;
+        std::unique_ptr<cJobSystem> js;
+        if (backend == 0) pool = std::make_unique<cJobPool>(threads);
+        else { cJobSystem::Config cfg; cfg.workerThreads = threads; js = std::make_unique<cJobSystem>(cfg); }
+        try {
+          if (pool) sched.runTick(0, &w, *pool); else sched.runTick(0, &w, *js);
+        } catch (const std::runtime_error&) { threw = true; }
+        bool ok = threw && applies == 0 && w.drainLog.empty() && schedWorldHash(w) == before;
+        if (pool) sched.runTick(1, &w, *pool); else sched.runTick(1, &w, *js);  // tick 1 succeeds
+        ok = ok && applies == 4 &&
+             w.drainLog == std::vector<uint64_t>{11, 12, (1ULL << 32) | 99, (2ULL << 32) | 21};
+        (backend == 0 ? okPool : okJs) &= ok;
+      }
+    }
+    check(okPool, "det-sched: failed stage commits nothing, next tick clean (cJobPool, 1/2/8/16 workers)");
+    check(okJs, "det-sched: failed stage commits nothing, next tick clean (cJobSystem, 1/2/8/16 workers)");
   }
 }
 
@@ -8319,12 +8693,927 @@ void testMarchRay() {
   check(a.hit && b.hit && a.cell[0] == 20 && a.dist == b.dist, "marchRay: direction length does not change the result");
 }
 
+// ---- P0.5 review fix 1 (external review by Cryosis (sirlinhart)): seqlock stress ----
+// One writer publishes {k,k,k,k,k}; readers must never accept a tuple whose words differ.
+// Run at 1, 2, 8 and 16 reader threads. A naive "re-read the counter after the fields"
+// reader (the old pattern) runs alongside on the same words as a detector self-check:
+// its torn count is reported (informational; it depends on the hardware's interleaving).
+// Thread Handshake P1: census math for 1/2/4/8/16/32 cores, and record behaviour.
+void testThreadCensus() {
+  std::printf("core: thread census (Thread Handshake P1, record-only)\n");
+  struct Want { unsigned hw, shards, bands, pool, cap; bool small; };
+  const Want wants[] = {
+      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 3, 2, 2, true},  // ruling 3/4: clamp(cores-2, 1, 64)
+      {8, 4, 7, 6, 6, false},  {16, 4, 15, 14, 14, false}, {32, 4, 16, 30, 30, false},
+  };
+  bool mathOk = true;
+  // 2026-10-30: layout-aware. Under LL_THREAD_BUDGET / LL_HS_LOCKFREE / LL_HS_LAYOUT=original the
+  // pool is cores minus every dedicated thread (main + clock + extra), floor 1.
+  auto capPool = [](unsigned hw, unsigned legacy) {
+    const ThreadBudget c = computeThreadBudget(hw);
+    if (!c.capped) return legacy;
+    const unsigned ded = 2u + c.dedicatedExtra;
+    return std::clamp(c.hw > ded ? c.hw - ded : 1u, 1u, kMaxPoolWorkers);
+  };
+  for (const Want& w : wants) {
+    const ThreadBudget b = computeThreadBudget(w.hw);
+    const bool ok = b.hw == w.hw && b.simShards == w.shards && b.renderBands == w.bands &&
+                    b.renderSpawned == w.bands - 1 && b.pool == capPool(w.hw, w.pool) && b.activeCap == capPool(w.hw, w.cap) &&
+                    b.smallMachine == w.small && b.simClock == 1 && b.mainThreads == 1;
+    std::printf("  census hw=%-2u: sim clock 1, shards %u, render bands %u (%u spawned), pool %u, cap %u%s -> %u spawned\n",
+                w.hw, b.simShards, b.renderBands, b.renderSpawned, b.pool, b.activeCap, b.smallMachine ? ", small" : "",
+                b.spawnedTotal());
+    mathOk = mathOk && ok;
+  }
+  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the rules");
+  check(computeThreadBudget(0).hw == 1 && computeThreadBudget(0).pool == 1, "thread census: unknown core count (0) treated as 1");
+  // Today's owners use the same numbers (record-only P1 must not change any count).
+  bool same = true;
+  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 12u, 16u, 32u, 64u}) {
+    const ThreadBudget b = computeThreadBudget(hw);
+    same = same && b.simShards == std::min(4u, hw > 1 ? hw - 1 : 1u) && b.renderBands == std::clamp(hw > 1 ? hw - 1 : 1u, 2u, 16u);
+  }
+  check(same, "thread census: shard and band counts equal the Timing Handshake and renderer auto rules");
+  // Small machines: the pool never takes the dedicated cores.
+  bool small = true;
+  for (unsigned hw = 1; hw <= 4; ++hw) { const ThreadBudget b = computeThreadBudget(hw); small = small && b.pool == capPool(hw, std::max(1u, hw > 2 ? hw - 2 : 0u)); }
+  check(small, "thread census: on <= 4 cores dedicated threads claim first, pool shrinks (floor 1)");
+  // hardware_concurrency is read once.
+  const ThreadBudget& b1 = cThreadCensus::instance().budget();
+  const ThreadBudget& b2 = cThreadCensus::instance().budget();
+  check(&b1 == &b2 && cThreadCensus::hwReads() == 1, "thread census: hardware_concurrency() read exactly once");
+
+  // Records: class A dedicated at tick 0; class B lend / reclaim through the ticket.
+  cThreadCensus c(8);
+  const uint32_t clk = c.declare(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
+  const uint32_t p0 = c.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool-0");
+  check(c.record(clk).state == ThreadState::Dedicated && c.record(clk).spawnTick == 0, "thread record: dedicated starts DEDICATED at spawnTick 0");
+  check(c.record(p0).state == ThreadState::Pooled, "thread record: pooled starts POOLED");
+  check(!c.tryClaim(clk, 5), "thread record: a dedicated thread cannot be lent");
+  check(c.tryClaim(p0, 10) && !c.tryClaim(p0, 11), "thread record: POOLED -> CLAIMED once (second claim refused)");
+  check(c.reclaim(p0, 12) && !c.reclaim(p0, 13), "thread record: CLAIMED -> RECLAIMED once");
+  check(c.tryClaim(p0, 20) && c.record(p0).ticket == 2 && c.record(p0).spawnTick == 20, "thread record: re-lend bumps the ticket");
+  // Telemetry never reaches the hash.
+  const uint64_t h = c.hash();
+  ThreadTelemetry t; t.osThreadId = 1234; t.wallSpawnNs = 987654321; t.name = "renamed";
+  c.setTelemetry(p0, t);
+  check(c.hash() == h, "thread record: telemetry (wall clock, OS id, name) is not hashed");
+  // Concurrent claims: exactly one winner per round.
+  cThreadCensus cc(16);
+  const uint32_t pw = cc.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool");
+  bool oneWinner = true;
+  for (int round = 0; round < 200; ++round) {
+    std::atomic<int> wins{0};
+    std::vector<std::thread> ts;
+    for (int i = 0; i < 8; ++i) ts.emplace_back([&] { if (cc.tryClaim(pw, uint64_t(round))) wins.fetch_add(1); });
+    for (auto& th : ts) th.join();
+    oneWinner = oneWinner && wins.load() == 1;
+    cc.reclaim(pw, uint64_t(round));
+  }
+  check(oneWinner && cc.record(pw).ticket == 200, "thread record: 8 racing claimers, exactly one wins each of 200 rounds");
+  // Power-down returns everything.
+  c.returnAll(99);
+  check(c.count(ThreadState::Returned) == c.size() && c.record(clk).reason == ThreadReturnReason::EnginePowerDown &&
+            c.record(clk).returnTick == 99,
+        "thread record: returnAll -> RETURNED, reason engine power-down, returnTick stamped");
+  // Same declarations + transitions -> same hash (deterministic, id order).
+  auto build = [] {
+    cThreadCensus x(4);
+    x.declare(ThreadClass::Dedicated, ThreadRole::Main, 0, "main");
+    const uint32_t q = x.declare(ThreadClass::Pooled, ThreadRole::PoolWorker, 0, "pool-0");
+    x.tryClaim(q, 3); x.reclaim(q, 4); x.returnAll(7);
+    return x.hash();
+  };
+  check(build() == build(), "thread record: identical histories hash identically");
+}
+
+// Thread Handshake P2: Archie's rulings (t3340u) in the census: cores precedence, pool size,
+// the single render-band resolver.
+void testThreadCensusRulings() {
+  std::printf("core: thread census rulings (Thread Handshake P2)\n");
+  check(resolveCores(0, nullptr, 12).cores == 12 && resolveCores(0, nullptr, 12).source == CoresSource::Hardware,
+        "census cores: hardware when no override");
+  check(resolveCores(0, "6", 12).cores == 6 && resolveCores(0, "6", 12).source == CoresSource::Env,
+        "census cores: LITHO_CORES beats hardware");
+  check(resolveCores(3, "6", 12).cores == 3 && resolveCores(3, "6", 12).source == CoresSource::Cli,
+        "census cores: CLI beats LITHO_CORES");
+  check(resolveCores(0, "0", 12).cores == 12 && resolveCores(0, "x4", 12).cores == 12 && resolveCores(0, "", 0).cores == 1,
+        "census cores: invalid / zero env ignored, unknown hardware -> 1");
+  bool poolOk = true;
+  const bool capped = computeThreadBudget(12).capped;  // 2026-10-30: layout-aware (cores minus dedicated)
+  for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 16u, 32u, 64u, 128u}) {
+    const ThreadBudget c = computeThreadBudget(hw);
+    const unsigned ded = capped ? 2u + c.dedicatedExtra : 2u;
+    poolOk = poolOk && c.pool == std::clamp(hw > ded ? hw - ded : 1u, 1u, kMaxPoolWorkers);
+  }
+  check(poolOk && (capped || computeThreadBudget(4).pool == 2) && computeThreadBudget(2).pool == 1 && computeThreadBudget(1).pool == 1 &&
+            computeThreadBudget(128).pool == kMaxPoolWorkers,
+        "census pool: clamp(cores-2, 1, MAX_POOL_WORKERS); 4 cores -> 2, 1-2 cores -> 1");
+  check(resolveRenderBands(0, 12, false) == 11 && resolveRenderBands(0, 2, false) == 2 && resolveRenderBands(0, 64, false) == 16,
+        "census bands: auto = clamp(cores-1, 2, 16)");
+  check(resolveRenderBands(0, 12, true) == 4 && resolveRenderBands(0, 2, true) == 2, "census bands: WASM auto capped at 4");
+  check(resolveRenderBands(3, 8, false) == 3 && resolveRenderBands(100, 16, false) == 64 && resolveRenderBands(8, 4, false) == 8 &&
+            resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 16,
+        "census bands: an explicit request is honoured as given, capped only at 64 (JD t3349u item 7)");
+  {  // Archie t3353u: compute workers only; automatic settings never warn
+    const ThreadBudget a = computeThreadBudget(12);
+    ThreadBudget cli = computeThreadBudget(32); cli.hwRaw = 12; cli.source = CoresSource::Cli;
+    ThreadBudget same = computeThreadBudget(12); same.source = CoresSource::Env;
+    bool autoQuiet = true;
+    for (unsigned hw : {1u, 2u, 4u, 8u, 12u, 16u, 64u, 128u}) autoQuiet = autoQuiet && oversubscriptionWarning(computeThreadBudget(hw)).empty();
+    const std::string w = oversubscriptionWarning(cli);
+    const std::string wr = oversubscriptionWarning(a, true, 63);
+    check(autoQuiet && oversubscriptionWarning(same).empty() && oversubscriptionWarning(a, true, 10).empty() && !w.empty() &&
+              w.find("--cores") != std::string::npos && w.find("shared pool " + std::to_string(cli.pool) + " ") != std::string::npos &&
+              w.find("render bands 15") != std::string::npos && !wr.empty() && wr.find("--render-threads") != std::string::npos,
+          "census: automatic settings never warn; only an explicit override past the hardware does (t3353u)");
+    const unsigned cw = a.pool + a.renderSpawned;  // 20 by default; layout-aware under the cap
+    check(threadTally(a).find("compute workers " + std::to_string(cw) + " ") != std::string::npos && computeWorkers(a, a.renderSpawned) == cw &&
+              (a.capped || cw == 20) && poolInvariantViolation(a.pool, a).empty() && !poolInvariantViolation(a.pool + 1, a).empty(),
+          "census: the tally counts compute workers only (pool + render bands); pool invariant check");
+  }
+  {
+    const uint64_t prev = cThreadCensus::lastCommittedTick();
+    cThreadCensus::noteCommittedTick(4242);
+    cThreadRecordSet rs;
+    rs.add(ThreadClass::System, ThreadRole::Other, 0, "tick-test");
+    const uint32_t id = uint32_t(cThreadCensus::instance().size() - 1);
+    rs.retireAll();
+    check(cThreadCensus::instance().record(id).returnTick == 4242,
+          "census: a shutdown record carries the last committed tick, not 0 (item 4)");
+    cThreadCensus::noteCommittedTick(prev);
+  }
+  const unsigned want = std::min(cThreadCensus::instance().budget().hw, 16u);
+  check(cSoftwareRenderer::renderThreads() == cThreadCensus::instance().renderBands(0) || want == 0,
+        "census bands: the renderer asks the census (no local clamp)");
+  check(!cThreadCensus::setCliCores(3), "census cores: a CLI override after boot is refused");
+}
+
+// Thread Handshake P2: Class A / system lifecycle. Every record is returned at shutdown and
+// the OS thread count before equals after.
+void testThreadLifecycle() {
+  std::printf("sim: thread lifecycle (Thread Handshake P2)\n");
+  cThreadCensus& c = cThreadCensus::instance();
+  auto settle = [](size_t want) {  // joined threads can linger in the OS list for a moment
+    size_t n = osThreadCount();
+    for (int i = 0; i < 200 && n != want; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); n = osThreadCount(); }
+    return n;
+  };
+  cJobPool& pool = cJobPool::shared();  // P3: the backing pool is up before the baseline (boot)
+  const size_t live0 = c.live();
+  const size_t os0 = osThreadCount();
+  {
+    cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
+    std::atomic<int> ran{0};
+    HsComponentDesc d; d.name = "p3.shard";
+    auth.registerComponent(d, [&](uint64_t, uint64_t) { ran.fetch_add(1); });
+    bool noSpawn = true, phasesOk = true;
+    for (int cycle = 0; cycle < 3; ++cycle) {
+      check(auth.start(), "lifecycle: handshake start");
+      for (uint64_t p = 0; p < 8; ++p) phasesOk = auth.runPhase(p, p, 0) && phasesOk;
+      noSpawn = noSpawn && (os0 == 0 || osThreadCount() == os0);
+      check(c.live() == live0, "lifecycle: shards are pool jobs, no per-shard thread record (P3, ruling 2)");
+      check(auth.stop(), "lifecycle: handshake stop drains every shard job");
+    }
+    check(phasesOk && ran.load() == 24, "lifecycle: each phase's shard job ran exactly once on the shared pool");
+    check(noSpawn, "lifecycle: no OS thread created after boot while the handshake runs (P3 gate)");
+    check(c.live(ThreadClass::Pooled) >= pool.size() && pool.size() == cThreadCensus::instance().budget().pool,
+          "lifecycle: the shared pool is clamp(cores-2, 1, 64) workers, recorded as Class B");
+  }
+  {  // JD t3349u item 1: the MCP accept thread reports through a dependency-free hook
+    static std::atomic<int> up{0}, down{0};
+    mcp::cMcpHttpServer::setThreadHook([](bool started) { (started ? up : down).fetch_add(1); });
+    {
+      mcp::cMcpHttpServer s(mcp::McpBackends{}, "hook-test");
+      if (s.start(0)) s.stop();
+      else up = down = 1;  // no loopback socket here: the hook wiring is still compiled and linked
+    }
+    mcp::cMcpHttpServer::setThreadHook(nullptr);
+    check(up == 1 && down == 1, "mcp: thread hook fires once on start and once after the join");
+  }
+  {
+    ChunkMap w = worldWithColumns(2, &fixtureBlocks());
+    SimConfig cfg; cfg.tickRate = 64; cfg.radiusChunks = 2;
+    cSimThread st(w, fixtureBlocks(), std::make_unique<ChangingSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+    st.start();
+    st.waitLoops(2);
+    check(c.live(ThreadClass::Dedicated) >= 1, "lifecycle: the sim clock holds a dedicated record while running");
+    st.stop();
+  }
+  check(c.live() == live0, "lifecycle: sim clock record RETURNED with reason engine power-down");
+  const size_t os1 = settle(os0);
+  std::printf("  OS threads before %zu, after %zu\n", os0, os1);
+  check(os0 == 0 || os1 == os0, "lifecycle: OS thread count before == after (no leaked threads)");
+}
+
+// Thread Handshake P4 (Archie t3353u): lend / reclaim on the shared pool. Background
+// views run on lent capacity only; a Timing Handshake epoch reclaims it. Measures shard
+// job start latency (phase open -> component start, max over shards) with the pool idle,
+// with stage-bounded 2 ms gen slices saturating the background lane, and (for contrast
+// only) with the same slices flat-merged into the normal lane.
+void testLendReclaim() {
+  std::printf("sim: shared pool lend / reclaim (Thread Handshake P4)\n");
+  cJobPool& pool = cJobPool::shared();
+  auto nowNs = [] {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  };
+  {
+    cJobPool v(pool, cJobPool::Lane::Background, 3);
+    std::atomic<int> n{0}, live{0}, peak{0};
+    for (int i = 0; i < 200; ++i)
+      v.submit([&, i] {
+        const int l = ++live;
+        int p = peak.load();
+        while (l > p && !peak.compare_exchange_weak(p, l)) {}
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        --live;
+        ++n;
+        if (i % 50 == 0) throw std::runtime_error("fixture");
+      });
+    v.waitIdle();
+    const int cap = int(std::min(3u, pool.lendCap()));
+    check(n == 200 && v.failedJobs() == 4 && peak.load() <= cap && v.size() == unsigned(cap),
+          "pool view: background jobs all run, failures counted per view, never more than min(view cap, lendCap) at once");
+    std::atomic<int> m{0};
+    { cJobPool w(pool, cJobPool::Lane::Background, 2); for (int i = 0; i < 50; ++i) w.submit([&] { ++m; }); }
+    check(m == 50, "pool view: destruction drains queued background jobs");
+  }
+  // 2026-10-31 (JD t3584u): the exact-reserve check is retired under the lock-free pool. Its reserve
+  // depends on whether shard jobs exist (0 in the inline 3-thread layout, simShards otherwise), so only
+  // the invariants are checked there; priority is covered by the two-lane preemption test below.
+  const unsigned maxReserve = std::min(cThreadCensus::instance().budget().simShards, pool.size() > 1 ? pool.size() - 1 : 0u);
+  const bool reserveOk = pool.lockFree() ? pool.reserve() <= maxReserve : pool.reserve() == maxReserve;
+  check(reserveOk && pool.lendCap() == pool.size() - pool.reserve() && pool.lendCap() >= 1,
+        pool.lockFree() ? "pool lend (lock-free): reserve <= min(shards, workers-1), lendCap = workers - reserve >= 1"
+                        : "pool lend: reserve = min(shards, workers-1), lendCap = workers - reserve >= 1");
+  {  // 2026-10-31 two-lane preemption: an urgent job starts ahead of a saturated background (meshing) lane.
+    constexpr int kBg = 240;
+    std::atomic<int> bgDone{0}, bgAtUrgent{-1};
+    std::atomic<bool> urgentRan{false};
+    for (int i = 0; i < kBg; ++i)
+      pool.submitBackground([&] { std::this_thread::sleep_for(std::chrono::milliseconds(2)); bgDone.fetch_add(1, std::memory_order_acq_rel); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));  // lane saturated, most slices still queued
+    pool.submitUrgent([&] { bgAtUrgent.store(bgDone.load(std::memory_order_acquire), std::memory_order_release); urgentRan.store(true, std::memory_order_release); });
+    const auto t0 = std::chrono::steady_clock::now();
+    while (bgDone.load(std::memory_order_acquire) < kBg && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    while (!urgentRan.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    std::printf("  two-lane preemption: urgent started after %d of %d background slices (%s pool)\n", bgAtUrgent.load(), kBg, pool.lockFree() ? "lock-free" : "locked");
+    check(urgentRan.load() && bgAtUrgent.load() >= 0 && bgAtUrgent.load() < kBg / 2,
+          "two-lane preemption: an urgent job starts before half of a queued background (meshing) burst has run");
+  }
+
+  cTimingHandshakeAuthority auth(cTimingHandshakeAuthority::Config{});
+  const int shards = int(cThreadCensus::instance().budget().simShards);
+  std::vector<std::atomic<uint64_t>> startNs(size_t(std::max(1, shards)));
+  std::atomic<uint64_t> openNs{0};
+  for (int s = 0; s < shards; ++s) {
+    HsComponentDesc d;
+    const std::string name = "p4.shard" + std::to_string(s);
+    d.name = name.c_str();
+    auth.registerComponent(d, [&, s](uint64_t, uint64_t) { startNs[size_t(s)].store(nowNs()); });
+  }
+  check(auth.start(), "reclaim: handshake start");
+  uint64_t phase = 0;
+  auto runPhases = [&](int count, std::vector<double>& out) {
+    bool ok = true;
+    for (int i = 0; i < count; ++i) {
+      for (auto& x : startNs) x.store(0);
+      openNs.store(nowNs());
+      ok = auth.runPhase(phase, phase, 0) && ok;
+      ++phase;
+      uint64_t worst = 0;
+      for (int s = 0; s < shards; ++s) worst = std::max(worst, startNs[size_t(s)].load() - openNs.load());
+      out.push_back(double(worst) / 1000.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));  // between bursts: the lane reopens
+    }
+    return ok;
+  };
+  auto pct = [](std::vector<double> v, double q) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    return v[std::min(v.size() - 1, size_t(q * double(v.size() - 1) + 0.5))];
+  };
+  std::atomic<bool> genStop{false};
+  std::atomic<uint64_t> slices{0};
+  auto slice = [&] {  // one stage-bounded world-gen stand-in: 2 ms of CPU
+    if (genStop.load()) return;
+    const uint64_t t = nowNs();
+    while (nowNs() - t < 2000000) {}
+    ++slices;
+  };
+  std::vector<double> idle, sat, flat;
+  bool ok = runPhases(200, idle);
+  const cJobPool::LendStats s0 = pool.lendStats();
+  {
+    cJobPool gen(pool, cJobPool::Lane::Background, 64);
+    gen.setDefaultMaxActive(0);  // uncapped view: only the pool's lendCap limits it
+    for (int i = 0; i < 4000; ++i) gen.submit(slice);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ok = runPhases(200, sat) && ok;
+    genStop.store(true);
+  }
+  const cJobPool::LendStats s1 = pool.lendStats();
+  genStop.store(false);
+  {
+    cJobPool flatView(pool, cJobPool::Lane::Normal, 64);  // contrast: no lending, gen on the normal lane
+    for (int i = 0; i < 4000; ++i) flatView.submit(slice);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ok = runPhases(200, flat) && ok;
+    genStop.store(true);
+  }
+  check(auth.stop(), "reclaim: handshake stop");
+  std::printf("  [reclaim] pool %u workers, lend %u, reserve %u, %d shards; shard start latency (us, phase open -> start, worst shard)\n",
+              pool.size(), s1.lendCap, s1.reserve, shards);
+  std::printf("  [reclaim]   idle pool          p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(idle, 0.5), pct(idle, 0.99), pct(idle, 1.0));
+  std::printf("  [reclaim]   gen saturated (lent) p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(sat, 0.5), pct(sat, 0.99), pct(sat, 1.0));
+  std::printf("  [reclaim]   flat merge (contrast) p50 %7.1f  p99 %7.1f  max %7.1f\n", pct(flat, 0.5), pct(flat, 0.99), pct(flat, 1.0));
+  std::printf("  [reclaim]   gen slices %llu, bg peak %u, epochs opened with lent workers %llu/%llu, slices started inside epochs %llu\n",
+              (unsigned long long)slices.load(), s1.bgPeak, (unsigned long long)(s1.reclaimsWithLent - s0.reclaimsWithLent),
+              (unsigned long long)(s1.epochs - s0.epochs), (unsigned long long)(s1.bgStartedInEpoch - s0.bgStartedInEpoch));
+  check(ok, "reclaim: every phase committed under gen saturation");
+  check(s1.bgPeak <= s1.lendCap, "reclaim: background never holds more than lendCap workers");
+  if (pool.lockFree())  // 2026-10-30: no epochs on the lock-free pool, nothing to reclaim; background still ran
+    check(s1.epochs == s0.epochs && slices.load() > 0, "reclaim: lock-free pool opens no epochs and background slices still run");
+  else
+    check(s1.reclaimsWithLent > s0.reclaimsWithLent, "reclaim: epochs opened while gen slices were lent (reclaim exercised)");
+  if (s1.reserve >= unsigned(shards))
+    check(pct(sat, 0.99) < 2000.0, "reclaim: shard start p99 under gen saturation stays below one 2 ms gen slice (never queued behind gen)");
+}
+
+// Thread Handshake P5: chunk state word + ingress rings + pop budgets.
+void testChunkIngress() {
+  std::printf("world: chunk state word + ingress rings (Thread Handshake P5)\n");
+  {
+    ChunkStateWord w;
+    check(w.stage() == ChunkStage::Gen && w.load() == 0, "P5 word: starts GEN, all zero");
+    check(w.advance(ChunkStage::Gen, ChunkStage::StagedSim), "P5 word: GEN->STAGED_SIM");
+    check(!w.advance(ChunkStage::Gen, ChunkStage::Mesh), "P5 word: guarded advance refuses a wrong from-stage");
+    w.setSimTicket(0xBEEF);
+    check(w.bumpMeshGen() == 1 && w.bumpMeshGen() == 2, "P5 word: MeshGen counts");
+    check(w.bumpBorderGen() == 1, "P5 word: BorderGen bumps");
+    const uint64_t v = w.load();
+    check(ChunkStateWord::simTicket(v) == 0xBEEF && ChunkStateWord::meshGen(v) == 2 && ChunkStateWord::borderGen(v) == 1 &&
+              ChunkStateWord::stageOf(v) == ChunkStage::StagedSim && (ChunkStateWord::dirtyBits(v) & kChunkDirtyNeighbor),
+          "P5 word: fields packed independently");
+    check(w.takeDirty(kChunkDirtyNeighbor) == kChunkDirtyNeighbor && w.takeDirty(kChunkDirtyNeighbor) == 0, "P5 word: takeDirty clears once");
+    ChunkStateWord c = w;
+    check(c.load() == w.load(), "P5 word: copy snapshots the value");
+    check(ChunkStateWord::pack(1, 2, 3, 4, ChunkStage::Active) == 0x0001000200030404ull, "P5 word: layout [Border|Ticket|Mesh|Dirty|Stage]");
+    // concurrent border bumps never lose an increment
+    ChunkStateWord shared;
+    std::vector<std::thread> ts;
+    for (int t = 0; t < 4; ++t) ts.emplace_back([&] { for (int i = 0; i < 5000; ++i) { shared.bumpBorderGen(); shared.bumpMeshGen(); } });
+    for (auto& t : ts) t.join();
+    check(ChunkStateWord::borderGen(shared.load()) == uint16_t(20000) && ChunkStateWord::meshGen(shared.load()) == uint16_t(20000),
+          "P5 word: CAS updates lose nothing under contention");
+  }
+  {
+    cSpscRing<uint64_t> r(64);
+    std::atomic<bool> bad{false};
+    constexpr uint64_t kN = 200000;
+    std::thread prod([&] { for (uint64_t i = 1; i <= kN; ++i) { uint64_t v = i; while (!r.tryPush(std::move(v))) std::this_thread::yield(); } });
+    uint64_t expect = 1, v = 0;
+    while (expect <= kN) { if (r.tryPop(v)) { if (v != expect) bad = true; ++expect; } }
+    prod.join();
+    check(!bad.load() && r.sizeApprox() == 0, "P5 SPSC ring: FIFO, nothing lost");
+  }
+  {
+    cIngress<uint64_t> in(64);  // tiny ring: the overflow path must carry the burst losslessly
+    constexpr int kP = 4;
+    constexpr uint64_t kPer = 50000;
+    std::atomic<int> done{0};
+    std::vector<std::thread> ps;
+    for (int p = 0; p < kP; ++p) ps.emplace_back([&, p] { for (uint64_t i = 0; i < kPer; ++i) in.push(uint64_t(p) * kPer + i + 1); done.fetch_add(1); });
+    std::vector<uint64_t> got;
+    while (done.load() < kP) in.drainInto(got);
+    for (auto& t : ps) t.join();
+    in.drainInto(got);
+    std::sort(got.begin(), got.end());
+    bool ok = got.size() == kP * kPer;
+    for (size_t i = 0; ok && i < got.size(); ++i) ok = got[i] == i + 1;
+    check(ok, "P5 MPSC ingress: every item exactly once (ring + overflow)");
+    std::printf("  ingress overflow pushes: %llu of %llu\n", (unsigned long long)in.overflowTotal(), (unsigned long long)(kP * kPer));
+  }
+  {  // paused render pipeline: the ingress queues far past its ring (no pops), counts bytes, drops nothing
+    struct VecBytes { size_t operator()(const std::vector<uint8_t>& v) const { return v.size(); } };
+    cIngress<std::vector<uint8_t>, VecBytes> in(16);
+    for (int i = 0; i < 1000; ++i) in.push(std::vector<uint8_t>(size_t(100 + i % 7)));
+    size_t expect = 0;
+    for (int i = 0; i < 1000; ++i) expect += size_t(100 + i % 7);
+    check(in.queuedBytes() == expect, "P5 render ingress: queued bytes tracked across ring + overflow while not popped");
+    std::vector<std::vector<uint8_t>> got;
+    in.drainInto(got);
+    check(got.size() == 1000 && in.queuedBytes() == 0, "P5 render ingress: catch-up drain returns every item, bytes back to 0");
+  }
+  {  // P6 slab: radius tiers, preallocation, reuse, cap, buffers outliving the slab
+    check(kSlabRadius4Columns == 81 && kSlabRadius8Columns == 289, "P6 slab: radius 4/8 tiers are 81/289 columns");
+    std::shared_ptr<std::vector<int>> outlive;
+    {
+      cSlab<std::vector<int>> slab(kSlabRadius4Columns);
+      check(slab.idle() == 81, "P6 slab: preallocates the radius-4 tier");
+      { auto a = slab.acquire(); a->push_back(7); check(slab.idle() == 80 && slab.hits() == 1, "P6 slab: acquire takes a preallocated buffer"); }
+      check(slab.idle() == 81, "P6 slab: release returns the buffer");
+      slab.reserve(kSlabRadius8Columns);
+      check(slab.idle() == 289 && slab.cap() == 289, "P6 slab: grows to the radius-8 tier");
+      std::vector<std::shared_ptr<std::vector<int>>> held;
+      for (int i = 0; i < 300; ++i) held.push_back(slab.acquire());
+      check(slab.misses() == 11, "P6 slab: past the tier, acquire allocates (never fails)");
+      held.clear();
+      check(slab.idle() == 289 && slab.dropped() == 11, "P6 slab: returns past the cap are freed");
+      outlive = slab.acquire();
+    }
+    outlive.reset();  // slab gone: the deleter frees instead of returning
+    check(!outlive, "P6 slab: a buffer may outlive its slab");
+  }
+  {  // P6 slack harvesting
+    check(cSlackHarvester::slicesFor(16.0, 8.0, 2.0, 1.0, 8) == 6, "P6 slack: spare time / slice cost");
+    check(cSlackHarvester::slicesFor(16.0, 15.0, 2.0, 1.0, 8) == 0, "P6 slack: no spare, no slices");
+    check(cSlackHarvester::slicesFor(100.0, 0.0, 2.0, 1.0, 8) == 8, "P6 slack: clamped to max");
+    cSlackHarvester h(0.5, 8, 2.0);
+    const int before = h.grant(16.0, 10.0);
+    for (int i = 0; i < 40; ++i) h.noteSlice(2.0);
+    check(before == 8 && h.grant(16.0, 10.0) == 2, "P6 slack: an expensive slice shrinks the grant");
+  }
+  {  // P8 neighbor-border meshing (Archie Q3/Q4/Q7/Q8, Q1/Q2 CoW table)
+    ChunkMap w = worldWithColumns(2, &fixtureBlocks());  // columns (0..1, 0..1)
+    w.set(0, 5, 7, kRock);   // own -x edge (neighbor column -1 absent)
+    w.set(0, 5, 0, kRock);   // own (-x,-z) corner
+    w.set(15, 6, 7, kRock);  // own +x edge (neighbor column 1 present, air there)
+    const auto air = snapshotForMeshing(w, fixtureBlocks(), 0, 0, 0, 1, 1, kAir);
+    const auto clp = snapshotForMeshing(w, fixtureBlocks(), 0, 0, 0, 1, 1, kAir, MeshEdge::Clamp);
+    check(air->id[meshPadIndex(0, 6, 8)] == kAir && clp->id[meshPadIndex(0, 6, 8)] == kRock,
+          "P8 clamp-to-edge: a missing neighbor column reads the own edge cell, not air");
+    check(clp->id[meshPadIndex(0, 6, 1)] == kRock && clp->id[meshPadIndex(0, 6, 0)] == kRock,
+          "P8 clamp-to-edge: missing corner neighbors (Moore 8) clamp both axes");
+    check(clp->id[meshPadIndex(17, 7, 8)] == kAir && clp->id[meshPadIndex(16, 7, 8)] == kRock,
+          "P8 clamp-to-edge: a resident neighbor is read as-is (no clamp)");
+    bool same = true;
+    for (int i = 0; i < kMeshPadVolume; ++i) {
+      int x = i % kMeshPad, z = (i / kMeshPad) % kMeshPad;
+      if (x >= 1 && x <= 16 && z >= 1 && z <= 16) same = same && air->id[i] == clp->id[i];
+    }
+    check(same, "P8 clamp-to-edge: interior and vertical apron unchanged");
+    cWorkerScratch& pad = workerScratchForThisThread();
+    buildWorkerScratch(*clp, pad);
+    bool occ = true;
+    for (int i = 0; i < kMeshPadVolume; ++i) {
+      const int x = i % kMeshPad, z = (i / kMeshPad) % kMeshPad, y = i / (kMeshPad * kMeshPad);
+      occ = occ && pad.solid(x, y, z) == (clp->id[i] != kAir);
+    }
+    cWorkerScratch* other = nullptr;
+    std::thread([&] { other = &workerScratchForThisThread(); }).join();
+    // core (0,5,7) is rock: its -X face is hidden by the clamped apron, +X/+Y/-Y/+Z/-Z are exposed
+    const bool faces = !(pad.faceMask[1][5][7] & 1u) && (pad.faceMask[0][5][7] & 1u) && (pad.faceMask[2][5][7] & 1u) &&
+                       !(pad.faceMask[0][5][8] & 1u);
+    check(occ && faces && sizeof(pad.occRows) == 1296 && alignof(cWorkerScratch) == 64 && other != &pad,
+          "P8 worker scratch: 1,296-byte occupancy rows + face masks match the 18^3 apron, one per thread");
+    bool moore = true;
+    for (int i = 0; i < 8; ++i) moore = moore && moore8Bit(kMoore8[i][0], kMoore8[i][1]) == i;
+    check(moore && moore8Bit(0, 0) == -1, "P8 Moore 8: Dirty8 bits map 1:1 onto edge + corner neighbors");
+    ChunkStateWord sw;
+    cMeshHashLedger L;
+    const uint64_t col = ChunkKey::make(0, 0);
+    L.noteMeshedBorder(col, ChunkStateWord::borderGen(sw.load()));
+    auto cur = [&](uint64_t) { return ChunkStateWord::borderGen(sw.load()); };
+    const bool q0 = L.quiescent(0, cur) && !L.quiescent(1, cur);
+    sw.bumpBorderGen();  // a neighbor arrived
+    const bool q1 = !L.quiescent(0, cur) && sw.takeDirty(kChunkDirtyNeighbor) == kChunkDirtyNeighbor;
+    L.noteMeshedBorder(col, ChunkStateWord::borderGen(sw.load()));  // re-meshed against it
+    check(q0 && q1 && L.quiescent(0, cur), "P8 BorderGen remesh: a bump un-quiesces until re-meshed against it");
+    cMeshHashLedger a, b;
+    for (int64_t k = 0; k < 50; ++k) a.note(k, uint64_t(k) * 977);
+    for (int64_t k = 49; k >= 0; --k) b.note(k, uint64_t(k) * 977);
+    const bool orderFree = a.combined() == b.combined();
+    b.note(7, 1);
+    check(orderFree && a.combined() != b.combined(), "P8 MeshHash: landing-order independent, content sensitive");
+    cColumnTable v;
+    auto mk = [](int32_t cx, int32_t cz, uint64_t ep) { auto c = std::make_shared<CowColumn>(); c->cx = cx; c->cz = cz; c->commitEpoch = ep; return std::shared_ptr<const CowColumn>(c); };
+    v.publishGen(mk(3, -4, 0));
+    const auto pinned = v.lookupPinned(3, -4);
+    v.stageEdit(mk(3, -4, 1));
+    const bool beforeCommit = v.lookupPinned(3, -4)->commitEpoch == 0;
+    const uint64_t e = v.commitEpoch();
+    check(beforeCommit && v.lookupPinned(3, -4)->commitEpoch == 1 && pinned->commitEpoch == 0 && e == 1 && !v.lookupPinned(4, -4),
+          "P8 CoW: GEN visible at once, edits only at commit_epoch, pinned versions immutable");
+  }
+  {  // P7 wafer reveal: Chebyshev spiral + pacer
+    bool bijective = revealSpiralIndex(0, 0) == 0;
+    for (int k = 1; k <= 6; ++k) {
+      std::vector<int> seen(size_t(8 * k), 0);
+      for (int dz = -k; dz <= k; ++dz)
+        for (int dx = -k; dx <= k; ++dx)
+          if (revealRing(dx, dz) == k) {
+            const int i = revealSpiralIndex(dx, dz);
+            if (i < 0 || i >= 8 * k) bijective = false; else ++seen[size_t(i)];
+          }
+      for (int c : seen) bijective = bijective && c == 1;
+    }
+    check(bijective, "P7 spiral: each ring maps 1:1 onto 0..8k-1");
+    cWaferRevealPacer::Config c;
+    c.maxRing = 4;
+    const auto ready = [](int, int) { return true; };
+    cWaferRevealPacer p;
+    p.begin(10, -3, c);
+    check(p.spawnTs(0, 0) == 0.f && p.spawnTs(1, 1) == 0.f && p.spawnTs(2, 0) == kRevealHidden,
+          "P7 pacer: pedestal at t=0, outer rings unscheduled");
+    for (int i = 0; i < 100; ++i) p.advance(0.f, ready);
+    check(p.now() == 0.f && p.ringsScheduled() == 2 && !p.skyboxOnline(), "P7 pacer: paused clock schedules nothing");
+    int frames = 0;
+    while (!p.skyboxOnline() && frames < 1000) { p.advance(1.f / 60.f, ready); ++frames; }
+    check(p.skyboxOnline() && frames < 120, "P7 pacer: rings at v_etch, then SKYBOX_ONLINE");
+    check(p.spawnTs(3, 0) > p.spawnTs(2, 0) && p.spawnTs(-4, 4) > p.spawnTs(4, -3), "P7 pacer: outward, spiral order");
+    WaferRevealFrame f;
+    p.fill(f);
+    check(!f.active, "P7 pacer: reveal off once the sky is online");
+    std::vector<int> asked;
+    cWaferRevealPacer w;
+    w.begin(0, 0, c);
+    frames = 0;
+    while (!w.skyboxOnline() && frames < 2000) { w.advance(1.f / 60.f, [](int, int) { return false; }); ++frames; }
+    check(w.skyboxOnline() && frames > 300, "P7 pacer: unready rings wait, then time out (never stalls)");
+    c.vEtch = std::numeric_limits<float>::infinity();
+    cWaferRevealPacer b;
+    b.begin(0, 0, c);
+    check(b.skyboxOnline() && b.spawnTs(kRevealHalf, -kRevealHalf) == kRevealInstant, "P7 pacer: infinite v_etch (bench) is instant");
+  }
+  {
+    cSimPromotionBudget b;
+    check(b.open(100) == 4, "P5 pop budget: first barrier seeds 4");
+    b.spend(4);
+    check(b.open(100) == 0, "P5 pop budget: no tick stepped, no promotions");
+    check(b.open(101) == 4, "P5 pop budget: 4 per sim tick");
+    check(b.open(110) == cSimPromotionBudget::kMaxBank, "P5 pop budget: banked ticks capped");
+    b.spend(100);
+    check(b.bank() == 0, "P5 pop budget: spend floors at 0");
+    int idleGrant = 0;
+    for (int i = 0; i < cSimPromotionBudget::kIdleOpens; ++i) idleGrant = b.open(110);
+    check(idleGrant == cSimPromotionBudget::kPerTick, "P5 pop budget: idle sim (paused) falls back to one tick's worth per open");
+    check(spawnSpiralBypass(true, 5, 6, 4, 5) && !spawnSpiralBypass(true, 6, 5, 4, 5) && !spawnSpiralBypass(false, 4, 5, 4, 5),
+          "P5 ring-center bypass: 3x3 center, spawn spiral only");
+  }
+  {
+    RenderPopBudget rb;
+    rb.maxItems = 3;
+    rb.maxBytes = 100;
+    check(rb.admit(500), "P5 render pop: first item always admitted");
+    rb.take(500);
+    check(!rb.admit(1), "P5 render pop: K bytes cap");
+    RenderPopBudget rn;
+    rn.maxItems = 2;
+    rn.take(1); rn.take(1);
+    check(!rn.admit(1), "P5 render pop: N items cap");
+  }
+  {
+    cBorderRing br;
+    check(br.note(7) && !br.note(7) && br.note(9), "P5 border ring: dedup");
+    std::vector<uint64_t> out;
+    br.popUpTo(1, out);
+    check(out.size() == 1 && out[0] == 7 && br.size() == 1, "P5 border ring: FIFO, bounded pop");
+    check(br.note(7), "P5 border ring: re-note after pop");
+    br.forget(9);
+    out.clear(); br.popUpTo(8, out);
+    check(out.size() == 1 && out[0] == 7 && br.empty(), "P5 border ring: forget");
+  }
+  {
+    struct Probe { std::atomic<int>* n; ~Probe() { n->fetch_add(1); } };
+    std::atomic<int> freed{0};
+    cDeferredFreeQueue<Probe> q;
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 5);
+    freed = 0;  // the temporary above died already
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 5);
+    q.retire(std::make_unique<Probe>(Probe{&freed}), 6);
+    freed = 0;
+    check(q.collect(4) == 0 && freed == 0, "P5 deferred free: nothing before the fence");
+    check(q.collect(5, 1) == 1 && freed == 1, "P5 deferred free: bounded per collect");
+    check(q.collect(6) == 2 && freed == 3 && q.pending() == 0, "P5 deferred free: drains past the fence");
+  }
+  {
+    ChunkMap m;
+    auto col = std::make_unique<ChunkColumn>();
+    col->cx = 3; col->cz = -2;
+    m.insert(std::move(col));
+    auto back = m.extract(3, -2);
+    check(back && back->cx == 3 && !m.contains(3, -2) && !m.extract(3, -2), "P5 ChunkMap::extract hands the column back");
+  }
+}
+
+// Thread Handshake P4: tick ledger. Ring (T_offset + seq) & MASK from a tick arena, swept
+// linearly at the barrier; sync jobs hash returnTick, async jobs hash (spawnTick,
+// dispatchSeq, commit epoch, payload); commit_epoch advances only on COMMITTED. Gate:
+// the per-tick ledger hash trace is identical at 1/2/4/8/16 shards with random worker
+// sleeps (jitter), and the ledger's own bookkeeping is ~0 ms per tick.
+void testTickLedger() {
+  std::printf("sim: tick ledger (Thread Handshake P4)\n");
+  using L = cTickLedger;
+  struct Trace { std::vector<uint64_t> ticks; uint64_t chain = 0, epoch = 0, asyncN = 0, late = 0, sync = 0; };
+  auto runTrace = [](int workers, bool jitter, bool start, int perturbAt) {
+    cJobPool pool(unsigned(std::max(1, workers)));
+    cTimingHandshakeAuthority::Config cfg;
+    cfg.workerThreads = workers;
+    cfg.pool = &pool;
+    cfg.phasesPerCycle = 4;
+    cfg.watchdogCeiling = std::chrono::seconds(5);
+    cTimingHandshakeAuthority auth(cfg);
+    std::atomic<uint64_t> curPhase{0};
+    auto rnd = [](uint32_t maxUs) {
+      thread_local std::mt19937 g{std::random_device{}()};
+      return std::uniform_int_distribution<uint32_t>(0, maxUs)(g);
+    };
+    // Random worker delay: a random busy wait, and 1 time in 16 a real sleep (the OS
+    // timer makes every sleep ~1 ms or more on Windows, so sleeping always would make
+    // the test minutes long without adding any new ordering).
+    auto jitterWait = [&rnd](uint32_t maxUs) {
+      if (rnd(15) == 0) { std::this_thread::sleep_for(std::chrono::microseconds(rnd(maxUs))); return; }
+      const auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(rnd(maxUs));
+      while (std::chrono::steady_clock::now() < end) {}
+    };
+    for (uint32_t id = 0; id < 12; ++id) {
+      HsComponentDesc d;
+      d.name = "ledger.jitter";
+      if (id % 4 == 3) d.cadence = CadenceClass::HalfCycle;
+      auth.registerComponent(d, [&, id, jitter, perturbAt](uint64_t phase, uint64_t cycle) {
+        if (jitter) jitterWait(300);
+        L::notePayload(L::mix(id, cycle * 131 + phase));
+        if (perturbAt >= 0 && phase == uint64_t(perturbAt) && id == 5) L::notePayload(1);
+        if ((id + phase) % 3 == 0) {
+          const uint64_t h = L::asyncBegin(1 + id % 3);
+          const uint64_t payload = L::mix(L::mix(id, phase), 7);
+          pool.submit([&auth, &jitterWait, h, payload, jitter] {
+            if (jitter) jitterWait(2000);
+            auth.ledger().asyncComplete(h, payload);
+          });
+        }
+      });
+    }
+    if (start) check(auth.start(), "ledger: handshake start");
+    Trace tr;
+    bool ok = true;
+    for (uint64_t p = 0; p < 300; ++p) {
+      curPhase = p;
+      ok = auth.runPhase(p, p / 4, 0) && ok;
+      tr.ticks.push_back(auth.ledger().lastTickHash());
+    }
+    pool.waitIdle();
+    check(ok, "ledger: every phase committed");
+    if (start) check(auth.stop(), "ledger: handshake stop");
+    tr.chain = auth.ledger().chainHash();
+    tr.epoch = auth.commitEpoch();
+    tr.asyncN = auth.ledger().stats().asyncCommitted;
+    tr.late = auth.ledger().stats().asyncLate;
+    tr.sync = auth.ledger().stats().syncRecords;
+    return tr;
+  };
+  const Trace ref = runTrace(1, false, true, -1);
+  check(ref.epoch == 300, "ledger: commit_epoch advances once per COMMITTED phase (300 phases -> 300)");
+  check(ref.asyncN > 0 && ref.sync > 0, "ledger: sync and async records were committed");
+  bool allSame = true;
+  uint64_t lateTotal = 0;
+  for (int w : {1, 2, 4, 8, 16}) {
+    const Trace t = runTrace(w, true, true, -1);
+    const bool same = t.ticks == ref.ticks && t.chain == ref.chain && t.epoch == ref.epoch && t.asyncN == ref.asyncN;
+    std::printf("  [ledger] jitter run: %2d shards, chain %016llx, sync %llu, async %llu (barrier waited on %llu late) %s\n", w,
+                (unsigned long long)t.chain, (unsigned long long)t.sync, (unsigned long long)t.asyncN,
+                (unsigned long long)t.late, same ? "MATCH" : "MISMATCH");
+    allSame = allSame && same;
+    lateTotal += t.late;
+  }
+  std::printf("  [ledger] reference (1 shard, no jitter) chain %016llx\n", (unsigned long long)ref.chain);
+  check(allSame, "ledger: jitter test - per-tick ledger hashes identical at 1/2/4/8/16 shards with random worker sleeps");
+  check(lateTotal > 0, "ledger: jitter really reordered completions (the barrier had to wait for late async jobs)");
+  const Trace inl = runTrace(4, true, false, -1);
+  check(inl.ticks == ref.ticks && inl.chain == ref.chain, "ledger: inline (never started) authority produces the same ledger trace");
+  const Trace pert = runTrace(4, true, true, 150);
+  check(pert.chain != ref.chain && std::equal(ref.ticks.begin(), ref.ticks.begin() + 150, pert.ticks.begin()) &&
+            pert.ticks[150] != ref.ticks[150],
+        "ledger: a changed payload changes the ledger hash from that tick on (and not before)");
+
+  {  // commit_epoch never advances on a frozen phase
+    cTimingHandshakeAuthority::Config cfg;
+    cfg.workerThreads = 1;
+    cfg.watchdogCeiling = std::chrono::milliseconds(30);
+    cTimingHandshakeAuthority auth(cfg);
+    std::atomic<bool> stall{false};
+    HsComponentDesc d; d.name = "ledger.stall";
+    auth.registerComponent(d, [&](uint64_t, uint64_t) {
+      if (stall.load()) std::this_thread::sleep_for(std::chrono::milliseconds(80));
+      L::notePayload(42);
+    });
+    check(auth.start(), "ledger: freeze fixture start");
+    bool ok = auth.runPhase(0, 0, 0) && auth.runPhase(1, 0, 0);
+    const uint64_t e0 = auth.commitEpoch();
+    stall = true;
+    const bool froze = !auth.runPhase(2, 0, 0);
+    const uint64_t e1 = auth.commitEpoch();
+    stall = false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    auth.resetAfterFreeze();
+    ok = auth.runPhase(3, 0, 0) && ok;
+    check(ok && froze && e0 == 2 && e1 == 2 && auth.commitEpoch() == 3,
+          "ledger: commit_epoch is monotonic and only advances on COMMITTED (a frozen phase leaves it alone)");
+    check(auth.stop(), "ledger: freeze fixture stop");
+  }
+
+  {  // Archie review H2 probe (2026-10-30): resetAfterFreeze() while the frozen
+     // phase's worker is STILL stuck. Its late finishJob lands after the reset,
+     // during the next phases. Compare the per-tick ledger trace after the reset
+     // with the same run where the stuck worker drained before the reset (the
+     // existing, accepted shape above). Identical trace + every post-reset phase
+     // committed = the late write is harmless.
+    struct Probe { std::vector<uint64_t> ticks; bool frozeAt2 = false, postOk = true; uint64_t epoch = 0; };
+    auto probe = [](bool resetWhileStuck) {
+      cTimingHandshakeAuthority::Config cfg;
+      cfg.workerThreads = 2;
+      cfg.watchdogCeiling = std::chrono::milliseconds(30);
+      cTimingHandshakeAuthority auth(cfg);
+      std::atomic<bool> stall{false};
+      for (uint32_t id = 0; id < 4; ++id) {
+        HsComponentDesc d; d.name = "ledger.h2probe";
+        auth.registerComponent(d, [&stall, id](uint64_t phase, uint64_t cycle) {
+          if (id == 0 && stall.exchange(false)) std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          L::notePayload(L::mix(id, cycle * 977 + phase));
+        });
+      }
+      Probe pr;
+      check(auth.start(), "ledger: H2 probe start");
+      auth.runPhase(0, 0, 0);
+      auth.runPhase(1, 0, 0);
+      stall = true;
+      pr.frozeAt2 = !auth.runPhase(2, 0, 0);
+      if (!resetWhileStuck) std::this_thread::sleep_for(std::chrono::milliseconds(400));
+      auth.resetAfterFreeze();
+      const auto t0 = std::chrono::steady_clock::now();
+      for (uint64_t p = 3; p < 60; ++p) {
+        pr.postOk = auth.runPhase(p, p / 4, 0) && pr.postOk;
+        pr.ticks.push_back(auth.ledger().lastTickHash());
+        // Keep phases flowing across the stuck worker's wake-up (~250 ms).
+        if (resetWhileStuck) std::this_thread::sleep_for(std::chrono::milliseconds(6));
+      }
+      if (resetWhileStuck) std::this_thread::sleep_until(t0 + std::chrono::milliseconds(400));
+      pr.epoch = auth.commitEpoch();
+      check(auth.stop(), "ledger: H2 probe stop");
+      return pr;
+    };
+    const Probe drained = probe(false);
+    bool same = true, allOk = true, froze = drained.frozeAt2;
+    for (int trial = 0; trial < 3; ++trial) {
+      const Probe stuck = probe(true);
+      froze = froze && stuck.frozeAt2;
+      allOk = allOk && stuck.postOk && stuck.epoch == drained.epoch;
+      same = same && stuck.ticks == drained.ticks;
+    }
+    std::printf("  [ledger] H2 probe: froze=%d drainedOk=%d stuckOk=%d traceSame=%d epoch=%llu\n", int(froze),
+                int(drained.postOk), int(allOk), int(same), (unsigned long long)drained.epoch);
+    check(froze && drained.postOk, "ledger: H2 probe fixture froze at phase 2 and recovered (drained reference)");
+    check(allOk && same,
+          "ledger: resetAfterFreeze with a still-stuck worker - post-reset phases commit and the ledger trace matches the drained run (Archie H2)");
+  }
+
+  {  // overhead: 16 trivial components on 4 shards of the shared pool, ledger on vs off
+    auto bench = [](bool ledger, uint64_t& ovAvg, uint64_t& ovMax, uint32_t& ring) {
+      cTimingHandshakeAuthority::Config cfg;
+      cfg.workerThreads = 4;
+      cfg.ledger = ledger;
+      cTimingHandshakeAuthority auth(cfg);
+      std::atomic<uint64_t> sink{0};
+      for (int i = 0; i < 16; ++i) {
+        HsComponentDesc d; d.name = "ledger.bench";
+        auth.registerComponent(d, [&sink, i](uint64_t ph, uint64_t) { sink.fetch_add(ph + uint64_t(i), std::memory_order_relaxed); L::notePayload(ph); });
+      }
+      auth.start();
+      for (uint64_t p = 0; p < 200; ++p) auth.runPhase(p, p, 0);  // warm-up
+      const auto t0 = std::chrono::steady_clock::now();
+      const int kPhases = 3000;
+      const L::Stats s0 = auth.ledger().stats();
+      for (uint64_t p = 200; p < 200 + uint64_t(kPhases); ++p) auth.runPhase(p, p, 0);
+      const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / kPhases;
+      const L::Stats s1 = auth.ledger().stats();
+      ovAvg = (s1.ticks > s0.ticks) ? (s1.overheadNsTotal - s0.overheadNsTotal) / (s1.ticks - s0.ticks) : 0;
+      ovMax = s1.overheadNsMax;
+      ring = auth.ledger().ringCapacity();
+      auth.stop();
+      return us;
+    };
+    uint64_t a = 0, m = 0, a2 = 0, m2 = 0;
+    uint32_t ring = 0, ring2 = 0;
+    const double offUs = bench(false, a2, m2, ring2);
+    const double onUs = bench(true, a, m, ring);
+    std::printf("  [ledger] overhead: 16 jobs/tick on 4 shards, ring %u slots: ledger bookkeeping avg %.4f ms max %.4f ms per tick\n",
+                ring, double(a) * 1e-6, double(m) * 1e-6);
+    std::printf("  [ledger] phase wall time avg: ledger on %.1f us, ledger off %.1f us (difference %.1f us, scheduling noise included)\n",
+                onUs, offUs, onUs - offUs);
+    check(a < 50000, "ledger: bookkeeping overhead ~0 ms per tick (avg < 0.05 ms in tick_profile terms)");
+  }
+}
+
+void testSeqLockStress() {
+  const uint64_t kWrites = [] {
+    const char* e = std::getenv("LL_SEQLOCK_WRITES");
+    return e ? std::strtoull(e, nullptr, 10) : 10000000ULL;
+  }();
+  for (int readers : {1, 2, 8, 16}) {
+    cSeqLockTuple<5> tuple;
+    // Old pattern for the detector: fields first, then the counter.
+    std::atomic<uint64_t> naiveW[5] = {}, naiveSeq{0};
+    std::atomic<bool> done{false};
+    std::atomic<uint64_t> accepted{0}, torn{0}, naiveTorn{0}, backwards{0};
+    std::vector<std::thread> rs;
+    for (int r = 0; r < readers; ++r)
+      rs.emplace_back([&] {
+        uint64_t last = 0, acc = 0, bad = 0, nbad = 0, back = 0;
+        while (!done.load(std::memory_order_relaxed)) {
+          uint64_t w[5];
+          if (tuple.tryRead(w)) {
+            ++acc;
+            if (!(w[0] == w[1] && w[1] == w[2] && w[2] == w[3] && w[3] == w[4])) ++bad;
+            if (w[0] < last) ++back;
+            last = w[0];
+          }
+          const uint64_t s1 = naiveSeq.load(std::memory_order_acquire);
+          uint64_t n[5];
+          for (int i = 0; i < 5; ++i) n[i] = naiveW[i].load(std::memory_order_acquire);
+          if (naiveSeq.load(std::memory_order_acquire) == s1 &&
+              !(n[0] == n[1] && n[1] == n[2] && n[2] == n[3] && n[3] == n[4]))
+            ++nbad;
+        }
+        accepted += acc; torn += bad; naiveTorn += nbad; backwards += back;
+      });
+    const auto t0 = std::chrono::steady_clock::now();
+    for (uint64_t k = 1; k <= kWrites; ++k) {
+      const uint64_t v[5] = {k, k, k, k, k};
+      tuple.write(v);
+      for (int i = 0; i < 5; ++i) naiveW[i].store(k, std::memory_order_relaxed);
+      naiveSeq.store(k, std::memory_order_release);
+    }
+    done = true;
+    for (auto& t : rs) t.join();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  seqlock stress: %d readers, %llu writes in %.0f ms: accepted %llu, torn %llu, backwards %llu; old pattern torn %llu\n",
+                readers, (unsigned long long)kWrites, ms, (unsigned long long)accepted.load(),
+                (unsigned long long)torn.load(), (unsigned long long)backwards.load(), (unsigned long long)naiveTorn.load());
+    char what[160];
+    std::snprintf(what, sizeof what, "seqlock: %d readers accept zero torn and zero backwards tuples (review fix 1)", readers);
+    check(torn.load() == 0 && backwards.load() == 0 && accepted.load() > 0, what);
+  }
+}
+
+// P0.5 review fix 2 (external review by Cryosis (sirlinhart), 2026-10-29): external
+// submits go through per-worker MPSC injection queues; no thread but the owner may touch
+// a deque's bottom. 8 external submitters x 1e6 jobs (LL_INJECT_JOBS overrides), plus
+// jobs that submit from inside workers: every job runs exactly once, none lost, and the
+// owner-rule audit stays at zero.
+void testJobInjectionStress() {
+  long long per = 1000000;
+  if (const char* e = std::getenv("LL_INJECT_JOBS")) per = std::max(1LL, std::atoll(e));
+  const int kSubmitters = 8;
+  const size_t total = size_t(per) * kSubmitters;
+  for (unsigned workers : {1u, 2u, 4u, 8u}) {
+    cJobSystem::Config cfg; cfg.workerThreads = workers;
+    cJobSystem js(cfg);
+    std::vector<std::atomic<uint8_t>> runs(total);
+    std::atomic<long long> nested{0};
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> subs;
+    for (int s = 0; s < kSubmitters; ++s)
+      subs.emplace_back([&, s] {
+        for (long long k = 0; k < per; ++k) {
+          const size_t id = size_t(s) * size_t(per) + size_t(k);
+          if ((k & 1023) == 0)  // some jobs fan out from a worker (owner-push path)
+            js.submit([&, id] { runs[id].fetch_add(1, std::memory_order_relaxed);
+                                js.submit([&] { nested.fetch_add(1, std::memory_order_relaxed); }); });
+          else
+            js.submit([&, id] { runs[id].fetch_add(1, std::memory_order_relaxed); },
+                      (k % 3 == 0) ? JobPriority::High : JobPriority::Normal);
+        }
+      });
+    for (auto& t : subs) t.join();
+    js.waitIdle();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    size_t once = 0, bad = 0;
+    for (auto& r : runs) (r.load() == 1 ? once : bad)++;
+    const long long expectNested = kSubmitters * ((per + 1023) / 1024);
+    std::printf("  [inject] workers=%u jobs=%zu once=%zu bad=%zu nested=%lld/%lld ownerViolations=%llu %.0f ms\n",
+                workers, total, once, bad, nested.load(), expectNested,
+                (unsigned long long)js.ownerViolations(), ms);
+    check(bad == 0 && once == total, "jobsystem inject: every externally submitted job runs exactly once");
+    check(nested.load() == expectNested, "jobsystem inject: worker-side submits all run");
+    check(js.ownerViolations() == 0 && js.failedJobs() == 0, "jobsystem inject: no owner-end deque call from a non-owner thread");
+  }
+#ifdef NDEBUG
+  {  // the audit itself works: a bound deque counts a foreign owner-end call
+    cChaseLevDeque<int, 64> d;
+    std::thread([&] { d.bindOwner(); }).join();
+    int x = 1; d.pushBottom(std::move(x));
+    check(d.ownerViolations() == 1, "chase-lev: owner audit flags a non-owner pushBottom");
+  }
+#endif
+}
+
 int runModule(const std::string& m) {
   const int before = g_fails;
-  if (m == "core") { testCore(); testFailFast(); testCounterHash(); }
-  else if (m == "world") { testWorld(); testMarchRay(); }
-  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); }
-  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); }
+  if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
+  else if (m == "world") { testWorld(); testMarchRay(); testChunkIngress(); }
+  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); g_fails += testCanonicalMeshEntry(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();

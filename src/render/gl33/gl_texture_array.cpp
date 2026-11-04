@@ -89,7 +89,7 @@ bool cGlTextureArray::upload(const cTextureReg& textures) {
     // CREW TILE (shake 2026-10-18): reused scratch instead of a fresh
     // per-layer copy; assign() fully overwrites it with this layer's pixels.
     dilScratch_.assign(img.pixels().begin(), img.pixels().end());
-    dilateTransparentRGB(dilScratch_.data(), tile_, tile_);
+    if (!dilateSkipLayer(textures.textures()[size_t(i)].name)) dilateTransparentRGB(dilScratch_.data(), tile_, tile_);  // 2026-11-01: masks unbled (LL_MASK_NODILATE)
     glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, tile_, tile_, 1, GL_RGBA, GL_UNSIGNED_BYTE, dilScratch_.data());
     ok = checkUploadError("glTexSubImage3D layer upload", i, 0, tile_, tile_, 1) && ok;
     if (coverageMipLayer(textures.textures()[size_t(i)].name)) coverage.emplace_back(i, coverageMips(dilScratch_.data(), tile_));
