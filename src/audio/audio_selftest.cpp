@@ -27,8 +27,8 @@
 #include <cstdint>
 #include <chrono>
 #include <cstring>
-#include <mutex>
 #include <span>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 namespace {
@@ -602,13 +602,13 @@ int runAudioSelfTest() {
     // (5) Async streaming: decode runs on the worker thread, never on the
     // audio thread; chunks cross via the double-buffered cHandoffQueue.
     constexpr size_t kTotal = 48000;  // 1 s of stereo
-    std::mutex m;
+    litholattice::cAtomicGate m;
     std::vector<std::thread::id> decodeThreads;
     size_t produced = 0;
     cAudioStreamer streamer(4096, 8);
     streamer.play([&](float* out, size_t maxFrames) {
       {
-        std::lock_guard<std::mutex> l(m);
+        litholattice::cGateGuard<litholattice::cAtomicGate> l(m);
         decodeThreads.push_back(std::this_thread::get_id());
       }
       size_t n = 0;
@@ -640,7 +640,7 @@ int runAudioSelfTest() {
     streamer.stop();  // join the worker before reading its id
     std::vector<std::thread::id> ids;
     {
-      std::lock_guard<std::mutex> l(m);
+      litholattice::cGateGuard<litholattice::cAtomicGate> l(m);
       ids = decodeThreads;
     }
     const bool allOnWorker =

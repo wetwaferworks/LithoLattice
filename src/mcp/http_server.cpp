@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <sys/random.h>
 #include <unistd.h>
+#include "litholattice/mcp/spin_gate.h"
 #endif
 
 namespace litholattice::mcp {
@@ -228,7 +229,7 @@ bool cMcpHttpServer::start(std::uint16_t port, const std::string& bindAddr) {
     return false;
   }
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     listener_ = std::move(listener);
     boundAddress_ = listener_.boundAddress();
     boundPort_ = listener_.boundPort();
@@ -250,12 +251,12 @@ void cMcpHttpServer::stop() {
     thread_.join();
     if (auto h = g_threadHook.load()) h(false);
   }
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   sessions_.clear();
 }
 
 std::string cMcpHttpServer::token() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return bearerToken_;
 }
 
@@ -265,12 +266,12 @@ std::string cMcpHttpServer::rotateToken() {
   if (cryptoRandomBytes(raw, sizeof(raw))) next = hexEncode(raw, sizeof(raw));
   {
     // Scoped: log() takes the same mutex, so it must not be held here.
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     if (!next.empty()) bearerToken_ = next;
   }
   // else: keep the old token; a failed rotation must not lock everyone out.
   log("mcp: http bearer token rotated");
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return bearerToken_;
 }
 
@@ -299,7 +300,7 @@ bool cMcpHttpServer::grantStatelessPermissions(std::uint32_t bits) {
   // (which forwards through cMcpHttpServer::log, i.e. this same mutex).
   cMcpServer* s = nullptr;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     s = statelessServer_.get();
   }
   if (!s) return false;
@@ -310,7 +311,7 @@ bool cMcpHttpServer::grantStatelessPermissions(std::uint32_t bits) {
 bool cMcpHttpServer::revokeStatelessPermissions(std::uint32_t bits) {
   cMcpServer* s = nullptr;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     s = statelessServer_.get();
   }
   if (!s) return false;
@@ -319,12 +320,12 @@ bool cMcpHttpServer::revokeStatelessPermissions(std::uint32_t bits) {
 }
 
 std::uint32_t cMcpHttpServer::statelessPermissionMask() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return statelessServer_ ? statelessServer_->permissionMask() : 0;
 }
 
 std::vector<std::string> cMcpHttpServer::sessionIds() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   std::vector<std::string> ids;
   ids.reserve(sessions_.size());
   for (const auto& kv : sessions_) ids.push_back(kv.first);
@@ -332,19 +333,19 @@ std::vector<std::string> cMcpHttpServer::sessionIds() const {
 }
 
 std::string cMcpHttpServer::boundAddress() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return boundAddress_;
 }
 
 std::uint16_t cMcpHttpServer::boundPort() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return boundPort_;
 }
 
 void cMcpHttpServer::log(std::string_view line) {
   LogSink sink;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     sink = logSink_;
   }
   if (sink) sink(line);
@@ -368,7 +369,7 @@ std::string cMcpHttpServer::createSession() {
   std::vector<std::string> expiredIds;
   std::string evictedId;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     if (logSink_) server->setLogSink(logSink_);
     const auto now = std::chrono::steady_clock::now();
     sessions_.emplace(id, Session{std::move(server), now});
@@ -403,7 +404,7 @@ cMcpServer* cMcpHttpServer::findSession(const std::string& id) {
   std::string expiredId;
   cMcpServer* out = nullptr;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     const auto it = sessions_.find(id);
     if (it != sessions_.end()) {
       const auto now = std::chrono::steady_clock::now();
@@ -421,7 +422,7 @@ cMcpServer* cMcpHttpServer::findSession(const std::string& id) {
 }
 
 void cMcpHttpServer::eraseSession(const std::string& id) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   sessions_.erase(id);
 }
 
@@ -429,7 +430,7 @@ bool cMcpHttpServer::checkAuth(const HttpRequest& req) const {
   std::string_view auth = req.headerValue("authorization");
   if (!startsWithI(auth, "Bearer ")) return false;
   std::string_view presented = auth.substr(7);
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
   return constantTimeEqual(presented, bearerToken_) && !bearerToken_.empty();
 }
 
@@ -462,7 +463,7 @@ HttpResponse cMcpHttpServer::handleStatelessRequest(const HttpRequest& req,
                                                    const std::string& method) {
   std::string agentLog = "unauthenticated";
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     if (statelessServer_) agentLog = statelessServer_->agent().name;
   }
   auto audit = [&](int status) {
@@ -514,7 +515,7 @@ HttpResponse cMcpHttpServer::handleStatelessRequest(const HttpRequest& req,
   try {
     cMcpServer* s = nullptr;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
       s = statelessServer_.get();
     }
     if (!s) {

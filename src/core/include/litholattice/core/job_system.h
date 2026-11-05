@@ -56,11 +56,9 @@
 #include <cstdlib>
 #include <cassert>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -71,7 +69,8 @@
 #include "litholattice/core/log.h"
 #include "litholattice/core/thread_debug.h"
 #include "litholattice/core/thread_census.h"  // Thread Handshake P3
-#include "litholattice/core/threading.h"      // P4: cJobPool::shared() backs every cJobSystem
+#include "litholattice/core/threading.h"
+#include "litholattice/core/atomic_gate.h"      // P4: cJobPool::shared() backs every cJobSystem
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -179,9 +178,9 @@ class cJobSystem {
     inFlight_.fetch_add(1, std::memory_order_relaxed);
     bool launch = false;
     {
-      std::lock_guard<std::mutex> l(qM_);  // L1 leaf
+      cGateGuard<cAtomicGate> l(qGate_);  // Archie PlayJ: mutex-free gate
       queue_[unsigned(prio)].push_back(std::move(job));
-      if (pumps_ < cap_) { ++pumps_; launch = true; }
+      if (pumps_.load(std::memory_order_relaxed) < cap_) { pumps_.fetch_add(1, std::memory_order_relaxed); launch = true; }
     }
     LITHO_THREAD_LOG("job", "submit prio=%u%s", unsigned(prio), launch ? " +pump" : "");
     if (launch) launchPump();
@@ -193,25 +192,40 @@ class cJobSystem {
     assert(!stop_.load(std::memory_order_relaxed) && "submitIo during/after shutdown");
     ioInFlight_.fetch_add(1, std::memory_order_relaxed);
     {
-      std::lock_guard<std::mutex> l(ioM_);  // L1 leaf
+      cGateGuard<cAtomicGate> l(ioGate_);
       ioQueue_.push_back(std::move(job));
     }
-    ioCv_.notify_one();
+    ioWake_.fetch_add(1, std::memory_order_release);
+    ioWake_.notify_one();
   }
 
   /// Block until every submitted job (workers + I/O) has finished. Must NOT be
   /// called from a worker/I/O job (thread-local assert: that would deadlock).
   void waitIdle() {
     assert(!t_onJobThread && "waitIdle() from a job thread would deadlock the pool");
-    std::unique_lock<std::mutex> l(m_);  // L2
+    // Archie PlayJ: no mutex/cv — wait on the in-flight atomics themselves.
     auto idle = [this] {
       return inFlight_.load(std::memory_order_acquire) == 0 &&
              ioInFlight_.load(std::memory_order_acquire) == 0;
     };
-    if constexpr (kThreadDebug) {  // B8 watchdog (debug builds only): same wait, dump after 10 s
-      if (!idleCv_.wait_for(l, std::chrono::seconds(10), idle)) { debugDump("waitIdle() 10 s without progress"); }
+    if constexpr (kThreadDebug) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (!idle()) {
+        if (std::chrono::steady_clock::now() >= deadline) { debugDump("waitIdle() 10 s without progress"); break; }
+        int a = inFlight_.load(std::memory_order_acquire);
+        int b = ioInFlight_.load(std::memory_order_acquire);
+        if (a == 0 && b == 0) break;
+        if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
+        else ioInFlight_.wait(b, std::memory_order_acquire);
+      }
     }
-    idleCv_.wait(l, idle);
+    while (!idle()) {
+      int a = inFlight_.load(std::memory_order_acquire);
+      int b = ioInFlight_.load(std::memory_order_acquire);
+      if (a == 0 && b == 0) break;
+      if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
+      else ioInFlight_.wait(b, std::memory_order_acquire);
+    }
   }
 
   uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
@@ -275,25 +289,37 @@ class cJobSystem {
       auto idle = [this] {
         return inFlight_.load(std::memory_order_acquire) == 0 && ioInFlight_.load(std::memory_order_acquire) == 0;
       };
-      std::unique_lock<std::mutex> l(m_);  // L2
       const long ms = drainMs();
-      if (ms > 0 && !idleCv_.wait_for(l, std::chrono::milliseconds(ms), idle)) {
-        cancel_.store(true, std::memory_order_release);
-        l.unlock();
-        const int dropped = dropQueued();
-        logWarn("job system shutdown: drain passed %ld ms; dropped %d queued job(s), waiting for running ones", ms, dropped);
-        l.lock();
+      if (ms > 0) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (!idle() && std::chrono::steady_clock::now() < deadline) {
+          int a = inFlight_.load(std::memory_order_acquire);
+          int b = ioInFlight_.load(std::memory_order_acquire);
+          if (a == 0 && b == 0) break;
+          if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
+          else ioInFlight_.wait(b, std::memory_order_acquire);
+        }
+        if (!idle()) {
+          cancel_.store(true, std::memory_order_release);
+          const int dropped = dropQueued();
+          logWarn("job system shutdown: drain passed %ld ms; dropped %d queued job(s), waiting for running ones", ms, dropped);
+        }
       }
-      idleCv_.wait(l, idle);
+      while (!idle()) {
+        int a = inFlight_.load(std::memory_order_acquire);
+        int b = ioInFlight_.load(std::memory_order_acquire);
+        if (a == 0 && b == 0) break;
+        if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
+        else ioInFlight_.wait(b, std::memory_order_acquire);
+      }
     }
-    {  // a pump may still be between its last job and its exit: it touches `this` until then
-      std::unique_lock<std::mutex> l(qM_);
-      pumpCv_.wait(l, [this] { return pumps_ == 0; });
+    {  // wait for pumps to exit
+      for (unsigned v; (v = pumps_.load(std::memory_order_acquire)) != 0;)
+        pumps_.wait(v, std::memory_order_acquire);
     }
     stop_.store(true, std::memory_order_release);
-    // B8: the empty lock before the notify is REQUIRED (io threads test stop_ under ioM_).
-    { std::lock_guard<std::mutex> l(ioM_); }
-    ioCv_.notify_all();
+    ioWake_.fetch_add(1, std::memory_order_release);
+    ioWake_.notify_all();
     for (auto& t : ioThreads_) t.join();
     records_.retireAll();  // joined -> RETURNED
     LITHO_THREAD_LOG("thread", "shutdown: io threads joined, failed=%llu",
@@ -307,11 +333,11 @@ class cJobSystem {
   // Drops every queued (not started) worker + io job; releases their in-flight counts.
   int dropQueued() {
     std::deque<Job> w, io;
-    { std::lock_guard<std::mutex> l(qM_); for (auto& q : queue_) { for (auto& j : q) w.push_back(std::move(j)); q.clear(); } }
-    { std::lock_guard<std::mutex> l(ioM_); io.swap(ioQueue_); }
+    { cGateGuard<cAtomicGate> l(qGate_); for (auto& q : queue_) { for (auto& j : q) w.push_back(std::move(j)); q.clear(); } }
+    { cGateGuard<cAtomicGate> l(ioGate_); io.swap(ioQueue_); }
     const int n = int(w.size() + io.size());
-    if (!w.empty() && inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel) == int(w.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
-    if (!io.empty() && ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel) == int(io.size())) { std::lock_guard<std::mutex> l(m_); idleCv_.notify_all(); }
+    if (!w.empty() && inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel) == int(w.size())) inFlight_.notify_all();
+    if (!io.empty() && ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel) == int(io.size())) ioInFlight_.notify_all();
     dropped_.fetch_add(uint64_t(n), std::memory_order_relaxed);
     return n;
   }
@@ -326,12 +352,12 @@ class cJobSystem {
     for (;;) {
       Job job;
       {
-        std::lock_guard<std::mutex> l(qM_);
+        cGateGuard<cAtomicGate> l(qGate_);
         int p = int(JobPriority::High);
         while (p >= int(JobPriority::Low) && queue_[p].empty()) --p;
         if (p < int(JobPriority::Low)) {
-          --pumps_;
-          pumpCv_.notify_all();  // under the lock: shutdown may destroy *this right after
+          pumps_.fetch_sub(1, std::memory_order_acq_rel);
+          pumps_.notify_all();
           break;
         }
         job = std::move(queue_[p].front());
@@ -349,14 +375,28 @@ class cJobSystem {
   void ioLoop(unsigned self) {
     for (;;) {
       Job job;
-      {
-        std::unique_lock<std::mutex> l(ioM_);  // L1
-        ioCv_.wait(l, [this] {
-          return stop_.load(std::memory_order_acquire) || !ioQueue_.empty();
-        });
-        if (ioQueue_.empty()) return;  // stop_ is set (see predicate)
-        job = std::move(ioQueue_.front());
-        ioQueue_.pop_front();
+      for (;;) {
+        {
+          cGateGuard<cAtomicGate> l(ioGate_);
+          if (!ioQueue_.empty()) {
+            job = std::move(ioQueue_.front());
+            ioQueue_.pop_front();
+            break;
+          }
+          if (stop_.load(std::memory_order_acquire)) return;
+        }
+        const uint64_t w = ioWake_.load(std::memory_order_acquire);
+        // Re-check under the gate after reading wake (avoid missing a push).
+        {
+          cGateGuard<cAtomicGate> l(ioGate_);
+          if (!ioQueue_.empty()) {
+            job = std::move(ioQueue_.front());
+            ioQueue_.pop_front();
+            break;
+          }
+          if (stop_.load(std::memory_order_acquire)) return;
+        }
+        ioWake_.wait(w, std::memory_order_acquire);
       }
       executeJob(std::move(job), ioInFlight_, "io", self);
     }
@@ -391,27 +431,21 @@ class cJobSystem {
         LITHO_THREAD_LOG("job", "SLOW JOB id=%llu ran %llu us: worker jobs must never block",
                          (unsigned long long)id, (unsigned long long)dt);
     }
-    if (counter.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      std::lock_guard<std::mutex> l(m_);  // L2, only to pair with idleCv_
-      idleCv_.notify_all();
-    }
+    if (counter.fetch_sub(1, std::memory_order_acq_rel) == 1)
+      counter.notify_all();
   }
 
   cJobPool* pool_ = nullptr;   // cJobPool::shared(), never destroyed
   unsigned cap_ = 1;
-  std::deque<Job> queue_[kJobPriorityCount];  // guarded by qM_
-  unsigned pumps_ = 0;                         // guarded by qM_
-  std::mutex qM_;                              // L1 leaf
-  std::condition_variable pumpCv_;             // shutdown waits for pumps_ == 0
+  std::deque<Job> queue_[kJobPriorityCount];  // guarded by qGate_
+  std::atomic<unsigned> pumps_{0};             // Archie PlayJ: atomic + wait (was mutex+cv)
+  cAtomicGate qGate_;                          // Archie PlayJ: replaces qM_
   std::vector<std::thread> ioThreads_;
   cThreadRecordSet records_;  // io threads, class System
 
   std::deque<Job> ioQueue_;
-  std::mutex ioM_;                 // L1
-  std::condition_variable ioCv_;
-
-  std::mutex m_;                   // L2: idleCv_ pairing
-  std::condition_variable idleCv_;  // waitIdle() sleeps here
+  cAtomicGate ioGate_;                 // Archie PlayJ: replaces ioM_
+  std::atomic<uint64_t> ioWake_{0};    // Archie PlayJ: replaces ioCv_
   std::atomic<bool> stop_{false};
   std::atomic<int> inFlight_{0};
   std::atomic<int> ioInFlight_{0};
@@ -435,10 +469,7 @@ class JobFence {
   JobFence& operator=(const JobFence&) = delete;
 
   void submit(Job job, JobPriority prio = JobPriority::Normal) {
-    {
-      std::lock_guard<std::mutex> l(m_);  // L1 leaf
-      ++pending_;
-    }
+    pending_.fetch_add(1, std::memory_order_acq_rel);
     sys_.submit(
         [this, j = std::move(job)] {
           bool ok = true;
@@ -451,9 +482,9 @@ class JobFence {
             ok = false;
             logError("job fence: job threw a non-std exception");
           }
-          std::lock_guard<std::mutex> l(m_);  // L1 leaf; never nested with system locks
-          if (!ok) ++failed_;
-          if (--pending_ == 0) cv_.notify_all();  // notify under the lock: the waiter may destroy *this right after
+          if (!ok) failed_.fetch_add(1, std::memory_order_relaxed);
+          if (pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            pending_.notify_all();
         },
         prio);
   }
@@ -462,22 +493,27 @@ class JobFence {
   /// number that threw. Must not be called from a job thread (assert).
   int wait() {
     assert(!cJobSystem::onJobThread() && "JobFence::wait() from a job thread would deadlock");
-    std::unique_lock<std::mutex> l(m_);  // L1 leaf
-    if constexpr (kThreadDebug) {  // B8 watchdog (debug builds only): same wait, dump after 10 s
-      if (!cv_.wait_for(l, std::chrono::seconds(10), [this] { return pending_ == 0; })) {
-        LITHO_THREAD_LOG("job", "fence stuck: pending=%d", pending_);
-        sys_.debugDump("JobFence::wait() 10 s without progress");
+    if constexpr (kThreadDebug) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (pending_.load(std::memory_order_acquire) != 0) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+          LITHO_THREAD_LOG("job", "fence stuck: pending=%d", pending_.load());
+          sys_.debugDump("JobFence::wait() 10 s without progress");
+          break;
+        }
+        int p = pending_.load(std::memory_order_acquire);
+        if (p == 0) break;
+        pending_.wait(p, std::memory_order_acquire);
       }
     }
-    cv_.wait(l, [this] { return pending_ == 0; });
-    return failed_;
+    for (int p; (p = pending_.load(std::memory_order_acquire)) != 0;)
+      pending_.wait(p, std::memory_order_acquire);
+    return int(failed_.load(std::memory_order_relaxed));
   }
 
  private:
   cJobSystem& sys_;
-  std::mutex m_;
-  std::condition_variable cv_;
-  int pending_ = 0, failed_ = 0;
+  std::atomic<int> pending_{0}, failed_{0};
 };
 
 }  // namespace litholattice

@@ -16,16 +16,16 @@
 // barrier wait, or for authority-thread preemption.
 #pragma once
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/atomic_condition.h"
 #include "litholattice/core/threading.h"      // Thread Handshake P3: shard jobs on cJobPool
 #include <memory>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -423,7 +423,7 @@ class cTimingHandshakeAuthority {
   // Guards stats_ for cross-thread snapshots (A-M6): held by runPhase's
   // stats fold, resetStats(), and statsSnapshot(). The authority thread's
   // own direct stats() reads need no lock (same thread as the fold).
-  mutable std::mutex statsM_;
+  mutable ::litholattice::cAtomicGate statsM_;
   HsFreezeInfo lastFreeze_{};
   cTickLedger ledger_;  // P4 (constructed from cfg_ in the ctor init list order: after cfg_)
 
@@ -465,7 +465,7 @@ class cTimingHandshakeAuthority {
     uint32_t componentId = 0;
     uint64_t phase = 0, cycleTick = 0;
   };
-  std::mutex failureM_;
+  ::litholattice::cAtomicGate failureM_;
   PendingFailure pendingFailure_;
 
   bool lockfree_ = false;             // LL_HS_LOCKFREE=1 (or LL_HS_LAYOUT=original)
@@ -473,9 +473,9 @@ class cTimingHandshakeAuthority {
   std::atomic<uint64_t> arrivalWord_{0};  // lock-free barrier: key(gen, seq) << 16 | arrivals
   std::atomic<uint64_t> statsSeq_{0};     // lock-free stats: odd while the fold writes
   std::vector<std::thread> lfThreads_;
-  mutable std::mutex m_;
-  std::condition_variable publishCv_;  // workers block here (hybrid poll)
-  std::condition_variable barrierCv_;  // authority waits here for arrivals
+  mutable ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition publishCv_;  // workers block here (hybrid poll)
+  ::litholattice::cAtomicCondition barrierCv_;  // authority waits here for arrivals
 };
 
 }  // namespace litholattice

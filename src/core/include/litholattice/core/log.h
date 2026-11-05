@@ -8,9 +8,9 @@
 // be tailed live; the previous run's file is kept as <name>.prev.log.
 #pragma once
 #include <cstdint>
-#include <mutex>
 #include <string>
 #include <vector>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 #if defined(__GNUC__)
@@ -49,7 +49,7 @@ class LogTap {
   size_t size() const;
   void clear();
  private:
-  mutable std::mutex mutex_;
+  mutable litholattice::cAtomicGate mutex_;
   std::vector<LogRecord> buf_;  ///< ring storage; buf_.size() <= kCapacity
   size_t head_ = 0;             ///< index of the oldest record
   uint64_t nextSeq_ = 1;

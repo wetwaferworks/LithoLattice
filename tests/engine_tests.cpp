@@ -638,10 +638,10 @@ void testJobSystem() {
                     while (!gate.load(std::memory_order_acquire)) std::this_thread::yield(); },
               JobPriority::High);
     while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
-    std::mutex m; std::vector<int> order; order.reserve(40);
+    litholattice::cAtomicGate m; std::vector<int> order; order.reserve(40);
     for (int i = 0; i < 20; ++i) {
-      js.submit([&] { std::lock_guard<std::mutex> l(m); order.push_back(0); }, JobPriority::Low);
-      js.submit([&] { std::lock_guard<std::mutex> l(m); order.push_back(1); }, JobPriority::High);
+      js.submit([&] { litholattice::cGateGuard<litholattice::cAtomicGate> l(m); order.push_back(0); }, JobPriority::Low);
+      js.submit([&] { litholattice::cGateGuard<litholattice::cAtomicGate> l(m); order.push_back(1); }, JobPriority::High);
     }
     gate.store(true, std::memory_order_release);
     js.waitIdle();
@@ -4406,7 +4406,7 @@ void testRandomTicks() {
 // ---- tick stepper (CH-H5) + tick continuity (CH-H8) fixtures -----------------
 struct StepRec {
   std::atomic<int> ticks{0}, randoms{0}, picks{0};
-  std::mutex m;
+  litholattice::cAtomicGate m;
   std::vector<uint64_t> randomIdx;  // tickIndex of every randomTick call, in order
 };
 
@@ -4422,7 +4422,7 @@ struct StepSim final : IWorldSim {
   }
   void randomTick(ChunkMap&, const TickArea&, uint64_t idx, const DirtyFn&) override {
     ++rec->randoms;
-    std::lock_guard l(rec->m);
+    litholattice::cGateGuard l(rec->m);
     rec->randomIdx.push_back(idx);
   }
   void onRandomTick(ChunkMap& w, int x, int y, int z, BlockId, uint32_t, const DirtyFn& dirty) override {
@@ -5694,12 +5694,12 @@ void testAsyncIo() {
   }
   {  // per-path FIFO: same-path ops complete in submission order
     std::vector<int> order;
-    std::mutex om;
+    litholattice::cAtomicGate om;
     st::cIoFence fence(io);
     const auto fp = dir / "fifo.bin";
     for (int i = 0; i < 20; ++i)
       fence.submitWrite(fp, st::Bytes{uint8_t(i)}, opts, [&, i](bool, std::string) {
-        std::lock_guard<std::mutex> l(om);
+        litholattice::cGateGuard<litholattice::cAtomicGate> l(om);
         order.push_back(i);
       });
     check(fence.wait() == 0, "async io: 20 same-path writes all complete");
@@ -9654,6 +9654,7 @@ int runModule(const std::string& m) {
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "litholattice/core/atomic_gate.h"
 // Headless test runs (2026-10-29): Debug CRT asserts / aborts report to stderr and
 // fail the process instead of popping an Abort/Retry/Ignore dialog on the desktop.
 static void quietCrtDialogs() {

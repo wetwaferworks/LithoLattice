@@ -39,7 +39,7 @@ class cLfJobQueue {
   using Job = std::function<void()>*;
 
   static bool enabled() {
-    static const bool on = [] { const char* e = std::getenv("LL_LF_JOBS"); return !(e && e[0] == '0');  /* PlayL: default ON (JD 2026-11-01) */ }();
+    static const bool on = true;  /* Archie PlayI: always ON (no legacy job_system mutex path) */
     return on;
   }
 

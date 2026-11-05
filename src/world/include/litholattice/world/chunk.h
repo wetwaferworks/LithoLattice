@@ -14,8 +14,8 @@
 #include <vector>
 #include <algorithm>
 #include <initializer_list>
-#include <mutex>
 #include <unordered_map>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -276,11 +276,11 @@ class MaterialPalette {
     }
     h ^= uint64_t(n) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
     struct Table {
-      std::mutex mu;
+      litholattice::cAtomicGate mu;
       std::unordered_map<uint64_t, std::vector<std::weak_ptr<const Entries>>> byHash;
     };
     static Table table;
-    std::lock_guard<std::mutex> lock(table.mu);
+    litholattice::cGateGuard<litholattice::cAtomicGate> lock(table.mu);
     auto& bucket = table.byHash[h];
     for (auto it = bucket.begin(); it != bucket.end();) {
       if (auto live = it->lock()) {

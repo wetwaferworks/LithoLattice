@@ -1,6 +1,7 @@
 #include "litholattice/input/input_system.h"
 #include <algorithm>
 #include <cmath>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -34,7 +35,7 @@ void cInputSystem::update(IInputBackend& backend) {
   {  // Model control (MCP player_control): synthetic events merge here,
      // the exact point keyboard input enters. Never in processFrame:
      // replay/test streams stay pure and deterministic.
-    std::lock_guard<std::mutex> lk(syntheticMutex_);
+    litholattice::cGateGuard<litholattice::cAtomicGate> lk(syntheticMutex_);
     frame_.insert(frame_.end(), synthetic_.begin(), synthetic_.end());
     synthetic_.clear();
   }
@@ -42,7 +43,7 @@ void cInputSystem::update(IInputBackend& backend) {
 }
 
 void cInputSystem::stageSyntheticEvents(std::vector<InputEvent> events) {
-  std::lock_guard<std::mutex> lk(syntheticMutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lk(syntheticMutex_);
   synthetic_.insert(synthetic_.end(), events.begin(), events.end());
 }
 

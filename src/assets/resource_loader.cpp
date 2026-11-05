@@ -8,6 +8,7 @@
 #include <iterator>
 #include <map>
 #include <system_error>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 namespace {
@@ -326,7 +327,7 @@ SvgRasterCache::Key SvgRasterCache::makeKey(const std::string& absPath, int tile
 
 std::optional<Image> SvgRasterCache::fetch(const std::string& absPath, int tileSize) {
   const Key key = makeKey(absPath, tileSize);
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   const auto it = map_.find(key);
   if (it == map_.end()) return std::nullopt;
   lru_.splice(lru_.begin(), lru_, it->second.lru);  // mark most-recent
@@ -335,7 +336,7 @@ std::optional<Image> SvgRasterCache::fetch(const std::string& absPath, int tileS
 
 void SvgRasterCache::store(const std::string& absPath, int tileSize, Image img) {
   const Key key = makeKey(absPath, tileSize);
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   if (const auto it = map_.find(key); it != map_.end()) {
     it->second.image = std::move(img);
     lru_.splice(lru_.begin(), lru_, it->second.lru);
@@ -350,13 +351,13 @@ void SvgRasterCache::store(const std::string& absPath, int tileSize, Image img) 
 }
 
 void SvgRasterCache::clear() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   map_.clear();
   lru_.clear();
 }
 
 size_t SvgRasterCache::size() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   return map_.size();
 }
 
@@ -393,7 +394,7 @@ TextureDecodeCache::Key TextureDecodeCache::makeKey(const std::filesystem::path&
 
 std::optional<Image> TextureDecodeCache::fetch(const std::filesystem::path& file) {
   const Key key = makeKey(file);
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   const auto it = map_.find(key);
   if (it == map_.end()) { ++misses_; return std::nullopt; }
   ++hits_;
@@ -405,7 +406,7 @@ void TextureDecodeCache::store(const std::filesystem::path& file, Image img) {
   const size_t imgBytes = img.pixels().size();
   if (imgBytes > kMaxBytes) return;  // a single oversized decode is never held
   const Key key = makeKey(file);
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   if (const auto it = map_.find(key); it != map_.end()) {
     bytes_ -= it->second.bytes;
     it->second.image = std::move(img);
@@ -428,29 +429,29 @@ void TextureDecodeCache::store(const std::filesystem::path& file, Image img) {
 }
 
 void TextureDecodeCache::clear() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   map_.clear();
   lru_.clear();
   bytes_ = 0;
 }
 
 size_t TextureDecodeCache::size() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   return map_.size();
 }
 
 size_t TextureDecodeCache::bytes() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   return bytes_;
 }
 
 uint64_t TextureDecodeCache::hits() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   return hits_;
 }
 
 uint64_t TextureDecodeCache::misses() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(mutex_);
   return misses_;
 }
 

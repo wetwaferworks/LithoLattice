@@ -60,7 +60,6 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -69,6 +68,7 @@
 #include "litholattice/mcp/http.h"
 #include "litholattice/mcp/server.h"
 #include "litholattice/mcp/sockets.h"
+#include "litholattice/mcp/spin_gate.h"
 
 namespace litholattice::mcp {
 
@@ -151,7 +151,7 @@ class cMcpHttpServer {
   std::uint32_t statelessPermissionMask() const;
 
   void setLogSink(LogSink sink) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     logSink_ = std::move(sink);
   }
 
@@ -225,7 +225,7 @@ class cMcpHttpServer {
     std::chrono::steady_clock::time_point lastActivity{};
   };
 
-  mutable std::mutex mutex_;
+  mutable litholattice::mcp::cSpinGate mutex_;
   std::map<std::string, Session> sessions_;
   /// Phase 3: the shared stateless-era server (one agent identity for every
   /// stateless client). Used only on the accept/dispatch thread; grants are

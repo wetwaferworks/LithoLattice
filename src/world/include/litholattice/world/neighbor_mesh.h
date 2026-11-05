@@ -21,12 +21,12 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "litholattice/world/mesh_input.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -123,12 +123,12 @@ class cColumnTable {
     slots_[s].store(std::move(col), std::memory_order_release);
   }
   void stageEdit(Ptr col) {
-    std::lock_guard l(stageMu_);
+    litholattice::cGateGuard l(stageMu_);
     staged_.push_back(std::move(col));
   }
   uint64_t commitEpoch() {
     std::vector<Ptr> batch;
-    { std::lock_guard l(stageMu_); batch.swap(staged_); }
+    { litholattice::cGateGuard l(stageMu_); batch.swap(staged_); }
     for (auto& c : batch) publishGen(std::move(c));
     return epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
   }
@@ -142,7 +142,7 @@ class cColumnTable {
            (kTableSlots - 1);
   }
   std::unique_ptr<std::atomic<Ptr>[]> slots_ = std::make_unique<std::atomic<Ptr>[]>(kTableSlots);
-  std::mutex stageMu_;
+  litholattice::cAtomicGate stageMu_;
   std::vector<Ptr> staged_;
   std::atomic<uint64_t> epoch_{0};
 };

@@ -154,20 +154,14 @@ void ColumnTable::lfEnter() {
 
 void ColumnTable::noteStale(int cx, int sy, int cz) {
   if (sy < 0 || sy >= kSubChunks) return;
-  if (lf_) {  // LL_LF_COWTABLE: any thread, atomics only
-    const uint64_t key = ChunkKey::make(cx, cz), bit = uint64_t(1) << sy;
-    if (!lfStale_.fetchOr(key, bit)) lfSpill_.push({key, bit});
-    g_staleNoted.fetch_add(1, std::memory_order_relaxed);
-    return;
-  }
-  std::lock_guard l(m_);
-  stale_[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy;
+  // Archie PlayI: LF-only
+  const uint64_t key = ChunkKey::make(cx, cz), bit = uint64_t(1) << sy;
+  if (!lfStale_.fetchOr(key, bit)) lfSpill_.push({key, bit});
   g_staleNoted.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
-  std::unique_lock l(m_, std::defer_lock);
-  if (lf_) lfEnter(); else l.lock();
+  lfEnter();  // PlayI LF-only
   std::vector<std::pair<uint64_t, uint64_t>> out;
   out.reserve(stale_.size());
   stale_.forEach([&](uint64_t k, uint64_t m) { if (m) out.emplace_back(k, m); });
@@ -177,19 +171,17 @@ std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
 }
 
 void ColumnTable::publish(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask) {
-  std::unique_lock l(m_, std::defer_lock);
-  if (lf_) lfEnter(); else l.lock();
+  lfEnter();  // PlayI LF-only
   publishLocked(w, reg, cx, cz, mask);
   enforceBudgetLocked();
-  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
+  lfCount_.store(entries_.size(), std::memory_order_relaxed);
 }
 
 std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
                                                 BlockId belowWorld, MeshEdge edge) {
   auto p = std::make_shared<MeshPin>();
   p->cx = cx; p->sy = sy; p->cz = cz; p->belowWorld = belowWorld; p->edge = edge;
-  std::unique_lock l(m_, std::defer_lock);
-  if (lf_) lfEnter(); else l.lock();
+  lfEnter();  // PlayI LF-only
   for (int dz = -1; dz <= 1; ++dz)
     for (int dx = -1; dx <= 1; ++dx) {
       const size_t i = size_t((dz + 1) * 3 + (dx + 1));
@@ -212,27 +204,24 @@ std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockR
   if (entries_.maxProbe() > g_maxProbe.load(std::memory_order_relaxed) && (g_pins.load(std::memory_order_relaxed) & 1023) == 0)
     g_maxProbe.store(entries_.maxProbe(), std::memory_order_relaxed);
   enforceBudgetLocked();
-  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
+  lfCount_.store(entries_.size(), std::memory_order_relaxed);
   g_pins.fetch_add(1, std::memory_order_relaxed);
   return p;
 }
 
 void ColumnTable::drop(int cx, int cz) {
-  std::unique_lock l(m_, std::defer_lock);
-  if (lf_) lfEnter(); else l.lock();
+  lfEnter();  // PlayI LF-only
   const uint64_t key = ChunkKey::make(cx, cz);
   if (Entry* it = entries_.find(key)) {
     bytes_ -= it->bytes;
     entries_.erase(key);
   }
   stale_.erase(key);
-  if (lf_) lfCount_.store(entries_.size(), std::memory_order_relaxed);
+  lfCount_.store(entries_.size(), std::memory_order_relaxed);
 }
 
 size_t ColumnTable::columns() const {
-  if (lf_) return lfCount_.load(std::memory_order_relaxed);
-  std::lock_guard l(m_);
-  return entries_.size();
+  return lfCount_.load(std::memory_order_relaxed);  // PlayI LF-only
 }
 
 // ---- worker side ----

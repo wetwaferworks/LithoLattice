@@ -5,15 +5,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <functional>
 #include <vector>
+#include "litholattice/core/atomic_gate.h"
 namespace litholattice {
 namespace {
 struct Ev { const char* stage; int cx, sy, cz; uint64_t seq; int64_t us; };
 struct Buf { unsigned idx; size_t tid; std::vector<Ev> ev; };
-std::mutex g_mx;
+litholattice::cAtomicGate g_mx;
 std::vector<std::unique_ptr<Buf>> g_bufs;  // never shrinks; flushed once at exit
 std::atomic<unsigned> g_next{0};
 const char* path() { static const char* p = [] { const char* e = std::getenv("LL_WORK_TRACE"); return (e && *e) ? e : nullptr; }(); return p; }
@@ -25,7 +25,7 @@ Buf* mine() {
     nb->idx = g_next.fetch_add(1);
     nb->tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
     nb->ev.reserve(1 << 14);
-    std::lock_guard<std::mutex> l(g_mx);
+    litholattice::cGateGuard<litholattice::cAtomicGate> l(g_mx);
     b = nb.get();
     g_bufs.push_back(std::move(nb));
   }
@@ -41,7 +41,7 @@ void workTrace(const char* stage, int cx, int sy, int cz, uint64_t seq) {
 void workTraceFlush() {
   const char* p = path();
   if (!p) return;
-  std::lock_guard<std::mutex> l(g_mx);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(g_mx);
   FILE* f = std::fopen(p, "w");
   if (!f) return;
   std::fprintf(f, "stage,thread,os_tid,cx,sy,cz,seq,t_us\n");

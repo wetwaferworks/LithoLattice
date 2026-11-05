@@ -40,7 +40,7 @@ class cLockFreePool {
   using Job = std::function<void()>*;
 
   static bool enabled() {
-    static const bool on = [] { const char* e = std::getenv("LL_POOL_LOCKFREE"); return e && e[0] == '1'; }();
+    static const bool on = true;  /* Archie PlayI: always ON (no mutex pool fallback) */
     return on;
   }
 

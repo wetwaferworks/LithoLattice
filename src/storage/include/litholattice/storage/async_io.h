@@ -33,12 +33,12 @@
 // the cJobSystem and destroy it before.
 #pragma once
 
-#include <condition_variable>
 #include <deque>
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/atomic_condition.h"
 #include <filesystem>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <string>
 #include <utility>
 
@@ -82,8 +82,8 @@ class cIoFence {
   void onOpDone(bool ok);
 
   cIoScheduler& io_;
-  std::mutex m_;
-  std::condition_variable cv_;
+  ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition cv_;
   int pending_ = 0, failed_ = 0;
 };
 
@@ -146,8 +146,8 @@ class cIoScheduler {
   void finishStrand(const std::filesystem::path& path);
 
   cJobSystem& jobs_;
-  std::mutex m_;
-  std::condition_variable drainCv_;
+  ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition drainCv_;
   int inflight_ = 0;  ///< ops currently on the cJobSystem (m_ held)
   std::map<std::filesystem::path, Strand> strands_;  // one FIFO per path, keyed by
                                                      // the canonical spelling

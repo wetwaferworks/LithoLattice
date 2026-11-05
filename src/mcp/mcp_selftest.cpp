@@ -1,12 +1,13 @@
 // mcp_selftest.cpp: headless checks for the MCP Phase 0 JSON-RPC core.
 #include "litholattice/mcp/mcp_selftest.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/gate_lock.h"
+#include "litholattice/core/atomic_condition.h"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <memory>
-#include <mutex>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -1281,8 +1282,8 @@ int runMcpSelfTest() {
     // signals completion. hang=true makes jobs never complete (timeout test).
     struct FakeWriter : IWorldWriter {
       struct CallState {
-        std::mutex m;
-        std::condition_variable cv;
+        ::litholattice::cAtomicGate m;
+        ::litholattice::cAtomicCondition cv;
         bool done = false;
       };
       struct Job {
@@ -1290,13 +1291,13 @@ int runMcpSelfTest() {
         uint16_t id = 0;
         std::shared_ptr<CallState> st;
       };
-      std::mutex m_;
-      std::condition_variable cv_;
+      ::litholattice::cAtomicGate m_;
+      ::litholattice::cAtomicCondition cv_;
       std::queue<Job> q_;
       std::atomic<bool> stop_{false};
       std::atomic<bool> hang_{false};
       std::thread worker_;
-      std::mutex am_;
+      ::litholattice::cAtomicGate am_;
       int ax_ = 0, ay_ = 0, az_ = 0;
       uint16_t aid_ = 0;
       std::thread::id appliedBy_;
@@ -1312,7 +1313,7 @@ int runMcpSelfTest() {
         for (;;) {
           Job j;
           {
-            std::unique_lock l(m_);
+            ::litholattice::cGateLock l(m_);
             cv_.wait(l, [&] { return stop_ || !q_.empty(); });
             if (stop_) return;
             j = std::move(q_.front());
@@ -1321,7 +1322,7 @@ int runMcpSelfTest() {
           if (hang_) continue;  // the sim thread never gets to it: caller must time out
           std::this_thread::sleep_for(std::chrono::milliseconds(5));  // sim-tick latency
           {
-            std::lock_guard l(am_);
+            ::litholattice::cGateGuard l(am_);
             ax_ = j.x;
             ay_ = j.y;
             az_ = j.z;
@@ -1330,7 +1331,7 @@ int runMcpSelfTest() {
             ++applied_;
           }
           {
-            std::lock_guard l(j.st->m);
+            ::litholattice::cGateGuard l(j.st->m);
             j.st->done = true;
           }
           j.st->cv.notify_one();
@@ -1340,11 +1341,11 @@ int runMcpSelfTest() {
                     std::string& why) override {
         auto st = std::make_shared<CallState>();
         {
-          std::lock_guard l(m_);
+          ::litholattice::cGateGuard l(m_);
           q_.push(Job{x, y, z, id, st});
         }
         cv_.notify_one();
-        std::unique_lock l(st->m);
+        ::litholattice::cGateLock l(st->m);
         if (!st->cv.wait_for(l, std::chrono::milliseconds(timeoutMs),
                              [&] { return st->done; })) {
           why = "timed out after " + std::to_string(timeoutMs) + "ms waiting for the sim thread";
@@ -1457,7 +1458,7 @@ int runMcpSelfTest() {
       check(r1 && !isErr && t1.find("\"applied\":true") != std::string::npos,
             "mcp4: granted world_set_block applies");
       {
-        std::lock_guard l(writer->am_);
+        ::litholattice::cGateGuard l(writer->am_);
         check(writer->applied_ == 1 && writer->ax_ == 7 && writer->ay_ == 64 &&
                   writer->az_ == -9 && writer->aid_ == 12,
               "mcp4: sim thread applied the right coords/block");

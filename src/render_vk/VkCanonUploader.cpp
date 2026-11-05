@@ -4,7 +4,6 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
-#include <mutex>
 #include "litholattice/render/canonical_quad.h"
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/unified_mesher.h"

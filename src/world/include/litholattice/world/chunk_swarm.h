@@ -14,8 +14,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <vector>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -27,7 +27,7 @@ static_assert(kSlabRadius4Columns == 81 && kSlabRadius8Columns == 289, "slab tie
 template <class T>
 class cSlab {
   struct State {
-    std::mutex m;
+    litholattice::cAtomicGate m;
     std::vector<std::unique_ptr<T>> free;
     size_t cap = 0;
     std::atomic<uint64_t> hits{0}, misses{0}, returned{0}, dropped{0};
@@ -43,7 +43,7 @@ class cSlab {
   void reserve(size_t n) {
     std::vector<std::unique_ptr<T>> fresh;
     {
-      std::lock_guard<std::mutex> l(s_->m);
+      litholattice::cGateGuard<litholattice::cAtomicGate> l(s_->m);
       s_->cap = std::max(s_->cap, n);
       if (s_->free.size() >= n) return;
       fresh.reserve(n - s_->free.size());
@@ -55,7 +55,7 @@ class cSlab {
   std::shared_ptr<T> acquire() {
     std::unique_ptr<T> p;
     {
-      std::lock_guard<std::mutex> l(s_->m);
+      litholattice::cGateGuard<litholattice::cAtomicGate> l(s_->m);
       if (!s_->free.empty()) { p = std::move(s_->free.back()); s_->free.pop_back(); }
     }
     if (p) s_->hits.fetch_add(1, std::memory_order_relaxed);
@@ -64,7 +64,7 @@ class cSlab {
     return std::shared_ptr<T>(p.release(), [w](T* raw) {
       std::unique_ptr<T> owned(raw);
       if (auto s = w.lock()) {
-        std::lock_guard<std::mutex> l(s->m);
+        litholattice::cGateGuard<litholattice::cAtomicGate> l(s->m);
         if (s->free.size() < s->cap) {
           s->free.push_back(std::move(owned));
           s->returned.fetch_add(1, std::memory_order_relaxed);
@@ -74,8 +74,8 @@ class cSlab {
       }
     });
   }
-  size_t idle() const { std::lock_guard<std::mutex> l(s_->m); return s_->free.size(); }
-  size_t cap() const { std::lock_guard<std::mutex> l(s_->m); return s_->cap; }
+  size_t idle() const { litholattice::cGateGuard<litholattice::cAtomicGate> l(s_->m); return s_->free.size(); }
+  size_t cap() const { litholattice::cGateGuard<litholattice::cAtomicGate> l(s_->m); return s_->cap; }
   uint64_t hits() const { return s_->hits.load(std::memory_order_relaxed); }
   uint64_t misses() const { return s_->misses.load(std::memory_order_relaxed); }
   uint64_t dropped() const { return s_->dropped.load(std::memory_order_relaxed); }

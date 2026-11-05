@@ -5,8 +5,7 @@
 #pragma once
 #include <cmath>
 #include <atomic>
-#include <mutex>
-#include <shared_mutex>
+#include "litholattice/core/atomic_gate.h"
 #include <stdexcept>
 #include <cassert>
 #include <cstdint>
@@ -78,6 +77,8 @@ enum BlockFlags : uint32_t {
   // bits 7-8 (so stFacing still reads the nearest-clockwise cardinal), half step in aux bit 0.
   kFacing8     = 1u << 12,
   kFirstGameFlag = 1u << 16,
+  /// Game bit (Archie Phase 4): Cube uses IBlockAppearance::meshShaped; mesher reads this instead of a virtual for opaque/classify.
+  kGameShapedRender = kFirstGameFlag << 4,
 };
 
 /// What the mesher builds. Cube / Slab / Cross are generic engine geometry; Custom blocks are
@@ -395,7 +396,7 @@ class cContentReg {
   // written only by refreshStaged() (between ticks). Readers take a shared lock;
   // refreshStaged() takes the unique lock. blockDef() returns BY VALUE so no
   // caller can hold a reference across a refresh (torn reads were UB).
-  mutable std::shared_mutex defMutex_;
+  mutable litholattice::cAtomicGate defMutex_;  // PlayL: was shared_mutex
   std::atomic<uint64_t> epoch_ = 0;
   // Cortana 2026-10-15 1658: F-5 [ENGINE] process-unique id, so a registry rebuilt at
   // a freed address can never match a stale StableDefScope table. Never reused.
@@ -546,7 +547,7 @@ inline std::optional<BlockId> cContentReg::addBlockWithStableId(const BlockDef& 
   {
     // Serialize the def-vector growth against blockDef()'s shared-lock
     // readers (F-M3): the pair is what makes the by-value read sound.
-    std::unique_lock lock(defMutex_);
+    litholattice::cGateGuard lock(defMutex_);
     blockDefs_.push_back(def);
     blockEntryIdx_.push_back(static_cast<uint32_t>(entries_.size()) - 1);
   }
@@ -566,7 +567,7 @@ inline cContentReg::StableDefScope::StableDefScope(const cContentReg& r)
   struct Table { const cContentReg* reg = nullptr; uint64_t id = 0; /* Cortana 2026-10-15 1658: F-5 */ uint64_t epoch = ~uint64_t(0); size_t n = 0; const void* data = nullptr; std::vector<BlockDef> defs; };
   static thread_local Table t;
   {
-    std::shared_lock lock(r.defMutex_);
+    litholattice::cGateGuard lock(r.defMutex_);
     const uint64_t e = r.epoch_.load(std::memory_order_acquire);
     if (t.reg != &r || t.id != r.instanceId_ || t.epoch != e || t.n != r.blockDefs_.size() || t.data != r.blockDefs_.data()) {
       t.defs = r.blockDefs_;
@@ -579,7 +580,7 @@ inline cContentReg::StableDefScope::StableDefScope(const cContentReg& r)
 
 inline BlockDef cContentReg::blockDef(BlockId id) const {
   if (tlStableOwner_ == this && id < tlStableDefs_->size()) return (*tlStableDefs_)[id];  // Cortana 2026-10-15 1335
-  std::shared_lock lock(defMutex_);
+  litholattice::cGateGuard lock(defMutex_);
   return id < blockDefs_.size() ? blockDefs_[id] : blockDefs_[0];  // air fallback, as before
 }
 
@@ -621,7 +622,7 @@ inline std::optional<BlockId> cContentReg::findBlockByStableId(StableId sid) con
 
 inline std::optional<BlockId> cContentReg::findBlockByTexture(std::string_view tex) const {
   if (tex.empty()) return std::nullopt;
-  std::shared_lock lock(defMutex_);
+  litholattice::cGateGuard lock(defMutex_);
   for (size_t i = 0; i < blockDefs_.size(); ++i)
     if (blockDefs_[i].tex == tex) return BlockId(i);
   return std::nullopt;
@@ -650,7 +651,7 @@ inline bool cContentReg::stageBlockUpdate(BlockId id, const BlockDef& newDef) {
   if (sealed_) return false;
   // Unique lock: staged_ is WRITTEN here. A shared lock would let two staging
   // threads race on the map.
-  std::unique_lock lock(defMutex_);
+  litholattice::cGateGuard lock(defMutex_);
   if (id >= blockDefs_.size()) return false;
   // The string ID is the identity: a staged def must name the same block.
   // (A rename is a remove+add, not an update.)
@@ -665,7 +666,7 @@ inline size_t cContentReg::refreshStaged() {
   // mid-refresh. The epoch is bumped BEFORE the lock releases, so the
   // (defs, epoch) pair is always consistent: caches comparing
   // definitionEpoch() invalidate exactly once.
-  std::unique_lock lock(defMutex_);
+  litholattice::cGateGuard lock(defMutex_);
   if (staged_.empty()) return 0;
   for (auto& [id, def] : staged_) {
     BlockDef applied = def;
@@ -700,7 +701,7 @@ inline std::optional<ItemId> cContentReg::addItemWithStableId(const ItemDef& d,
   if (!insertEntry(EntryKind::Item, sid, stable, def.crc32, local)) return std::nullopt;
   {
     // Serialized against itemDef()'s shared-lock by-value reads (F-M3).
-    std::unique_lock lock(defMutex_);
+    litholattice::cGateGuard lock(defMutex_);
     itemDefs_.push_back(def);
     itemEntryIdx_.push_back(static_cast<uint32_t>(entries_.size()) - 1);
   }
@@ -709,7 +710,7 @@ inline std::optional<ItemId> cContentReg::addItemWithStableId(const ItemDef& d,
 
 inline ItemDef cContentReg::itemDef(ItemId id) const {
   // By value under the shared lock (review F-M3), mirroring blockDef().
-  std::shared_lock lock(defMutex_);
+  litholattice::cGateGuard lock(defMutex_);
   if (id == 0 || size_t(id - 1) >= itemDefs_.size()) return kEmptyItem;
   return itemDefs_[id - 1];
 }

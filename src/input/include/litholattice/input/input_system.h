@@ -6,12 +6,12 @@
 #include <array>
 #include <bitset>
 #include <span>
-#include <mutex>
 #include <vector>
 #include "litholattice/input/action_map.h"
 #include "litholattice/input/device_state.h"
 #include "litholattice/input/input_backend.h"
 #include "litholattice/input/input_context.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -93,7 +93,7 @@ class cInputSystem {
   bool textEnabled_ = false;
   std::vector<InputEvent> frame_, lastFrame_, recorded_;
   bool recording_ = false;
-  mutable std::mutex syntheticMutex_;
+  mutable litholattice::cAtomicGate syntheticMutex_;
   std::vector<InputEvent> synthetic_;  ///< staged by stageSyntheticEvents
 };
 

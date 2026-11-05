@@ -28,8 +28,8 @@
 #include <cmath>
 #include <cstring>
 #include <list>
-#include <mutex>
 #include <utility>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 namespace {
@@ -568,8 +568,8 @@ std::list<CacheEntry>& cacheEntries() {
   static std::list<CacheEntry> entries;
   return entries;
 }
-std::mutex& cacheMutex() {
-  static std::mutex m;
+litholattice::cAtomicGate& cacheMutex() {
+  static litholattice::cAtomicGate m;
   return m;
 }
 
@@ -593,7 +593,7 @@ Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size
   uint64_t sm = h ^ seed;
   h ^= splitmix64(sm);
   h ^= static_cast<uint64_t>(static_cast<uint32_t>(keySize)) + 0x9E3779B97F4A7C15ULL;
-  std::lock_guard<std::mutex> lock(cacheMutex());
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(cacheMutex());
   std::list<CacheEntry>& entries = cacheEntries();
   for (auto it = entries.begin(); it != entries.end(); ++it) {
     if (it->recipeHash == h && it->seed == seed && it->size == keySize) {
@@ -607,7 +607,7 @@ Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size
 }
 
 size_t textureCacheSize() {
-  std::lock_guard<std::mutex> lock(cacheMutex());
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(cacheMutex());
   return cacheEntries().size();
 }
 

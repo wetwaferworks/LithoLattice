@@ -34,6 +34,10 @@ struct MaterialBindings {
   int pipMask = 0, cellMask = 0, debugDigits = 0; std::array<int, 2> stripDot{};  /* dot masks; DEBUG digit tile */
   std::array<int, 4> leafGlow{};  ///< 2026-10-16: kShadeLeaf glow mask layer per slot (value-1)
   static constexpr size_t kTintSlots = 32;
+  /// 2026-11-04 (CloudAtlas components-v2: 90+ tint masks): slot 31 is the "adjacent" slot - the mask
+  /// is the texture layer right after the face's own (base, tintmask pairs in resources.json order).
+  /// Used once slots 0..30 are taken; GL, Vulkan (chunk_shading.glsl) and software read it the same.
+  static constexpr size_t kTintAdjacentSlot = kTintSlots - 1;
   std::array<int, kTintSlots> tintMask{};  ///< 2026-10-16: kShadeTraceTint mask layer per slot (value & 63)                            ///< kShadePips / kShadeCells mask layers
 };
 class IBlockAppearance;

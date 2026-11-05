@@ -49,7 +49,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -59,6 +58,7 @@
 #include "litholattice/mcp/json.h"
 #include "litholattice/mcp/jsonrpc.h"
 #include "litholattice/mcp/rate_limit.h"
+#include "litholattice/mcp/spin_gate.h"
 
 namespace litholattice {
 // Forward declaration: the server takes console::IWorldQuery directly (it is
@@ -664,7 +664,7 @@ class cMcpServer {
 
   McpBackends backends_;
   McpAgent agent_;
-  mutable std::mutex agentMutex_;
+  mutable litholattice::mcp::cSpinGate agentMutex_;
   cRpcRouter router_;
   std::vector<ToolDescriptor> tools_;
   /// Name -> index into tools_: the per-call linear scan was fine at ~20

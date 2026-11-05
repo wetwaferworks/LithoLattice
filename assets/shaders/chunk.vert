@@ -38,6 +38,8 @@ void main() {
   vRot = int((aInfo.z >> 5u) & 3u);
   vUV = vec2(aInfo.xy) / 16.0;
   vLayer = int(aInfo.w | (aLayerHi << 8u)); vVal = int(aShade.x); vMode = int(aShade.y & 63u);
+  // s2-PlayD: build 9 (PlayB, JD t4332u) readout drop restored: readouts sit 1/64 above the model top. Render only.
+  if (vMode == 15 && vNormal.y > 0.5) vWorld.y -= 3.0 / 64.0;
   gl_Position = uVP * vec4(vWorld, 1.0);
   // Cortana 2026-10-16 (JD foliage LOD, renderer.h kShadeLod*): LOD-tagged quads draw by the
   // sub-chunk's horizontal centre distance; the other set collapses outside the clip volume.

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice::ai {
 namespace {
@@ -266,7 +267,7 @@ uint8_t cWalkCache::compute(int x, int y, int z) const {
 std::shared_ptr<const cWalkCache::Column> cWalkCache::column(int cx, int cz) const {
   uint64_t gen;
   {
-    std::lock_guard l(m_);
+    litholattice::cGateGuard l(m_);
     if (auto it = cols_.find(colKey(cx, cz)); it != cols_.end()) {
       it->second->lastUsed = ++useClock_;
       return it->second;
@@ -299,7 +300,7 @@ std::shared_ptr<const cWalkCache::Column> cWalkCache::column(int cx, int cz) con
     col->spanCnt[i] = uint16_t(spans[i].size());
     for (auto rit = spans[i].rbegin(); rit != spans[i].rend(); ++rit) col->spanData.push_back(*rit);
   }
-  std::lock_guard l(m_);
+  litholattice::cGateGuard l(m_);
   // Poison check: invalidate() ran mid-compute -> drop the stale column instead
   // of reinserting it. Also don't clobber a fresher column computed concurrently.
   if (gen != generation_) return nullptr;
@@ -327,7 +328,7 @@ uint8_t cWalkCache::bits(int x, int y, int z) const {
 }
 
 size_t cWalkCache::cachedBytes() const {
-  std::lock_guard l(m_);
+  litholattice::cGateGuard l(m_);
   size_t n = 0;
   for (const auto& entry : cols_) {
     const Column& c = *entry.second;
@@ -364,21 +365,21 @@ uint8_t cNavView::bits(int x, int y, int z) const {
   return lastCol_ ? cWalkCache::assemble(*lastCol_, cWalkCache::cellIndex(x & 15, y, z & 15)) : uint8_t(0);
 }
 
-uint64_t cWalkCache::generation() const { std::lock_guard l(m_); return generation_; }
+uint64_t cWalkCache::generation() const { litholattice::cGateGuard l(m_); return generation_; }
 
 uint64_t cWalkCache::columnVersion(int cx, int cz) const {
-  std::lock_guard l(m_);
+  litholattice::cGateGuard l(m_);
   const auto it = colVer_.find(colKey(cx, cz));
   return it == colVer_.end() ? 0 : it->second;
 }
 
 void cWalkCache::invalidate(int x, int z) {
-  std::lock_guard l(m_);
+  litholattice::cGateGuard l(m_);
   cols_.erase(colKey(x >> 4, z >> 4));
   ++colVer_[colKey(x >> 4, z >> 4)];
   ++generation_;
 }
-size_t cWalkCache::cachedColumns() const { std::lock_guard l(m_); return cols_.size(); }
+size_t cWalkCache::cachedColumns() const { litholattice::cGateGuard l(m_); return cols_.size(); }
 
 std::unique_ptr<IMovementMode> makeWalk(int maxDrop) { return std::make_unique<cWalk>(maxDrop); }
 std::unique_ptr<IMovementMode> makeClimb() { return std::make_unique<cClimb>(); }

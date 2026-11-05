@@ -12,6 +12,7 @@
 #include "litholattice/audio/occlusion_thread.h"
 #include <cassert>
 #include <chrono>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -38,7 +39,7 @@ size_t cOcclusionThread::addQuery(float lx, float ly, float lz,
                                   float sx, float sy, float sz) {
   // Structural mutation is mutex-guarded: the occlusion thread may be
   // iterating a snapshot of these same objects right now.
-  std::lock_guard<std::mutex> lock(queriesMu_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(queriesMu_);
   // Find a free slot or append.
   for (size_t i = 0; i < queries_.size(); ++i) {
     // Archie review H28a: the CAS published active=true BEFORE the positions
@@ -85,7 +86,7 @@ void cOcclusionThread::publishSnapshotLocked() {
 }
 
 void cOcclusionThread::removeQuery(size_t idx) {
-  std::lock_guard<std::mutex> lock(queriesMu_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lock(queriesMu_);
   if (idx < queries_.size()) queries_[idx]->active.store(false, std::memory_order_release);
 }
 
@@ -140,7 +141,7 @@ void cOcclusionThread::threadMain() {
     if (isOccluded_) {
       snapshot_.clear();
       {
-        std::lock_guard<std::mutex> lock(queriesMu_);
+        litholattice::cGateGuard<litholattice::cAtomicGate> lock(queriesMu_);
         snapshot_.reserve(queries_.size());
         for (auto& q : queries_) snapshot_.push_back(q.get());
       }

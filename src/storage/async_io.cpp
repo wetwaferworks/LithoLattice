@@ -1,6 +1,8 @@
 // cIoScheduler: async file I/O on the cJobSystem's submitIo().
 // See async_io.h for the completion contract.
 #include "litholattice/storage/async_io.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/gate_lock.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -58,7 +60,7 @@ void cIoScheduler::submitWriteRecord(std::filesystem::path path, Bytes payload,
 void cIoScheduler::submit(std::function<void()> work, std::function<void()> done,
                          cIoFence* fence) {
   if (fence) {
-    std::lock_guard<std::mutex> l(fence->m_);
+    ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(fence->m_);
     ++fence->pending_;
   }
   jobs_.submitIo([work = std::move(work), done = std::move(done), fence]() mutable {
@@ -91,7 +93,7 @@ void cIoScheduler::submitStrand(std::filesystem::path path, Op op, cIoFence* fen
   }
   if (fence) {
     {
-      std::lock_guard<std::mutex> l(fence->m_);
+      ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(fence->m_);
       ++fence->pending_;
     }
     auto user = std::move(op.done);
@@ -105,7 +107,7 @@ void cIoScheduler::submitStrand(std::filesystem::path path, Op op, cIoFence* fen
       fence->onOpDone(ok);
     };
   }
-  std::lock_guard<std::mutex> l(m_);
+  ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(m_);
   Strand& s = strands_[path];
   s.queue.push_back(std::move(op));
   if (!s.active) {
@@ -118,7 +120,7 @@ cIoScheduler::~cIoScheduler() {
   // Drain: an op's StrandGuard touches `this` on completion, so the scheduler
   // must not die mid-flight. Ops run on the cJobSystem's I/O threads (which must
   // outlive us), so waiting here cannot deadlock the pool.
-  std::unique_lock<std::mutex> l(m_);
+  ::litholattice::cGateLock<::litholattice::cAtomicGate> l(m_);
   drainCv_.wait(l, [this] { return inflight_ == 0; });
 }
 
@@ -144,7 +146,7 @@ void cIoScheduler::launchHead(const std::filesystem::path& path, Strand& s) {
 }
 
 void cIoScheduler::finishStrand(const std::filesystem::path& path) {
-  std::lock_guard<std::mutex> l(m_);
+  ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(m_);
   if (--inflight_ == 0) drainCv_.notify_all();
   auto it = strands_.find(path);
   if (it == strands_.end()) return;  // cannot happen; defensive
@@ -166,7 +168,7 @@ cIoFence::~cIoFence() {
   // thread is a programming error: fail loud (abort), not silent. With zero
   // pending ops the refusal is harmless and destruction proceeds normally.
   if (wait() < 0) {
-    std::lock_guard<std::mutex> l(m_);
+    ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(m_);
     if (pending_ > 0) {
       logError("storage: IoFence destroyed on a job thread with %d ops pending; aborting (would UAF)",
                pending_);
@@ -192,7 +194,7 @@ void cIoFence::submitWriteRecord(std::filesystem::path path, Bytes payload,
 }
 
 void cIoFence::onOpDone(bool ok) {
-  std::lock_guard<std::mutex> l(m_);
+  ::litholattice::cGateGuard<::litholattice::cAtomicGate> l(m_);
   if (!ok) ++failed_;
   if (--pending_ == 0) cv_.notify_all();
 }
@@ -205,7 +207,7 @@ int cIoFence::wait() {
     logError("storage: IoFence::wait() called from a job thread; refusing (would deadlock)");
     return -1;
   }
-  std::unique_lock<std::mutex> l(m_);
+  ::litholattice::cGateLock<::litholattice::cAtomicGate> l(m_);
   cv_.wait(l, [this] { return pending_ == 0; });
   return failed_;
 }

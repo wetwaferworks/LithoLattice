@@ -1,4 +1,6 @@
 #include "litholattice/storage/storage.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/gate_lock.h"
 #include "litholattice/storage/file_contract.h"
 #include "litholattice/core/job_system.h"
 #include "litholattice/core/log.h"
@@ -358,7 +360,7 @@ cWorldStore::cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads,
 cWorldStore::~cWorldStore() {
   flush();
   if (jobsys_) return;  // the engine owns the cJobSystem: never stop or join it here
-  { std::lock_guard l(m_); stop_ = true; }
+  { ::litholattice::cGateGuard l(m_); stop_ = true; }
   cv_.notify_all();
   thread_.join();
   sysRecord_.retireAll();  // P2: joined -> RETURNED
@@ -385,7 +387,7 @@ cRegionFile& cWorldStore::region(int rx, int rz) {
 void cWorldStore::post(std::function<void()> job) {
   bool kick = false;
   {
-    std::lock_guard l(m_);
+    ::litholattice::cGateGuard l(m_);
     jobs_.push_back(std::move(job));
     if (jobsys_ && !pumping_) { pumping_ = true; kick = true; }
   }
@@ -403,7 +405,7 @@ void cWorldStore::pumpOne() {
   jobsys_->submitIo([this] {
     std::function<void()> job;
     {
-      std::lock_guard l(m_);
+      ::litholattice::cGateGuard l(m_);
       if (jobs_.empty()) { pumping_ = false; idle_.notify_all(); return; }
       job = std::move(jobs_.front());
       jobs_.pop_front();
@@ -417,7 +419,7 @@ void cWorldStore::pumpOne() {
       logError("storage: queued job threw a non-std exception");
     }
     {
-      std::lock_guard l(m_);
+      ::litholattice::cGateGuard l(m_);
       busy_ = false;
       if (jobs_.empty()) { pumping_ = false; idle_.notify_all(); return; }
     }
@@ -430,13 +432,13 @@ void cWorldStore::run() {
   for (;;) {
     std::function<void()> job;
     {
-      std::unique_lock l(m_);
+      ::litholattice::cGateLock l(m_);
       cv_.wait(l, [&] { return stop_ || !jobs_.empty(); });
       if (jobs_.empty()) return;
       job = std::move(jobs_.front()); jobs_.pop_front(); busy_ = true;
     }
     job();
-    { std::lock_guard l(m_); busy_ = false; }
+    { ::litholattice::cGateGuard l(m_); busy_ = false; }
     idle_.notify_all();
   }
 }
@@ -467,7 +469,7 @@ void cWorldStore::loadAsync(int cx, int cz, std::function<void(std::unique_ptr<C
 
 bool cWorldStore::flush() {
   flushAsync();
-  std::unique_lock l(m_);
+  ::litholattice::cGateLock l(m_);
   idle_.wait(l, [&] { return jobs_.empty() && !busy_; });
   return lastFlushOk();
 }
@@ -500,7 +502,7 @@ std::unique_ptr<ChunkColumn> cWorldStore::load(int cx, int cz, std::string* err)
   std::unique_ptr<ChunkColumn> out;
   std::string e;
   loadAsync(cx, cz, [&](std::unique_ptr<ChunkColumn> c, std::string er) { out = std::move(c); e = std::move(er); });
-  { std::unique_lock l(m_); idle_.wait(l, [&] { return jobs_.empty() && !busy_; }); }
+  { ::litholattice::cGateLock l(m_); idle_.wait(l, [&] { return jobs_.empty() && !busy_; }); }
   if (err) *err = e;
   return out;
 }

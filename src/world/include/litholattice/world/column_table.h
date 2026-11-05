@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <memory>
 #include <cstdlib>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -89,12 +88,12 @@ class ColumnTable {
   /// lock-free key table (spill: lock-free handoff); publish / pin / drop / takeStale run on the
   /// owner thread only (the thread that may mutate the map: sim thread, or main before the sim
   /// starts) and drain the stale marks first. columns() reads an atomic. Set before first use.
-  void setLockFree(bool on) { lf_ = on; }
-  bool lockFree() const { return lf_; }
+  void setLockFree(bool) { lf_ = true; }  // Archie PlayI: LF-only; mutex path removed
+  bool lockFree() const { return true; }
 
  private:
   void lfEnter();  // owner-thread entry on the lock-free path: tripwire + drain stale marks
-  bool lf_ = [] { const char* e = std::getenv("LL_LF_COWTABLE"); return !(e && e[0] == '0');  /* PlayL: default ON (JD 2026-11-01) */ }();
+  bool lf_ = true;  // Archie PlayI: always lock-free
   cLfKeyTable lfStale_{size_t(1) << 15};
   cLfHandoff<std::pair<uint64_t, uint64_t>> lfSpill_;
   std::atomic<size_t> lfCount_{0};
@@ -102,7 +101,7 @@ class ColumnTable {
   struct Entry { std::shared_ptr<const ColumnSnap> snap; uint64_t lastUse = 0; size_t bytes = 0; };
   std::shared_ptr<const ColumnSnap> publishLocked(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask);
   void enforceBudgetLocked();
-  mutable std::mutex m_;
+  // PlayI: mutex removed (LF-only)
   OaTable<Entry> entries_;     // M9: open addressing (ruling 6)
   OaTable<uint64_t> stale_;    // M9: column key -> stale sub mask
   uint64_t epoch_ = 0, use_ = 0;

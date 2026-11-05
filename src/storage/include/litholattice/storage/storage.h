@@ -4,16 +4,16 @@
 // (SDK style), and an async store that loads / saves off the calling thread.
 #pragma once
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/atomic_condition.h"
 #include <atomic>
 #include <cassert>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -196,8 +196,8 @@ class cWorldStore {
   std::filesystem::path dir_;
   const cPayloadReg& payloads_;
   std::map<std::pair<int, int>, std::unique_ptr<cRegionFile>> regions_;  // I/O thread only
-  std::mutex m_;
-  std::condition_variable cv_, idle_;
+  ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition cv_, idle_;
   std::deque<std::function<void()>> jobs_;
   bool stop_ = false, busy_ = false, pumping_ = false;
   std::thread thread_;

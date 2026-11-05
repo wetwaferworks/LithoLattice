@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <atomic>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +15,7 @@
 
 #include <memory>
 #include "litholattice/core/slice_free_list.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice::vk {
 
@@ -93,7 +93,7 @@ class cVertexArena {
   VkDeviceSize alignment_ = 64;  ///< 0.0.1.59 [P59-1]
   static constexpr uint32_t kMaxBlocks = 1024;  ///< [C53-2] fixed table (32 GB of 32 MB blocks)
   std::atomic<uint32_t> count_{0};
-  std::mutex mu_;
+  litholattice::cAtomicGate mu_;
   VkDeviceSize deviceBudget_ = 0;  ///< 0.0.1.51: device-local cap (70% of the largest device-local heap)
   bool spillLogged_ = false;
   std::vector<Block> blocks_;

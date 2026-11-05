@@ -4,6 +4,7 @@
 // see phase N+1 until the authority has committed N, and the barrier — not
 // the poll — is the synchroniser.
 #include "litholattice/core/timer_resolution.h"  // 0.0.1.57 F57-1
+#include "litholattice/core/gate_lock.h"
 #include "litholattice/sim/timing_handshake.h"
 
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include "litholattice/core/log.h"
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 #include <immintrin.h>
+#include "litholattice/core/atomic_gate.h"
 #define LL_HS_RELAX() _mm_pause()
 #else
 #define LL_HS_RELAX() ((void)0)
@@ -267,7 +269,7 @@ bool cTimingHandshakeAuthority::runItem(Comp& c, uint64_t phase, uint64_t cycleT
 void cTimingHandshakeAuthority::recordFailure(const Comp& c, uint64_t phase, uint64_t cycleTick,
                                              const char* what) {
   {
-    std::lock_guard lk(failureM_);
+    litholattice::cGateGuard lk(failureM_);
     if (!pendingFailure_.present) {  // first failure wins
       pendingFailure_.present = true;
       pendingFailure_.message = what ? what : "unknown exception";
@@ -289,7 +291,7 @@ void cTimingHandshakeAuthority::recordFailure(const Comp& c, uint64_t phase, uin
 void cTimingHandshakeAuthority::convertPendingFailureIfAny() {
   PendingFailure f;
   {
-    std::lock_guard lk(failureM_);
+    litholattice::cGateGuard lk(failureM_);
     if (!pendingFailure_.present) return;
     f = pendingFailure_;
   }
@@ -333,7 +335,7 @@ void cTimingHandshakeAuthority::resetAfterFreeze() {
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivalWord_.store(0, std::memory_order_release);
   } else {
-    std::lock_guard lk(m_);
+    litholattice::cGateGuard lk(m_);
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivals_.store(0, std::memory_order_relaxed);
   }
@@ -361,7 +363,7 @@ bool cTimingHandshakeAuthority::start() {
     // stale last publication as new work and re-executed it outside any
     // tick/barrier. The generation bump additionally invalidates any
     // snapshot a worker from a previous life could still be holding.
-    std::unique_lock lk(m_, std::defer_lock);
+    ::litholattice::cGateLock lk(m_, ::litholattice::kDeferLock);
     if (!lockfree_) lk.lock();
     generation_.fetch_add(1, std::memory_order_acq_rel);
     arrivalWord_.store(0, std::memory_order_release);
@@ -375,7 +377,7 @@ bool cTimingHandshakeAuthority::start() {
     for (auto& d : shardDoneSeq_) d.store(0, std::memory_order_relaxed);
   }
   {
-    std::lock_guard lk(failureM_);
+    litholattice::cGateGuard lk(failureM_);
     pendingFailure_ = PendingFailure{};
   }
   for (auto& e : workerExited_) e.store(false);
@@ -485,7 +487,7 @@ HsStats cTimingHandshakeAuthority::statsSnapshot() const {
       if (statsSeq_.load(std::memory_order_acquire) == a) return copy;
     }
   }
-  std::lock_guard lk(statsM_);
+  litholattice::cGateGuard lk(statsM_);
   return stats_;
 }
 
@@ -540,7 +542,7 @@ void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap
         uint64_t w = arrivalWord_.load(std::memory_order_acquire);
         while ((w & ~0xFFFFull) == key && !arrivalWord_.compare_exchange_weak(w, w + 1, std::memory_order_acq_rel, std::memory_order_acquire)) LL_HS_RELAX();
       } else {
-        std::lock_guard lk(m_);
+        litholattice::cGateGuard lk(m_);
         if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
             generation_.load(std::memory_order_relaxed) == snap.generation) {
           shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
@@ -554,7 +556,7 @@ void cTimingHandshakeAuthority::serveShard(int shard, const PublishedPhase& snap
     if (publishSeq_.load(std::memory_order_acquire) == snap.seq && generation_.load(std::memory_order_acquire) == snap.generation)
       shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
   } else {
-    std::lock_guard lk(m_);
+    litholattice::cGateGuard lk(m_);
     if (publishSeq_.load(std::memory_order_relaxed) == snap.seq &&
         generation_.load(std::memory_order_relaxed) == snap.generation)
       shardDoneSeq_[size_t(shard)].store(snap.seq, std::memory_order_release);
@@ -607,7 +609,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
 
   uint64_t seq = 0;
   {
-    std::unique_lock lk(m_, std::defer_lock);
+    ::litholattice::cGateLock lk(m_, ::litholattice::kDeferLock);
     if (!lockfree_) lk.lock();
     arrivals_.store(0, std::memory_order_relaxed);
     seq = publishSeq_.load(std::memory_order_relaxed) + 1;
@@ -623,7 +625,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   // idle poll used to do.
   if (haveWorkers) {
     {
-      std::unique_lock lk(m_, std::defer_lock);
+      ::litholattice::cGateLock lk(m_, ::litholattice::kDeferLock);
       if (!lockfree_) lk.lock();
       for (int s = 0; s < workerCount_; ++s)
         if (!shardActive[size_t(s)]) shardDoneSeq_[size_t(s)].store(seq, std::memory_order_release);
@@ -666,13 +668,13 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
       }
     } else {
       const uint64_t waitStart = nowNs();
-      std::unique_lock lk(m_, std::defer_lock);
+      ::litholattice::cGateLock lk(m_, ::litholattice::kDeferLock);
       if (!lockfree_) lk.lock();
       uint32_t spins = 0;
       while (arrivedCount() < activeShards) {
         bool check;
         if (lockfree_) { LL_HS_RELAX(); check = (++spins & 1023u) == 0; }  // watchdog check every 1024 pauses
-        else check = barrierCv_.wait_for(lk, std::chrono::milliseconds(1)) == std::cv_status::timeout;
+        else check = !barrierCv_.wait_for(lk, std::chrono::milliseconds(1));
         if (check) {
           const uint64_t t = nowNs();
           // 0.0.1.57 F57-2 (R21): the last shard may have arrived between the timed-out wait and this check;
@@ -763,7 +765,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
   const uint64_t dur = nowNs() - openStamp;
   // A-M6: the fold is the stats writer; hold statsM_ so a cross-thread
   // statsSnapshot() never copies a half-folded struct (vector included).
-  std::unique_lock statsLk(statsM_, std::defer_lock);
+  ::litholattice::cGateLock statsLk(statsM_, ::litholattice::kDeferLock);
   if (!lockfree_) statsLk.lock();
   else statsSeq_.fetch_add(1, std::memory_order_acq_rel);  // odd: fold in progress (readers retry)
   stats_.phases += 1;
@@ -844,7 +846,7 @@ void cTimingHandshakeAuthority::lfWorkerLoop(int shard) {
 }
 
 void cTimingHandshakeAuthority::resetStats() {
-  std::lock_guard lk(statsM_);  // A-M6: same mutex as the fold + snapshots
+  litholattice::cGateGuard lk(statsM_);  // A-M6: same mutex as the fold + snapshots
   HsStats fresh;
   fresh.perComponent.assign(stats_.perComponent.size(), HsComponentStats{});
   for (size_t i = 0; i < fresh.perComponent.size(); ++i)

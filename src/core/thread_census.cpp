@@ -17,6 +17,7 @@
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
+#include "litholattice/core/atomic_gate.h"
 #endif
 
 namespace litholattice {
@@ -217,7 +218,7 @@ bool cThreadCensus::setCliCores(unsigned cores) {
 }
 
 uint32_t cThreadCensus::declare(ThreadClass cls, ThreadRole role, uint16_t roleIndex, const char* name) {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   auto s = std::make_unique<Slot>();
   s->rec.id = uint32_t(slots_.size());
   s->rec.cls = cls;
@@ -232,7 +233,7 @@ uint32_t cThreadCensus::declare(ThreadClass cls, ThreadRole role, uint16_t roleI
 }
 
 bool cThreadCensus::tryClaim(uint32_t id, uint64_t tick) {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   if (id >= slots_.size()) return false;
   Slot& s = *slots_[id];
   if (s.rec.cls != ThreadClass::Pooled) return false;
@@ -250,7 +251,7 @@ bool cThreadCensus::tryClaim(uint32_t id, uint64_t tick) {
 }
 
 bool cThreadCensus::reclaim(uint32_t id, uint64_t tick) {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   if (id >= slots_.size()) return false;
   Slot& s = *slots_[id];
   uint64_t w = s.word.load(std::memory_order_acquire);
@@ -263,7 +264,7 @@ bool cThreadCensus::reclaim(uint32_t id, uint64_t tick) {
 }
 
 void cThreadCensus::returnAll(uint64_t tick) {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   for (auto& s : slots_) {
     s->word.store(pack(ThreadState::Returned, ticketOf(s->word.load(std::memory_order_relaxed))), std::memory_order_release);
     s->rec.state = ThreadState::Returned;
@@ -274,7 +275,7 @@ void cThreadCensus::returnAll(uint64_t tick) {
 
 void cThreadCensus::retire(uint32_t id, uint64_t tick) {
   if (tick == kLastCommittedTick) tick = lastCommittedTick();  // JD t3349u item 4
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   if (id >= slots_.size()) return;
   Slot& s = *slots_[id];
   if (s.rec.state == ThreadState::Returned) return;
@@ -285,14 +286,14 @@ void cThreadCensus::retire(uint32_t id, uint64_t tick) {
 }
 
 size_t cThreadCensus::live() const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   size_t n = 0;
   for (auto& s : slots_) n += s->rec.state != ThreadState::Returned;
   return n;
 }
 
 size_t cThreadCensus::live(ThreadClass cls) const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   size_t n = 0;
   for (auto& s : slots_) n += s->rec.cls == cls && s->rec.state != ThreadState::Returned;
   return n;
@@ -315,32 +316,32 @@ void cThreadRecordSet::retireAll(uint64_t tick) {
   retired_.clear();
 }
 
-size_t cThreadCensus::size() const { std::lock_guard<std::mutex> l(m_); return slots_.size(); }
+size_t cThreadCensus::size() const { litholattice::cGateGuard<litholattice::cAtomicGate> l(m_); return slots_.size(); }
 
 ThreadRecord cThreadCensus::record(uint32_t id) const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   return id < slots_.size() ? slots_[id]->rec : ThreadRecord{};
 }
 
 ThreadTelemetry cThreadCensus::telemetry(uint32_t id) const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   return id < slots_.size() ? slots_[id]->tel : ThreadTelemetry{};
 }
 
 void cThreadCensus::setTelemetry(uint32_t id, const ThreadTelemetry& t) {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   if (id < slots_.size()) slots_[id]->tel = t;
 }
 
 uint64_t cThreadCensus::hash() const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   Fnv f;
   for (auto& s : slots_) f.u64(threadRecordHash(s->rec));
   return f.h;
 }
 
 size_t cThreadCensus::count(ThreadState st) const {
-  std::lock_guard<std::mutex> l(m_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
   size_t n = 0;
   for (auto& s : slots_) n += s->rec.state == st;
   return n;

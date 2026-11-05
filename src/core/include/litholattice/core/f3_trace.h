@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 #include <cstdlib>
-#include <mutex>
 #include <string>
 #include <string_view>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice::f3trace {
 
@@ -17,7 +17,7 @@ inline bool on() {
 }
 
 struct Drawn {
-  std::mutex m;
+  litholattice::cAtomicGate m;
   std::string text;    // the HUD text item containing "XYZ", as handed to the HUD rasterizer
   uint64_t seq = 0;    // renderer frames that drew it
   size_t verts = 0;    // HUD vertices built that frame (built fresh every frame: there is no HUD mesh cache)
@@ -25,7 +25,7 @@ struct Drawn {
 inline Drawn& drawn() { static Drawn d; return d; }
 inline void noteDrawn(std::string_view t, size_t verts) {
   Drawn& d = drawn();
-  std::lock_guard l(d.m);
+  litholattice::cGateGuard l(d.m);
   d.text.assign(t);
   ++d.seq;
   d.verts = verts;

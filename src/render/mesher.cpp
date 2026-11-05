@@ -7,6 +7,7 @@
 #include <vector>
 #include "litholattice/core/log.h"  // Cortana 2026-10-16 2335 F55-2
 #include "litholattice/render/mesher.h"
+#include "litholattice/render/sw_lod_rings.h"  // Archie Phase 1: canonical rings bounded to the view
 #include "litholattice/render/unified_mesher.h"  // render pipeline M2
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
@@ -631,7 +632,7 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
             int wdx = 0, wdy = 0, wdz = 0;
             attachOffset(af, wdx, wdy, wdz);
             const size_t tiltFrom = out.verts.size();
-            const int turns = look.boxModelTurns(def, st);  // PlayN (JD): the game decides per mount (wall Switches turn too)  // 2026-10-24: floor / ceiling facing
+            const int turns = (tilt || af == 1 || af == 2) ? look.boxModelTurns(def, st) : 0;  // s2-PlayD: build 9 (5c22f7b) box-model turn gate restored  // PlayN (JD): the game decides per mount (wall Switches turn too)  // 2026-10-24: floor / ceiling facing
             for (BoxModel::Box box : bm->orientedBoxes(tilt ? 1 : af, turns)) {
               const FaceMaterial& fm = mats.face(b, bm->materials[size_t(box.material)].slot, on);
               FaceLook fl = look.faceLookAt(def, st, FaceSlot::Top, on, in.cx * 16 + x, in.sy * 16 + y,
@@ -1025,6 +1026,13 @@ int selectCanonLod(int d, int current, int ring1, int ring2) {
 void canonLodRings(int& ring1, int& ring2) {
   static const std::pair<int, int> r = cMesherSelector::envCanonLodRings();
   ring1 = r.first; ring2 = r.second;
+  // Archie Phase 1 (JD 2026-11-04): no canonical LOD ring lies beyond the view radius. Inside the
+  // outer ring the ladder scales with the view ({12,24} at view 6 -> {3,6}); else it is clamped.
+  const int view = cSwLodRings::shared().view();
+  if (view > 0 && view < ring2) {
+    if (view <= ring1) { ring1 = std::max(1, ring1 * view / std::max(1, ring2)); ring2 = view; }
+    else ring2 = view;
+  }
 }
 bool canonLodsEnabled() {
   static const bool v = cMesherSelector::envCanonLods();

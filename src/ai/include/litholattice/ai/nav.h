@@ -12,13 +12,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 #include "litholattice/world/block.h"
 #include "litholattice/world/chunk_map.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice::ai {
 
@@ -157,7 +157,7 @@ class cWalkCache {
   const cBlockReg& blocks_;
   NavRules rules_;
   const size_t maxColumns_;
-  mutable std::mutex m_;
+  mutable litholattice::cAtomicGate m_;
   mutable std::unordered_map<uint64_t, std::shared_ptr<const Column>> cols_;
   mutable uint64_t generation_ = 0;  ///< bumped by invalidate(); poisons in-flight computes
   mutable uint64_t useClock_ = 0;    ///< monotone LRU clock, bumped under m_

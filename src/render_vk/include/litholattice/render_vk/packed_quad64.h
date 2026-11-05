@@ -25,11 +25,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
 #include "litholattice/render_vk/packed_vertex12.h"
+#include "litholattice/core/atomic_gate.h"
 // Review R2 (fix pass 2026-10-25): encodePulled compares decoded vertices with memcmp, which is only an exact
 // value check while GpuVertex12 is 12 padding-free bytes.
 static_assert(sizeof(litholattice::vk::GpuVertex12) == 12, "GpuVertex12 must stay 12 bytes");
@@ -87,7 +87,7 @@ inline bool pullReject(uint32_t* why, uint32_t r) { if (why) ++why[r]; return fa
 /// Phase 4 C (Archie Q3): unique sub-cell tuple census. Tuple = face | n-nibble | a-min/a-max | b-min/b-max nibbles
 /// (1/16-unit offsets inside the cell). Counted only when the reason counters are on (LL_STREAM_COUNTERS) and LL_VK_SUBCELL_CENSUS=1.
 struct SubCellCensus {
-  std::mutex mu;
+  litholattice::cAtomicGate mu;
   std::unordered_map<uint32_t, uint64_t> tuples;
   std::unordered_map<uint64_t, uint64_t> raw;
 };
@@ -103,7 +103,7 @@ inline void noteSubCell(const GpuVertex12* g) {
   }
   const uint32_t t = face | ((mn[n] & 15u) << 3) | ((mn[a] & 15u) << 7) | ((mx[a] & 15u) << 11) | ((mn[b] & 15u) << 15) |
                      ((mx[b] & 15u) << 19) | (uint32_t(mn[n] != mx[n]) << 23);
-  SubCellCensus& s = subCellCensus(); std::lock_guard<std::mutex> lk(s.mu); ++s.tuples[t];
+  SubCellCensus& s = subCellCensus(); litholattice::cGateGuard<litholattice::cAtomicGate> lk(s.mu); ++s.tuples[t];
   // Review C5 (fix pass 2026-10-25): the raw map only feeds a count; cap it so a long census cannot grow without bound.
   constexpr size_t kRawCap = size_t(1) << 20;
   if (const uint64_t key = rw | (uint64_t(face) << 48); s.raw.size() < kRawCap || s.raw.count(key)) ++s.raw[key];

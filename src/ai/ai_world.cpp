@@ -1,9 +1,10 @@
 #include "litholattice/ai/ai_world.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/gate_lock.h"
+#include "litholattice/core/atomic_condition.h"
 #include <algorithm>
 #include <chrono>
-#include <condition_variable>
 #include <cstdlib>
-#include <mutex>
 
 namespace litholattice::ai {
 
@@ -173,25 +174,25 @@ void cAiWorld::tick() {
     results[i] = findPath(nav_, {m.pos, hopToward(m.pos, *m.goal, cfg_.planRange - 8), m.mode, cfg_.planRange, cfg_.nodesPerPath});
   };
   if (pool_ && n > 1) {
-    std::mutex mx;
-    std::condition_variable cv;
+    ::litholattice::cAtomicGate mx;
+    ::litholattice::cAtomicCondition cv;
     size_t left = n;
     for (size_t i = 0; i < n; ++i)
       pool_->submit([&, i] {
         // Decrement even if job() throws (cJobPool catches): otherwise a single
         // throwing path job hangs cv.wait forever.
         struct DoneGuard {
-          std::mutex& mx;
+          ::litholattice::cAtomicGate& mx;
           size_t& left;
-          std::condition_variable& cv;
+          ::litholattice::cAtomicCondition& cv;
           ~DoneGuard() {
-            std::lock_guard l(mx);
+            ::litholattice::cGateGuard l(mx);
             if (--left == 0) cv.notify_one();
           }
         } done{mx, left, cv};
         job(i);
       });
-    std::unique_lock l(mx);
+    ::litholattice::cGateLock l(mx);
     cv.wait(l, [&] { return left == 0; });
   } else {
     for (size_t i = 0; i < n; ++i) job(i);

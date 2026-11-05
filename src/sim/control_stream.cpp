@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include "litholattice/sim/det_sched.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -36,7 +37,7 @@ void cControlStream::submit(ControlEvent e) {
   e.seq = 0;
   e.tick = 0;  // stamps are assigned at the PRE phase, never by producers
   {
-    std::lock_guard l(inboundM_);
+    litholattice::cGateGuard l(inboundM_);
     inbound_.push_back(e);
   }
   submitted_.fetch_add(1, std::memory_order_relaxed);
@@ -45,7 +46,7 @@ void cControlStream::submit(ControlEvent e) {
 void cControlStream::submitStamped(std::vector<ControlEvent> evts) {
   if (evts.empty()) return;
   {
-    std::lock_guard l(injectM_);
+    litholattice::cGateGuard l(injectM_);
     inject_.insert(inject_.end(), std::make_move_iterator(evts.begin()), std::make_move_iterator(evts.end()));
   }
   injected_.fetch_add(evts.size(), std::memory_order_relaxed);
@@ -64,11 +65,11 @@ void cControlStream::insertSorted(ControlEvent e) {
 void cControlStream::prePhase(uint64_t stampTick) {
   std::vector<ControlEvent> live, injected;
   {
-    std::lock_guard l(inboundM_);
+    litholattice::cGateGuard l(inboundM_);
     live.swap(inbound_);
   }
   {
-    std::lock_guard l(injectM_);
+    litholattice::cGateGuard l(injectM_);
     injected.swap(inject_);
   }
   for (ControlEvent& e : injected) {
@@ -103,7 +104,7 @@ size_t cControlStream::extractDue(uint64_t tick, std::vector<ControlEvent>& out)
     ++n;
     out.push_back(e);
     if (recording_.load(std::memory_order_acquire)) {
-      std::lock_guard l(recordM_);
+      litholattice::cGateGuard l(recordM_);
       record_.push_back(e);
     }
   }
@@ -112,7 +113,7 @@ size_t cControlStream::extractDue(uint64_t tick, std::vector<ControlEvent>& out)
 }
 
 void cControlStream::takeRecord(std::vector<ControlEvent>& out) {
-  std::lock_guard l(recordM_);
+  litholattice::cGateGuard l(recordM_);
   out.insert(out.end(), std::make_move_iterator(record_.begin()), std::make_move_iterator(record_.end()));
   record_.clear();
 }

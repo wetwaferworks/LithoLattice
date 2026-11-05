@@ -1,10 +1,12 @@
 // Threading primitives: lock-free triple buffer for snapshots, and a small job pool.
 #pragma once
 #include "litholattice/core/lock_timing.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/gate_lock.h"
+#include "litholattice/core/atomic_condition.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
@@ -12,7 +14,6 @@
 #include <functional>
 #include <iterator>
 #include <string>
-#include <mutex>
 #include <memory>
 #include <new>
 #include <thread>
@@ -123,12 +124,12 @@ class cJobPool {
       : backing_(&backing), lane_(lane), viewCap_(std::max(1u, maxConcurrent)) {}
   ~cJobPool() {
     if (backing_) {  // view: drain like a pool (queued jobs still run), then wait out the pumps
-      std::unique_lock l(m_);
+      ::litholattice::cGateLock l(m_);
       idle_.wait(l, [this] { return inFlight_ == 0 && pumps_ == 0; });
       return;
     }
     if (lf_) { lf_.reset(); return; }  // drains queued jobs, joins its workers
-    { std::lock_guard l(m_); stop_ = true; }
+    { ::litholattice::cGateGuard l(m_); stop_ = true; }
     cv_.notify_all();
     for (auto& t : workers_) t.join();
   }
@@ -174,7 +175,7 @@ class cJobPool {
   /// P4 lend / reclaim. reserve = workers never lent to the background lane (the shard
   /// jobs' guaranteed capacity); clamped so at least one worker can always be lent.
   void configureLending(unsigned reserve) {
-    { std::lock_guard l(m_);
+    { ::litholattice::cGateGuard l(m_);
       const unsigned n = lf_ ? lf_->size() : unsigned(workers_.size());
       reserve_ = n > 1 ? std::min(reserve, n - 1) : 0;
       lendCap_ = n - reserve_; }
@@ -185,14 +186,14 @@ class cJobPool {
   /// until endEpoch(). Lent workers finish their current slice and come back.
   void beginEpoch() {
     if (lf_) return;  // lock-free pool: no epochs (no shard jobs on the pool in JD's layout)
-    std::lock_guard l(m_);
+    ::litholattice::cGateGuard l(m_);
     ++epochs_;
     ++stats_.epochs;
     if (bgActive_ > 0) ++stats_.reclaimsWithLent;
   }
   void endEpoch() {
     if (lf_) return;
-    { std::lock_guard l(m_); if (epochs_ > 0) --epochs_; }
+    { ::litholattice::cGateGuard l(m_); if (epochs_ > 0) --epochs_; }
     cv_.notify_all();  // the lane reopens: lend idle workers again
   }
   struct LendStats {
@@ -204,14 +205,14 @@ class cJobPool {
     unsigned lendCap = 0, reserve = 0;
   };
   LendStats lendStats() const {
-    std::lock_guard l(m_);
+    ::litholattice::cGateGuard l(m_);
     LendStats s = stats_;
     s.lendCap = lendCap_;
     s.reserve = reserve_;
     return s;
   }
-  unsigned lendCap() const { if (backing_) return backing_->lendCap(); std::lock_guard l(m_); return lendCap_; }
-  unsigned reserve() const { if (backing_) return backing_->reserve(); std::lock_guard l(m_); return reserve_; }
+  unsigned lendCap() const { if (backing_) return backing_->lendCap(); ::litholattice::cGateGuard l(m_); return lendCap_; }
+  unsigned reserve() const { if (backing_) return backing_->reserve(); ::litholattice::cGateGuard l(m_); return reserve_; }
 
   /// Thread Handshake P3 (Archie ruling 3): the process-wide backing pool,
   /// clamp(cores - 2, 1, 64) workers from the thread census, recorded as Class B.
@@ -230,30 +231,30 @@ class cJobPool {
   /// Cap on concurrently running jobs for THIS pool unless LL_BG_MAX_ACTIVE overrides it.
   void setDefaultMaxActive(int n) {
     if (BgThrottle::get().maxActiveSet) return;
-    { std::lock_guard l(m_); maxActive_ = std::max(0, n); }
+    { ::litholattice::cGateGuard l(m_); maxActive_ = std::max(0, n); }
     if (backing_) { viewKick(); return; }
     cv_.notify_all();
   }
-  int maxActive() const { std::lock_guard l(m_); return maxActive_; }
+  int maxActive() const { ::litholattice::cGateGuard l(m_); return maxActive_; }
   /// 2026-10-26 (Archie item 4): runtime yield-render (adaptive policy). LL_BG_YIELD_RENDER=1 forces it on.
   /// P4: on a background view this sets the backing pool's background-lane yield.
   void setYieldRender(bool on) {
     if (backing_) {
-      { std::lock_guard l(m_); yieldRender_ = on; }
+      { ::litholattice::cGateGuard l(m_); yieldRender_ = on; }
       if (lane_ == Lane::Background) backing_->setBackgroundYieldRender(on);
       return;
     }
-    { std::lock_guard l(m_); yieldRender_ = on; }
+    { ::litholattice::cGateGuard l(m_); yieldRender_ = on; }
     cv_.notify_all();
   }
   void setBackgroundYieldRender(bool on) {
-    { std::lock_guard l(m_); bgYieldRender_ = on; }
+    { ::litholattice::cGateGuard l(m_); bgYieldRender_ = on; }
     cv_.notify_all();
   }
   /// Blocks (no polling) until every job submitted so far has finished.
   void waitIdle() const {
     if (lf_) { lf_->waitIdle(); return; }
-    std::unique_lock l(m_);
+    ::litholattice::cGateLock l(m_);
     idle_.wait(l, [this] { return inFlight_ == 0; });
   }
   /// Jobs that ended with an exception since the pool was created.
@@ -282,7 +283,7 @@ class cJobPool {
   }
   void viewKick() {  // a raised cap admits more pumps for already-queued jobs
     int n = 0;
-    { std::lock_guard l(m_);
+    { ::litholattice::cGateGuard l(m_);
       while (pumps_ < viewLimit() && size_t(pumps_) < jobs_.size()) { ++pumps_; ++n; } }
     for (int i = 0; i < n; ++i) viewLaunch();
   }
@@ -290,7 +291,7 @@ class cJobPool {
   // boundary, and the next turn queues behind whatever the lane admits next.
   void viewPump() {
     std::function<void()> job;
-    { std::lock_guard l(m_);
+    { ::litholattice::cGateGuard l(m_);
       if (jobs_.empty() || pumps_ > viewLimit()) { --pumps_; idle_.notify_all(); return; }  // notify under the lock
       job = std::move(jobs_.front());
       jobs_.pop_front(); }
@@ -304,7 +305,7 @@ class cJobPool {
       logError("job pool: job threw a non-std exception");
     }
     bool again;
-    { std::lock_guard l(m_);
+    { ::litholattice::cGateGuard l(m_);
       --inFlight_;
       again = !jobs_.empty() && pumps_ <= viewLimit();
       if (!again) --pumps_;
@@ -329,7 +330,7 @@ class cJobPool {
       std::function<void()> job;
       bool bg = false;
       {
-        std::unique_lock l(m_);
+        ::litholattice::cGateLock l(m_);
         for (;;) {
           if (!urgent_.empty()) {  // P3: urgent (shard) jobs first, never throttled
             job = std::move(urgent_.front());
@@ -374,7 +375,7 @@ class cJobPool {
       }
       bool idle;
       bool wake;
-      { std::lock_guard l(m_);
+      { ::litholattice::cGateGuard l(m_);
         idle = --inFlight_ == 0;
         --active_;
         if (bg) --bgActive_;
@@ -388,9 +389,9 @@ class cJobPool {
   std::deque<std::function<void()>> jobs_;    // normal lane (a view: its own queue)
   std::deque<std::function<void()>> urgent_;  // P3: submitUrgent(), ahead of jobs_, guarded by m_
   std::deque<std::function<void()>> bg_;      // P4: background lane (lent capacity), guarded by m_
-  mutable std::mutex m_;
-  std::condition_variable cv_;
-  mutable std::condition_variable idle_;
+  mutable ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition cv_;
+  mutable ::litholattice::cAtomicCondition idle_;
   bool stop_ = false;
   int inFlight_ = 0;  // guarded by m_
   int active_ = 0;    // jobs running now, guarded by m_ (BgThrottle cap)
@@ -428,7 +429,7 @@ inline cJobPool& cJobPool::shared() {
     const unsigned n = c.budget().pool;  // clamp(cores-2, 1, 64)
     alignas(cJobPool) static unsigned char storage[sizeof(cJobPool)];
     auto* pool = new (storage) cJobPool(n, &raiseCurrentThreadForSim);
-    { std::lock_guard l(pool->m_); pool->maxActive_ = 0; }  // P4: normal lane unthrottled; views carry the cap
+    { ::litholattice::cGateGuard l(pool->m_); pool->maxActive_ = 0; }  // P4: normal lane unthrottled; views carry the cap
     { const char* lf = std::getenv("LL_HS_LOCKFREE"); const char* ly = std::getenv("LL_HS_LAYOUT");  // 2026-10-30: lock-free/original run no shard jobs on the pool
       const bool noShardJobs = (lf && lf[0] == '1') || (ly && std::string(ly) == "original");
       pool->configureLending(noShardJobs ? 0u : c.budget().simShards); }  // P4: shard jobs' reserve
@@ -453,27 +454,27 @@ class JobBatch {
   JobBatch& operator=(const JobBatch&) = delete;
 
   void submit(std::function<void()> job) {
-    { std::lock_guard l(m_); ++pending_; }
+    { ::litholattice::cGateGuard l(m_); ++pending_; }
     pool_.submit([this, job = std::move(job)] {
       bool ok = true;
       try { job(); } catch (const std::exception& e) { ok = false; logError("job batch: job threw: %s", e.what()); }
       catch (...) { ok = false; logError("job batch: job threw a non-std exception"); }
-      std::lock_guard l(m_);
+      ::litholattice::cGateGuard l(m_);
       if (!ok) ++failed_;
       if (--pending_ == 0) cv_.notify_all();  // notify under the lock: the waiter may destroy *this right after
     });
   }
   /// Blocks until every job submitted to this batch has finished. Returns the number that threw.
   int wait() {
-    std::unique_lock l(m_);
+    ::litholattice::cGateLock l(m_);
     cv_.wait(l, [this] { return pending_ == 0; });
     return failed_;
   }
 
  private:
   cJobPool& pool_;
-  std::mutex m_;
-  std::condition_variable cv_;
+  ::litholattice::cAtomicGate m_;
+  ::litholattice::cAtomicCondition cv_;
   int pending_ = 0, failed_ = 0;
 };
 
@@ -492,7 +493,7 @@ class cHandoffQueue {
     items_.clear();
   }
  private:
-  std::mutex m_;
+  ::litholattice::cAtomicGate m_;
   std::vector<T> items_;
 };
 

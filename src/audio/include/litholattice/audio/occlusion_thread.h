@@ -24,10 +24,10 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <vector>
 #include <functional>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -95,7 +95,7 @@ class cOcclusionThread {
   // snapshots raw pointers under the lock and raycasts unlocked. The
   // OcclusionQuery objects themselves are heap-stable (unique_ptr, never
   // erased), so snapshot pointers stay valid after the lock is released.
-  mutable std::mutex queriesMu_;
+  mutable litholattice::cAtomicGate queriesMu_;
   std::vector<std::unique_ptr<OcclusionQuery>> queries_;  // unique_ptr: atomics aren't movable
   std::vector<OcclusionQuery*> snapshot_;  // per-tick scratch, reused (no per-tick alloc)
   // H-AUD-1 lock-free read snapshot for gain(): an immutable pointer array

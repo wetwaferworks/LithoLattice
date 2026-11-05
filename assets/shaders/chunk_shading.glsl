@@ -194,10 +194,13 @@ void main() {
   } else if (vMode == MODE_CUTOUT || vMode == MODE_LEAF) {
     if (a < 0.5) discard;
   } else if (vMode == MODE_TRACE_TINT) {  // grey mask (R) x feeding Trace colour, over the base
-    float tm = mask(uTintMask[vVal & 31], uvW).r;
+    float tm = mask((vVal & 31) == 31 ? vLayer + 1 : uTintMask[vVal & 31], uvW).r;  // 2026-11-04: slot 31 = next layer (BlockMaterials kTintAdjacentSlot)
     bool on = (vVal & 128) != 0;
     vec3 tint = texelFetch(uPal, ivec2(on ? 64 : 0, uWirePal[(vVal >> 6) & 1]), 0).rgb;
-    if ((vVal & 32) != 0) tint = vec3(0.545, 0.396, 0.867);  // 2026-10-31: Switch-fed purple (#8B65DD)
+    if ((vVal & 96) == 96) {  // PlayB (JD t4342u): fed by red AND blue Trace -> red <-> blue pulse, 2 s, render clock only
+      vec3 tr = texelFetch(uPal, ivec2(64, uWirePal[0]), 0).rgb, tb = texelFetch(uPal, ivec2(64, uWirePal[1]), 0).rgb;
+      tint = mix(tr, tb, 0.5 + 0.5 * sin(uTime * 3.14159265));
+    } else if ((vVal & 32) != 0) tint = vec3(0.545, 0.396, 0.867);  // 2026-10-31: Switch-fed purple (#8B65DD)
     // 2026-10-16 (JD, Discovered by J.D.): grey until powered - no tint when off (was the ramp's red start).
     if (on) { base = mix(base, tint, tm); emissive = 0.85 * tm; }
   } else if (vMode == MODE_WIRE0 || vMode == MODE_WIRE1) {                       // wire

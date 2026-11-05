@@ -79,8 +79,12 @@ BlockMaterials BlockMaterials::build(const cBlockReg& reg, const cTextureReg& te
       if (m.tintSlotOfLayer_.size() <= tex->layer) m.tintSlotOfLayer_.resize(size_t(tex->layer) + 1, 0);
       if (m.tintSlotOfLayer_[tex->layer]) continue;  // shared texture: first mask wins
       size_t slot = 0;
-      while (slot < MaterialBindings::kTintSlots && m.bindings_.tintMask[slot]) ++slot;
-      if (slot == MaterialBindings::kTintSlots) { warn("tint mask '" + role + "': more than 32 tint masks"); continue; }
+      while (slot < MaterialBindings::kTintAdjacentSlot && m.bindings_.tintMask[slot]) ++slot;
+      if (slot == MaterialBindings::kTintAdjacentSlot) {  // 2026-11-04: table full -> adjacent-layer slot
+        if (maskTex.value == uint32_t(tex->layer) + 1u) { m.tintSlotOfLayer_[tex->layer] = uint8_t(MaterialBindings::kTintAdjacentSlot + 1); continue; }
+        warn("tint mask '" + role + "': more than 31 tint masks and the mask is not the next layer");
+        continue;
+      }
       m.bindings_.tintMask[slot] = int(maskTex.value);
       m.tintSlotOfLayer_[tex->layer] = uint8_t(slot + 1);
     }

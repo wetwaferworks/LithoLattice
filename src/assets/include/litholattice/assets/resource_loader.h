@@ -5,7 +5,6 @@
 #pragma once
 #include <cstdint>
 #include <list>
-#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -13,6 +12,7 @@
 #include "litholattice/assets/block_model.h"
 #include "litholattice/assets/resource_pack.h"
 #include "litholattice/assets/texture_registry.h"
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -77,7 +77,7 @@ struct SvgRasterCache {
     Image image;
     std::list<Key>::iterator lru;  // position in lru_ (front = most recent)
   };
-  mutable std::mutex mutex_;
+  mutable litholattice::cAtomicGate mutex_;
   std::unordered_map<Key, Entry, KeyHash> map_;
   mutable std::list<Key> lru_;  // front = most recently used
 };
@@ -124,7 +124,7 @@ struct TextureDecodeCache {
     size_t bytes = 0;
     std::list<Key>::iterator lru;  // position in lru_ (front = most recent)
   };
-  mutable std::mutex mutex_;
+  mutable litholattice::cAtomicGate mutex_;
   std::unordered_map<Key, Entry, KeyHash> map_;
   mutable std::list<Key> lru_;  // front = most recently used
   size_t bytes_ = 0;

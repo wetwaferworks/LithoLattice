@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <thread>  // 0.0.1.56 F56-8
 #include "litholattice/render_vk/packed_quad64.h"  // Mega-Pipeline Phase 2
+#include "litholattice/core/atomic_gate.h"
 // Phase 4.0 (Direction JD, research Elfie, implementation Cortana): streaming / culling counters. Logging only,
 // zero behavior change. CMake option LITHO_STREAM_COUNTERS (default ON) sets this; OFF compiles them out.
 #ifndef LL_STREAM_COUNTERS
@@ -1126,7 +1127,7 @@ class cVulkanRenderer final : public IRenderer {
           logInfo("vulkan pull reasons (quads, cumulative): %s", buf);
           if (subCellCensusOn()) {  // Phase 4 C: sub-cell tuple census (how big a LUT would need to be)
             SubCellCensus& sc = subCellCensus(); std::vector<uint64_t> cnt; size_t rawN = 0;
-            { std::lock_guard<std::mutex> lk(sc.mu); for (auto& kv : sc.tuples) cnt.push_back(kv.second); rawN = sc.raw.size(); }
+            { litholattice::cGateGuard<litholattice::cAtomicGate> lk(sc.mu); for (auto& kv : sc.tuples) cnt.push_back(kv.second); rawN = sc.raw.size(); }
             std::sort(cnt.begin(), cnt.end(), std::greater<uint64_t>());
             uint64_t tot = 0; for (uint64_t x : cnt) tot += x;
             auto cov = [&](size_t k) { uint64_t s = 0; for (size_t i = 0; i < k && i < cnt.size(); ++i) s += cnt[i]; return tot ? 100.0 * double(s) / double(tot) : 0.0; };

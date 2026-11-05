@@ -11,12 +11,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
-#include <mutex>
 #include <thread>
 #include <algorithm>
 
 #if defined(__linux__)
 #include <pthread.h>
+#include "litholattice/core/atomic_gate.h"
 #endif
 
 namespace litholattice {
@@ -25,7 +25,7 @@ namespace detail {
 namespace {
 // The debug-log lock: L3 in the lock order, the absolute leaf. Taken to emit one
 // line and released immediately; no other lock is ever acquired while holding it.
-std::mutex g_threadLogMutex;
+litholattice::cAtomicGate g_threadLogMutex;
 
 // B8: per-thread lock-free trace rings. Each thread owns one ring (single writer); the
 // registry is a fixed array claimed with fetch_add, so logging never takes a lock. Rings are
@@ -87,13 +87,13 @@ void threadLog(const char* tag, const char* fmt, ...) {
   std::snprintf(r->lines[h % TraceRing::kLines], TraceRing::kLen, "%llu [%s] %s", (unsigned long long)threadDebugNowUs(), tag, msg);
   r->head.store(h + 1, std::memory_order_release);
   if (!echoStderr()) return;
-  std::lock_guard<std::mutex> l(g_threadLogMutex);  // L3 leaf
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(g_threadLogMutex);  // L3 leaf
   std::fprintf(stderr, "[litho-thread][%s][%s] %s\n", tag, who, msg);
   std::fflush(stderr);
 }
 
 void threadDebugDump(const char* why) {
-  std::lock_guard<std::mutex> l(g_threadLogMutex);  // L3 leaf
+  litholattice::cGateGuard<litholattice::cAtomicGate> l(g_threadLogMutex);  // L3 leaf
   std::fprintf(stderr, "[litho-thread] ===== DUMP: %s =====\n", why);
   const uint32_t n = std::min<uint32_t>(g_ringCount.load(std::memory_order_acquire), kMaxRings);
   for (uint32_t i = 0; i < n; ++i) {

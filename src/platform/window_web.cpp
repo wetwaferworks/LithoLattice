@@ -51,12 +51,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <optional>
 #include <thread>
 
 #include "litholattice/core/log.h"
 #include "litholattice/core/thread_census.h"  // JD t3349u item 2: drain thread record
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -69,7 +69,7 @@ double nowSeconds() { return lk_now_ms() / 1000.0; }
 /// capture + focus). Everything is touched on this (proxied) pthread; the
 /// mutex is belt-and-braces, not load-bearing.
 struct InputSharedState {
-  std::mutex mutex;
+  litholattice::cAtomicGate mutex;
   std::vector<InputEvent> queue;
   std::atomic<bool> focused{true};
   std::atomic<bool> pointerLocked{false};
@@ -87,7 +87,7 @@ struct InputSharedState {
   int fbW = 0, fbH = 0;         // canvas framebuffer size, same refresh
 
   void push(const InputEvent& e) {
-    std::lock_guard lock(mutex);
+    litholattice::cGateGuard lock(mutex);
     queue.push_back(e);
   }
 };
@@ -572,7 +572,7 @@ class WebHtml5InputBackend final : public IInputBackend {
   void poll(std::vector<InputEvent>& out) override {
     if (ringActive_ && !drainThreadOn_) drainRing();  // fallback only: the drain thread owns the ring when it runs
     if (!ringSeen_.load(std::memory_order_acquire)) drainJsQueue();  // legacy transport until the ring proves itself
-    std::lock_guard lock(st_->mutex);
+    litholattice::cGateGuard lock(st_->mutex);
     out.insert(out.end(), st_->queue.begin(), st_->queue.end());
     st_->queue.clear();
   }
@@ -603,7 +603,7 @@ class WebHtml5InputBackend final : public IInputBackend {
   /// the same handlers as the legacy queue. Called by the drain thread
   /// (step cadence) or, as fallback, by poll() (frame cadence).
   void drainRing() {
-    std::lock_guard convLock(convMutex_);
+    litholattice::cGateGuard convLock(convMutex_);
     // Canvas geometry rides the header (refreshed by the listeners on
     // non-mousemove records and resizes); adopt it before converting, the
     // same order the legacy drain applies its leading `sz` record.
@@ -695,7 +695,7 @@ class WebHtml5InputBackend final : public IInputBackend {
     // Conversions serialize with the ring drain thread's (build 63): both
     // feed the same handlers and conversion state. The bridge hop above
     // deliberately stays outside this lock.
-    std::lock_guard convLock(convMutex_);
+    litholattice::cGateGuard convLock(convMutex_);
     const std::string_view text(drainBuf_.data(), (size_t)n);
     size_t b = 0;
     while (b < text.size()) {
@@ -727,7 +727,7 @@ class WebHtml5InputBackend final : public IInputBackend {
   std::atomic<bool> ringSeen_{false};  // first ring record consumed (legacy drain retires)
   bool ringDropLogged_ = false;        // drain-side only, under convMutex_
   bool ringDesyncLogged_ = false;      // drain-side only, under convMutex_
-  std::mutex convMutex_;               // serializes ALL conversions (ring thread + legacy drain)
+  litholattice::cAtomicGate convMutex_;               // serializes ALL conversions (ring thread + legacy drain)
   std::thread drainThread_;            // build 63: step-cadence ring consumer
   cThreadRecordSet drainRecord_;       // JD t3349u item 2: System record (P2 pattern)
   std::atomic<bool> drainStop_{false};

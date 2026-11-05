@@ -1,5 +1,6 @@
 // Cortana 2026-10-15 0825: CHUNK-STALL postLock (SIM-H1 tried 1010, reverted 1035)
 #include <unordered_map>
+#include "litholattice/core/gate_lock.h"
 #include "litholattice/sim/sim_thread.h"
 #include "litholattice/sim/control_stream.h"
 #include <cstdio>
@@ -16,6 +17,7 @@
 #include "litholattice/core/thread_readout.h"
 #include "litholattice/core/log.h"
 #include "litholattice/core/tick_profile.h"  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 using Ns = std::chrono::nanoseconds;
@@ -197,7 +199,7 @@ void cSimThread::edit(EditCmd c) {
 }
 
 std::vector<uint8_t> cSimThread::drainPlaceReceipts() {
-  std::lock_guard<std::mutex> lk(receiptM_);
+  litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
   std::vector<uint8_t> out;
   out.swap(receipts_);
   return out;
@@ -232,16 +234,16 @@ void cSimThread::runBetweenTicks(std::function<void()> fn) {
   { locktiming::TimedGuard l(blockMutex_, locktiming::kBlock); fn(); }  // 0.0.1.60 timing (diagnostic)
 }
 
-bool cSimThread::tryHoldBetweenTicks(std::unique_lock<std::recursive_mutex>& hold, bool* busy) {
+bool cSimThread::tryHoldBetweenTicks(::litholattice::cGateLock<cBlockGate>& hold, bool* busy) {
   if (busy) *busy = false;
-  std::unique_lock<std::recursive_mutex> l(blockMutex_, std::try_to_lock);
+  ::litholattice::cGateLock<cBlockGate> l(blockMutex_, ::litholattice::kTryToLock);
   if (!l.owns_lock()) { if (busy) *busy = true; return false; }
   if (handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())) return false;
   hold = std::move(l);
   return true;
 }
 
-bool cSimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) {
+bool cSimThread::holdBetweenTicks(::litholattice::cGateLock<cBlockGate>& hold) {
   // Waits out any in-flight iteration (ticks + post-tick flush both hold
   // blockMutex_). The sim thread keeps running; it simply cannot start its
   // next iteration until hold is released. A frozen or poisoned handshake
@@ -253,7 +255,7 @@ bool cSimThread::holdBetweenTicks(std::unique_lock<std::recursive_mutex>& hold) 
   PointRead pr(threewayYield_ ? &pointReaders_ : nullptr, threewayYield_ ? &insertWaiting_ : nullptr);
   locktiming::lockTimed(blockMutex_, locktiming::kBlock);  // 0.0.1.60 timing (diagnostic); same lock, adopted below
   pr.done();
-  std::unique_lock<std::recursive_mutex> l(blockMutex_, std::adopt_lock);
+  ::litholattice::cGateLock<cBlockGate> l(blockMutex_, ::litholattice::kAdoptLock);
   if (handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())) return false;
   if (stallLogWindow())  // LL_SIM_STALL_MS (measure only; Proposed by Herominde; implemented by Cortana)
     logInfo("sim-stall: insert landed at world tick %llu (%s)", (unsigned long long)worldTickN_, inBurst_ ? "mid-burst handoff" : "between sim iterations");
@@ -343,7 +345,7 @@ void cSimThread::flushDirty() {
     // the buffer to the shared pool; the pool outlives in-flight snapshots.
     std::unique_ptr<MeshInput> buf;
     {
-      std::lock_guard l(meshPool_->m);
+      litholattice::cGateGuard l(meshPool_->m);
       if (!meshPool_->free.empty()) {
         buf = std::move(meshPool_->free.back());
         meshPool_->free.pop_back();
@@ -358,7 +360,7 @@ void cSimThread::flushDirty() {
     submit_(std::shared_ptr<MeshInput>(raw, [pool](MeshInput* p) {
       std::unique_ptr<MeshInput> u(p);
       u->pin.reset();  // M5: never retain pinned snapshots in the pool
-      std::lock_guard l(pool->m);
+      litholattice::cGateGuard l(pool->m);
       if (pool->free.size() < 64) pool->free.push_back(std::move(u));
       // else: pool full, drop it (bounds retained memory)
     }));
@@ -436,7 +438,7 @@ bool cSimThread::applyOneEdit(EditCmd& e, const IWorldSim::DirtyFn& dirty) {
     sim_->command(w, e.command, dirty);
     if (e.x == kPlaceReceipt) {
       const bool ok = w.get(e.command.x, e.command.y, e.command.z) != before;
-      std::lock_guard<std::mutex> lk(receiptM_);
+      litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
       if (receipts_.size() < 4096) receipts_.push_back(ok ? 1 : 0);
     }
     return false;
@@ -444,7 +446,7 @@ bool cSimThread::applyOneEdit(EditCmd& e, const IWorldSim::DirtyFn& dirty) {
   if (e.kind == EditCmd::Kind::Place) {
     const bool ok = applyPlace(e);
     if (e.x == kPlaceReceipt) {  // 2026-10-16: the game refunds a rejected place
-      std::lock_guard<std::mutex> lk(receiptM_);
+      litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
       if (receipts_.size() < 4096) receipts_.push_back(ok ? 1 : 0);
     }
     return ok;
@@ -680,7 +682,7 @@ void cSimThread::run() {
     {
       const bool rdOn = cThreadReadout::enabled();  // LL_THREAD_READOUT (read-only; tick thread is this slot's only writer)
       const uint64_t rdT0 = rdOn ? cThreadReadout::nowNs() : 0;
-      std::lock_guard l(blockMutex_);
+      litholattice::cGateGuard l(blockMutex_);
       const uint64_t rdT1 = rdOn ? cThreadReadout::nowNs() : 0;
       struct RdPass { bool on; uint64_t t0, t1; ~RdPass() { if (on) cNamedThreadLoad::instance().pass(cNamedThreadLoad::kTick, t1 - t0, cThreadReadout::nowNs() - t1); } } rdPass{rdOn, rdT0, rdT1};
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
@@ -810,7 +812,7 @@ void cSimThread::run() {
     // 2026-10-15 (stream hand-off): the post-tick section below reads chunks_
     // (flushDirty snapshots, HUD inspect) and also runs under blockMutex_, so
     // holdBetweenTicks() callers may insert/erase columns without stop()/start().
-    std::unique_lock<std::recursive_mutex> postLock(blockMutex_);
+    ::litholattice::cGateLock<cBlockGate> postLock(blockMutex_);
     locktiming::setBlockHolder(locktiming::kHolderSimPost);  // 0.0.1.60 diagnostic (cleared before postLock.unlock())
 
     bool flushNow = editsApplied;  // player edits remesh at once (no added latency)
@@ -902,13 +904,13 @@ void cSimThread::run() {
     // edit. Promptness: the wake is a CV notify, so edit application and
     // step response are faster than the old one-master-step poll.
     if (paused_.load(std::memory_order_relaxed) && stepRequested_.load(std::memory_order_relaxed) == 0) {
-      std::unique_lock lk(wakeM_);
+      // PlayL JD: cruise — spin/poll wakeEpoch_ (short yield); never CV-wait on another thread.
       const uint64_t e = wakeEpoch_.load(std::memory_order_relaxed);
-      wakeCv_.wait(lk, [&] {
-        return !running_.load(std::memory_order_relaxed) || !paused_.load(std::memory_order_relaxed) ||
-               stepRequested_.load(std::memory_order_relaxed) != 0 ||
-               wakeEpoch_.load(std::memory_order_relaxed) != e;
-      });
+      while (running_.load(std::memory_order_relaxed) && paused_.load(std::memory_order_relaxed) &&
+             stepRequested_.load(std::memory_order_relaxed) == 0 &&
+             wakeEpoch_.load(std::memory_order_relaxed) == e) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+      }
     } else if (passCut) {
       // backlog beyond one pass: the 100 ms lag cap above drops what can't be caught up,
       // so a too-slow (Debug) sim runs slow; give lock waiters a turn instead of re-locking at once

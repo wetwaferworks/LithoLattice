@@ -25,12 +25,12 @@
 #include <cstdlib>
 #include <deque>
 #include <memory>
-#include <mutex>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "litholattice/core/lf_handoff.h"  // 2026-11-01 LL_LF_INGRESS
+#include "litholattice/core/atomic_gate.h"
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -147,7 +147,7 @@ class cIngress {
       overflowTotal_.fetch_add(1, std::memory_order_relaxed);
       return;
     }
-    std::lock_guard<std::mutex> l(m_);
+    litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
     overflow_.push_back(std::move(v));
     overflowN_.fetch_add(1, std::memory_order_release);
     overflowTotal_.fetch_add(1, std::memory_order_relaxed);
@@ -166,7 +166,7 @@ class cIngress {
       return;
     }
     if (overflowN_.load(std::memory_order_acquire) == 0) { bytes_.fetch_sub(drained, std::memory_order_relaxed); return; }
-    std::lock_guard<std::mutex> l(m_);
+    litholattice::cGateGuard<litholattice::cAtomicGate> l(m_);
     for (auto& o : overflow_) { drained += W{}(o); out.push_back(std::move(o)); }
     bytes_.fetch_sub(drained, std::memory_order_relaxed);
     overflowN_.fetch_sub(overflow_.size(), std::memory_order_release);
@@ -182,7 +182,7 @@ class cIngress {
   }
   cMpscRing<T> ring_;
   cLfHandoff<T> lfOverflow_;  // LL_LF_INGRESS=1 only
-  std::mutex m_;
+  litholattice::cAtomicGate m_;
   std::vector<T> overflow_;
   std::atomic<size_t> overflowN_{0};
   std::atomic<uint64_t> overflowTotal_{0};

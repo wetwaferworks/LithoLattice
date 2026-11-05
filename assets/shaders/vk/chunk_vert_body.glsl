@@ -120,6 +120,12 @@ void main() {
       vWorld.y -= (1.0 - k) * (1.0 - k) * uRevealHdr.w;
     }
   }
+  // PlayB (JD t4332u) / PlayI: value readouts are meshed one 1/16 step above the model top;
+  // drop them 3/64 so they sit 1/64 above it (1 px at 64, 2 px at 128). MUST adjust vWorld
+  // before the MVP multiply — PlayB Vulkan applied it after, so clip Y never moved (LED text floated).
+  // Modes: 15=kShadeReadout, 19/20/21=kShadeDigits* (Latchor/Repeator/Randor). All LED text.
+  // s2-PlayD: build 9 look: PlayB Vulkan applied the drop after the MVP (no-op), so readouts were not dropped. Restore: uncomment.
+  // if ((vMode == 15 || vMode == 19 || vMode == 20 || vMode == 21) && vNormal.y > 0.5) vWorld.y -= 3.0 / 64.0;
   vec4 p = uVP * vec4(vWorld, 1.0);
   gl_Position = vec4(p.x, -p.y, (p.z + p.w) * 0.5, p.w);
   // Cortana 2026-10-16 (JD foliage LOD, renderer.h kShadeLod*): LOD-tagged quads draw by the

@@ -1,4 +1,4 @@
-// Cortana 2026-10-15 1010-1116: RND-H4/H3/H2, GAME-H1, RND-MT band raster
+﻿// Cortana 2026-10-15 1010-1116: RND-H4/H3/H2, GAME-H1, RND-MT band raster
 // Software renderer: full CPU rasterizer implementation.
 // Optimized for voxels: backface culling, depth buffer, scanline rasterization.
 // Shading: flat face colors, or per-pixel fragment shaders (basic / PBR tiers)
@@ -6,6 +6,8 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/core/atomic_gate.h"
+#include "litholattice/render/sw_lod_rings.h"  // PlayB: the shared far-LOD ladder
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/unified_mesher.h"
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
@@ -32,9 +34,7 @@
 #include <atomic>
 #include <climits>
 #include <thread>
-#include <mutex>
 #include <functional>
-#include <condition_variable>
 #include <algorithm>
 #include "litholattice/render/block_materials.h"
 #include "litholattice/render/texture_coverage.h"
@@ -268,8 +268,8 @@ static thread_local bool tlHudStats = true;
 struct HudBig { uint64_t area; int x0, y0, x1, y1; float r, g, b, a; };  // 2026-10-26 HUD fill diagnostic (LL_SW_PROF)
 static HudBig g_hudBig[4] = {}; static uint64_t g_hudBlendPx = 0;
 static double g_hudMsAcc = 0, g_hudBuildMs = 0; static uint64_t g_hudTris = 0, g_hudFlat = 0, g_hudBox = 0;  // 2026-10-25 HUD split (LL_SW_PROF)
-static double g_skyMsAcc = 0;        // 2026-10-28 S1a: t_sky — the serial clear/sky fill (LL_SW_PROF)
-static double g_rasterBandsUsAcc = 0;  // 2026-10-28 S3: t_raster_bands_us — wall time of the band dispatch (drawBand run), microseconds
+static double g_skyMsAcc = 0;        // 2026-10-28 S1a: t_sky â€” the serial clear/sky fill (LL_SW_PROF)
+static double g_rasterBandsUsAcc = 0;  // 2026-10-28 S3: t_raster_bands_us â€” wall time of the band dispatch (drawBand run), microseconds
 static std::atomic<uint64_t> g_pxScan{0}, g_pxCov{0}, g_pxShade{0}, g_tris{0};  // LL_SW_PROF counters
 static std::atomic<uint64_t> g_hizRows{0};
 static std::atomic<uint64_t> g_hizTested{0}, g_hizPartial{0}, g_hizTilesTot{0}, g_hizTilesOcc{0};  // Strike 3 sizing
@@ -290,7 +290,7 @@ static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
 static std::atomic<uint64_t> g_ringTris[4]{};  // 2026-10-25 (Archie step 6): binned tris per far-LOD ring (LL_SW_PROF)
-static int g_ringEdge[3] = {32, 64, 96};  // = game LL_SW_LOD_RINGS default (JD's 32-chunk full-fidelity core, 2026-10-28)
+static int g_ringEdge[3] = {32, 64, 96};  // = game LL_SW_LOD_RINGS default; PlayB: refreshed from cSwLodRings::shared() (clamped to view) (JD's 32-chunk full-fidelity core, 2026-10-28)
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
@@ -313,11 +313,11 @@ unsigned swAutoRenderThreads(unsigned logical) {
   // std::clamp(hw - 1, 2, 16). i5-12450H (12 logical) gives 11.
   const unsigned n = std::clamp(logical > 1 ? logical - 1 : 1u, 2u, 16u);
 #ifdef __wasm__
-  // Phone-framerate pass (2026-10-28 — Archie: optimization design;
+  // Phone-framerate pass (2026-10-28 â€” Archie: optimization design;
   // Elfie: co-implementation; JD: direction + debugging): on web the
   // band pool shares the device with the browser compositor, the
   // Timing Handshake workers and the job pool, so the auto count is
-  // Archie's raster lane count — 4 bands, caller included — not
+  // Archie's raster lane count â€” 4 bands, caller included â€” not
   // hw-1. An explicit request still overrides (swResolveThreads).
   return std::min(n, 4u);
 #else
@@ -334,139 +334,80 @@ class cSwBandPool {
   static cSwBandPool& get() { static cSwBandPool p; return p; }
   unsigned bands() const { return bands_; }
   void run(const std::function<void(unsigned)>& fn) {
-    // Cortana 2026-10-15 1415 (Elfie §1.4): nested run() from a band
-    // callback (or any thread already inside run) used to deadlock on runM_.
-    // It now runs every band inline on the calling thread - same result,
-    // no re-entry into the pool.
+    // Nested run() from a band callback: inline (same result, no re-entry).
     if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands_); ++b) fn(b); return; }
     struct InRun { InRun() { tlInRun_ = true; } ~InRun() { tlInRun_ = false; } } inRun;
-    // Design B Stage 1: a detached frame in flight owns the pool's frame
-    // slot; a synchronous frame waits for it (the design's §4.3 rule: vision
-    // serialises behind an in-flight detached frame, as it does today via
-    // runM_). runM_ alone cannot express this — its owner would have to be
-    // the executor thread — so frame ownership is a flag under m_. The
-    // executor running a detached body IS the frame owner (tlDetachedBody_):
-    // its run() calls skip the wait and the slot release, which stay with
-    // runDetached/executorLoop for the body's whole duration.
-    // Archie review C1 (2026-10-30): the frame slot is taken BEFORE runM_,
-    // never while holding it. Holding runM_ across the frameFree_ wait
-    // deadlocked against the executor, whose detached body takes runM_ in
-    // its own run() calls while it owns the slot. One lock order now:
-    // frame slot -> runM_ (run, runDetached, setDetachedMode).
+    // Frame slot first (serialises sync vs detached), then runGate_ (serialises start/stop).
     if (!tlDetachedBody_) acquireFrameSlot();
     FrameSlot frameSlot{*this, !tlDetachedBody_};
-    // Serialize whole frames (game view + MCP vision share the pool) and
-    // apply a thread-count change between frames.
-    std::lock_guard<std::mutex> runLock(runM_);
+    runGate_.lock();
+    struct RunUnlock { cAtomicGate& g; ~RunUnlock() { g.unlock(); } } runUnlock{runGate_};
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
-    // Design B Stage 1: the executor cannot restart the pool it belongs to
-    // (stopAll() would self-join); runDetached applies the change between
-    // frames instead — it re-checks on every submit.
     if (want != bands_ && !tlDetachedBody_) { stopAll(); start(want); }
     if (bands_ <= 1) { fn(0); return; }
-    if (folded_) { runFolded(fn); return; }  // Gate 1: bands ride the shared lock-free pool
-    // Several cSoftwareRenderer instances share the pool (the game view and
-    // the MCP vision capture for the Daemon's pilots): one frame at a time.
-    // run() returns only after every band has finished, so the framebuffer
-    // is fully resolved before any post pass, grabFramebuffer or capture.
-    {
-      std::lock_guard<std::mutex> l(m_);
-      fn_ = &fn;
-      remaining_ = bands_ - 1;
-      ++gen_;
-    }
-    cv_.notify_all();
-    // Cortana 2026-10-15 1415: exception guard. A throwing band no longer
-    // skips its remaining_ decrement (which hung run() forever); the first
-    // exception is rethrown here after EVERY band finished, so the
-    // framebuffer is never torn down under a running worker.
+    if (folded_) { runFolded(fn); return; }
+    // Publish band work: fn_ before gen_ (release), workers acquire gen then load fn_.
+    workerErr_ = nullptr;
+    hasWorkerErr_.store(false, std::memory_order_relaxed);
+    remaining_.store(bands_ - 1, std::memory_order_relaxed);
+    fn_ = &fn;
+    gen_.fetch_add(1, std::memory_order_release);
+    gen_.notify_all();
     std::exception_ptr mine;
     try { fn(0); } catch (...) { mine = std::current_exception(); }
-    std::unique_lock<std::mutex> l(m_);
-    done_.wait(l, [&] { return remaining_ == 0; });
+    for (unsigned v; (v = remaining_.load(std::memory_order_acquire)) != 0;)
+      remaining_.wait(v, std::memory_order_acquire);
     fn_ = nullptr;
     std::exception_ptr err = mine ? mine : workerErr_;
     workerErr_ = nullptr;
-    l.unlock();
     if (err) std::rethrow_exception(err);
   }
-  // ---- Design B Stage 1: detached submit mode (JD ruling 2: the render
-  // side rides the band-pool threads; no new always-on thread outside the
-  // pool). While detachedMode_ is on, start() spawns bands_ workers: the
-  // band workers 1..bands_-1 exactly as before, plus the executor (band
-  // 0's seat), whose only work is runDetached bodies. The band count is
-  // unchanged — detached mode changes WHO runs a detached frame (the
-  // executor instead of the submitting caller), never how many bands a
-  // frame has. The executor runs the body as the frame's caller (band
-  // 0's seat): the body's run() calls fork-join normally, and a run()
-  // re-entered from inside a band callback still takes the tlInRun_
-  // inline path (the Daemon/MCP-vision fallback, preserved verbatim);
-  // a synchronous run() from any other thread keeps
-  // caller-runs-band-0 over the band workers and serialises against an
-  // in-flight detached frame through frameActive_ (see run()).
   void setDetachedMode(bool on) {
-    acquireFrameSlot();  // Archie review C1: slot first, then runM_
+    acquireFrameSlot();
     FrameSlot frameSlot{*this, true};
-    std::lock_guard<std::mutex> runLock(runM_);
+    runGate_.lock();
+    struct RunUnlock { cAtomicGate& g; ~RunUnlock() { g.unlock(); } } runUnlock{runGate_};
     if (detachedMode_ == on) return;
     detachedMode_ = on;
     stopAll();
     start(bands_);
   }
   bool detachedMode() const { return detachedMode_; }
-  // Publish fn to the executor and return immediately. fn runs on the
-  // executor; onDone(err) runs there right after it (err null on success).
-  // One detached job at a time: the mailbox guarantees the previous job
-  // completed before submitting again, and frameActive_ serialises
-  // against synchronous run() frames either way. If detached mode is off
-  // there is no executor: fn runs inline on the caller and onDone fires
-  // before return (the Stage 0 shape), so callers stay correct.
   void runDetached(std::function<void()> fn, std::function<void(std::exception_ptr)> onDone) {
-    acquireFrameSlot();  // Archie review C1: slot first, then runM_
-    std::unique_lock<std::mutex> runLock(runM_);
-    // Thread-count changes apply between frames, as in run().
+    acquireFrameSlot();
+    runGate_.lock();
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
     if (want != bands_) { stopAll(); start(want); }
     if (!detachedMode_) {
-      // Archie review C1: the inline body runs as the frame owner, exactly
-      // like the executor: runM_ released, tlDetachedBody_ set, so its own
-      // run() calls neither re-lock runM_ under us nor wait on the slot.
-      runLock.unlock();
+      runGate_.unlock();
       std::exception_ptr err;
       tlDetachedBody_ = true;
       try { fn(); } catch (...) { err = std::current_exception(); }
       tlDetachedBody_ = false;
-      { std::lock_guard<std::mutex> l(m_); frameActive_ = false; }
-      frameFree_.notify_all();
+      releaseFrameSlot();
       if (onDone) onDone(err);
       return;
     }
-    { std::lock_guard<std::mutex> l(m_); detachedFn_ = std::move(fn); detachedDone_ = std::move(onDone); }
-    runLock.unlock();
-    cv_.notify_all();
+    detachedFn_ = std::move(fn);
+    detachedDone_ = std::move(onDone);
+    detachedPending_.store(true, std::memory_order_release);
+    runGate_.unlock();
+    detachedPending_.notify_all();
   }
   ~cSwBandPool() { stopAll(); }
-  /// Gate 1 (Archie Q0-Q17): fold the render bands into the shared job pool. Opt-in: LL_RENDER_POOL=1
-  /// with the lock-free shared pool (LL_POOL_LOCKFREE=1); otherwise the dedicated band threads
-  /// stay (fold raised tick p99 ~10x in the Gate 1 A/B: bands starve shard jobs). Render-only: no hash.
   static bool foldWanted() {
     static const bool on = [] {
       const char* e = std::getenv("LL_RENDER_POOL");
-      if (!(e && e[0] == '1')) return false;  // opt-in: Gate 1 A/B showed tick p99 1.4 -> 13-14 ms when bands share the pool
+      if (!(e && e[0] == '1')) return false;
       return cJobPool::shared().lockFree();
     }();
     return on;
   }
  private:
-  // Gate 1: one frame's band fan-out over the shared pool. No mutex, no condvar: an atomic
-  // countdown (release per band, acquire by the caller) plus std::atomic::wait. The state is
-  // shared_ptr-owned so a band's final notify never touches a returned caller's stack. Bands
-  // go on the NORMAL lane so Timing Handshake shard jobs (urgent ring) always run first. A
-  // caller that is itself a pool worker runs every band inline (no worker waits on workers).
   struct FoldState {
     std::atomic<unsigned> remaining{0};
     std::atomic<bool> failed{false};
-    std::exception_ptr err;  // written once by the band that wins `failed`
+    std::exception_ptr err;
   };
   void runFolded(const std::function<void(unsigned)>& fn) {
     if (cLockFreePool::onAnyWorker()) { for (unsigned b = 0; b < bands_; ++b) fn(b); return; }
@@ -489,40 +430,50 @@ class cSwBandPool {
     std::exception_ptr err = mine ? mine : st->err;
     if (err) std::rethrow_exception(err);
   }
-  // Archie review C1: frame-slot helpers (the slot is a flag under m_).
   void acquireFrameSlot() {
-    std::unique_lock<std::mutex> l(m_);
-    frameFree_.wait(l, [&] { return !frameActive_; });
-    frameActive_ = true;
+    for (;;) {
+      bool expected = false;
+      if (frameActive_.compare_exchange_weak(expected, true, std::memory_order_acquire, std::memory_order_relaxed))
+        return;
+      frameActive_.wait(true, std::memory_order_relaxed);
+    }
+  }
+  void releaseFrameSlot() {
+    frameActive_.store(false, std::memory_order_release);
+    frameActive_.notify_all();
   }
   struct FrameSlot {
     cSwBandPool& p;
     bool held;
-    ~FrameSlot() { if (held) { { std::lock_guard<std::mutex> l(p.m_); p.frameActive_ = false; } p.frameFree_.notify_all(); } }
+    ~FrameSlot() { if (held) p.releaseFrameSlot(); }
   };
   cSwBandPool() {
-    std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());  // Cortana 2026-10-15 1455
+    std::fprintf(stderr, "software renderer: SIMD path %s\n", swsimd::activePath());
     start(swResolveThreads(g_swRequestedThreads.load()));
   }
   void stopAll() {
-    { std::lock_guard<std::mutex> l(m_); stop_ = true; ++gen_; }
-    cv_.notify_all();
+    stop_.store(true, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
+    gen_.notify_all();
+    detachedPending_.store(true, std::memory_order_release);  // wake executor so it can see stop_
+    detachedPending_.notify_all();
     for (auto& t : threads_) if (t.joinable()) t.join();
     threads_.clear();
-    records_.retireAll();  // Thread Handshake P2: joined -> RETURNED
-    std::lock_guard<std::mutex> l(m_);
-    stop_ = false;
+    records_.retireAll();
+    stop_.store(false, std::memory_order_release);
+    detachedPending_.store(false, std::memory_order_relaxed);
+    detachedFn_ = nullptr;
+    detachedDone_ = nullptr;
   }
   void start(unsigned n) {
     bands_ = n;
-    {  // Ginny (Argon) 2026-10-16 Pass 2 step 2: thread-count telemetry (oversubscription / NUMA check)
+    {
       const unsigned hw = std::thread::hardware_concurrency();
       const unsigned spawned = detachedMode_ ? n : (n ? n - 1 : 0);
       std::fprintf(stderr, "software renderer: hardware_concurrency=%u, render bands=%u (%u spawned workers%s)\n", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
       logInfo("software renderer: hardware_concurrency=%u, render bands=%u (%u spawned workers%s)", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
     }
-    uint64_t g;
-    { std::lock_guard<std::mutex> l(m_); g = gen_; }
+    const uint64_t g = gen_.load(std::memory_order_relaxed);
     if (detachedMode_) {
       threads_.emplace_back([this] { executorLoop(); });
       records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
@@ -530,82 +481,74 @@ class cSwBandPool {
     folded_ = n > 1 && foldWanted();
     if (folded_) {
       logInfo("software renderer: %u render bands folded into the shared job pool (Gate 1; 0 band threads spawned)", n);
-      return;  // the detached executor (if any) is still spawned above
+      return;
     }
     for (unsigned i = 1; i < bands_; ++i) {
       threads_.emplace_back([this, i, g] { loop(i, g); });
       records_.add(ThreadClass::Dedicated, ThreadRole::RenderBand, uint16_t(i), "sw-band");
     }
   }
-  // Design B Stage 1: the executor worker. Waits for a published detached
-  // body and runs it AS THE FRAME'S CALLER: the executor takes band 0's
-  // seat, so the body's own run() calls fork-join over the band workers
-  // exactly as a synchronous frame's do (runM_ serialises them against
-  // any other frame; the body's band callbacks run under tlInRun_ as
-  // always, so a run() re-entered from inside a band callback still
-  // inlines — the Daemon/MCP-vision fallback is preserved verbatim).
-  // tlDetachedBody_ marks this thread as the frame owner runDetached
-  // already accounted for. The completion callback runs here, before the
-  // frame slot is released, so a following run()/runDetached can never
-  // overlap the completion bookkeeping; it must not throw (a throw is
-  // swallowed rather than killing the pool's only executor).
   void executorLoop() {
     for (;;) {
-      std::function<void()> fn;
-      std::function<void(std::exception_ptr)> done;
-      {
-        std::unique_lock<std::mutex> l(m_);
-        cv_.wait(l, [&] { return stop_ || detachedFn_ != nullptr; });
-        if (stop_) return;
-        fn = std::move(detachedFn_); detachedFn_ = nullptr;
-        done = std::move(detachedDone_); detachedDone_ = nullptr;
+      for (;;) {
+        if (stop_.load(std::memory_order_acquire)) return;
+        if (detachedPending_.load(std::memory_order_acquire)) break;
+        detachedPending_.wait(false, std::memory_order_relaxed);
       }
+      if (stop_.load(std::memory_order_acquire)) return;
+      std::function<void()> fn = std::move(detachedFn_);
+      std::function<void(std::exception_ptr)> done = std::move(detachedDone_);
+      detachedFn_ = nullptr;
+      detachedDone_ = nullptr;
+      detachedPending_.store(false, std::memory_order_release);
+      if (!fn) continue;  // stop wake with no body
       tlDetachedBody_ = true;
       std::exception_ptr err;
       try { fn(); } catch (...) { err = std::current_exception(); }
       tlDetachedBody_ = false;
       if (done) { try { done(err); } catch (...) {} }
-      { std::lock_guard<std::mutex> l(m_); frameActive_ = false; }
-      frameFree_.notify_all();
+      releaseFrameSlot();
     }
   }
   void loop(unsigned band, uint64_t seen) {
     for (;;) {
-      const std::function<void(unsigned)>* fn = nullptr;
-      {
-        std::unique_lock<std::mutex> l(m_);
-        cv_.wait(l, [&] { return stop_ || gen_ != seen; });
-        if (stop_) return;
-        seen = gen_;
-        fn = fn_;
+      uint64_t g;
+      for (;;) {
+        if (stop_.load(std::memory_order_acquire)) return;
+        g = gen_.load(std::memory_order_acquire);
+        if (g != seen) break;
+        gen_.wait(seen, std::memory_order_relaxed);
       }
-      tlInRun_ = true;  // a band callback calling run() takes the inline path
+      if (stop_.load(std::memory_order_acquire)) return;
+      seen = g;
+      const std::function<void(unsigned)>* fn = fn_;
+      if (!fn) continue;
+      tlInRun_ = true;
       std::exception_ptr err;
       try { (*fn)(band); } catch (...) { err = std::current_exception(); }
-      std::lock_guard<std::mutex> l(m_);
-      if (err && !workerErr_) workerErr_ = err;
-      if (--remaining_ == 0) done_.notify_one();
+      tlInRun_ = false;
+      if (err && !hasWorkerErr_.exchange(true, std::memory_order_acq_rel)) workerErr_ = err;
+      if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) remaining_.notify_all();
     }
   }
   unsigned bands_ = 1;
-  bool folded_ = false;  // Gate 1: set by start() (runM_ held / constructor)
+  bool folded_ = false;
   std::vector<std::thread> threads_;
-  cThreadRecordSet records_;  // Thread Handshake P2: band workers + executor (Class A)
-  std::mutex m_, runM_;
-  std::condition_variable cv_, done_;
+  cThreadRecordSet records_;
+  cAtomicGate runGate_;  // Archie PlayJ: replaces runM_ (no std::mutex)
   const std::function<void(unsigned)>* fn_ = nullptr;
-  unsigned remaining_ = 0;
-  std::exception_ptr workerErr_;  // first worker exception of the current run (m_)
-  // Design B Stage 1 (detached mode): all under m_ unless noted.
-  bool detachedMode_ = false;                 // start() spawns the executor while true
-  bool frameActive_ = false;                  // a run() frame or a detached job owns the pool
-  std::condition_variable frameFree_;         // signalled when frameActive_ clears
-  std::function<void()> detachedFn_;          // the published detached body (executor's only)
-  std::function<void(std::exception_ptr)> detachedDone_;  // its completion callback
+  std::atomic<unsigned> remaining_{0};
+  std::exception_ptr workerErr_;
+  std::atomic<bool> hasWorkerErr_{false};
+  bool detachedMode_ = false;
+  std::atomic<bool> frameActive_{false};
+  std::function<void()> detachedFn_;
+  std::function<void(std::exception_ptr)> detachedDone_;
+  std::atomic<bool> detachedPending_{false};
   inline static thread_local bool tlInRun_ = false;
-  inline static thread_local bool tlDetachedBody_ = false;  // Design B Stage 1: this thread runs a detached body (frame owner)
-  uint64_t gen_ = 0;
-  bool stop_ = false;
+  inline static thread_local bool tlDetachedBody_ = false;
+  std::atomic<uint64_t> gen_{0};
+  std::atomic<bool> stop_{false};
 };
 }  // namespace
 
@@ -633,7 +576,7 @@ struct PairHash {
 // game's remaining guarded renderer calls (which take the same guard)
 // stay serialised with the in-flight render.
 //
-// Design B Stage 2: the body opens with the frame seal — the upload ring
+// Design B Stage 2: the body opens with the frame seal â€” the upload ring
 // drains (drainUploadRing) BEFORE the guard is taken and before
 // renderFrame builds its draw order. The drain takes no lock and touches
 // nothing but the ring and the store, which are executor-owned between
@@ -667,7 +610,7 @@ bool cSoftwareRenderer::enqueueChunkMesh(ChunkMesh&& mesh) {
   if (!uploadRingEnabled_) { uploadChunkMesh(mesh); return true; }
   const bool tombstone = mesh.verts.empty();  // removals are must-push: never refused for bytes
   cSwUploadRing::Slot* s = uploadRing_.claim(uint32_t(mesh.verts.size() * sizeof(PackedVertex)), tombstone);
-  if (!s) return false;  // ring full: caller keeps the mesh (spill/retry) — never dropped
+  if (!s) return false;  // ring full: caller keeps the mesh (spill/retry) â€” never dropped
   s->kind = cSwUploadRing::Kind::Chunk;
   s->mesh = std::move(mesh);
   uploadRing_.publish();
@@ -701,7 +644,7 @@ void cSoftwareRenderer::enqueuePbrMaterials(const cMaterialReg& reg) {
   // the same table twice is a no-op and content edits under a stable
   // pointer stay visible exactly as the per-frame direct call left them.
   // The executor applies the announcement at the next seal, ahead of that
-  // seal's meshes — the game's update order (materials, then uploads).
+  // seal's meshes â€” the game's update order (materials, then uploads).
   if (ringMaterialsEnqueued_ == &reg) return;
   ringMaterialsEnqueued_ = &reg;
   pendingPbrMaterials_.store(&reg, std::memory_order_release);
@@ -719,12 +662,12 @@ cSoftwareRenderer::UploadRingStats cSoftwareRenderer::uploadRingStats() const {
   return st;
 }
 
-// ---- Design B Stage 2: the upload ring (consumer side — the seal) --------
+// ---- Design B Stage 2: the upload ring (consumer side â€” the seal) --------
 // Runs on the detached executor inside renderFrameDetached, before the
 // frame's renderFrame. The store's mutation discipline is unchanged: the
 // survivors apply through the same three entry points (each bumps
 // storeGen_), in ring order, and nothing else on the split path mutates
-// the store — main's uploads all arrive here.
+// the store â€” main's uploads all arrive here.
 void cSoftwareRenderer::drainUploadRing(uint64_t target) {
   if (!uploadRingEnabled_) return;
   // The announced PBR material table lands first (the game's update order:
@@ -737,10 +680,10 @@ void cSoftwareRenderer::drainUploadRing(uint64_t target) {
   if (n == 0) return;
   // Consumer-side coalescing (Argon trap 2): within one drain, only the
   // LAST entry per (kind, store key) can matter, and everything before the
-  // last ClearAll is wiped by it. Superseded entries are skipped whole —
+  // last ClearAll is wiped by it. Superseded entries are skipped whole â€”
   // their face-bucket/emitter work never runs. A tombstone is an ordinary
   // last-entry: it survives unless a NEWER entry for its own key follows
-  // it in the same drain (which defines the final state anyway) — it is
+  // it in the same drain (which defines the final state anyway) â€” it is
   // never dropped in favour of an older entry, and backpressure upstream
   // never drops it at all (must-push + the game's spill queue).
   size_t begin = 0;
@@ -821,6 +764,11 @@ static void transformVertex(const PackedVertex& v, const float* mvp,
                             float* out, uint32_t width, uint32_t height) {
   // Position in block units (1/16 -> 1.0)
   float x = v.x / 16.0f, y = v.y / 16.0f, z = v.z / 16.0f;
+  // PlayI: LED readout/digits sit 1-2 px above model top (modes 15/19/20/21, +Y face).
+  const uint8_t sm = uint8_t(v.mode & kShadeModeMask);
+  if ((sm == kShadeReadout || sm == kShadeDigits || sm == kShadeDigitsRep || sm == kShadeDigitsRnd)
+      && (v.faceAo & 7) == 2)
+    y -= 3.0f / 64.0f;
   // MVP transform (column-major 4x4)
   float cx = mvp[0]*x + mvp[4]*y + mvp[8]*z + mvp[12];
   float cy = mvp[1]*x + mvp[5]*y + mvp[9]*z + mvp[13];
@@ -853,7 +801,7 @@ static bool isBackface(const float* v0, const float* v1, const float* v2) {
 // fade band. A fragment's view depth is the perspective-correct interpolation
 // of the vertices' clip w, which lies within [min w, max w] of the triangle,
 // so: 1 = every fragment at/past far (keep all, zero per-pixel cost),
-// 0 = every fragment at/before near (drop the whole triangle — fully faded
+// 0 = every fragment at/before near (drop the whole triangle â€” fully faded
 // geometry is not rasterized at all), 2 = straddling (per-pixel test).
 static int ditherTriClass(bool on, float near, float far, const float* v0,
                           const float* v1, const float* v2) {
@@ -918,19 +866,19 @@ void cSoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
 
 // Face colors: flat shading by face direction (top brightest, bottom darkest).
 //
-// FLAT-MODE MODE MAP (P3-3, Appendix D L3 — exact, do not over-read):
+// FLAT-MODE MODE MAP (P3-3, Appendix D L3 â€” exact, do not over-read):
 // the flat path collapses PackedVertex shading modes onto two cases:
 //   - kShadeStripTint0 / kShadeStripTint1 (modes 3 / 4): a reddish tint of
 //     the value's luminance (parity detail from the shader is NOT
 //     reproduced);
 //   - EVERY other mode (kShadeTex, kShadePalette16/32/64, kShadePips,
 //     kShadeCells, kShadeAnimated, kShadeGlass, ...): plain grayscale
-//     from `value` — palette indices, pip/cell counts and animation
+//     from `value` â€” palette indices, pip/cell counts and animation
 //     indices are NOT resolved to their shader colors here.
 // Consequence: flat-mode consumers (MCP-vision captures are flat by
 // design) see strip-tinted or grayscale geometry, never the palette /
 // mask colors the per-pixel path (or GL) shows. That is the documented
-// simplification of this path, not a bug — read flat captures as
+// simplification of this path, not a bug â€” read flat captures as
 // geometry/luminance, not as color truth.
 static uint32_t faceColor(uint8_t face, uint8_t value, uint8_t mode) {
   // Base color from mode/value (simplified: use value as brightness)
@@ -1007,8 +955,8 @@ struct alignas(64) SwTriSetup {
 #if UINTPTR_MAX == UINT32_MAX
   // 32-bit (wasm32, the phone build): the three pointers above are
   // 12 B, not 24, so line 1 would close at 52 B and s0 would land
-  // mid-line. Pad the difference away so the PT4-B layout — hot
-  // line 1 exactly 64 B, s0 opening line 2 — holds on every
+  // mid-line. Pad the difference away so the PT4-B layout â€” hot
+  // line 1 exactly 64 B, s0 opening line 2 â€” holds on every
   // platform (surfaced by the 2026-10-28 phone-framerate build;
   // Archie: PT4-B design; Elfie: co-implementation; JD: direction).
   char line1Pad[12];
@@ -1115,7 +1063,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
   // basic shader's light ratio, emissive 0.85 * mask when powered.
   auto traceTintShade = [this](const FragmentInput& f, uint32_t shaded) -> uint32_t {
     const int v = tlQuadValue;
-    const int maskLayer = tintMask_[size_t(v & 31)];
+    const int maskLayer = (v & 31) == 31 ? int(f.varyings.layer) + 1 : tintMask_[size_t(v & 31)];  // 2026-11-04: slot 31 = next layer (kTintAdjacentSlot)
     const uint32_t* row = textures_.paletteRow(stripPal_[size_t((v >> 6) & 1)]);
     if (!row || maskLayer <= 0 || uint32_t(maskLayer) >= f.texLayers || !f.texData || f.varyings.layer >= f.texLayers) return shaded;
     const bool on = (v & 128) != 0;
@@ -1124,7 +1072,13 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     const uint32_t ti = swTexelIndex(f, tx, ty);
     const uint32_t t = f.texData[size_t(f.varyings.layer) * f.texArea + ti];
     const float m = float((f.texData[size_t(maskLayer) * f.texArea + ti] >> 16) & 0xFF) / 255.f;
-    const uint32_t c = row[on ? 64 : 0];
+    uint32_t c = row[on ? 64 : 0];
+    // PlayB (JD t4342u): mirror of the shader: 0x60 = red <-> blue pulse (2 s, render clock), 0x20 = purple.
+    if ((v & 0x60) == 0x60) {
+      const uint32_t* r0 = textures_.paletteRow(stripPal_[0]); const uint32_t* r1 = textures_.paletteRow(stripPal_[1]);
+      const float k = 0.5f + 0.5f * std::sin(shimmerTime_ * 3.14159265f);
+      if (r0 && r1) { c = 0xFF000000u; for (int sh = 16; sh >= 0; sh -= 8) c |= uint32_t(float((r0[64] >> sh) & 0xFF) * (1.f - k) + float((r1[64] >> sh) & 0xFF) * k + 0.5f) << sh; }
+    } else if (v & 0x20) c = 0xFF8B65DDu;
     const float tl = float(std::max({(t >> 16) & 0xFFu, (t >> 8) & 0xFFu, t & 0xFFu})) / 255.f;
     const float sl = float(std::max({(shaded >> 16) & 0xFFu, (shaded >> 8) & 0xFFu, shaded & 0xFFu})) / 255.f;
     const float light = tl > 0.f ? std::min(1.f, sl / tl) : 1.f;
@@ -1260,7 +1214,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
                  tlQuadMode != kShadeCutout && tlQuadMode != kShadeAlphaBlend && tlQuadMode != kShadeLeaf && tlQuadMode != kShadeTraceTint &&
                  (tlQuadMode < kShadePalette16 || tlQuadMode > kShadePalette64) &&
                  fin.texData && s0->layer < fin.texLayers;
-    // Argon point 3 (2026-10-18): AO tris no longer excluded — the span kernels
+    // Argon point 3 (2026-10-18): AO tris no longer excluded â€” the span kernels
     // interpolate AO with the scalar loop's exact op order and apply its
     // post-shader channel scale, so AO shading is bit-identical in-kernel.
     S.cold.hasEl = false;
@@ -1331,7 +1285,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     swsimd::ShadeSpanBasic& span = S.span;
     if (g_swProfOn) ++tlC.rowsTotal;
     if (hiz && (y == S.y0 || y % kHizTile == 0)) {
-      // PT4-A: the skip test runs in the quantized domain — the tile max
+      // PT4-A: the skip test runs in the quantized domain â€” the tile max
       // is an exact integer; the margin rounds up and triMinZ rounds
       // down, so the integer test fires only when the float test would.
       // LL_SW_DEPTH_REMAP: a slack is not remappable on its own, so fold
@@ -1457,7 +1411,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           if (fx) {
             // Wafer ground pulse + traces (P1-RENDER H1): additive emissive
             // at the fragment's world position, from the mesh's baked
-            // params — the CPU mirrors of the GLSL in chunk_shading.glsl.
+            // params â€” the CPU mirrors of the GLSL in chunk_shading.glsl.
             const float wx = fin.varyings.wx + meshOriginX_;
             const float wz = fin.varyings.wz + meshOriginZ_;
             float er = 0.f, eg = 0.f, eb = 0.f;
@@ -1555,6 +1509,13 @@ static void varyingsFromPackedVertex(const PackedVertex& v, ShaderVaryings& s) {
   s.wx = v.x / 16.0f;
   s.wy = v.y / 16.0f;
   s.wz = v.z / 16.0f;
+  // PlayI: keep world-Y lighting consistent with the readout drop in transformVertex.
+  {
+    const uint8_t sm = uint8_t(v.mode & kShadeModeMask);
+    if ((sm == kShadeReadout || sm == kShadeDigits || sm == kShadeDigitsRep || sm == kShadeDigitsRnd)
+        && (v.faceAo & 7) == 2)
+      s.wy -= 3.0f / 64.0f;
+  }
   // SEAM (JD-locked coexistence, renderer.h): PackedVertex is 16 bytes fully
   // packed and NEVER extended - it carries no material slot by design, so the
   // classic path's fragments resolve to the 0xFFFF "none" marker and the PBR
@@ -1589,7 +1550,7 @@ void cSoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
   };
   for (size_t i = 0; i + 3 < count; i += 4) {
     if (!quadVisible(i)) {
-      // Cortana 2026-10-15 1420 (Elfie §1.2): the flat/sprite path dropped
+      // Cortana 2026-10-15 1420 (Elfie Â§1.2): the flat/sprite path dropped
       // quads crossing the near plane (RND-H2 fixed only the per-pixel
       // path). Same homogeneous clip against w >= kNearW, then a flat fan.
       // Quads wholly in front never reach here, so their pixels are unchanged.
@@ -1845,12 +1806,12 @@ void cSoftwareRenderer::setTextures(const uint32_t* data, uint32_t layers) {
 
 void cSoftwareRenderer::applyFXAA() {
   // FXAA-lite (P3-3, Appendix D L2): a 3x3 box blend applied ONLY at
-  // high-contrast edges — a pixel blends toward its neighbourhood average
+  // high-contrast edges â€” a pixel blends toward its neighbourhood average
   // when the neighbourhood's luminance range exceeds kEdgeThreshold;
   // flat regions pass through untouched. (The v1 code blurred EVERYTHING
-  // despite the "edges only" comment — dead-ish and misnamed; this gate is
+  // despite the "edges only" comment â€” dead-ish and misnamed; this gate is
   // what the name claims. It is still not a full FXAA shader: no luma
-  // subpixel/edge-direction search. No production caller yet — the direct
+  // subpixel/edge-direction search. No production caller yet â€” the direct
   // CPU surface and tests drive it.)
   // fxaaSrc_ is a reusable member buffer (no per-call full-framebuffer copy).
   constexpr uint32_t kEdgeThreshold = 48;  // luminance range (0..255) that counts as an edge
@@ -2056,8 +2017,12 @@ bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
 }
 // Fix (e): an evicted canonical chunk (lod -1) that is in view decodes again at its pending lod.
 void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
+  const int view = cSwLodRings::shared().view();  // Archie Phase 1: never redecode beyond the view
+  const int ccx = int(std::floor(p.camPos.x / 16.f)), ccz = int(std::floor(p.camPos.z / 16.f));
   for (auto& [key, src] : canonStore_.entries()) {
     if (src.lod >= 0) continue;
+    if (view > 0 && view < (1 << 20) &&
+        std::max(std::abs(src.meta.cx - ccx), std::abs(src.meta.cz - ccz)) > view) continue;
     const Vec3 mn{src.meta.cx * 16.f, src.meta.sy * 16.f, src.meta.cz * 16.f};
     if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) continue;
     const int want = src.pend >= 0 ? src.pend : 0;
@@ -2091,11 +2056,15 @@ void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
   if (canonStore_.entries().empty()) return;
   int r1 = 0, r2 = 0;
   canonLodRings(r1, r2);
+  const int view = cSwLodRings::shared().view();  // Archie Phase 1: rings already clamped; skip beyond view
   // Two passes (M10): pick every lod first so the skirt masks see the new neighbours.
+  for (auto& [key, src] : canonStore_.entries()) {
+    const int d = swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz);
+    if (view > 0 && view < (1 << 20) && d > view) { src.pend = -1; continue; }  // beyond view: leave decoded until tombstone
+    src.pend = selectCanonLod(d, src.lod, r1, r2);
+  }
   for (auto& [key, src] : canonStore_.entries())
-    src.pend = selectCanonLod(swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz), src.lod, r1, r2);
-  for (auto& [key, src] : canonStore_.entries())
-    if (src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
+    if (src.pend >= 0 && src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
 }
 
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
@@ -2152,7 +2121,7 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
   // Cortana 2026-10-16: LOD-tagged quads (foliage) split into a near set (detail) and a far set.
   // The far set keeps only untagged quads: far foliage is skipped on the software path.
   // Elfie 2026-10-17 (Argon counsel pt 1, phase A): the two sets are no longer both stored.
-  // One vector, reordered: untagged quads first (original relative order — the exact old far
+  // One vector, reordered: untagged quads first (original relative order â€” the exact old far
   // set), then kShadeLodNear quads with tag bits masked (with the prefix, the exact old near
   // set selectLod produced). kShadeLodFar quads were dropped by BOTH old sets on this path,
   // so they are not stored. Far mode draws the prefix [0, untaggedCount) quads only.
@@ -2229,7 +2198,7 @@ void cSoftwareRenderer::setPbrTier(PbrTransparencyTier t) {
   // frames are pixel-identical; BinaryQuad fragments shade real PBR.
   shadingTier_ = SoftwareShadingTier::Pbr;
   // Honest limit (pbr_software_shaders.h ULTRA TIER GAP): the CPU path does
-  // not implement the transparency-tier ladder — PBR fragments shade
+  // not implement the transparency-tier ladder â€” PBR fragments shade
   // opaque regardless of tier. Loud once, not silent.
   static bool warnedTier = false;
   if (!warnedTier) {
@@ -2283,7 +2252,7 @@ void cSoftwareRenderer::applyAaPostPass() {
         (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr;
     applyCmaaPost(fb_, depth, ensureAaScratch());
   }
-  // Off: no-op. Ssaa2x: render-time mode — nothing to post-apply.
+  // Off: no-op. Ssaa2x: render-time mode â€” nothing to post-apply.
 }
 
 void cSoftwareRenderer::setAsciiMode(bool enabled, int cols) {
@@ -2410,14 +2379,14 @@ void cSoftwareRenderer::drawSprites(const FrameParams& p) {
   // skipped), shaded flat with the luminance of the sprite's atlas-average
   // color x tint on face 2 (faceColor's unshaded face). The host averages
   // the def's frame-0 atlas rect; here the average is taken over the quad's
-  // own uv rect on its atlas page — the same region for frame 0, and the
+  // own uv rect on its atlas page â€” the same region for frame 0, and the
   // drawn frame's region for later animation frames.
   const Vec3 origin{std::floor((p.camPos.x - 1024.f) / 16.f) * 16.f,
                     std::floor((p.camPos.y - 1024.f) / 16.f) * 16.f,
                     std::floor((p.camPos.z - 1024.f) / 16.f) * 16.f};
   // Average-color cache (D-M2): keyed by (atlas version, page, pixel
   // rect); a version move clears it wholesale. The average itself is
-  // summed directly over the page rect — no per-quad temp Image/vector.
+  // summed directly over the page rect â€” no per-quad temp Image/vector.
   if (spriteAvgVersion_ != p.spriteAtlasVersion) {
     spriteAvgCache_.clear();
     spriteAvgVersion_ = p.spriteAtlasVersion;
@@ -2504,7 +2473,7 @@ void cSoftwareRenderer::drawSprites(const FrameParams& p) {
       bs.additive = q.shade == kShadeAdditive;
       if (ditherEnabled_) {
         // Model dithering for blended sprites (JD 2026-10-13): fade the
-        // whole billboard by its NEAREST corner's distance to the camera —
+        // whole billboard by its NEAREST corner's distance to the camera â€”
         // per-sprite, not per-pixel (the opaque paths dither per-pixel in
         // the rasterizers; a translucent quad reads better as a fade).
         float dmin = 1e30f;
@@ -2536,7 +2505,7 @@ void cSoftwareRenderer::drawSprites(const FrameParams& p) {
 void cSoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
   // BinaryQuad (PBR) meshes: positions convert to PackedVertex-shaped verts
   // for the shared transform; the varyings carry the REAL per-vertex compact
-  // material ID (PbrQuadVertex::material) — the fix for the classic path's
+  // material ID (PbrQuadVertex::material) â€” the fix for the classic path's
   // 0xFFFF seam (H2). Shading is pbrFragmentShader through the effective
   // context (external setPbrContext, else the owned setPbrMaterials one);
   // with neither, it falls back to basic per fragment, never black.
@@ -2577,7 +2546,7 @@ void cSoftwareRenderer::renderPbrMeshes(const FrameParams& p) {
       // Per-quad flood-fill levels ride the owned context (its block/sky
       // fields are context-global; the rasterizer is synchronous, so
       // setting them per quad is exact). External contexts are the
-      // caller's own — theirs stay untouched.
+      // caller's own â€” theirs stay untouched.
       if (!pbrContext_ && pbrMaterials_) {
         ownedPbrCtx_.blockLight = m.verts[i].blockLight;
         ownedPbrCtx_.skyLight = m.verts[i].skyLight;
@@ -2812,7 +2781,7 @@ void cSoftwareRenderer::fillHudRectSpan(const HudVertex& c, int x0, int y0, int 
 
 // World-space line segment, depth-tested against depth_ (highlight outline:
 // GL draws it with depth test on). Projected with the frame viewProj;
-// segments crossing the near plane are clipped coarsely (endpoint w test —
+// segments crossing the near plane are clipped coarsely (endpoint w test â€”
 // the outline is 12 short edges around one block, so a fully-inside test
 // per endpoint with 32 subdivisions is ample).
 void cSoftwareRenderer::drawWorldLine(const FrameParams& p, const Vec3& a, const Vec3& b,
@@ -2947,6 +2916,7 @@ struct SwProf {
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
     {
       static const bool once = [] { if (const char* r = std::getenv("LL_SW_LOD_RINGS")) std::sscanf(r, "%d,%d,%d", &g_ringEdge[0], &g_ringEdge[1], &g_ringEdge[2]); return true; }();
+      for (int i = 0; i < 3; ++i) g_ringEdge[i] = litholattice::cSwLodRings::shared().edge(i);  // PlayB: same edges the game meshes with
       (void)once;
       const uint64_t r0 = g_ringTris[0].exchange(0) / frames, r1 = g_ringTris[1].exchange(0) / frames, r2 = g_ringTris[2].exchange(0) / frames, r3 = g_ringTris[3].exchange(0) / frames;
       std::fprintf(stderr, "swprof ring tris (binned): near<=%d=%llu mid<=%d=%llu mid2<=%d(2x)=%llu far>%d(4x)=%llu /frame\n", g_ringEdge[0], (unsigned long long)r0,
@@ -2955,7 +2925,7 @@ struct SwProf {
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
-    // 2026-10-28 S1a/S3: t_sky (serial clear only — p2par clears in-strip,
+    // 2026-10-28 S1a/S3: t_sky (serial clear only â€” p2par clears in-strip,
     // timed inside the strips stage) and the band-dispatch wall timer.
     // t_play_hud is the "hud ms/frame" line above (drawHud total).
     std::fprintf(stderr, "swprof t_sky ms/frame=%.3f t_raster_bands_us/frame=%.1f\n",
@@ -3091,8 +3061,12 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     for (size_t i = 0; i < keep; ++i) frameEmit_.insert(frameEmit_.end(), src[cand[i].second], src[cand[i].second] + 6);
   }
   drawOrder_.clear();
+  const int viewCull = cSwLodRings::shared().view();  // Archie Phase 1 follow-up: draw-side view bound
+  const int eyeCx = int(std::floor(p.camPos.x / 16.f)), eyeCz = int(std::floor(p.camPos.z / 16.f));
   for (auto& [key, m] : meshes_) {
     (void)key;
+    if (viewCull > 0 && viewCull < (1 << 20) &&
+        std::max(std::abs(m.cx - eyeCx), std::abs(m.cz - eyeCz)) > viewCull) continue;
     const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
     if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos,
                           frustumMarginDeg_) != CullDecision::Full)
@@ -3501,7 +3475,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
    meshOriginX_ = meshOriginY_ = meshOriginZ_ = 0.f;
   };
   if (g_swProfOn) { for (double& b : g_bandMs) b = 0; g_lastEmitN = frameEmit_.size() / 6; }
-  {  // 2026-10-28 S3: t_raster_bands_us — wall time of the band worker
+  {  // 2026-10-28 S3: t_raster_bands_us â€” wall time of the band worker
      // dispatch + raster + join for this frame (the drawBand run only;
      // the transform/bin phase above keeps its own swprof stage).
     const auto tBands = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -3579,7 +3553,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   }
   if (bloom_) applyBloomPost(fb_, (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr, ensureAaScratch());  // Cortana 2026-10-16
   if (asciiEnabled_) applyAsciiPass();
-  // Overlays (H3): highlight + crosshair lines, then the HUD layer — the
+  // Overlays (H3): highlight + crosshair lines, then the HUD layer â€” the
   // same order the GPU backends draw them (lines before HUD).
   drawOverlayLines(p);
   {  // 2026-10-25 (Archie bucket 5): HUD alone, split out of post+hud (LL_SW_PROF)

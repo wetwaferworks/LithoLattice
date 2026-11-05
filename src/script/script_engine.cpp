@@ -1,11 +1,11 @@
 #include "litholattice/script/script_engine.h"
+#include "litholattice/core/once_gate.h"
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <mutex>
 #include <sstream>
 #include <vector>
 #include <algorithm>
@@ -118,8 +118,8 @@ void cScriptEngine::quotaEnforce() {
 }
 
 void cScriptEngine::installMemoryShims() {
-  static std::once_flag once;
-  std::call_once(once, [] {
+  static ::litholattice::cOnceGate once;
+  once.call([] {
     // Installed before the first engine exists (init() runs first), so every
     // AngelScript allocation in the process goes through the accounting shims.
     asSetGlobalMemoryFunctions(&cScriptEngine::allocShim, &cScriptEngine::freeShim);

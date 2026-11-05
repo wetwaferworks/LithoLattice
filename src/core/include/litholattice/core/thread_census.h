@@ -21,9 +21,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -198,7 +198,7 @@ class cThreadCensus {
     std::atomic<uint64_t> word{0};  ///< [ticket:32 | state:8], the lend/reclaim ticket
   };
   ThreadBudget budget_;
-  mutable std::mutex m_;  ///< guards slots_ growth and telemetry; hot path is the atomic word
+  mutable litholattice::cAtomicGate m_;  ///< guards slots_ growth and telemetry; hot path is the atomic word
   std::vector<std::unique_ptr<Slot>> slots_;
 };
 

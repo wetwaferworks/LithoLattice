@@ -17,5 +17,7 @@ target_include_directories(litholattice_mcp PUBLIC include)
 target_include_directories(litholattice_mcp PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../mods/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../console/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../core/include  # PlayN: header-only cAtomicGate / cGateLock / cAtomicCondition (mutex removal)
   ${CMAKE_CURRENT_SOURCE_DIR}/../net/include)
 litholattice_module_options(litholattice_mcp)
+

@@ -25,10 +25,10 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
-#include <mutex>
 #include <string>
 #include <vector>
 #include "litholattice/sim/sim_thread.h"  // EditCmd, RayInput (the Edit/Ray payloads)
+#include "litholattice/core/atomic_gate.h"
 
 namespace litholattice {
 
@@ -160,9 +160,9 @@ class cControlStream {
 
  private:
   void insertSorted(ControlEvent e);
-  std::mutex inboundM_;
+  litholattice::cAtomicGate inboundM_;
   std::vector<ControlEvent> inbound_;
-  std::mutex injectM_;
+  litholattice::cAtomicGate injectM_;
   std::vector<ControlEvent> inject_;
   // Sim-thread only:
   std::vector<ControlEvent> pending_;  // sorted by (tick, seq)
@@ -173,7 +173,7 @@ class cControlStream {
   std::atomic<uint64_t> stamped_{0}, applied_{0}, lateApplied_{0}, orderViolations_{0};
   std::atomic<uint64_t> pendingNow_{0}, maxPending_{0};
   std::atomic<bool> recording_{false};
-  std::mutex recordM_;
+  litholattice::cAtomicGate recordM_;
   std::vector<ControlEvent> record_;
 };
 

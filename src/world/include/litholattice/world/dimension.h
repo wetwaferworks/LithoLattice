@@ -33,6 +33,12 @@ struct Dimension {
   int lastLoadFailures = 0;  ///< columns whose generation threw during the last load()
 
   Spawn load(cJobPool& pool, int sizeChunks);  // parallel worldgen + structures
+  /// Archie PlayG: generate only the Chebyshev disk around (ocx,ocz) with the given radius,
+  /// clamped into [0, sizeChunks). sizeChunks still drives setup()/spawn. Lock-free job queue.
+  Spawn loadRadius(cJobPool& pool, int sizeChunks, int ocx, int ocz, int radius);
+  /// Fill any missing columns in [cx0,cx1) x [cz0,cz1). Owner thread; lock-free when LF jobs on.
+  /// Returns the number of columns newly generated (0 if the rect was already resident).
+  int generateMissing(cJobPool& pool, int cx0, int cz0, int cx1, int cz1);
   void unload() {
     // Preserve the registry across the map reset (Infinite Registry): get()/set()
     // translate through it, and the replacement map needs it too.

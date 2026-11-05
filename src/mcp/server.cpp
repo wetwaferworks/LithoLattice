@@ -30,6 +30,7 @@ extern "C" __declspec(dllimport) int __stdcall CancelSynchronousIo(void* hThread
 #include "litholattice/net/protocol.h"
 // IWorldQuery: pure interface + kMaxQueryCells/kMaxQueryResults (no link dep).
 #include "litholattice/console/iworldquery.h"
+#include "litholattice/mcp/spin_gate.h"
 
 namespace litholattice::mcp {
 namespace {
@@ -293,7 +294,7 @@ void cMcpServer::log(std::string_view line) {
 
 void cMcpServer::grantPermissions(uint32_t bits) {
   {
-    std::lock_guard<std::mutex> lock(agentMutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
     agent_.permissionMask |= bits;
   }
   log("grant: +" + permMaskNames(bits));
@@ -301,24 +302,24 @@ void cMcpServer::grantPermissions(uint32_t bits) {
 
 void cMcpServer::revokePermissions(uint32_t bits) {
   {
-    std::lock_guard<std::mutex> lock(agentMutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
     agent_.permissionMask &= ~bits;
   }
   log("revoke: -" + permMaskNames(bits));
 }
 
 uint32_t cMcpServer::permissionMask() const {
-  std::lock_guard<std::mutex> lock(agentMutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
   return agent_.permissionMask;
 }
 
 void cMcpServer::setAgentName(std::string name) {
-  std::lock_guard<std::mutex> lock(agentMutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
   agent_.name = std::move(name);
 }
 
 McpAgent cMcpServer::agent() const {
-  std::lock_guard<std::mutex> lock(agentMutex_);
+  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
   return agent_;
 }
 
@@ -578,7 +579,7 @@ cJsonValue cMcpServer::onPromptsGet(const cJsonValue& params) {
   McpAgent agentCopy;
   uint32_t missing;
   {
-    std::lock_guard<std::mutex> lock(agentMutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
     missing = prompt->requiredPerms & ~agent_.permissionMask;
     agentCopy = agent_;
   }
@@ -691,7 +692,7 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
   if (!toolCalls_.take(1)) {
     std::string agentName;
     {
-      std::lock_guard<std::mutex> lock(agentMutex_);
+      litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
       agentName = agent_.name;
     }
     log("tool " + name + " agent=" + agentName + " rate_limited (" +
@@ -709,13 +710,13 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
   if (tool) {
     uint32_t missing;
     {
-      std::lock_guard<std::mutex> lock(agentMutex_);
+      litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
       missing = tool->requiredPerms & ~agent_.permissionMask;
     }
     if (missing != 0) {
       std::string agentName;
       {
-        std::lock_guard<std::mutex> lock(agentMutex_);
+        litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
         agentName = agent_.name;
       }
       r = ToolResult::error("permission denied: agent '" + agentName +
@@ -726,7 +727,7 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
       try {
         McpAgent agentCopy;
         {
-          std::lock_guard<std::mutex> lock(agentMutex_);
+          litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
           agentCopy = agent_;
         }
         r = tool->handler(callArgs, agentCopy);
@@ -741,7 +742,7 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
     }
   }
   {
-    std::lock_guard<std::mutex> lock(agentMutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
     log("tool " + name + " agent=" + agent_.name + " " + outcome);
   }
   return toolResultJson(r);
@@ -782,7 +783,7 @@ cJsonValue cMcpServer::onResourcesRead(const cJsonValue& params) {
   uint32_t missing;
   McpAgent agentCopy;
   {
-    std::lock_guard<std::mutex> lock(agentMutex_);
+    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
     missing = res->requiredPerms & ~agent_.permissionMask;
     agentCopy = agent_;
   }
