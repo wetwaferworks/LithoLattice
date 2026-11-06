@@ -9,7 +9,10 @@ workstation; JD tests and debugs there.
 
 - **Core GUI** (from the standalone `~/workspace/litho-gui` tree, Build 27
   state, copied without modification except `#include` paths rewritten to
-  engine style `litholattice/ui/...`):
+  engine style `litholattice/ui/...`, and one warning fix: the parameter
+  of `TextField::moveVertical` was renamed `dir` -> `dy` in the header and
+  the definition, because `dir` shadows the inherited `Widget::dir`
+  member under the engine's `-Wshadow` module flags):
   - `src/ui/include/litholattice/ui/litho_gui.h` + `src/ui/litho_gui.cpp` —
     `ILithoGui` / `cLithoGui` (JD naming lock, lowercase c), the retained
     widget tree, `DrawList`, themes, `UiContext`.

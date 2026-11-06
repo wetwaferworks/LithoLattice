@@ -2152,7 +2152,7 @@ private:
     // multi-byte sequence, so byte scans are boundary-safe).
     std::size_t lineStartOffset(std::size_t bytePos) const;
     std::size_t lineEndOffset(std::size_t bytePos) const;
-    void moveVertical(int dir, bool extend);
+    void moveVertical(int dy, bool extend);
     // Widget-specific state-word bit: multi-line mode (bit 58;
     // bit 32 before build 27, moved above Frame's range).
     static constexpr std::uint64_t kMultiLineBit = 1ull << 58;

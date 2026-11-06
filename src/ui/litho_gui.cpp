@@ -2900,12 +2900,12 @@ std::size_t TextField::lineEndOffset(std::size_t bytePos) const {
     return p;
 }
 
-void TextField::moveVertical(int dir, bool extend) {
+void TextField::moveVertical(int dy, bool extend) {
     const std::size_t ls = lineStartOffset(cursor_);
     std::size_t col = 0; // caret column, in code points
     for (std::size_t i = ls; i < cursor_; i = nextCpBoundary(text_, i)) ++col;
     std::size_t target = cursor_;
-    if (dir < 0) {
+    if (dy < 0) {
         if (ls == 0) return; // already on the first line: stay
         const std::size_t pls = lineStartOffset(ls - 1);
         const std::size_t ple = ls - 1; // previous line's end (its '\n')
