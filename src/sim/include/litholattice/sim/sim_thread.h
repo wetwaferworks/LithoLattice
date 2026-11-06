@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "litholattice/core/fail_fast.h"
@@ -260,6 +261,9 @@ class cSimThread {
   const cControlStream& controlStream() const { return *control_; }
   /// Re-snapshots every loaded sub-chunk for meshing at the next tick (textures were reloaded).
   void requestRemeshAll() { remeshAll_.store(true); notifyWake(); }
+  /// PlayJ fix 3: when false, flushDirty keeps dirty flags but skips pinForMeshing / submit (null renderer / headless benches).
+  void setMeshConsumer(bool on) { meshConsumes_ = on; }
+  bool meshConsumer() const { return meshConsumes_; }
   /// Columns whose cells changed (player edits, simulation ticks, random ticks, commands) since
   /// the last call: what a partial save must write. Clears the set. Call only while stopped.
   std::unordered_set<uint64_t> takeChangedColumns() { std::unordered_set<uint64_t> out; out.swap(changedCols_); return out; }
@@ -360,6 +364,10 @@ class cSimThread {
   // Recursive: runBetweenTicks holds it across fn(), and fn() may legitimately
   // call getBlock() (which takes the same gate). A plain non-reentrant gate deadlocks there.
   // Archie PlayI: cBlockGate (atomics), not std::recursive_mutex.
+  // PlayJ fix 7 note: tick mutation window + getBlock/holdBetweenTicks still need this ownership gate
+  // (phase boundary between sim/main/stream). remesh/flush unlocks it when CoW columns are on
+  // (pin reads snapshots). Cannot remove for non-CoW pin or mid-tick getBlock without a new
+  // ownership/phase handoff for live column pointers.
   cBlockGate blockMutex_;
   // Three-way split timing handshake (LL_THREEWAY=1, default OFF). Proposed by JD; co-implemented by JD and Cortana.
   // Point readers (getBlock / getBlockAndState) announce themselves; between whole ticks of a catch-up
@@ -428,6 +436,7 @@ class cSimThread {
   TripleBuffer<SimStats> stats_;
   std::atomic<std::thread::id> statsReader_{};  // Cortana 2026-10-15 1658: F-2 (checked in Debug only)
   float rayEye_[3] = {0.f, -1e9f, 0.f};  ///< 2026-10-25: eye of the last cast ray (placement overlap check)
+  float rayDir_[3] = {0.f, 0.f, 1.f};    ///< PlayJ: look direction for remesh frustum cull
   TripleBuffer<RayInput> ray_;  // presentation only (HUD look-at); edit resolution uses stampedRay_
   // The serialized control stream: every sim-affecting control input
   // crosses here (edits, the stamped ray, the player chunk). Constructed
@@ -451,13 +460,22 @@ class cSimThread {
   // Pooled MeshInput buffers: the pool is shared with the submit() deleter so it
   // outlives any in-flight snapshot (a cSimThread may die while mesh workers still
   // hold snapshots). Cap bounds the retained memory (~64 x 24 KB).
+  // PlayI (JD, lock-free): fixed slot array, ownership handed off by atomic exchange / CAS (no gate).
   struct MeshInputPool {
-    ::litholattice::cAtomicGate m;
-    std::vector<std::unique_ptr<MeshInput>> free;
+    static constexpr int kSlots = 64;
+    std::atomic<MeshInput*> slot[kSlots] = {};
+    std::unique_ptr<MeshInput> take() { for (auto& s : slot) if (MeshInput* p = s.exchange(nullptr, std::memory_order_acquire)) return std::unique_ptr<MeshInput>(p); return nullptr; }
+    void give(std::unique_ptr<MeshInput> u) { MeshInput* p = u.get(); for (auto& s : slot) { MeshInput* e = nullptr; if (s.compare_exchange_strong(e, p, std::memory_order_release, std::memory_order_relaxed)) { u.release(); return; } } }  // full: u frees it
+    ~MeshInputPool() { for (auto& s : slot) delete s.exchange(nullptr); }
   };
   std::shared_ptr<MeshInputPool> meshPool_ = std::make_shared<MeshInputPool>();
   RandomTickCache randomTickCache_;  // ticking column pointers (opt: skip hash lookups)
   uint64_t meshSeq_ = 1ull << 32;  // above the initial-load sequence numbers
+  std::unordered_map<uint64_t, uint64_t> flushMasks_;               // PlayI: flushDirty scratch, reused (no per-flush alloc)
+  std::vector<std::pair<uint64_t, uint64_t>> flushOrdered_;         // PlayI: flushDirty scratch, reused
+  std::vector<int64_t> flushWork_;                                 // PlayJ: in-view dirty keys this flush
+  std::vector<int64_t> flushHold_;                                 // PlayJ: out-of-view dirty keys retained
+  bool meshConsumes_ = true;                                       // PlayJ fix 3: pin/submit when a mesh consumer exists
   uint64_t flushBatch_ = 0;  // Cortana 2026-10-15 1350: phase-boundary publish batch id
 
   // ---- persistent tick state (review CH-H8) — sim thread only ----

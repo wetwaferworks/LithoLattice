@@ -45,6 +45,9 @@ Key fromGlfwKey(int k) {
     case GLFW_KEY_SLASH: return Key::Slash;
     case GLFW_KEY_BACKSLASH: return Key::Backslash;
     case GLFW_KEY_GRAVE_ACCENT: return Key::GraveAccent;
+    case GLFW_KEY_KP_7: return Key::Kp7;  // PlayM4: litho compile
+    case GLFW_KEY_KP_8: return Key::Kp8;  // PlayM4: litho stop
+    case GLFW_KEY_KP_9: return Key::Kp9;  // PlayM4: litho speed
     default: return Key::Unknown;
   }
 }

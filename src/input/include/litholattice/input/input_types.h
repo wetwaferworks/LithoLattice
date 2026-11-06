@@ -16,7 +16,7 @@ namespace litholattice {
   K_(Enter) K_(Escape) K_(Backspace) K_(Tab) K_(LeftShift) K_(RightShift) K_(LeftCtrl) K_(RightCtrl) K_(LeftAlt)    \
   K_(RightAlt) K_(Up) K_(Down) K_(Left) K_(Right) K_(Insert) K_(Delete) K_(Home) K_(End) K_(PageUp) K_(PageDown)      \
   K_(Minus) K_(Equal) K_(LeftBracket) K_(RightBracket) K_(Semicolon) K_(Apostrophe) K_(Comma) K_(Period) K_(Slash)  \
-  K_(Backslash) K_(GraveAccent)
+  K_(Backslash) K_(GraveAccent) K_(Kp7) K_(Kp8) K_(Kp9) /* PlayM4: numpad 7/8/9 (appended) */
 #define LITHOLATTICE_INPUT_MOUSE_BUTTONS(X) X(Left) X(Right) X(Middle) X(Back) X(Forward)
 // Gamepad buttons and axes follow the SDL / GLFW standard gamepad layout (Xbox names).
 // (The parameter is not called X here: the button X would be substituted too.)

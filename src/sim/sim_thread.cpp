@@ -58,7 +58,12 @@ void cSimThread::validateTickRate(int tps) {
 cSimThread::cSimThread(ChunkMap& chunks, const cBlockReg& blocks, std::unique_ptr<IWorldSim> simulation,
                      SimConfig config, SubmitMesh submit)
     : chunks_(chunks), blocks_(blocks), sim_(std::move(simulation)), radius_(config.radiusChunks), round_(config.roundArea), diamond_(config.diamondArea), epoch_(config.epoch),
-      belowWorld_(config.belowWorldFill), submit_(std::move(submit)), requestedTps_(config.tickRate) {
+      belowWorld_(config.belowWorldFill), submit_(std::move(submit)), requestedTps_(config.tickRate),
+      meshConsumes_([] {  // PlayJ fix 3: LL_NO_MESH=1 / LL_MESH_CONSUMER=0 skips pinForMeshing
+        const char* e = std::getenv("LL_NO_MESH"); if (e && e[0] == '1') return false;
+        const char* c = std::getenv("LL_MESH_CONSUMER"); if (c && c[0] == '0') return false;
+        return true;
+      }()) {
   validateTickRate(config.tickRate);
   if (config.domains.size() > size_t(kMaxClockDomains)) config.domains.resize(size_t(kMaxClockDomains));
   domains_ = std::move(config.domains);
@@ -306,13 +311,27 @@ bool cSimThread::waitLoops(uint64_t n, std::chrono::milliseconds timeout) const 
 }
 
 void cSimThread::markDirty(int x, int y, int z) {
+  // PlayJ (JD): LL_PROF_CULL=1 counts markDirty rate (same census as I2 scratch).
+  static const bool kCullProf = [] { const char* e = std::getenv("LL_PROF_CULL"); return e && e[0] == '1'; }();
+  if (kCullProf) {
+    static uint64_t marks = 0, t0 = 0; ++marks;
+    const int64_t now = ::litholattice::tickprof::nowNs(); if (!t0) t0 = now;
+    if (now - t0 >= 1000000000ll) { logInfo("cull profile: markDirty calls/s %llu", (unsigned long long)marks); marks = 0; t0 = now; }
+  }
   // Own sub-chunk, plus neighbours when the cell sits on a border (face culling / AO).
+  // PlayJ fix 6: Lamp / ColorLamp state edges only dirty their own sub (SimRole 3/4). Neighbour
+  // face-cull does not change when a lamp toggles colour/on; fanout on borders was ~extra remeshes.
   const int cx = x >> 4, sy = y >> 4, cz = z >> 4;
+  changedCols_.insert(ChunkKey::make(cx, cz));
+  dirtySubs_.insert(packPos(cx, sy, cz));
+  static const bool kLampOwn = [] { const char* e = std::getenv("LL_LAMP_OWN_DIRTY"); return !(e && e[0] == '0'); }();
+  const uint16_t role = blocks_.def(chunks_.get(x, y, z)).role;  // game SimRole: Lamp=3 ColorLamp=4
+  if (kLampOwn && (role == 3 || role == 4)) return;
   const int lx = x & 15, ly = y & 15, lz = z & 15;
-  changedCols_.insert(ChunkKey::make(cx, cz));  // the cell's own column (neighbours only remesh)
   for (int dy = (ly == 0 ? -1 : 0); dy <= (ly == 15 ? 1 : 0); ++dy)
     for (int dz = (lz == 0 ? -1 : 0); dz <= (lz == 15 ? 1 : 0); ++dz)
       for (int dx = (lx == 0 ? -1 : 0); dx <= (lx == 15 ? 1 : 0); ++dx) {
+        if (dx == 0 && dy == 0 && dz == 0) continue;
         const int s = sy + dy;
         if (s < 0 || s >= kSubChunks) continue;
         dirtySubs_.insert(packPos(cx + dx, s, cz + dz));
@@ -320,37 +339,93 @@ void cSimThread::markDirty(int x, int y, int z) {
 }
 
 void cSimThread::flushDirty() {
+  // PlayJ fix 1: skip pin/submit for dirty subs outside vertical + frustum (cheb) of the eye;
+  // keep their dirty flags so they remesh when they come into view. LL_MESH_VERT_SUBS (default 4),
+  // LL_MESH_CHEB (default 6). LL_PROF_CULL=1 logs the census (I2 baseline shape).
+  static const bool kCullProf = [] { const char* e = std::getenv("LL_PROF_CULL"); return e && e[0] == '1'; }();
+  static const int kCheb = [] { const char* e = std::getenv("LL_MESH_CHEB"); return e ? std::max(1, int(std::atoi(e))) : 6; }();
+  static const int kVert = [] { const char* e = std::getenv("LL_MESH_VERT_SUBS"); return e ? std::max(0, int(std::atoi(e))) : 4; }();
+  static const bool kMeshCull = [] { const char* e = std::getenv("LL_MESH_VIEW_CULL"); return !(e && e[0] == '0'); }();
+  const int pcx = int(int32_t(areaChunkKey_ >> 32)), pcz = int(int32_t(areaChunkKey_ & 0xffffffffu));
+  const int psy = int(std::floor(rayEye_[1])) >> 4;
+  const float rdx = rayDir_[0], rdy = rayDir_[1], rdz = rayDir_[2];
+  const float rlen2 = rdx * rdx + rdy * rdy + rdz * rdz;
+  auto inView = [&](int cx, int sy, int cz) -> bool {
+    if (!kMeshCull) return true;
+    const int cheb = std::max(std::abs(cx - pcx), std::abs(cz - pcz));
+    if (cheb > kCheb) return false;
+    if (std::abs(sy - psy) > kVert) return false;
+    // Coarse frustum: sub-chunk centre must not sit clearly behind the look ray.
+    if (rlen2 > 1e-8f) {
+      const float sx = (float(cx) + 0.5f) * 16.f - rayEye_[0];
+      const float syw = (float(sy) + 0.5f) * 16.f - rayEye_[1];
+      const float sz = (float(cz) + 0.5f) * 16.f - rayEye_[2];
+      const float dist2 = sx * sx + syw * syw + sz * sz;
+      if (dist2 > 64.f && (sx * rdx + syw * rdy + sz * rdz) < 0.f) return false;
+    }
+    return true;
+  };
+
+  flushHold_.clear();
+  flushWork_.clear();
+  uint64_t nIn = 0, nOut = 0;
+  for (int64_t k : dirtySubs_) {
+    int cx, sy, cz; unpackPos(k, cx, sy, cz);
+    if (!chunks_.column(cx, cz)) continue;
+    if (inView(cx, sy, cz)) { flushWork_.push_back(k); ++nIn; }
+    else { flushHold_.push_back(k); ++nOut; }
+  }
+  if (kCullProf) {
+    static uint64_t flushes = 0, subs = 0, inC = 0, outC = 0, inV = 0, outV = 0, inBoth = 0, outEither = 0; static int64_t t0 = 0;
+    ++flushes;
+    for (int64_t k : dirtySubs_) {
+      int cx, sy, cz; unpackPos(k, cx, sy, cz); if (!chunks_.column(cx, cz)) continue; ++subs;
+      const int cheb = std::max(std::abs(cx - pcx), std::abs(cz - pcz));
+      const int vert = std::abs(sy - psy);
+      const bool ic = cheb <= kCheb, iv = vert <= kVert;
+      if (ic) ++inC; else ++outC; if (iv) ++inV; else ++outV; if (ic && iv) ++inBoth; else ++outEither;
+    }
+    const int64_t now = ::litholattice::tickprof::nowNs(); if (!t0) t0 = now;
+    if (now - t0 >= 1000000000ll) {
+      logInfo("cull profile: flushes %llu dirty_subs %llu | cheb<=%d in %llu out %llu (%.1f%% out) | vert<=%d in %llu out %llu (%.1f%% out) | both in %llu out_either %llu (%.1f%% out) | flushed_in %llu held_out %llu | player_chunk %d,%d eye_sy %d eyeY %.1f",
+        (unsigned long long)flushes, (unsigned long long)subs, kCheb, (unsigned long long)inC, (unsigned long long)outC, subs ? 100.0 * outC / double(subs) : 0.0,
+        kVert, (unsigned long long)inV, (unsigned long long)outV, subs ? 100.0 * outV / double(subs) : 0.0,
+        (unsigned long long)inBoth, (unsigned long long)outEither, subs ? 100.0 * outEither / double(subs) : 0.0,
+        (unsigned long long)nIn, (unsigned long long)nOut, pcx, pcz, psy, double(rayEye_[1]));
+      flushes = subs = inC = outC = inV = outV = inBoth = outEither = 0; t0 = now;
+    }
+  }
+
+  // PlayJ fix 3: no mesh consumer (null renderer / LL_NO_MESH=1) - drop in-view work without pin/submit;
+  // still keep held out-of-view flags so a later consumer (or view move) can catch up.
+  dirtySubs_.clear();
+  for (int64_t k : flushHold_) dirtySubs_.insert(k);
+  if (!meshConsumes_ || flushWork_.empty()) return;
+
   // Cortana 2026-10-15 1350: one flush = one settled post-phase state = one
   // publish batch (the game lands a batch's meshes in the same frame).
   uint32_t batchN = 0;
-  for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) ++batchN; }
+  for (int64_t k : flushWork_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) ++batchN; }
   const uint64_t batchId = ++flushBatch_;
   if (cowColumnsEnabled()) {  // render pipeline M5: publish every dirty sub once (per column), then pin
-    std::unordered_map<uint64_t, uint64_t> masks;
-    for (int64_t k : dirtySubs_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) masks[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy; }
+    std::unordered_map<uint64_t, uint64_t>& masks = flushMasks_; masks.clear();  // PlayI: pooled scratch
+    for (int64_t k : flushWork_) { int cx, sy, cz; unpackPos(k, cx, sy, cz); if (chunks_.column(cx, cz)) masks[ChunkKey::make(cx, cz)] |= uint64_t(1) << sy; }
     // M9 (Archie rulings 4+6): in-place state edits noted since the last tick join this
     // tick's single batched publish (no live apron read at pin time any more).
     for (const auto& [key, mask] : chunks_.cowTable().takeStale())
       if (chunks_.column(int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)))) masks[key] |= mask;
-    std::vector<std::pair<uint64_t, uint64_t>> ordered(masks.begin(), masks.end());
+    std::vector<std::pair<uint64_t, uint64_t>>& ordered = flushOrdered_; ordered.assign(masks.begin(), masks.end());
     std::sort(ordered.begin(), ordered.end());
     for (const auto& [key, mask] : ordered)
       chunks_.cowTable().publish(chunks_, blocks_, int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)), mask);
   }
-  for (int64_t k : dirtySubs_) {
+  for (int64_t k : flushWork_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
     // Recycle MeshInput buffers (~24 KB each; up to ~120 passes/s under signal
     // churn made make_shared-per-snapshot pure churn). The custom deleter returns
     // the buffer to the shared pool; the pool outlives in-flight snapshots.
-    std::unique_ptr<MeshInput> buf;
-    {
-      litholattice::cGateGuard l(meshPool_->m);
-      if (!meshPool_->free.empty()) {
-        buf = std::move(meshPool_->free.back());
-        meshPool_->free.pop_back();
-      }
-    }
+    std::unique_ptr<MeshInput> buf = meshPool_->take();  // PlayI: lock-free slot handoff
     if (!buf) buf = std::make_unique<MeshInput>();
     pinForMeshingInto(chunks_, blocks_, cx, sy, cz, epoch_, ++meshSeq_, belowWorld_, *buf,
                       MeshEdge::Clamp, 0);  // P8 clamp-to-edge; M5: pinned CoW, worker gathers
@@ -360,17 +435,15 @@ void cSimThread::flushDirty() {
     submit_(std::shared_ptr<MeshInput>(raw, [pool](MeshInput* p) {
       std::unique_ptr<MeshInput> u(p);
       u->pin.reset();  // M5: never retain pinned snapshots in the pool
-      litholattice::cGateGuard l(pool->m);
-      if (pool->free.size() < 64) pool->free.push_back(std::move(u));
-      // else: pool full, drop it (bounds retained memory)
+      pool->give(std::move(u));  // PlayI: lock-free; pool full drops it (bounds retained memory)
     }));
   }
-  dirtySubs_.clear();
 }
 
 void cSimThread::castRay(const RayInput& ray) {
   ChunkMap& w = chunks_;
   rayEye_[0] = ray.ox; rayEye_[1] = ray.oy; rayEye_[2] = ray.oz;
+  rayDir_[0] = ray.dx; rayDir_[1] = ray.dy; rayDir_[2] = ray.dz;  // PlayJ: frustum remesh cull
   hit_ = raycast(w, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, kLookRange, hit_xyz_, prev_xyz_, &blocks_, /*modelPick=*/true);
   const float dx = hit_xyz_[0] + 0.5f - ray.ox, dy = hit_xyz_[1] + 0.5f - ray.oy, dz = hit_xyz_[2] + 0.5f - ray.oz;
   hitDist_ = hit_ ? std::sqrt(dx * dx + dy * dy + dz * dz) : 0.f;
@@ -568,6 +641,16 @@ void cSimThread::run() {
   const auto dirtyFn = [this](int x, int y, int z) { simChanged(x, y, z); };
   constexpr auto kRemeshInterval = std::chrono::microseconds(8333);
   auto lastFlush = Clock::now();
+  // PlayI/PlayJ (JD render divider): signal-driven remesh flushes wait for LL_RENDER_DIV world ticks
+  // (default 32; JD preferred) or LL_RENDER_MAX_WAIT_US (default 62500), whichever comes first.
+  // Player edits / remesh-all still flush at once. Off-screen dirty subs are held by view cull (fix 1).
+  static const uint64_t kRenderDiv = [] { const char* e = std::getenv("LL_RENDER_DIV"); const long v = e ? std::atol(e) : 32; return uint64_t(v > 0 ? v : 1); }();
+  static const auto kRenderMaxWait = [] {
+    const char* e = std::getenv("LL_RENDER_MAX_WAIT_US");
+    const long v = e ? std::atol(e) : 62500;
+    return std::chrono::microseconds(v > 0 ? v : 62500);
+  }();
+  uint64_t lastFlushTick = 0;
 
   auto reconfigure = [&] {
     cfgWorldTps_ = requestedTps_.load();
@@ -780,14 +863,14 @@ void cSimThread::run() {
         int steps = 0;
         const uint64_t burstFrom = worldTickN_;  // LL_SIM_STALL_MS (measure only; Proposed by Herominde; implemented by Cortana)
         inBurst_ = true;
-        // 2026-10-25 (JD, Debug stall): one pass holds blockMutex_ for at most kPassTicks ticks or
+        // 2026-10-25 (JD, Debug stall): one pass holds blockMutex_ for (PlayI: no tick cap) at most
         // kPassBudget of work; the lock is then released before the next pass, so a too-slow sim
         // (Debug) runs slow via the 100 ms lag cap instead of starving the main thread (getBlock / holdBetweenTicks) of the lock.
         // At Release tick costs (<1 ms) a pass never hits the time budget.
-        constexpr int kPassTicks = 4;
+        // PlayI (JD): no fixed tick cap; a pass keeps working a backlog until kPassBudget.
         const auto passStart = Clock::now();
         const Ns kPassBudget = std::chrono::milliseconds(6);
-        while (acc_ >= stepDur_ && steps < kPassTicks && (steps == 0 || Clock::now() - passStart < kPassBudget)) {
+        while (acc_ >= stepDur_ && (steps == 0 || Clock::now() - passStart < kPassBudget)) {
           if (!stepMasterOnce(true)) {
             // Frozen step (A-M5): not consumed — masterStep_ unchanged and
             // the step re-runs on resume. Charge the pacing slot anyway
@@ -825,11 +908,23 @@ void cSimThread::run() {
     // Signal-driven changes are coalesced to at most ~120 remesh passes per second: at 512 Hz a
     // busy circuit would otherwise snapshot and mesh the same sub-chunks hundreds of times a second.
     const auto tFlush = Clock::now();
-    if (!dirtySubs_.empty() && (flushNow || tFlush - lastFlush >= kRemeshInterval)) {
+    if (!dirtySubs_.empty() && (flushNow || (tFlush - lastFlush >= kRemeshInterval && (worldTickN_ - lastFlushTick >= kRenderDiv || tFlush - lastFlush >= kRenderMaxWait)))) {
       const int64_t tpF = ::litholattice::tickprof::enabled() ? ::litholattice::tickprof::nowNs() : 0;  // LL_TICK_PROFILE (measure only)
+      // PlayJ fix 7: with CoW columns, publish+pin read pinned snapshots - release blockMutex_
+      // before pin/submit so streaming holdBetweenTicks is not stalled for remesh duration.
+      // Without CoW, pin still reads live columns; keep the gate (SIM-H1 2026-10-15 reverted unlock).
+      const bool unlockForFlush = cowColumnsEnabled() && postLock.owns_lock();
+      if (unlockForFlush) {
+        locktiming::setBlockHolder(locktiming::kHolderNone);
+        postLock.unlock();
+      }
       flushDirty();
       if (tpF) ::litholattice::tickprof::ticks().noteFlush(::litholattice::tickprof::nowNs() - tpF);
-      lastFlush = tFlush;
+      lastFlush = tFlush; lastFlushTick = worldTickN_;
+      if (unlockForFlush && !postLock.owns_lock()) {
+        postLock = ::litholattice::cGateLock<cBlockGate>(blockMutex_);
+        locktiming::setBlockHolder(locktiming::kHolderSimPost);
+      }
     }
     publishEvents();
 
@@ -914,7 +1009,7 @@ void cSimThread::run() {
     } else if (passCut) {
       // backlog beyond one pass: the 100 ms lag cap above drops what can't be caught up,
       // so a too-slow (Debug) sim runs slow; give lock waiters a turn instead of re-locking at once
-      std::this_thread::sleep_for(std::chrono::microseconds(200));
+      std::this_thread::yield();  // PlayI (JD): yield, not a 200 us sleep
     } else {
       waitUntil(last + (stepDur_ - acc_));
     }
