@@ -1,33 +1,35 @@
 // cDebugConsole: the Half-Life-style dropdown console for lithoscript. Tilde
-// drops it from the top of the screen; it renders through the ui framework (a cStackPanel holding
-// a read-only cTextEditor log view over a cTextBox command line — composition,
-// no new widgets).
+// drops it from the top of the screen; it renders through Litho GUI (a
+// lithogui::Panel holding a lithogui::ListBox log view over a
+// lithogui::TextField command line, with a second ListBox as the completion
+// dropdown — composition, no new widgets).
 //
 // INPUT CONFINEMENT (hard rule): the tilde key never toggles the console open
-// while cUiRoot::wantsKeyboard() (a text field has focus, a modal/popup is
-// open) — typing "~" in a field keeps working. While the console is open its
-// cTextBox holds focus, so wantsKeyboard() is true and keystrokes typed here
-// never reach mods (cModInputRouter::shouldDeliverToMod), exactly like any
-// other text field. Tilde while open closes it (HL1 behavior).
+// while another text field wants the keyboard — the ILithoGui has a focused
+// widget that is not this console's input, or a popup/modal is open on its
+// context — so typing "~" in a field keeps working. While the console is open
+// its TextField holds focus, so keystrokes typed here are the GUI's, exactly
+// like any other text field. Tilde while open closes it (HL1 behavior).
 //
-// GAME WIRING (one call site, see Game::routeUiInput):
-//   for (const ui::UiEvent& e : uiEvents) {
-//     if (debugConsole.handleTildeKey(ui.root(), e)) continue;   // tilde toggle
+// GAME WIRING (one call site, in the game's UI input route):
+//   for (const lithogui::KeyEvent& e : keyEvents) {
+//     if (debugConsole.handleTildeKey(gui, e)) continue;   // tilde toggle
 //     if (debugConsole.isOpen() && debugConsole.handleKeyPreFilter(e)) continue;
-//     ... ui_.root().handleEvent(e) ...
+//     ... gui.dispatchKey(e) ...
 //   }
-// plus debugConsole.update() once per frame.
+// plus debugConsole.update() once per frame. attach(gui) once, after the
+// ILithoGui exists: the panel joins the GUI's root tree when one is set, and
+// becomes the root when none is.
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "litholattice/console/completer.h"
 #include "litholattice/console/concmd.h"
-#include "litholattice/ui/lists.h"
-#include "litholattice/ui/text_edit.h"
-#include "litholattice/ui/ui_root.h"
+#include "litholattice/ui/litho_gui.h"
 
 namespace litholattice::console {
 
@@ -38,34 +40,37 @@ class cDebugConsole {
   cDebugConsole(const cDebugConsole&) = delete;
   cDebugConsole& operator=(const cDebugConsole&) = delete;
 
-  /// Builds the panel (hidden) and adds it on top of ui.root(). Call once,
-  /// after the cUiRoot exists. Available in ALL builds, not just debug.
-  void attach(ui::cUiRoot& ui);
+  /// Builds the panel (hidden) and adds it to the GUI. Call once, after the
+  /// ILithoGui exists. Available in ALL builds, not just debug.
+  void attach(lithogui::ILithoGui& gui);
 
   bool isOpen() const { return open_; }
   void open();
   void close();
   void toggle();
 
-  /// Tilde handling for the game loop. Consumes UiEvent::Text('~') and
-  /// UiEvent::Text('`') (the grave-accent key with/without shift): opens the
-  /// console when closed and closes it when open. Never opens while
-  /// ui.wantsKeyboard() — that check runs before the key-repeat debounce, so
-  /// typing "~" in a field always keeps working. Debounced: a held tilde key
-  /// (text repeat) toggles at most once per 200 ms. Returns true when the
-  /// event was consumed.
-  bool handleTildeKey(ui::cUiRoot& ui, const ui::UiEvent& e);
+  /// Tilde handling for the game loop. Consumes a key-down event whose
+  /// character is '~' or '`' (the grave-accent key with/without shift):
+  /// opens the console when closed and closes it when open. Never opens
+  /// while another text field / a modal wants the keyboard (the GUI's
+  /// focused widget / popup state) — that check runs before the key-repeat
+  /// debounce, so typing "~" in a field always keeps working. Debounced:
+  /// a held tilde key toggles at most once per 200 ms. Returns true when
+  /// the event was consumed.
+  bool handleTildeKey(lithogui::ILithoGui& gui, const lithogui::KeyEvent& e);
 
-  /// Key pre-filter while open; call BEFORE ui.handleEvent. Tab performs
-  /// HL1-style completion of the input line; typing filters the VS Code-style
-  /// autocomplete dropdown (a cListView above the input). While the dropdown
-  /// is visible Up/Down move its selection, Enter accepts it, Escape
-  /// dismisses it (the console stays open); otherwise Up/Down walk command
-  /// history, PageUp/PageDown scroll the log view, Escape closes.
+  /// Key pre-filter while open; call BEFORE gui.dispatchKey. Tab performs
+  /// HL1-style completion of the input line; typing filters the VS
+  /// Code-style autocomplete dropdown (a ListBox above the input) — the
+  /// live refresh itself runs in update(), which polls the input text.
+  /// While the dropdown is visible Up/Down move its selection, Enter
+  /// accepts it, Escape dismisses it (the console stays open); otherwise
+  /// Up/Down walk command history and Escape closes.
   /// Returns true when the event was consumed.
-  bool handleKeyPreFilter(const ui::UiEvent& e);
+  bool handleKeyPreFilter(const lithogui::KeyEvent& e);
 
-  /// Pulls new engine-log tap records into the log view (call once per frame).
+  /// Pulls new engine-log tap records into the log view and refreshes the
+  /// completion dropdown when the input text changed (call once per frame).
   void update();
 
   // ---- test seams ----
@@ -77,7 +82,7 @@ class cDebugConsole {
   /// Autocomplete dropdown state (headless-verifiable).
   bool completionVisible() const { return completionView_ && completionView_->visible(); }
   size_t completionRowCount() const { return completionRows_.size(); }
-  int completionSelected() const { return completionView_ ? completionView_->selected() : -1; }
+  int completionSelected() const { return completionView_ ? completionView_->selectedIndex() : -1; }
   /// Sets the input text as if typed (fires the completion refresh).
   void setInputTextForTest(const std::string& text);
 
@@ -85,6 +90,8 @@ class cDebugConsole {
   void onSubmit();
   void appendLogLine(const std::string& line);
   void trimLogView();
+  void syncLogView();
+  void syncCompletionView();
 
   // ---- autocomplete (shares the registry-agnostic Completer unit) ----
   void refreshCompletion();
@@ -99,12 +106,17 @@ class cDebugConsole {
   cConsoleReg& registry_;
   cRegCompletionSource completionSource_;  ///< injected candidate source (the Fragment seam)
   Completer completer_;
-  ui::cUiRoot* ui_ = nullptr;
-  ui::cWidget* panel_ = nullptr;
-  ui::cTextEditor* logView_ = nullptr;
-  ui::cListView* completionView_ = nullptr;
-  ui::cTextBox* input_ = nullptr;
+  lithogui::ILithoGui* gui_ = nullptr;
+  // Owned only when the console panel became the GUI root; when the panel
+  // joined an existing root tree, that tree owns it and panel_ is borrowed.
+  std::unique_ptr<lithogui::Widget> ownedRoot_;
+  lithogui::Widget* panel_ = nullptr;
+  lithogui::ListBox* logView_ = nullptr;
+  lithogui::ListBox* completionView_ = nullptr;
+  lithogui::TextField* input_ = nullptr;
   std::vector<CompletionCandidate> completionRows_;
+  std::vector<std::string> logLines_;  ///< the log view's model (capped at kMaxViewLines)
+  std::string lastInputSeen_;          ///< input text at the last completion refresh
 
   bool open_ = false;
   std::vector<std::string> history_;

@@ -17,8 +17,7 @@
 #include "litholattice/defrag/defrag.h"
 #include "litholattice/mods/mod_interface.h"  // kPermConsole
 #include "litholattice/mods/mod_permissions.h"
-#include "litholattice/ui/text_edit.h"
-#include "litholattice/ui/ui_root.h"
+#include "litholattice/ui/litho_gui.h"
 
 namespace litholattice::console {
 namespace {
@@ -57,8 +56,18 @@ std::filesystem::path tempDir(const std::string& name) {
   return dir;
 }
 
-ui::UiEvent tildeEvent() { return ui::UiEvent::text(U'~'); }
-ui::UiEvent keyEvent(ui::Key k) { return ui::UiEvent::keyDown(k); }
+lithogui::KeyEvent tildeEvent() {
+  lithogui::KeyEvent e;
+  e.ch = U'~';
+  e.down = true;
+  return e;
+}
+lithogui::KeyEvent keyEvent(int key) {
+  lithogui::KeyEvent e;
+  e.key = key;
+  e.down = true;
+  return e;
+}
 
 }  // namespace
 
@@ -810,7 +819,7 @@ int runConsoleSelfTest() {
 
   // ---- end-to-end: the debug console input path drives lithoscript ----
   {
-    ui::cUiRoot ui;
+    lithogui::cLithoGui ui;
     cConsoleReg r;
     r.registerBuiltins(false);
     std::string err;
@@ -1072,7 +1081,7 @@ int runConsoleSelfTest() {
 
   // ---- cDebugConsole widget: toggle, tilde, confinement, history ----
   {
-    ui::cUiRoot ui;
+    lithogui::cLithoGui ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);
@@ -1096,29 +1105,33 @@ int runConsoleSelfTest() {
 
     // Tilde while a text field has focus: suppressed (typing "~" keeps working),
     // even right after a toggle — the confinement check runs before the debounce.
-    ui::cTextBox field;
-    ui.setFocus(&field);
-    ok = ok && ui.wantsKeyboard();
+    auto fieldRoot = std::make_unique<lithogui::Panel>("confinement-root");
+    auto field = std::make_unique<lithogui::TextField>("confinement-field");
+    lithogui::TextField* fieldPtr = field.get();
+    fieldRoot->addChild(std::move(field));
+    ui.setRoot(fieldRoot.get());
+    ui.context().setFocus(fieldPtr);
+    ok = ok && ui.focused() == fieldPtr;
     ok = ok && !con.handleTildeKey(ui, tildeEvent()) && !con.isOpen();
-    ui.setFocus(nullptr);
+    ui.context().setFocus(nullptr);
 
     // History: Up/Down walk submitted lines; Escape closes.
     con.open();
     con.submitForTest("echo one");
     con.submitForTest("echo two");
     ok = ok && con.historySize() == 2;
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Up)) && con.inputText() == "echo two";
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Up)) && con.inputText() == "echo one";
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Down)) && con.inputText() == "echo two";
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Down)) && con.inputText().empty();
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Escape)) && !con.isOpen();
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_UP)) && con.inputText() == "echo two";
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_UP)) && con.inputText() == "echo one";
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_DOWN)) && con.inputText() == "echo two";
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_DOWN)) && con.inputText().empty();
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_ESCAPE)) && !con.isOpen();
     check(ok, "console widget: toggle, tilde suppressed while a field has focus, history, escape");
   }
 
   // ---- console displays engine-log tap records ----
   {
     engineLogTap().clear();
-    ui::cUiRoot ui;
+    lithogui::cLithoGui ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);
@@ -1454,9 +1467,9 @@ int runConsoleSelfTest() {
     check(ok, "completer: splitCompletionLine + isContextCommand");
   }
 
-  // ---- cDebugConsole autocomplete dropdown (headless cUiRoot) ----
+  // ---- cDebugConsole autocomplete dropdown (headless cLithoGui) ----
   {
-    ui::cUiRoot ui;
+    lithogui::cLithoGui ui;
     cConsoleReg r;
     cDebugConsole con(r);
     con.attach(ui);  // registers builtins: echo, exec, ...
@@ -1474,17 +1487,17 @@ int runConsoleSelfTest() {
     ok = ok && con.completionVisible();  // two matches (unbind, unbindall): still shown
 
     // Tab with an ambiguous prefix: completes the common prefix, matches listed.
-    con.submitForTest("echo hi");  // seeds the log view (an empty buffer counts as one line)
+    con.submitForTest("echo hi");  // seeds the log view with the echo + output lines
     con.setInputTextForTest("unb");
     const size_t linesBefore = con.logLineCount();
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Tab)) && con.inputText() == "unbind" &&
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_TAB)) && con.inputText() == "unbind" &&
          con.logLineCount() > linesBefore;
     // Tab with a unique match: completes plus the trailing space.
     con.setInputTextForTest("ech");
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Tab)) && con.inputText() == "echo ";
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_TAB)) && con.inputText() == "echo ";
     // Tab with no matches: no-op.
     con.setInputTextForTest("zzz_no_such_thing");
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Tab)) &&
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_TAB)) &&
          con.inputText() == "zzz_no_such_thing";
     check(ok, "console dropdown: live filtering, tab ambiguous/unique/no-match");
 
@@ -1492,14 +1505,14 @@ int runConsoleSelfTest() {
     // the dropdown (console stays open); a second Escape closes the console.
     con.setInputTextForTest("unb");
     ok = con.completionVisible() && con.completionRowCount() == 2;
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Down)) && con.completionSelected() == 1;
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Up)) && con.completionSelected() == 0;
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Enter)) && con.inputText() == "unbind " &&
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_DOWN)) && con.completionSelected() == 1;
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_UP)) && con.completionSelected() == 0;
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_ENTER)) && con.inputText() == "unbind " &&
          !con.completionVisible();
     con.setInputTextForTest("ec");
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Escape)) && con.isOpen() &&
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_ESCAPE)) && con.isOpen() &&
          !con.completionVisible();
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Escape)) && !con.isOpen();
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_ESCAPE)) && !con.isOpen();
     check(ok, "console dropdown: arrows move, enter accepts, escape dismisses then closes");
 
     // `exec` context in the live dropdown: script filenames.
@@ -1509,7 +1522,7 @@ int runConsoleSelfTest() {
     r.setConfigDir(scriptDir);
     con.setInputTextForTest("exec quest_");
     ok = con.completionVisible() && con.completionRowCount() == 1;
-    ok = ok && con.handleKeyPreFilter(keyEvent(ui::Key::Enter)) &&
+    ok = ok && con.handleKeyPreFilter(keyEvent(lithogui::KEY_ENTER)) &&
          con.inputText() == "exec quest_start.lth ";
     con.close();
     check(ok, "console dropdown: `exec` context completes script filenames in the UI");

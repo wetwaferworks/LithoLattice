@@ -107,7 +107,7 @@ int testCanonicalMeshEntry();  // canonical_mesh_test.cpp (render pipeline step 
 #include <filesystem>
 #include <fstream>
 #include <random>
-#include "litholattice/ui/ui_selftest.h"
+#include "litholattice/ui/litho_gui_selftest.h"
 #include "litholattice/world/chunk_map.h"
 #include "litholattice/world/mesh_input.h"
 #include "litholattice/world/raycast.h"
@@ -9627,7 +9627,7 @@ int runModule(const std::string& m) {
     g_fails += procgen::litho_formula::runLithoFormulaNodeSelfTest();
     g_fails += procgen::litho_formula::runLithoStampFeatureSelfTest();
   }
-  else if (m == "ui") g_fails += ui::runUiSelfTest();
+  else if (m == "ui") g_fails += runLithoGuiSelftest() ? 0 : 1;
   else if (m == "assets") { g_fails += runAssetsSelfTest(); testMods(); }
   else if (m == "audio") g_fails += runAudioSelfTest();
   else if (m == "input") g_fails += runInputSelfTest();

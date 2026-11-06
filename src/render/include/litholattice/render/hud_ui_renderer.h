@@ -1,36 +1,43 @@
-// ui::IUiRenderer on top of the HUD layer: UI draws become ordered, CPU-clipped HudDraws that
-// both backends (gl33 and Vulkan) already render through buildHudVertices, so the UI needs no
-// backend-specific code. Images resolve to a colour swatch through a callback (the HUD has no
-// texture path yet).
+// cHudUiRenderer: consumes a Litho GUI draw list (lithogui::DrawList) and appends
+// ordered, CPU-clipped HudDraws to a HudLayer, so both backends (gl33 and Vulkan)
+// render the GUI through buildHudVertices with no backend-specific GUI code.
+// Images resolve through callbacks (the HUD has no texture path yet): a texture id
+// either maps to a pixel-art icon image drawn per pixel, or to a colour swatch.
 #pragma once
 #include <functional>
 #include <optional>
-#include <string_view>
 #include <vector>
 #include "litholattice/assets/image.h"
 #include "litholattice/render/renderer.h"
-#include "litholattice/ui/ui_renderer.h"
+#include "litholattice/ui/litho_gui.h"
 
 namespace litholattice {
 
-class cHudUiRenderer final : public ui::IUiRenderer {
+class cHudUiRenderer final {
  public:
-  using ImageResolver = std::function<std::optional<ui::Color>(std::string_view image)>;
+  /// Colour swatch for a Litho GUI texture id (ImageQuad fallback path).
+  using ImageResolver = std::function<std::optional<lithogui::Color>(int textureId)>;
+
+  /// Pixel-art icons: a small RGBA image drawn as one rect per opaque pixel
+  /// (alpha >= 50%), so the HUD needs no textures. Keep icons small
+  /// (16 x 16, see downsampleIcon).
+  using IconResolver = std::function<const Image*(int textureId)>;
 
   /// Appends to `layer.draws` (the caller clears the layer each frame).
-  /// Pixel-art icons: a small RGBA image drawn as one rect per opaque pixel (alpha >= 50%),
-  /// so the HUD needs no textures. Keep icons small (16 x 16, see downsampleIcon).
-  using IconResolver = std::function<const Image*(std::string_view image)>;
   explicit cHudUiRenderer(HudLayer& layer, ImageResolver images = {}, IconResolver icons = {})
       : layer_(layer), images_(std::move(images)), icons_(std::move(icons)) {}
 
-  void fillRect(const ui::Rect& r, ui::Color c) override;
-  void drawText(ui::Vec2 pos, std::string_view text, ui::Color c, float scale) override;
-  void drawImage(const ui::Rect& r, std::string_view image, ui::Color tint) override;
-  void pushClip(const ui::Rect& r) override;
-  void popClip() override;
+  /// Translates one frame of Litho GUI draw commands into HudDraws, in order.
+  void render(const lithogui::DrawList& dl);
 
  private:
+  void fillRect(const lithogui::Rect& r, lithogui::Color c);
+  void drawText(lithogui::Vec2 pos, const std::string& text, lithogui::Color c, float scale);
+  void drawLine(lithogui::Vec2 a, lithogui::Vec2 b, lithogui::Color c, float thickness);
+  void drawImage(const lithogui::Rect& r, int textureId, float imageAlpha);
+  void pushClip(const lithogui::Rect& r);
+  void popClip();
+
   HudClip clip() const { return clips_.empty() ? HudClip{} : clips_.back(); }
   HudLayer& layer_;
   ImageResolver images_;

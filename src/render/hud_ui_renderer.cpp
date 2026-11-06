@@ -1,7 +1,6 @@
 #include "litholattice/render/hud_ui_renderer.h"
 #include <algorithm>
 #include <cmath>
-#include "litholattice/ui/theme.h"
 #include <string>
 
 namespace litholattice {
@@ -10,7 +9,12 @@ namespace litholattice {
 // Edges are rounded independently (not x and w), so adjacent rects never gap or overlap.
 static float snapPx(float v) { return std::floor(v + 0.5f); }
 
-void cHudUiRenderer::fillRect(const ui::Rect& r, ui::Color c) {
+// The old ui toolkit's text-scale snap, kept for the HUD's baked 8x16 glyph cell:
+// scales below 1 stay 1, anything above rounds to a whole multiplier, so HUD text
+// never lands on a fractional glyph cell.
+static float snapTextScale(float s) { return s < 1.f ? 1.f : float(int(s + 0.5f)); }
+
+void cHudUiRenderer::fillRect(const lithogui::Rect& r, lithogui::Color c) {
   HudDraw d;
   d.x = snapPx(r.x);
   d.y = snapPx(r.y);
@@ -25,7 +29,7 @@ void cHudUiRenderer::fillRect(const ui::Rect& r, ui::Color c) {
   layer_.draws.push_back(std::move(d));
 }
 
-void cHudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, float scale) {
+void cHudUiRenderer::drawText(lithogui::Vec2 pos, const std::string& text, lithogui::Color c, float scale) {
   HudDraw d;
   d.x = snapPx(pos.x);
   d.y = snapPx(pos.y);
@@ -33,10 +37,26 @@ void cHudUiRenderer::drawText(ui::Vec2 pos, std::string_view text, ui::Color c, 
   d.g = c.g;
   d.b = c.b;
   d.a = c.a;
-  d.scale = ui::Theme::snapTextScale(scale);
-  d.text = std::string(text);
+  d.scale = snapTextScale(scale);
+  d.text = text;
   d.clip = clip();
   layer_.draws.push_back(std::move(d));
+}
+
+void cHudUiRenderer::drawLine(lithogui::Vec2 a, lithogui::Vec2 b, lithogui::Color c, float thickness) {
+  // HudDraws are axis-aligned rects and text only, so a segment becomes its
+  // bounding rect at the requested thickness. Axis-aligned segments (the
+  // Trace-border fallback polylines, widget rules) are exact; a diagonal
+  // segment is approximated by its bounding box — honest HUD limitation.
+  const float t = std::max(1.0f, thickness);
+  lithogui::Rect r;
+  r.x = std::min(a.x, b.x);
+  r.y = std::min(a.y, b.y);
+  r.w = std::max(std::abs(b.x - a.x), a.y == b.y ? 0.0f : t);
+  r.h = std::max(std::abs(b.y - a.y), a.x == b.x ? 0.0f : t);
+  if (a.y == b.y) r.h = t;
+  if (a.x == b.x) r.w = t;
+  fillRect(r, c);
 }
 
 // 2026-10-25 (JD, crisp hotbar icons): a source icon larger than its on-screen rect is
@@ -58,8 +78,9 @@ const Image& fittedIcon(const Image& src, int w, int h) {
 }  // namespace
 void invalidateHudIconCache() { ++g_iconGen; iconFitCache().clear(); }
 
-void cHudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Color tint) {
-  const Image* icon0 = icons_ ? icons_(image) : nullptr;
+void cHudUiRenderer::drawImage(const lithogui::Rect& r, int textureId, float imageAlpha) {
+  const lithogui::Color tint{1.f, 1.f, 1.f, imageAlpha};
+  const Image* icon0 = icons_ ? icons_(textureId) : nullptr;
   if (icon0 && !icon0->empty()) {
     const float x0 = snapPx(r.x), y0 = snapPx(r.y);
     const int pw = int(snapPx(r.x + r.w) - x0), ph = int(snapPx(r.y + r.h) - y0);
@@ -95,19 +116,67 @@ void cHudUiRenderer::drawImage(const ui::Rect& r, std::string_view image, ui::Co
       }
     return;
   }
-  const std::optional<ui::Color> swatch = images_ ? images_(image) : std::nullopt;
-  const ui::Color base = swatch.value_or(ui::Color{1.f, 0.f, 1.f, 1.f});  // magenta: unknown image
+  const std::optional<lithogui::Color> swatch = images_ ? images_(textureId) : std::nullopt;
+  const lithogui::Color base = swatch.value_or(lithogui::Color{1.f, 0.f, 1.f, 1.f});  // magenta: unknown image
   fillRect(r, {base.r * tint.r, base.g * tint.g, base.b * tint.b, base.a * tint.a});
 }
 
-void cHudUiRenderer::pushClip(const ui::Rect& r) {
+void cHudUiRenderer::pushClip(const lithogui::Rect& r) {
   const HudClip cur = clip();
-  clips_.push_back({std::max(cur.x0, snapPx(r.x)), std::max(cur.y0, snapPx(r.y)), std::min(cur.x1, snapPx(r.right())),
-                    std::min(cur.y1, snapPx(r.bottom()))});  // whole-pixel clips: glyphs cut on texel edges
+  clips_.push_back({std::max(cur.x0, snapPx(r.x)), std::max(cur.y0, snapPx(r.y)),
+                    std::min(cur.x1, snapPx(r.x + r.w)), std::min(cur.y1, snapPx(r.y + r.h))});
 }
 
 void cHudUiRenderer::popClip() {
   if (!clips_.empty()) clips_.pop_back();
+}
+
+void cHudUiRenderer::render(const lithogui::DrawList& dl) {
+  clips_.clear();
+  for (const lithogui::DrawCmd& cmd : dl.commands()) {
+    switch (cmd.kind) {
+      case lithogui::DrawCmd::Kind::PushClip:
+        pushClip(cmd.rect);
+        break;
+      case lithogui::DrawCmd::Kind::PopClip:
+        popClip();
+        break;
+      case lithogui::DrawCmd::Kind::FillRect:
+        fillRect(cmd.rect, cmd.color);
+        break;
+      case lithogui::DrawCmd::Kind::Line:
+        if (cmd.points.size() >= 2) drawLine(cmd.points[0], cmd.points[1], cmd.color, cmd.thickness);
+        break;
+      case lithogui::DrawCmd::Kind::Polyline:
+        for (size_t i = 1; i < cmd.points.size(); ++i)
+          drawLine(cmd.points[i - 1], cmd.points[i], cmd.color, cmd.thickness);
+        break;
+      case lithogui::DrawCmd::Kind::TextRun: {
+        // The HUD glyph cell is 8x16 at scale 1 (see renderer.h); the run's
+        // origin rect is the top-left of the text box, baseline offset inside.
+        const float scale = cmd.fontSize > 0.0f ? cmd.fontSize / 16.0f : 1.0f;
+        drawText({cmd.rect.x, cmd.rect.y}, cmd.text, cmd.color, scale);
+        break;
+      }
+      case lithogui::DrawCmd::Kind::ImageQuad:
+        drawImage(cmd.rect, cmd.textureId, cmd.imageAlpha);
+        break;
+      case lithogui::DrawCmd::Kind::GlyphQuad:
+        // Skipped, honestly: the HUD has no glyph-atlas texture path. Glyph
+        // expansion only produces GlyphQuads when a glyph source is bound to
+        // the UiContext; the default engine path binds none, so text arrives
+        // as TextRuns and nothing is lost here.
+        break;
+      case lithogui::DrawCmd::Kind::CustomDraw:
+        // Skipped: CustomDraw tag 1 is the shader Trace border, and the GUI
+        // emits a fallback Polyline for the same rect immediately before it
+        // in the stream — that polyline is what the HUD draws. A GL/Vulkan
+        // shader pass can pick the tag up later without changing this code's
+        // output contract.
+        break;
+    }
+  }
+  clips_.clear();
 }
 
 Image downsampleIcon(const Image& src, int size) {
