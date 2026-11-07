@@ -310,7 +310,7 @@ bool cSimThread::waitLoops(uint64_t n, std::chrono::milliseconds timeout) const 
   return true;
 }
 
-void cSimThread::markDirty(int x, int y, int z) {
+void cSimThread::markDirty(int x, int y, int z, bool activeSignal) {
   // PlayJ (JD): LL_PROF_CULL=1 counts markDirty rate (same census as I2 scratch).
   static const bool kCullProf = [] { const char* e = std::getenv("LL_PROF_CULL"); return e && e[0] == '1'; }();
   if (kCullProf) {
@@ -324,6 +324,7 @@ void cSimThread::markDirty(int x, int y, int z) {
   const int cx = x >> 4, sy = y >> 4, cz = z >> 4;
   changedCols_.insert(ChunkKey::make(cx, cz));
   dirtySubs_.insert(packPos(cx, sy, cz));
+  if (activeSignal) signalDirtySubs_.insert(packPos(cx, sy, cz));
   static const bool kLampOwn = [] { const char* e = std::getenv("LL_LAMP_OWN_DIRTY"); return !(e && e[0] == '0'); }();
   const uint16_t role = blocks_.def(chunks_.get(x, y, z)).role;  // game SimRole: Lamp=3 ColorLamp=4
   if (kLampOwn && (role == 3 || role == 4)) return;
@@ -335,10 +336,11 @@ void cSimThread::markDirty(int x, int y, int z) {
         const int s = sy + dy;
         if (s < 0 || s >= kSubChunks) continue;
         dirtySubs_.insert(packPos(cx + dx, s, cz + dz));
+        if (activeSignal) signalDirtySubs_.insert(packPos(cx + dx, s, cz + dz));
       }
 }
 
-void cSimThread::flushDirty() {
+void cSimThread::flushDirty(bool forceInView) {
   // PlayJ fix 1: skip pin/submit for dirty subs outside vertical + frustum (cheb) of the eye;
   // keep their dirty flags so they remesh when they come into view. LL_MESH_VERT_SUBS (default 4),
   // LL_MESH_CHEB (default 6). LL_PROF_CULL=1 logs the census (I2 baseline shape).
@@ -361,7 +363,7 @@ void cSimThread::flushDirty() {
       const float syw = (float(sy) + 0.5f) * 16.f - rayEye_[1];
       const float sz = (float(cz) + 0.5f) * 16.f - rayEye_[2];
       const float dist2 = sx * sx + syw * syw + sz * sz;
-      if (dist2 > 64.f && (sx * rdx + syw * rdy + sz * rdz) < 0.f) return false;
+      if (cheb > 1 && dist2 > 64.f && (sx * rdx + syw * rdy + sz * rdz) < 0.f) return false;  // Cortana: near chunks never behind-culled
     }
     return true;
   };
@@ -372,7 +374,7 @@ void cSimThread::flushDirty() {
   for (int64_t k : dirtySubs_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
-    if (inView(cx, sy, cz)) { flushWork_.push_back(k); ++nIn; }
+    if (forceInView || signalDirtySubs_.contains(k) || inView(cx, sy, cz)) { flushWork_.push_back(k); ++nIn; }
     else { flushHold_.push_back(k); ++nOut; }
   }
   if (kCullProf) {
@@ -398,9 +400,10 @@ void cSimThread::flushDirty() {
 
   // PlayJ fix 3: no mesh consumer (null renderer / LL_NO_MESH=1) - drop in-view work without pin/submit;
   // still keep held out-of-view flags so a later consumer (or view move) can catch up.
+  signalDirtySubs_.clear();  // all signal-priority keys entered flushWork_ (or lost their column)
   dirtySubs_.clear();
   for (int64_t k : flushHold_) dirtySubs_.insert(k);
-  if (!meshConsumes_ || flushWork_.empty()) return;
+  // CoW state publication is independent of camera/mesh eligibility.
 
   // Cortana 2026-10-15 1350: one flush = one settled post-phase state = one
   // publish batch (the game lands a batch's meshes in the same frame).
@@ -419,6 +422,7 @@ void cSimThread::flushDirty() {
     for (const auto& [key, mask] : ordered)
       chunks_.cowTable().publish(chunks_, blocks_, int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)), mask);
   }
+  if (!meshConsumes_ || flushWork_.empty()) return;
   for (int64_t k : flushWork_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
@@ -564,7 +568,8 @@ bool cSimThread::applyPlace(EditCmd& e) {
 // A cell changed on the sim thread (player edit, game sim, random tick, script command): mark it
 // dirty, and when it no longer holds a solid block, pop off attachables mounted on it.
 void cSimThread::simChanged(int x, int y, int z) {
-  markDirty(x, y, z);
+  // Registry roles identify live signal cells; ordinary terrain keeps all mesh culling.
+  markDirty(x, y, z, blocks_.def(chunks_.get(x, y, z)).role != 0);
   if (!blocks_.has(chunks_.get(x, y, z), kSolid)) popAttached(x, y, z);
 }
 
@@ -918,7 +923,7 @@ void cSimThread::run() {
         locktiming::setBlockHolder(locktiming::kHolderNone);
         postLock.unlock();
       }
-      flushDirty();
+      flushDirty(editsApplied);  // Cortana 2026-11-06: player edits bypass view cull
       if (tpF) ::litholattice::tickprof::ticks().noteFlush(::litholattice::tickprof::nowNs() - tpF);
       lastFlush = tFlush; lastFlushTick = worldTickN_;
       if (unlockForFlush && !postLock.owns_lock()) {
@@ -962,11 +967,10 @@ void cSimThread::run() {
     if (hit_) {
       s.hx = hit_xyz_[0]; s.hy = hit_xyz_[1]; s.hz = hit_xyz_[2];
       s.hitBlock = chunks_.get(s.hx, s.hy, s.hz); s.hitState = chunks_.getState(s.hx, s.hy, s.hz);
-      // The inspector string is rebuilt only when the looked-at cell changes
-      // (it was formatted every loop iteration, even with zero ticks). Note: the
-      // line can go briefly stale if the block's state changes under a stationary
-      // cursor; moving the cursor refreshes it.
-      if (!hitInfoValid_ || hit_xyz_[0] != hitInfoXyz_[0] || hit_xyz_[1] != hitInfoXyz_[1] ||
+      // N7: refresh on a completed tick/edit as well as a target change. Circuit
+      // state can change under a stationary cursor; a coordinate-only cache froze
+      // the inspector. Still avoid formatting in idle loops with no world work.
+      if (!hitInfoValid_ || lastPassTicks_ > 0 || editsApplied || hit_xyz_[0] != hitInfoXyz_[0] || hit_xyz_[1] != hitInfoXyz_[1] ||
           hit_xyz_[2] != hitInfoXyz_[2]) {
         hitInfoCache_ = sim_->inspect(chunks_, s.hx, s.hy, s.hz);
         hitInfoXyz_[0] = hit_xyz_[0]; hitInfoXyz_[1] = hit_xyz_[1]; hitInfoXyz_[2] = hit_xyz_[2];

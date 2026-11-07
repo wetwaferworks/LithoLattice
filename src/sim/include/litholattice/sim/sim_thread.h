@@ -342,10 +342,10 @@ class cSimThread {
     // PlayL JD: no CV wait/notify; bump epoch so a paused loop's spin/poll sees it.
     wakeEpoch_.fetch_add(1, std::memory_order_acq_rel);
   }
-  void markDirty(int x, int y, int z);
+  void markDirty(int x, int y, int z, bool activeSignal = false);
   void popAttached(int x, int y, int z);
   void simChanged(int x, int y, int z);
-  void flushDirty();
+  void flushDirty(bool forceInView = false);  // Cortana 2026-11-06: edit flush skips view cull
 
   // ---- Timing Handshake (null in legacy mode) ----
   std::unique_ptr<cTimingHandshakeAuthority> handshake_;
@@ -452,6 +452,7 @@ class cSimThread {
   std::vector<ClockDomain> domains_;
   std::vector<bool> domainInitial_;
   std::unordered_set<int64_t> dirtySubs_;
+  std::unordered_set<int64_t> signalDirtySubs_;  // changing signal appearances bypass mesh view cull
   std::vector<ControlEvent> controlDue_;  // POST-phase extraction scratch (stream order)
   // Stamped control state (sim thread): the aim and tick area in effect
   // for the tick being run — pure functions of the applied stream prefix.
