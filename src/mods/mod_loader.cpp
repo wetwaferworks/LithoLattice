@@ -48,9 +48,14 @@ bool parseSemver(const std::string& s, Semver& out) {
     size_t dot = s.find('.', pos);
     const std::string tok = (dot == std::string::npos) ? s.substr(pos) : s.substr(pos, dot - pos);
     if (!parseUint32(tok, parts[i])) return false;
-    if (dot == std::string::npos) break;
+    if (dot == std::string::npos) {
+      pos = s.size();
+      break;
+    }
+    if (i == 2) return false;  // a third dot means a 4th component follows
     pos = dot + 1;
   }
+  if (pos != s.size()) return false;  // trailing junk/component: fail closed
   out = {parts[0], parts[1], parts[2]};
   return true;
 }
@@ -294,7 +299,10 @@ bool cModLoader::checkCompatibility(const ModInfo& mod, std::string& reason) con
     }
     if (!hiOp.empty()) {
       const int c = cmpSemver(engine, hiV);
-      const bool okHi = hiOp == "<" ? c < 0 : hiOp == "<=" ? c <= 0 : true;
+      const bool okHi = hiOp == "<"    ? c < 0
+                        : hiOp == "<=" ? c <= 0
+                        : hiOp == "="  ? c == 0
+                                       : false;  // unrecognized op: fail closed
       if (!okHi) {
         reason = "mod '" + mod.id + "': SDK major mismatch (engine " +
                  std::to_string(engine.major) + "." + std::to_string(engine.minor) + "." +

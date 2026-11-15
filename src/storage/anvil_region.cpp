@@ -377,8 +377,11 @@ cAnvilRegion::Staged cAnvilRegion::stage(int lx, int lz, uint8_t codec,
   // index points at the new one.
   if (!allocRun(need, &sector, err)) return none;
   const auto rec = buildRecord(codec, payload);
-  if (!writeAt(uint64_t(sector) * kSector, rec.data(), rec.size(), err)) return none;
-  if (!flushFile(err)) return none;
+  // Bug hunt #41 (2026-11-08): free the run on the error paths below. Staged has
+  // no RAII cleanup and rebuildBitmap() runs only at open(), so an abandoned run
+  // leaked its sectors for the life of the process.
+  if (!writeAt(uint64_t(sector) * kSector, rec.data(), rec.size(), err)) { freeRun(sector, need); return none; }
+  if (!flushFile(err)) { freeRun(sector, need); return none; }
   Staged s{};
   s.sector = sector;
   s.sectors = need;
@@ -431,6 +434,7 @@ bool cAnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32
     }
     if (!ok || vcodec != codec || vpayload.size() != payloadLen) {
       if (err) *err = "staged payload failed verification (" + verr + "): index left untouched";
+      if (!s.external) freeRun(s.sector, s.sectors);  // bug hunt #41: don't leak the staged run
       return false;
     }
   }
@@ -454,7 +458,16 @@ bool cAnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32
   // Timestamp entry first, then the 4-byte location entry LAST: the single commit point.
   uint8_t tb[4];
   putU32LE(tb, gen);
-  if (!writeAt(kTimeTableOff + uint64_t(4 * sl), tb, sizeof(tb), err)) return false;
+  if (!writeAt(kTimeTableOff + uint64_t(4 * sl), tb, sizeof(tb), err)) {
+    // Bug hunt #16 (2026-11-08): for an external record the sidecar rename above
+    // has ALREADY published the new payload, while read() still keys off the
+    // index generation. Roll the in-memory publish forward (the new payload is
+    // durable in the sidecar and matches gen) so index and payload agree;
+    // generation() will report gen even though the on-disk timestamp write
+    // failed, and the caller still sees the failure.
+    if (s.external) { gens_[sl] = gen; extSlots_[sl] = 1; }
+    return false;
+  }
   uint8_t le[4];
   if (s.external) {
     le[0] = le[1] = le[2] = 0;
@@ -465,12 +478,19 @@ bool cAnvilRegion::commit(int lx, int lz, uint8_t codec, const Staged& s, uint32
     le[2] = uint8_t(s.sector);
     le[3] = s.sectors;
   }
-  if (!writeAt(kLocTableOff + uint64_t(4 * sl), le, sizeof(le), err)) return false;
-  if (!flushFile(err)) return false;
+  if (!writeAt(kLocTableOff + uint64_t(4 * sl), le, sizeof(le), err)) {
+    if (s.external) { gens_[sl] = gen; extSlots_[sl] = 1; }  // bug hunt #16: payload already live (see above)
+    return false;
+  }
+  if (!flushFile(err)) {
+    if (s.external) { gens_[sl] = gen; extSlots_[sl] = 1; }  // bug hunt #16: payload already live (see above)
+    return false;
+  }
   // Publish in memory; retire the previous record's storage.
   sectors_[sl] = s.external ? 0 : s.sector;
   counts_[sl] = s.external ? kExternalBit : s.sectors;
   gens_[sl] = gen;
+  extSlots_[sl] = 0;  // bug hunt #16: index fully written now; clear any live-past-failure flag
   if (oldC != 0 && !(oldC & kExternalBit)) {
     if (s.external || oldSector != s.sector) {
       freeRun(oldSector, oldC & 0x7F);

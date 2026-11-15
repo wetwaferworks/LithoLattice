@@ -155,10 +155,12 @@ class cProjectileMgr {
     Projectile p;
     IProjectileBehavior* behavior = nullptr;
     double traveledExact = 0;  ///< fractional accumulator behind p.traveled
+    uint64_t generation = 0;   ///< spawn generation: tells a respawned entry from the original after onTick
   };
   std::unordered_map<uint64_t, Entry> entries_;
   std::vector<uint64_t> order_;  ///< live ids, spawn order (tick order)
   uint64_t nextId_ = 1;
+  uint64_t nextGeneration_ = 0;  ///< monotonic source of Entry::generation (never reused)
   std::unordered_set<uint64_t> requestedChunks_;  ///< (cx,cz) key set, dedup
 
   VoxelQueryFn voxel_;

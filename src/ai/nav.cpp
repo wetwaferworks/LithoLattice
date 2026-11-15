@@ -356,10 +356,11 @@ int cWalkCache::topStandable(int x, int z) const {
 uint8_t cNavView::bits(int x, int y, int z) const {
   if (y < 0 || y >= kWorldHeight) return y >= kWorldHeight ? uint8_t(kNavPassable) : uint8_t(0);
   const uint64_t key = colKey(x >> 4, z >> 4);
-  if (key != lastKey_) {
+  if (!lastValid_ || key != lastKey_) {
     auto it = held_.find(key);
     if (it == held_.end()) it = held_.emplace(key, cache_.column(x >> 4, z >> 4)).first;
     lastKey_ = key;
+    lastValid_ = true;
     lastCol_ = it->second.get();
   }
   return lastCol_ ? cWalkCache::assemble(*lastCol_, cWalkCache::cellIndex(x & 15, y, z & 15)) : uint8_t(0);
@@ -405,8 +406,13 @@ Path findPath(const cWalkCache& cache, const PathRequest& req) {
   struct Parent { uint64_t from; NavCost g; StepTag tag; };
   std::unordered_map<uint64_t, Parent> parent;  // key -> (parent key, g, arriving edge tag)
   std::unordered_map<uint64_t, Cell> cells;
-  parent.reserve(size_t(req.maxNodes) * 4);
-  cells.reserve(size_t(req.maxNodes) * 4);
+  // req.maxNodes is caller-supplied and unvalidated: clamp it before the
+  // 4x reserves below so a negative or huge budget degrades to a partial
+  // path instead of throwing out of the search. 100000 is 5x the default
+  // PathRequest budget, far above every in-tree caller.
+  const int maxNodes = std::clamp(req.maxNodes, 1, 100000);
+  parent.reserve(size_t(maxNodes) * 4);
+  cells.reserve(size_t(maxNodes) * 4);
   const uint64_t start = cellKey(req.from);
   parent[start] = {start, 0, StepTag::kStepStart};
   cells[start] = req.from;
@@ -415,7 +421,7 @@ Path findPath(const cWalkCache& cache, const PathRequest& req) {
   NavCost bestH = heurFp(req.from, req.to);
   std::vector<NavStep> nb;
   bool found = false;
-  while (!open.empty() && out.expanded < req.maxNodes) {
+  while (!open.empty() && out.expanded < maxNodes) {
     const Node n = open.top();
     open.pop();
     const uint64_t k = cellKey(n.c);

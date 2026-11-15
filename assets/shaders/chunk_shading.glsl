@@ -13,6 +13,13 @@ const int MODE_ALPHABLEND = 12;  // Cortana 2026-10-15 1900: kShadeAlphaBlend (E
 const int MODE_GROUND_PULSE = 16;  // mirror kShadeGroundPulse (renderer.h)
 const int MODE_LEAF = 17;
 const int MODE_DIGITS = 19, MODE_DIGITS_REP = 20, MODE_DIGITS_RND = 21;  // mirror kShadeDigits / kShadeDigitsRep (2026-10-31)
+// B9 2026-11-12 (JD rule 11 Nov 10:42 PM): ONE shared, deeper, more readable, SOLID purple for every
+// component text / LED readout (MODE_READOUT: Catchor, Thresholdor, Dialor, Breakor, Fusor Sum, Memor,
+// Latchor, Randor; MODE_DIGITS*: Latchor / Repeator / Randor; MODE_CELLS: Memor). JD violet #A970FF
+// (in-tree: sprite_host, litho_formula_2d, house style). Was #D6BEFA digits / #8B65DD lit / #1D165A unlit.
+// Solid: the powered bit (vVal 128) no longer changes colour or emissive, and no fx pulse on readouts.
+const vec3 READOUT_PURPLE = vec3(0.663, 0.439, 1.000);  // #A970FF
+const float READOUT_EMISSIVE = 0.9;
 const int MODE_TRACE_TINT = 18;  // mirror kShadeTraceTint (2026-10-16 Wafer beta art)  // mirror kShadeLeaf (2026-10-16 JD leaf pass): alpha test 0.5 + crystal twinkle
 // ---- Wafer ground pulse (JD-locked 2026-10-11; biome blending 2026-10-11) ----
 // The wafer's heartbeat: time-driven emissive add for kShadeGroundPulse quads.
@@ -189,6 +196,7 @@ void main() {
   vec3 n = vNormal;
   vec4 t = lithoTex(uvW, float(vLayer));
   vec3 base = t.rgb; float a = t.a; float emissive = 0.0;
+  bool readoutPx = false;  // B9 2026-11-12: a readout pixel (solid: no fx pulse)
   if (vMode == MODE_EMISSIVE) {
     emissive = 0.85;
   } else if (vMode == MODE_CUTOUT || vMode == MODE_LEAF) {
@@ -278,15 +286,13 @@ void main() {
     vec4 m = mask(uMemMask, tuvC);
     int r = int(floor(m.r * 255.0 + 0.5));
     int v = clamp(vVal & 127, 0, 64);
-    const vec3 MEM_GLOW = vec3(0.545, 0.396, 0.867);   // #8B65DD
-    const vec3 MEM_HI = vec3(0.784, 0.663, 0.965);     // #C8A9F6
-    const vec3 MEM_DIGIT = vec3(0.839, 0.745, 0.980);  // #D6BEFA
+    // B9 2026-11-12: ring + digits = READOUT_PURPLE (was ring #8B65DD / #C8A9F6 edge, digits #D6BEFA).
     const vec3 MEM_GHOST = vec3(0.235, 0.149, 0.557);  // #3C268E
     if (r == 3) {
       if (v > 0) {
-        int gx = int(floor(m.g * 255.0 + 0.5)), gy = int(floor(m.b * 255.0 + 0.5));
-        base = (gx == 0 || gy == 0) ? MEM_HI : MEM_GLOW;
-        emissive += 0.6;
+        base = READOUT_PURPLE;
+        emissive = READOUT_EMISSIVE;
+        readoutPx = true;
       }
     } else {
       ivec2 t = ivec2(floor(tuvC * 128.0));
@@ -297,7 +303,7 @@ void main() {
         int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
         bool on = d >= 0 && ((SEG7M[d * 14 + g.y] >> g.x) & 1) != 0;
         bool ghost = ((SEG7M[8 * 14 + g.y] >> g.x) & 1) != 0;
-        if (on) { base = MEM_DIGIT; emissive += 0.6; }
+        if (on) { base = READOUT_PURPLE; emissive = READOUT_EMISSIVE; readoutPx = true; }
         else if (ghost) base = mix(base, MEM_GHOST, 40.0 / 255.0);
       }
     }
@@ -320,7 +326,7 @@ void main() {
     // Latchor 1-64 (MODE_DIGITS) / Repeator delay 4-32 (MODE_DIGITS_REP), drawn on an overlay of the top in
     // the base texture's own UV (same rotation as the base). Box (128 space, 22x14): Latchor x87 y39,
     // Repeator x91 y101; tens at local x 0..9, ones at 12..21; each digit 10x14 (seg7 atlas rows, bit0 = left).
-    // vVal bits 0-6 = value, bit 7 = lit (powered). Static textures; only vVal changes per tick (GL + Vulkan).
+    // vVal bits 0-6 = value, bit 7 = lit (powered; B9 2026-11-12: ignored, solid). Static textures; only vVal changes per tick (GL + Vulkan).
     const int SEG7[140] = int[140](252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252);
     const int SEG7_GHOST[14] = int[14](252,252,771,771,771,771,252,252,771,771,771,771,252,252);
     ivec2 lp = ivec2(floor(uvW * 128.0)) - (vMode == MODE_DIGITS_REP ? ivec2(91, 101) : vMode == MODE_DIGITS_RND ? ivec2(53, 57) : ivec2(87, 39));
@@ -332,11 +338,11 @@ void main() {
     bool lit = (ones || dv >= 10) && ((SEG7[dg * 14 + lp.y] >> gx) & 1) != 0;
     bool ghost = ((SEG7_GHOST[lp.y] >> gx) & 1) != 0;
     if (!lit && !ghost) discard;
-    const vec3 DIGIT = vec3(0.839, 0.745, 0.980);   // #D6BEFA
     const vec3 WINDOW = vec3(9.0, 7.0, 20.0) / 255.0;
-    bool hot = (vVal & 128) != 0;
-    base = mix(WINDOW, DIGIT, lit ? (hot ? 1.0 : 0.55) : 40.0 / 255.0);
-    emissive = lit && hot ? 0.6 : 0.1;
+    // B9 2026-11-12 (JD): solid READOUT_PURPLE (was #D6BEFA at 1.0 / 0.55 and emissive 0.6 / 0.1 by the powered bit).
+    base = lit ? READOUT_PURPLE : mix(WINDOW, READOUT_PURPLE, 40.0 / 255.0);
+    emissive = lit ? READOUT_EMISSIVE : 0.1;
+    readoutPx = true;
   } else if (vMode == MODE_READOUT) {                                    // 7-segment readout (catchor match value)
     const int SEG[10] = int[10](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);
     vec4 m = mask(vLayer, uvW);  // 2026-10-31 11:20 PM (JD): rotated UV, turns with the facing (was world-pinned)
@@ -346,9 +352,11 @@ void main() {
     int digit = ones ? v % 10 : (v / 10) % 10, bit = ones ? seg - 8 : seg - 1;
     bool on = seg >= 1 && seg <= 14 && (ones || v >= 10) && ((SEG[digit] >> bit) & 1) != 0;
     if (!on || m.g < 0.5) discard;
-    // 2026-10-26 (JD approved palette): lit = Glow #8B65DD, unlit = Deep #1D165A.
-    base = (vVal & 128) != 0 ? vec3(0.545, 0.396, 0.867) /*Glow #8B65DD*/ : vec3(0.114, 0.086, 0.353) /*Deep #1D165A*/;
-    emissive = 0.9;
+    // 2026-10-26 (JD approved palette) was lit = Glow #8B65DD, unlit = Deep #1D165A (flashed with the on bit).
+    // B9 2026-11-12 (JD): solid READOUT_PURPLE whatever the on bit.
+    base = READOUT_PURPLE;
+    emissive = READOUT_EMISSIVE;
+    readoutPx = true;
   }
 #ifdef LITHO_VK_FX
   float fxGlowPhase = 0.0, fxGlowR = 0.0;
@@ -420,7 +428,8 @@ void main() {
   // Pulsing glow: mask G = phase, on the sim clock (tick-synced) but render-only.
   float fxPulse = 1.0;
   // 2026-10-31 (JD): colour lamps 16 / 32 / 64 (modes 5..7) glow steadily: no fx pulse.
-  if ((uFx.x & 8) != 0 && emissive > 0.0 && !(vMode >= 5 && vMode <= 7))
+  // B9 2026-11-12 (JD): text / LED readout pixels are solid too (the pulse also scales their bloom below).
+  if ((uFx.x & 8) != 0 && emissive > 0.0 && !(vMode >= 5 && vMode <= 7) && !readoutPx)
     fxPulse = 0.72 + 0.28 * sin(6.28318530718 * (uFxP.z * uFxP.w - fxGlowPhase - dot(vWorld, vec3(0.031, 0.017, 0.023))));
   col = mix(col, col * fxPulse * 1.12, emissive);
   if ((uFx.x & 32) != 0) {  // exponential-squared distance fog, thinning with height

@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <unordered_set>  // bug hunt #27: duplicate live-id gate in deserialize()
 
 #include "litholattice/index/text_indexer.h"
 #include "litholattice/storage/file_contract.h"
@@ -216,6 +217,12 @@ std::optional<cRecordStore> cRecordStore::deserialize(const uint8_t* data, size_
   if (!getU32(p, end, pageCount)) return fail("truncated header");
   if (pageCount > 1'000'000) return fail("absurd page count");  // fail-closed
   cRecordStore store;
+  // Bug hunt #27 (2026-11-08): live record ids must be distinct across the whole
+  // image. rebuildIndex() keeps only the last duplicate, so a duplicated live id
+  // silently shadowed one physical copy (recordCount/get lie, and a later defrag
+  // drops a copy without error). These files carry no CRC, so this check is the
+  // only integrity gate for id uniqueness: fail closed on a repeat.
+  std::unordered_set<uint64_t> liveIds;
   for (uint32_t pi = 0; pi < pageCount; ++pi) {
     uint32_t slotCount = 0;
     if (!getU32(p, end, slotCount)) return fail("truncated page");
@@ -232,6 +239,7 @@ std::optional<cRecordStore> cRecordStore::deserialize(const uint8_t* data, size_
       live = *p++;
       s.id = id;
       s.live = (live != 0);
+      if (s.live && !liveIds.insert(id).second) return fail("duplicate live record id");
       pg.slots.push_back(s);
     }
     uint32_t dataLen = 0;

@@ -328,7 +328,8 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
       {kBindingSpriteAtlas, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
       {kBindingMegaDraws, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, both, nullptr},  // mega-draw V2b (unused unless LL_VK_MEGA=3)
       {kBindingArenaQuads, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxPullBlocks, VK_SHADER_STAGE_VERTEX_BIT, nullptr},  // Mega-Pipeline Phase 2
-      {kBindingWaferReveal, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};  // Thread Handshake P7
+      {kBindingWaferReveal, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},  // Thread Handshake P7
+      {kBindingHudIcons, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};  // textured icons: HUD icon atlas (GUI draw-cost program 2026-11-10)
   auto li = make<VkDescriptorSetLayoutCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
   li.bindingCount = uint32_t(std::size(bindings));
   li.pBindings = bindings;
@@ -459,7 +460,8 @@ std::unique_ptr<RenderPipelines> RenderPipelines::create(const cVulkanDevice& de
   hud.stride = sizeof(HudVertex);
   hud.attributes = {{0, 0, VK_FORMAT_R32G32_SFLOAT, uint32_t(offsetof(HudVertex, x))},
                     {1, 0, VK_FORMAT_R32G32_SFLOAT, uint32_t(offsetof(HudVertex, u))},
-                    {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, uint32_t(offsetof(HudVertex, r))}};
+                    {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, uint32_t(offsetof(HudVertex, r))},
+                    {3, 0, VK_FORMAT_R32_SFLOAT, uint32_t(offsetof(HudVertex, tex))}};
   hud.depthTest = hud.depthWrite = false;
   hud.alphaBlend = true;
   hud.colorCount = 1;

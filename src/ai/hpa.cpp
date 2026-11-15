@@ -170,9 +170,14 @@ std::optional<Cell> cFlowField::next(Cell from) const {
 
 const HpaGraph::Cluster& HpaGraph::ensure(int cx, int cz) {
   const uint64_t key = colKey(cx, cz);
-  const std::array<uint64_t, 5> vers = {cache_.columnVersion(cx, cz), cache_.columnVersion(cx + 1, cz),
-                                        cache_.columnVersion(cx - 1, cz), cache_.columnVersion(cx, cz + 1),
-                                        cache_.columnVersion(cx, cz - 1)};
+  // The cached adjacency costs come from findPath legs at maxRange 20,
+  // which can read columns 2 away (and corner-cut probes reach the
+  // diagonals), so validation must cover the whole 5x5 neighbourhood:
+  // an edit in any of these columns can change a leg's true cost.
+  std::array<uint64_t, 25> vers;
+  size_t vi = 0;
+  for (int dz = -2; dz <= 2; ++dz)
+    for (int dx = -2; dx <= 2; ++dx) vers[vi++] = cache_.columnVersion(cx + dx, cz + dz);
   if (auto it = clusters_.find(key); it != clusters_.end() && it->second.vers == vers) return it->second;
   Cluster cl;
   cl.vers = vers;

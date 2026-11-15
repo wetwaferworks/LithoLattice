@@ -132,6 +132,7 @@ const ResourcePack* cPackStack::ownerExact(std::string_view rel) const {
 std::string cPackStack::resolve(std::string_view rel) const {
   if (fallbacks_.empty() || ownerExact(rel)) return std::string(rel);
   for (const auto& [nw, old] : fallbacks_) {
+    if (nw.empty()) continue;  // find("") matches everywhere: the loop below would never terminate
     std::string alt(rel);
     bool hit = false;
     for (size_t at = alt.find(nw); at != std::string::npos; at = alt.find(nw, at + old.size())) {

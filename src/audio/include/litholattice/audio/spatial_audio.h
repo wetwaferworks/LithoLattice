@@ -229,7 +229,10 @@ void cOcclusionField::bake(int lx, int ly, int lz, IsSolid isSolid, int radius) 
   size_t head = 0;
   while (head < queue.size()) {
     const Cell c = queue[head++];
-    const uint8_t nd = uint8_t(dist_[index(c.x, c.y, c.z)] + 1);
+    const uint8_t cd = dist_[index(c.x, c.y, c.z)];
+    if (cd >= 0xFE) continue;  // depth cap: 0xFF is the unreachable sentinel, so
+                               // distances saturate at 254 and never wrap to 0
+    const uint8_t nd = uint8_t(cd + 1);
     for (const auto& nb : kNeighbors) {
       const int nx = c.x + nb[0], ny = c.y + nb[1], nz = c.z + nb[2];
       if (nx < lx_ - radius_ || nx > lx_ + radius_ || ny < ly_ - radius_ ||

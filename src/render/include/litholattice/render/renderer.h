@@ -161,19 +161,69 @@ struct HudText { float x, y; std::string text; float r = 1, g = 1, b = 1, a = 1;
 /// Clip rectangle in pixels; the default clips nothing.
 struct HudClip { float x0 = -1e9f, y0 = -1e9f, x1 = 1e9f, y1 = 1e9f; };
 /// One retained-UI draw, painted in order after the rects / texts above (so overlapping
-/// windows layer correctly) and clipped on the CPU. Empty text = solid rect.
+/// windows layer correctly) and clipped on the CPU. Empty text = solid rect;
+/// empty text + icon set = one textured icon quad (textured icons, Phase B
+/// 2026-11-09, completed by the GUI draw-cost program 2026-11-10: the draw
+/// samples the layer's icon atlas snapshot at the UV rect, texel RGBA
+/// multiplied by (r, g, b, a) as tint... JD's law: one instance drawn per
+/// stack, the count stays a text badge).
 struct HudDraw {
   float x = 0, y = 0, w = 0, h = 0;  ///< rect (w, h unused for text)
   float r = 1, g = 1, b = 1, a = 1;
   float scale = 1.f;                 ///< text: glyph cell multiplier
   std::string text;
   HudClip clip;
+  float iu0 = 0, iv0 = 0, iu1 = 0, iv1 = 0;  ///< icon atlas UV rect (icon draws only)
+  bool icon = false;                        ///< text empty + icon = textured icon quad
 };
 struct HudLayer {
   float scale = 1.f;
   std::vector<HudRect> rects;
   std::vector<HudText> texts;
   std::vector<HudDraw> draws;  ///< UI (ui::IUiRenderer through cHudUiRenderer)
+  /// Textured icons (Phase B): the icon atlas snapshot this layer's icon
+  /// draws address, shared by reference (never copied per frame), plus
+  /// its version. Null when the layer carries no icon draws. Snapshots
+  /// are append-only within a builder generation, so a layer's UVs stay
+  /// valid for the snapshot it was built against (and for any later
+  /// snapshot of the same generation, which is a superset at identical
+  /// tile positions). Backends key their upload on (pointer, version).
+  std::shared_ptr<const class Image> iconAtlas;
+  uint64_t iconAtlasVersion = 0;
+};
+
+/// Split HUD delivery (GUI draw-cost program, cure 1, 2026-11-10): the
+/// producer hands the backend its STATIC layer (the main GUI surface:
+/// menus, HUD chrome, dialogs) and its DYNAMIC layer (the per-frame
+/// readout surfaces: tick/TPS line, F3 debug text) as two separately
+/// identified streams instead of one composed layer. Each stream is
+/// content-keyed and vertex-expanded independently by the backends, so
+/// a readout change re-expands only the tiny dynamic stream and never
+/// the static surface under it. Either pointer may be null (stream
+/// absent this frame). When BOTH are null the backend falls back to
+/// FrameParams::hud (the legacy composed path: tests, tools, and any
+/// producer that has not split). The pointed-to layers are borrowed for
+/// the duration of the frame call only; producers keep them alive and
+/// stable by generation (see HudLayerRef below).
+struct HudLayerSplit {
+  const HudLayer* staticLayer = nullptr;
+  uint64_t staticGeneration = 0;
+  const HudLayer* dynamicLayer = nullptr;
+  uint64_t dynamicGeneration = 0;
+};
+
+/// A producer-owned HudLayer plus the generation it was built under
+/// (GUI draw-cost program, cure 1). The producer (game facade) rebuilds
+/// the layer ONLY when its own generation advances and hands backends
+/// the {layer, generation} pair every frame; the generation is the
+/// producer-side identity of the content, so a backend can trust a
+/// generation match the way it trusts the content fingerprint... and
+/// the fingerprint still runs, so a producer that ever mutates a layer
+/// without advancing its generation is caught by the key, never by a
+/// stale frame. Generation 0 means "no stamp": key-only behaviour.
+struct HudLayerRef {
+  const HudLayer* layer = nullptr;
+  uint64_t generation = 0;
 };
 
 /// One world-space textured quad for the dynamic sprite pass (sprite system
@@ -230,6 +280,16 @@ struct FrameParams {
   bool groundTraceOn = true;
   bool debugOverlay = false;  // F3: debug-only shading (wire strength numbers)
   HudLayer hud;
+  /// Split HUD streams (GUI draw-cost program, cure 1, 2026-11-10): when
+  /// hudStatic.layer is non-null the backend draws hudStatic then
+  /// hudDynamic (when its layer is non-null) INSTEAD of `hud`, each
+  /// content-keyed and expanded (and, on GPU backends, uploaded) as its
+  /// own stream, so per-frame readout changes never re-expand or
+  /// re-upload the static surface. When hudStatic.layer is null the
+  /// backend uses `hud` exactly as before. `hud` stays filled by the
+  /// producer in both cases (single source of truth for any consumer
+  /// that has not split). Borrowed pointers, frame call only.
+  HudLayerRef hudStatic, hudDynamic;
   /// PBR analytic lights for the BinaryQuad path (phase 2, Worker 3): the game fills
   /// these per frame from a LightCollector fed by cChunkEmissiveProvider
   /// (pbr_emissive_provider.h); the GL backend uploads them to the chunk_pbr

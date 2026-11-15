@@ -414,6 +414,39 @@ bool scalar_lt_l(const uint8_t s[32]) {
   return false;  // equal -> not less
 }
 
+// Small-order encoding blocklist (the canonical libsodium-style set, here
+// in pattern form): the compressed encodings of the identity (y = 1), the
+// order-2 point (y = p - 1), and the order-4 points (y = 0), each with
+// either x-sign bit. Remaining small-order encodings (order 8) are caught
+// by inPrimeOrderSubgroup() below.
+bool isSmallOrderEncoding(const uint8_t enc[32]) {
+  auto matches = [&](uint8_t first, uint8_t mid, uint8_t last) {
+    if (enc[0] != first) return false;
+    for (int i = 1; i < 31; ++i)
+      if (enc[i] != mid) return false;
+    return enc[31] == last || enc[31] == (uint8_t)(last | 0x80);
+  };
+  return matches(0x01, 0x00, 0x00) ||   // identity (0, 1)
+         matches(0xec, 0xff, 0x7f) ||   // order 2 (0, p - 1)
+         matches(0x00, 0x00, 0x00);     // order 4 (y = 0)
+}
+
+// Prime-order subgroup membership: [L]p is the identity iff p lies in the
+// prime-order subgroup (L is odd, so every point whose order carries a
+// factor of the cofactor 8 fails this, small-order points included).
+bool inPrimeOrderSubgroup(const Point& p) {
+  Scalar l;
+  for (int i = 0; i < 4; ++i) l.w[i] = kL[i];
+  uint8_t lbytes[32];
+  scalar_to_bytes(lbytes, l);
+  Point q;
+  scalar_mul(q, p, lbytes);
+  if (q.inf) return true;
+  Fe one;
+  one.w[0] = 1;
+  return fe_is_zero(q.x) && fe_equal(q.y, one);
+}
+
 }  // namespace
 
 void keypair_from_seed(const Seed& seed, PublicKey& pub, SecretKey& sec) {
@@ -478,6 +511,13 @@ bool verify(const Signature& sig, const uint8_t* msg, size_t msglen, const Publi
   // Decode A
   Point A;
   if (!point_decompress(A, pub.data())) return false;
+  // Reject small-order / non-prime-subgroup R and A: with a small-order A
+  // (the identity key is the extreme case) k*A is the identity for every
+  // k, so the cofactorless equation below verifies for any message with a
+  // freely chosen S and R = S*B.
+  if (isSmallOrderEncoding(sig.data()) || isSmallOrderEncoding(pub.data()))
+    return false;
+  if (!inPrimeOrderSubgroup(R) || !inPrimeOrderSubgroup(A)) return false;
   // h = H(R || pub || msg) mod L
   Sha512 hh;
   hh.update(sig.data(), 32);

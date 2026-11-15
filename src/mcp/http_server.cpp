@@ -277,7 +277,7 @@ std::string cMcpHttpServer::rotateToken() {
 
 bool cMcpHttpServer::grantPermissions(const std::string& sessionId,
                                      std::uint32_t bits) {
-  if (cMcpServer* s = findSession(sessionId)) {
+  if (auto s = findSession(sessionId)) {
     s->grantPermissions(bits);
     return true;
   }
@@ -286,7 +286,7 @@ bool cMcpHttpServer::grantPermissions(const std::string& sessionId,
 
 bool cMcpHttpServer::revokePermissions(const std::string& sessionId,
                                       std::uint32_t bits) {
-  if (cMcpServer* s = findSession(sessionId)) {
+  if (auto s = findSession(sessionId)) {
     s->revokePermissions(bits);
     return true;
   }
@@ -365,7 +365,7 @@ std::string cMcpHttpServer::createSession() {
     return {};
   }
   auto server =
-      std::make_unique<cMcpServer>(backends_, McpAgent{agentName_, 0});
+      std::make_shared<cMcpServer>(backends_, McpAgent{agentName_, 0});
   std::vector<std::string> expiredIds;
   std::string evictedId;
   {
@@ -400,9 +400,9 @@ std::string cMcpHttpServer::createSession() {
   return id;
 }
 
-cMcpServer* cMcpHttpServer::findSession(const std::string& id) {
+std::shared_ptr<cMcpServer> cMcpHttpServer::findSession(const std::string& id) {
   std::string expiredId;
-  cMcpServer* out = nullptr;
+  std::shared_ptr<cMcpServer> out;
   {
     litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(mutex_);
     const auto it = sessions_.find(id);
@@ -413,7 +413,8 @@ cMcpServer* cMcpHttpServer::findSession(const std::string& id) {
         sessions_.erase(it);
       } else {
         it->second.lastActivity = now;  // every authed use keeps it alive
-        out = it->second.server.get();
+        out = it->second.server;  // shared_ptr copy under the lock: the
+                                  // caller holds the session alive
       }
     }
   }
@@ -730,7 +731,7 @@ HttpResponse cMcpHttpServer::handleRequest(const HttpRequest& req) {
 
   // 6. Session lifecycle (handshake era).
   std::string sid(req.headerValue("mcp-session-id"));
-  cMcpServer* session = nullptr;
+  std::shared_ptr<cMcpServer> session;
   if (sid.empty()) {
     // Only initialize may open a session.
     if (methodLog != "initialize") {

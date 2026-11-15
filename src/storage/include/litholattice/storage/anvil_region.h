@@ -124,6 +124,7 @@ class cAnvilRegion {
   std::vector<uint32_t> sectors_ = std::vector<uint32_t>(kSpan * kSpan);  // BE 24-bit offset
   std::vector<uint8_t> counts_ = std::vector<uint8_t>(kSpan * kSpan);      // 0 = absent
   std::vector<uint32_t> gens_ = std::vector<uint32_t>(kSpan * kSpan);      // dirty generations
+  std::vector<uint32_t> extSlots_ = std::vector<uint32_t>(kSpan * kSpan);  // bug hunt #16: per-slot external flag bits (1 = a newer sidecar payload is already live past a failed index write)
   std::vector<uint64_t> freeBits_;  // rebuilt from the index on open()
   size_t quarantinedEntries_ = 0;   ///< entries normalised to absent by readHeader() (C-L3)
   uint32_t nextGen_ = 1;

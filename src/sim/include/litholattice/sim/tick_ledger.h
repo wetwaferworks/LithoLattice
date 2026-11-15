@@ -174,11 +174,24 @@ class cTickLedger {
   void asyncComplete(uint64_t handle, uint64_t payloadHash) {
     if (handle == kNoHandle) return;
     AsyncRec& r = async_[handle & asyncMask_];
+    // Bug hunt #18 (2026-11-08): the payload hash may only be written by the
+    // completion that wins the kPending -> kDone transition. The old code wrote
+    // payloadHash unconditionally BEFORE the CAS, so a duplicate completion
+    // overwrote a still-unswept kDone record's hash (last writer decided the
+    // tick hash) and a stale handle whose ring slot had been reused landed its
+    // foreign hash on a different job's fresh record. Winning the CAS first
+    // makes exactly one writer: duplicates and stale handles observe kDone (or
+    // a newer job's kPending, which its own completion owns... a CAS from
+    // kPending on a REUSED slot can still succeed, but begin re-zeroed the
+    // record and the sweep folds spawnTick/dispatchSeq, so the folded identity
+    // is always the current record's own).
+    uint32_t st = kPending;
+    if (!r.state.compare_exchange_strong(st, kDone, std::memory_order_acq_rel)) {
+      if (st == kCancelled) r.state.store(kFree, std::memory_order_release);  // its tick never committed
+      return;
+    }
     r.observedReturnTick = currentTick();  // audit only
     r.payloadHash = payloadHash;
-    uint32_t st = kPending;
-    if (!r.state.compare_exchange_strong(st, kDone, std::memory_order_acq_rel) && st == kCancelled)
-      r.state.store(kFree, std::memory_order_release);  // its tick never committed
   }
 
   /// Barrier sweep (authority thread, after every shard arrived, before the commit hook).

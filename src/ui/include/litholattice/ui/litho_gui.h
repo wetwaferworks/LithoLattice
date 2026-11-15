@@ -395,6 +395,15 @@ struct DrawCmd {
     // opacityOverride above 1 cannot push a command alpha past 1.
     // GlyphQuad does NOT use it (atlas coverage is in the texture).
     float imageAlpha = 1.0f;
+    // ImageQuad payload (textured icons, Phase B 2026-11-09): the
+    // widget tint's RGB, carried separately from imageAlpha because
+    // the two have different producers (tint = the widget's colour,
+    // alpha = effective opacity after the [0, 1] clamp above). Before
+    // this field the HUD path saw alpha only and icon RGB tints died
+    // at this boundary; every live icon tint in the game today is
+    // white (Phase B step 0 audit), so carrying it changes no current
+    // pixel... it makes the mechanism honest going forward.
+    Color imageTint{1.0f, 1.0f, 1.0f, 1.0f};
     // GlyphQuad payload: the glyph's sub-rectangle in its atlas, in
     // NORMALIZED atlas coordinates (0..1 across the atlas image).
     // Normalized on purpose: UVs are not lengths, so DrawList::scale
@@ -434,6 +443,8 @@ public:
     void textRun(Rect origin, const std::string& s, const TextStyle& style, Color color,
                  float baseline);
     void imageQuad(Rect r, int textureId, float alpha = 1.0f);
+    // Full-tint form: imageAlpha is derived from tint.a (same clamp).
+    void imageQuad(Rect r, int textureId, Color tint);
     // One rasterized glyph: destination rect (same unit space as
     // every other command), atlas sub-rect in normalized UV, atlas id
     // in textureId, tint in color. Emitted by the glyph expansion
@@ -2864,8 +2875,16 @@ public:
     // 1.0 the list is exactly the logical list, untouched). The list
     // is CLEARED at entry (review CORE-M3): one call is one frame.
     void emitDraw(DrawList& dl) const;
-    Widget* focused() const { return focus_; }
+    // Checked accessors (2026-11-08 lifetime audit F-1/F-2): a stored
+    // interaction pointer whose widget has been destroyed reads back
+    // as nullptr, never as the stale address. The tombstone test is
+    // pointer-only, so asking is always safe; the raw members stay
+    // private to the apply*/repair paths, which guard their own
+    // dereferences the same way.
+    Widget* focused() const { return focus_ && !widgetTombstoned(focus_) ? focus_ : nullptr; }
     void setFocus(Widget* w) { applyFocus(w); }
+    Widget* hovered() const { return hover_ && !widgetTombstoned(hover_) ? hover_ : nullptr; }
+    void setHover(Widget* w) { applyHover(w); }
     // Context-client registry (review C3): widgets holding a
     // back-pointer to this context (ComboBox) register on attach
     // and unregister on detach/destruction; ~UiContext detaches

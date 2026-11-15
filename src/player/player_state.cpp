@@ -126,7 +126,10 @@ cPlayer& cPlayerMgr::ensurePlayer(uint64_t playerId) {
 cPlayer& cPlayerMgr::addPlayer(uint64_t playerId, std::string displayName) {
   if (playerId == 0) {  // 0 is "nobody": hand out the next free id instead
     playerId = players_.empty() ? 1 : players_.rbegin()->first + 1;
-    if (playerId == 0) playerId = 1;  // id space wrapped (theoretical)
+    if (playerId == 0) {  // id space wrapped (theoretical): first unused id from 1 up
+      playerId = 1;
+      while (players_.count(playerId)) ++playerId;  // never hand out a taken id
+    }
   }
   cPlayer& p = ensurePlayer(playerId);
   p.setDisplayName(std::move(displayName));

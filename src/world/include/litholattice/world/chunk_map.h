@@ -74,9 +74,13 @@ class ChunkMap {
     if (!c) return -1;
     for (int sy = kSubChunks - 1; sy >= 0; --sy) {
       const SubChunk* s = c->subs[sy].get();
-      if (!s) continue;
-      for (int y = kChunkSize - 1; y >= 0; --y)
-        if (!isAirStableId(s->at(x & 15, y, z & 15))) return sy * kChunkSize + y;
+      if (s) {
+        for (int y = kChunkSize - 1; y >= 0; --y)
+          if (!isAirStableId(s->at(x & 15, y, z & 15))) return sy * kChunkSize + y;
+      } else if (c->edgeShell) {  // Q12: demoted columns resolve through the shell, as get() does
+        for (int y = kChunkSize - 1; y >= 0; --y)
+          if (!isAirStableId(c->edgeShell->at(sy, x & 15, y, z & 15))) return sy * kChunkSize + y;
+      }
     }
     return -1;
   }

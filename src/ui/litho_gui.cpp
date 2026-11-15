@@ -583,6 +583,11 @@ void DrawList::imageQuad(Rect r, int textureId, float alpha) {
     c.imageAlpha = (alpha >= 0.0f) ? (alpha > 1.0f ? 1.0f : alpha) : 0.0f;
     cmds_.push_back(std::move(c));
 }
+
+void DrawList::imageQuad(Rect r, int textureId, Color tint) {
+    imageQuad(r, textureId, tint.a);
+    cmds_.back().imageTint = tint;
+}
 void DrawList::glyphQuad(Rect dest, Rect uv, int atlasId, FontId font, Color color) {
     DrawCmd c; c.kind = DrawCmd::Kind::GlyphQuad; c.rect = dest; c.uvRect = uv;
     c.textureId = atlasId; c.fontId = font; c.color = color;
@@ -2338,7 +2343,7 @@ void TreeView::draw(DrawList& dl, const DrawParams& params) const {
     float sy = clampf(scrollY_, 0.0f, maxScr);
     int firstVis = rowH_ > 0.0f ? static_cast<int>(sy / rowH_) : 0;
     int first = std::max(0, firstVis - kRowOverscan);
-    int visCount = static_cast<int>(std::ceil(rect_.h / rowH_)) + 1;
+    int visCount = rowH_ > 0.0f ? static_cast<int>(std::ceil(rect_.h / rowH_)) + 1 : 0;
     int last = std::min(total, firstVis + visCount + kRowOverscan);
     flattenWindow(first, last, -1, nullptr);
     const std::vector<Row>& rows = scratch_;
@@ -2512,7 +2517,7 @@ void ListBox::draw(DrawList& dl, const DrawParams& params) const {
                       std::max(0.0f, static_cast<float>(items_.size()) * rowH_ - rect_.h));
     int firstVis = rowH_ > 0.0f ? static_cast<int>(sy / rowH_) : 0;
     int first = std::max(0, firstVis - kRowOverscan);
-    int visCount = static_cast<int>(std::ceil(rect_.h / rowH_)) + 1;
+    int visCount = rowH_ > 0.0f ? static_cast<int>(std::ceil(rect_.h / rowH_)) + 1 : 0;
     int last = std::min(static_cast<int>(items_.size()), firstVis + visCount + kRowOverscan);
     TextStyle ts = effectiveTextStyle(style);
     FontMetrics fm = metrics.fontMetrics(ts.font, ts.size);
@@ -4331,7 +4336,7 @@ void VirtualList::rebind(const Style& style) {
     int count = totalCount();
     int firstVis = firstVisibleIndex();
     int first = std::max(0, firstVis - kOverscan);
-    int visible = static_cast<int>(std::ceil(rect_.h / rowH_)) + 1;
+    int visible = rowH_ > 0.0f ? static_cast<int>(std::ceil(rect_.h / rowH_)) + 1 : 0;
     int last = std::min(count, firstVis + visible + kOverscan);
     pool_.clear();
     for (int i = first; i < last; ++i) {
@@ -4508,6 +4513,14 @@ void Tooltip::showAt(UiContext& ctx, Rect anchor) {
     float x = std::max(0.0f, anchor.x + anchor.w * 0.5f - w * 0.5f);
     float y = anchor.y - h - 4.0f;
     if (y < 0.0f) y = anchor.y + anchor.h + 4.0f;
+    // 2026-11-08: keep the whole tip inside the viewport. Before, a tip
+    // anchored near the right or bottom edge hung off-screen (only the
+    // left edge was clamped and only the top had the flip).
+    if (Widget* root = ctx.root()) {
+        const Rect vp = root->rect();
+        if (vp.w > 0) x = std::min(x, std::max(vp.x, vp.x + vp.w - w));
+        if (vp.h > 0) y = std::min(y, std::max(vp.y, vp.y + vp.h - h));
+    }
     setFrame({x, y, w, h});
     setBackground(style.panelBg); // theme's panel tone, refreshed per show
     ctx.openPopup(this);
@@ -4595,14 +4608,32 @@ Popup* UiContext::topInteractivePopup() const {
 
 void UiContext::applyFocus(Widget* w) {
     if (focus_ == w) return;
-    if (focus_) focus_->dropState(WS_FOCUSED);
+    if (focus_) {
+        // Lifetime audit F-2: the old holder may have been destroyed
+        // without any repair reaching us (an owner resetting its
+        // unique_ptr, a facade subtree drained by destroyLater before
+        // this context existed in the path). Never dereference a
+        // tombstoned holder: record it for the lazy bit reap, exactly
+        // as setRoot does, and move on.
+        if (widgetTombstoned(focus_)) staleFocusBit_ = focus_;
+        else focus_->dropState(WS_FOCUSED);
+    }
     focus_ = w;
     if (focus_) focus_->raiseState(WS_FOCUSED);
 }
 
 void UiContext::applyHover(Widget* w) {
     if (hover_ == w) return;
-    if (hover_) hover_->dropState(WS_HOVERED);
+    if (hover_) {
+        // Lifetime audit F-1: hover_ is focus_'s twin and got none of
+        // its repairs... a plain widget destroyed via the facade's
+        // destroyLater drain leaves hover_ dangling, and every pointer
+        // Move used to write WS_HOVERED through the freed widget here.
+        // Same discipline as applyFocus: tombstoned holders are never
+        // dereferenced, only recorded for reapStaleBits.
+        if (widgetTombstoned(hover_)) staleHoverBit_ = hover_;
+        else hover_->dropState(WS_HOVERED);
+    }
     hover_ = w;
     if (hover_) hover_->raiseState(WS_HOVERED);
 }
@@ -4717,8 +4748,15 @@ void UiContext::restoreModalFocus(Popup* p) {
     // Restore only when nothing else took focus since, the saved
     // widget is not inside the popup itself, and its chain is still
     // valid (review CORE-H4's rule, shared by both close paths).
-    if (!focus_ && saved && saved != p && !isInTree(saved, p) &&
-        focusChainValid(saved))
+    // Lifetime audit F-3: widgetAlive runs FIRST... isInTree and
+    // focusChainValid walk saved->parent() chains, which is a member
+    // read on the saved widget itself; the widget that held focus at
+    // modal open (e.g. the menu Play button) can be destroyed while
+    // the modal is open (a resize rebuilds its tree), and the restore
+    // used to walk the freed widget before any check. widgetAlive is
+    // pointer-only, matching the dispatchKey discipline.
+    if (!focus_ && saved && saved != p && widgetAlive(saved) &&
+        !isInTree(saved, p) && focusChainValid(saved))
         applyFocus(saved);
 }
 

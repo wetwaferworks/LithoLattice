@@ -173,6 +173,7 @@ class cNavView {
  private:
   const cWalkCache& cache_;
   mutable uint64_t lastKey_ = ~0ull;
+  mutable bool lastValid_ = false;  // lastKey_ alone collides with colKey(-1, -1) == ~0ull
   mutable const cWalkCache::Column* lastCol_ = nullptr;
   mutable std::unordered_map<uint64_t, std::shared_ptr<const cWalkCache::Column>> held_;
 };

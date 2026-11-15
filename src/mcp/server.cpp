@@ -6,6 +6,7 @@
 #include "litholattice/mcp/mcp_senses.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -250,6 +251,7 @@ McpEra classifyRequestEra(const cJsonValue& params) {
 
 cMcpServer::cMcpServer(McpBackends backends, McpAgent agent)
     : backends_(std::move(backends)), agent_(std::move(agent)) {
+  permMask_.store(agent_.permissionMask, std::memory_order_relaxed);  // mutexfree 2b
   logSink_ = [](std::string_view line) {
     std::fprintf(stderr, "mcp: %.*s\n", static_cast<int>(line.size()), line.data());
   };
@@ -294,36 +296,38 @@ void cMcpServer::log(std::string_view line) {
 
 void cMcpServer::grantPermissions(uint32_t bits) {
   {
-    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-    agent_.permissionMask |= bits;
+    // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+    permMask_.fetch_or(bits, std::memory_order_acq_rel);
   }
   log("grant: +" + permMaskNames(bits));
 }
 
 void cMcpServer::revokePermissions(uint32_t bits) {
   {
-    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-    agent_.permissionMask &= ~bits;
+    // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+    permMask_.fetch_and(~bits, std::memory_order_acq_rel);
   }
   log("revoke: -" + permMaskNames(bits));
 }
 
 uint32_t cMcpServer::permissionMask() const {
-  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-  return agent_.permissionMask;
+  // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+  return permMask_.load(std::memory_order_acquire);
 }
 
 void cMcpServer::setAgentName(std::string name) {
-  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-  agent_.name = std::move(name);
+  // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+  if (serving_.load(std::memory_order_acquire)) { log("setAgentName refused: the agent name is fixed once the server serves (mutexfree 2b)"); return; }
+    agent_.name = std::move(name);
 }
 
 McpAgent cMcpServer::agent() const {
-  litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-  return agent_;
+  // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+  return agentSnapshot();
 }
 
 std::optional<std::string> cMcpServer::handleMessage(std::string_view text) {
+  serving_.store(true, std::memory_order_release);  // mutexfree 2b: setup phase is over
   RpcParseOutcome outcome = parseRpcRequest(text);
   if (!outcome.ok) {
     return buildErrorResponse(outcome.errorId, outcome.errorCode,
@@ -579,9 +583,9 @@ cJsonValue cMcpServer::onPromptsGet(const cJsonValue& params) {
   McpAgent agentCopy;
   uint32_t missing;
   {
-    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-    missing = prompt->requiredPerms & ~agent_.permissionMask;
-    agentCopy = agent_;
+    // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+    missing = prompt->requiredPerms & ~permMask_.load(std::memory_order_acquire);
+    agentCopy = agentSnapshot();
   }
   if (missing != 0) {
     throw cRpcError(kMcpPermissionDenied,
@@ -692,7 +696,7 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
   if (!toolCalls_.take(1)) {
     std::string agentName;
     {
-      litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
+      // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
       agentName = agent_.name;
     }
     log("tool " + name + " agent=" + agentName + " rate_limited (" +
@@ -710,13 +714,13 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
   if (tool) {
     uint32_t missing;
     {
-      litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-      missing = tool->requiredPerms & ~agent_.permissionMask;
+      // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+      missing = tool->requiredPerms & ~permMask_.load(std::memory_order_acquire);
     }
     if (missing != 0) {
       std::string agentName;
       {
-        litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
+        // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
         agentName = agent_.name;
       }
       r = ToolResult::error("permission denied: agent '" + agentName +
@@ -727,8 +731,8 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
       try {
         McpAgent agentCopy;
         {
-          litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-          agentCopy = agent_;
+          // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+          agentCopy = agentSnapshot();
         }
         r = tool->handler(callArgs, agentCopy);
         outcome = r.isError ? "error" : "ok";
@@ -742,7 +746,7 @@ cJsonValue cMcpServer::onToolsCall(const cJsonValue& params) {
     }
   }
   {
-    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
+    // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
     log("tool " + name + " agent=" + agent_.name + " " + outcome);
   }
   return toolResultJson(r);
@@ -783,9 +787,9 @@ cJsonValue cMcpServer::onResourcesRead(const cJsonValue& params) {
   uint32_t missing;
   McpAgent agentCopy;
   {
-    litholattice::mcp::cSpinGuard<litholattice::mcp::cSpinGate> lock(agentMutex_);
-    missing = res->requiredPerms & ~agent_.permissionMask;
-    agentCopy = agent_;
+    // mutexfree 2b: agentMutex_ removed (atomic mask; setup-phase name)
+    missing = res->requiredPerms & ~permMask_.load(std::memory_order_acquire);
+    agentCopy = agentSnapshot();
   }
   if (missing != 0) {
     throw cRpcError(kMcpPermissionDenied,
@@ -1605,6 +1609,66 @@ void cMcpServer::registerPilotSensesTools() {
     tools_.push_back(std::move(t));
   }
 
+  // -- vision.capture_display (SCRATCH vulkfb, opt-in) ------------------------
+  // Registered ONLY when LL_MCP_DISPLAY_VISION=1 (tools/list is unchanged otherwise). Returns the
+  // NEXT frame the active DISPLAY renderer draws (Vulkan: swapchain image copied to host before
+  // present), i.e. the player's actual on-screen view, box-downsampled. Observation only; shares
+  // the vision rate bucket and the pilot_senses grant.
+  if (const char* e = std::getenv("LL_MCP_DISPLAY_VISION"); e && std::string(e) == "1") {
+    ToolDescriptor t;
+    t.name = "vision.capture_display";
+    t.description =
+        "SCRATCH research (opt-in): capture the next frame drawn by the active display renderer "
+        "(the player's real on-screen view; Vulkan swapchain read-back), box-downsampled to "
+        "width x height. Returns PNG (base64), the renderer name, source size and camera. "
+        "Requires the pilot_senses grant.";
+    t.params = {p("pilot", "string", "pilot id (v1: \"player\")", true),
+                p("width", "integer", "output width, 16..1280 (default: min(display, 640))"),
+                p("height", "integer", "output height, 16..720 (default: keep aspect)")};
+    t.params[1].hasMinimum = t.params[1].hasMaximum = true;
+    t.params[1].minimum = 16; t.params[1].maximum = 1280;
+    t.params[2].hasMinimum = t.params[2].hasMaximum = true;
+    t.params[2].minimum = 16; t.params[2].maximum = 720;
+    t.requiredPerms = kPermPilotSenses;
+    t.annotations.readOnlyHint = true;
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
+                                                    const McpAgent& agent) {
+      ArgReader r(args);
+      const std::string pilot = reqPilot(r);
+      if (!visionBucket(pilot).take(1))
+        return ToolResult::error("vision rate limit exceeded");
+      if (!b.vision) return ToolResult::error(kNotWired);
+      if (!needSensePilot(b.vision->pilotIds(), pilot, agent, "vision.capture_display"))
+        return ToolResult::error("unknown pilot '" + pilot + "'");
+      const int w = static_cast<int>(r.optInt("width", 0, 16, 1280));
+      const int h = static_cast<int>(r.optInt("height", 0, 16, 720));
+      VisionFrame f;
+      if (!b.vision->captureDisplayFrame(pilot, w, h, f) || f.png.empty())
+        return ToolResult::error("display capture failed for pilot '" + pilot + "' (timeout or unsupported)");
+      cJsonValue::Object o;
+      o.emplace_back("width", cJsonValue::integer(f.width));
+      o.emplace_back("height", cJsonValue::integer(f.height));
+      o.emplace_back("src_width", cJsonValue::integer(f.srcWidth));
+      o.emplace_back("src_height", cJsonValue::integer(f.srcHeight));
+      o.emplace_back("renderer", cJsonValue::string(f.source));
+      o.emplace_back("format", cJsonValue::string("png"));
+      o.emplace_back("data", cJsonValue::string(base64Encode(f.png.data(), f.png.size())));
+      o.emplace_back("tick", cJsonValue::integer(int64_t(f.tick)));
+      cJsonValue::Object cam;
+      cam.emplace_back("x", cJsonValue::number(f.camX));
+      cam.emplace_back("y", cJsonValue::number(f.camY));
+      cam.emplace_back("z", cJsonValue::number(f.camZ));
+      cam.emplace_back("yaw", cJsonValue::number(f.yaw));
+      cam.emplace_back("pitch", cJsonValue::number(f.pitch));
+      o.emplace_back("camera", cJsonValue::object(std::move(cam)));
+      log("mcp: senses vision.capture_display agent=" + agent.name + " pilot=" + pilot + " -> ok " +
+          f.source + " " + std::to_string(f.srcWidth) + "x" + std::to_string(f.srcHeight) + " -> " +
+          std::to_string(f.width) + "x" + std::to_string(f.height));
+      return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
+    };
+    tools_.push_back(std::move(t));
+  }
+
   // -- audio.capture_chunk ---------------------------------------------------
   {
     ToolDescriptor t;
@@ -1953,9 +2017,44 @@ bool cFdStdioTransport::readLine(std::string& out) {
   return true;
 }
 
+// MCP stdout fix (2026-11-10, JD t5117u): was `std::cout << line << '\n'; flush()`
+// with no lock. On Windows the game's logInfo also wrote to the same stdout, so an
+// engine log line could land between the JSON text and its newline (seen as
+// `...,"id":27787}[20:19:29.563] vulkan record split ...`). Now: one gate, one
+// buffer (line + '\n'), raw write loop to the configured fd.
+// MUTEX-FREE (scratch, 2026-11-11, JD t5192u): the stdout gate is removed. Single-owner phase:
+// writeLine has exactly one caller, cMcpServer::runStdio's read->handle->write loop, which runs on the
+// one MCP stdio thread; replies are written in request order by that owner only. Engine log lines no
+// longer share this fd (logSetInfoToStderr + fd redirect in main.cpp), so there is no second writer.
+// The output fd is set before the serve loop starts and restored after it stops (atomic, phase edges).
+namespace {
+std::atomic<int> gMcpStdoutFd{1};
+}  // namespace
+
+void cFdStdioTransport::setOutputFd(int fd) { gMcpStdoutFd.store(fd >= 0 ? fd : 1, std::memory_order_release); }
+int cFdStdioTransport::outputFd() { return gMcpStdoutFd.load(std::memory_order_acquire); }
+
 void cFdStdioTransport::writeLine(std::string_view line) {
-  std::cout << line << '\n';
-  std::cout.flush();
+  std::string out;
+  out.reserve(line.size() + 1);
+  out.append(line.data(), line.size());
+  out.push_back('\n');
+  const int fd = gMcpStdoutFd.load(std::memory_order_acquire);
+  const char* p = out.data();
+  size_t left = out.size();
+  while (left > 0) {
+#ifdef _WIN32
+    const unsigned chunk = left > 0x40000000u ? 0x40000000u : unsigned(left);
+    const int n = _write(fd, p, chunk);
+    if (n <= 0) return;  // peer gone: drop the line; the read side sees EOF/stop
+#else
+    const ssize_t n = ::write(fd, p, left);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) return;
+#endif
+    p += n;
+    left -= size_t(n);
+  }
 }
 
 // ---------------------------------------------------------------------------

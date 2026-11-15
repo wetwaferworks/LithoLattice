@@ -41,12 +41,21 @@ Spawn Dimension::load(cJobPool& pool, int sizeChunks) {
   } else {
     const std::shared_ptr<const cColumnGen> gen = generator;
     JobBatch batch(pool);
+    // Bug hunt #19 (2026-11-08): collect into per-coordinate slots and insert in
+    // fixed (cz, cx) order after the wait, exactly like the lock-free branch
+    // above. The old code drained the completion-ordered handoff queue straight
+    // into the unordered_map, so two runs with the same seed could iterate the
+    // columns in different orders downstream.
+    const size_t nn = size_t(sizeChunks) * size_t(sizeChunks);
+    std::vector<std::unique_ptr<ChunkColumn>> slots(nn);
     for (int cz = 0; cz < sizeChunks; ++cz)
       for (int cx = 0; cx < sizeChunks; ++cx)
-        batch.submit([&out, gen, cx, cz] {
-          if (auto col = gen->generate(cx, cz)) out.push(std::move(col));
+        batch.submit([&slots, gen, cx, cz, sizeChunks] {
+          if (auto col = gen->generate(cx, cz)) slots[size_t(cz) * size_t(sizeChunks) + size_t(cx)] = std::move(col);
         });
     failed = batch.wait();  // blocks on a condition variable; failed columns are logged and skipped
+    for (size_t i = 0; i < nn; ++i)
+      if (slots[i]) out.push(std::move(slots[i]));
   }
   std::vector<std::unique_ptr<ChunkColumn>> cols;
   out.drainInto(cols);

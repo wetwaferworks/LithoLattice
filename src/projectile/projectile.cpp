@@ -30,11 +30,15 @@ uint64_t cProjectileMgr::spawn(const Projectile& p, IProjectileBehavior* behavio
   e.p = q;
   e.behavior = behavior;
   e.traveledExact = double(q.traveled);
+  e.generation = ++nextGeneration_;
   const uint64_t id = q.id;
   entries_.emplace(id, e);
   order_.push_back(id);
   // Warm-up: request the path's columns immediately, not one tick late.
-  loadChunksAhead(q.x, q.y, q.z, q.vx, q.vy, q.vz, q.maxRange ? q.maxRange : uint32_t(kChunkLookaheadBlocks));
+  // Capped at the per-tick lookahead, like tick(): an uncapped maxRange
+  // would loop ~maxRange/8 times synchronously inside spawn().
+  loadChunksAhead(q.x, q.y, q.z, q.vx, q.vy, q.vz,
+                  q.maxRange ? std::min(q.maxRange, uint32_t(kChunkLookaheadBlocks)) : uint32_t(kChunkLookaheadBlocks));
   return id;
 }
 
@@ -153,6 +157,7 @@ void cProjectileMgr::tick() {
     // -- Behavior --------------------------------------------------------
     bool keep = true;
     IProjectileBehavior* const beh = e.behavior;
+    const uint64_t gen = e.generation;  // captured before the callback: `e` may dangle after it
     if (beh) keep = beh->onTick(p, hitBlock, hitEntity);
 
     // UAF fix (code review 2026-10-26 HIGH-1, JD ruling 1): onTick may
@@ -166,7 +171,7 @@ void cProjectileMgr::tick() {
     const auto it1 = entries_.find(id);
     if (it1 == entries_.end()) continue;
     Entry& e2 = it1->second;
-    if (e2.behavior != beh) continue;
+    if (e2.behavior != beh || e2.generation != gen) continue;  // a respawn under the same id + shared behavior is a different projectile
     Projectile& p2 = e2.p;
 
     // -- Despawn / turn-around rules -------------------------------------

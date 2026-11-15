@@ -21,8 +21,15 @@ cLightEngine::cLightEngine(int sx, int sy, int sz)
 void cLightEngine::addSource(int x, int y, int z, uint8_t level) {
   if (!inBounds(x, y, z)) return;
   if (level > kMaxLight) level = kMaxLight;  // B-L5: clamp to the 1..64 light scale
-  sources_[packPos(x, y, z)] = level;
-  light_[size_t(idx(x, y, z))] = level;
+  // Only raise, never lower: a dimmer (re-)registration must not overwrite a
+  // brighter co-located source or light already spread here by one, since
+  // propagate() only ever raises cells and could never restore the loss.
+  const auto key = packPos(x, y, z);
+  const auto it = sources_.find(key);
+  if (it != sources_.end() && it->second > level) level = it->second;
+  sources_[key] = level;
+  uint8_t& cell = light_[size_t(idx(x, y, z))];
+  if (level > cell) cell = level;
   bfsQueue_.push({x, y, z, level});
 }
 

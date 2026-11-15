@@ -58,6 +58,13 @@ struct TickAgg {
 };
 inline TickAgg& ticks() { static TickAgg a; return a; }
 
+/// 2026-11-09 next-build-2 (GUI diagnosis Section 6): HUD expansion time
+/// (buildHudVertices) of the most recent frame, written by whichever
+/// backend expanded the HUD (render thread in threeway, main otherwise).
+/// Plain value: the app loop's spike record reads it one frame late at
+/// worst, which the spike line's own wording allows for.
+inline int64_t& hudExpandNs() { static int64_t v = 0; return v; }
+
 enum RPhase { kSprite, kWaitFence, kHousekeep, kAcquire, kRecord, kSubmit, kPresent, kRCount };
 /// Vulkan renderFrame phases of the last frame (render thread only).
 struct RenderPh { int64_t ns[kRCount] = {}; bool valid = false; };

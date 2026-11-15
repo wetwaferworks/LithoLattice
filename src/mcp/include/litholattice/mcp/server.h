@@ -545,7 +545,15 @@ class IStdioTransport {
 class cFdStdioTransport : public IStdioTransport {
  public:
   bool readLine(std::string& out) override;
+  /// MCP stdout fix (2026-11-10, JD t5117u): writes line + '\n' as ONE locked
+  /// write to the process-wide output fd (default 1), so a JSON-RPC line can
+  /// never be split or spliced by another stdout writer.
   void writeLine(std::string_view line) override;
+  /// Process-wide fd that writeLine targets (default 1 = stdout). The game
+  /// points it at a saved copy of the real stdout after redirecting fd 1 to
+  /// stderr under --mcp-stdio. Thread-safe (atomic).
+  static void setOutputFd(int fd);
+  static int outputFd();
 
  private:
   /// Bytes already read past a line's newline (a chunk rarely ends exactly
@@ -664,7 +672,12 @@ class cMcpServer {
 
   McpBackends backends_;
   McpAgent agent_;
-  mutable litholattice::mcp::cSpinGate agentMutex_;
+  // mutexfree pass 2b: agentMutex_ removed. The permission mask is the only agent field written while the server
+  // serves (console grant/revoke on the main thread): an atomic bit mask, fetch_or/fetch_and, acquire on read.
+  // agent_.name is setup-phase only (setAgentName refuses once serving_ is set). agent_.permissionMask is unused.
+  std::atomic<uint32_t> permMask_{0};
+  std::atomic<bool> serving_{false};
+  McpAgent agentSnapshot() const { McpAgent a; a.name = agent_.name; a.permissionMask = permMask_.load(std::memory_order_acquire); return a; }
   cRpcRouter router_;
   std::vector<ToolDescriptor> tools_;
   /// Name -> index into tools_: the per-call linear scan was fine at ~20

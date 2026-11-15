@@ -1,4 +1,5 @@
 #include "litholattice/core/log.h"
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdint>
@@ -50,7 +51,10 @@ void vlog(FILE* console, LogLevel tapLevel, const char* level, const char* fmt, 
 }
 }  // namespace
 
-void logInfo(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vlog(stdout, LogLevel::Info, "", fmt, ap); va_end(ap); }
+// MCP stdout fix (2026-11-10, JD t5117u): logInfo's console copy can be moved to stderr.
+namespace { std::atomic<bool> gInfoToStderr{false}; }
+void logSetInfoToStderr(bool on) { gInfoToStderr.store(on, std::memory_order_release); }
+void logInfo(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vlog(gInfoToStderr.load(std::memory_order_acquire) ? stderr : stdout, LogLevel::Info, "", fmt, ap); va_end(ap); }
 void logWarn(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vlog(stderr, LogLevel::Warn, "WARN ", fmt, ap); va_end(ap); }
 void logError(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vlog(stderr, LogLevel::Error, "ERROR ", fmt, ap); va_end(ap); }
 

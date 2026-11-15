@@ -65,6 +65,11 @@ bool versionSatisfies(const SemVer& v, const std::string& range) {
     const auto b = at(1);
     return b && v >= *b && (b->major ? v.major == b->major : v.minor == b->minor);
   }
+  if (range[0] == '~') {
+    // Tilde: >= bound and within the same major.minor line (~1.2.3 := >=1.2.3 <1.3.0).
+    const auto b = at(1);
+    return b && v >= *b && v.major == b->major && v.minor == b->minor;
+  }
   const auto b = SemVer::parse(range);
   return b && v == *b;
 }

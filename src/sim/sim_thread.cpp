@@ -204,9 +204,8 @@ void cSimThread::edit(EditCmd c) {
 }
 
 std::vector<uint8_t> cSimThread::drainPlaceReceipts() {
-  litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
   std::vector<uint8_t> out;
-  out.swap(receipts_);
+  receipts_.drain([&out](uint8_t r) { out.push_back(r); });  // phase edge (game thread), in order
   return out;
 }
 
@@ -515,16 +514,14 @@ bool cSimThread::applyOneEdit(EditCmd& e, const IWorldSim::DirtyFn& dirty) {
     sim_->command(w, e.command, dirty);
     if (e.x == kPlaceReceipt) {
       const bool ok = w.get(e.command.x, e.command.y, e.command.z) != before;
-      litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
-      if (receipts_.size() < 4096) receipts_.push_back(ok ? 1 : 0);
+      if (receipts_.sizeHint() < 4096) receipts_.push(uint8_t(ok ? 1 : 0));  // handoff (sim thread)
     }
     return false;
   }
   if (e.kind == EditCmd::Kind::Place) {
     const bool ok = applyPlace(e);
     if (e.x == kPlaceReceipt) {  // 2026-10-16: the game refunds a rejected place
-      litholattice::cGateGuard<litholattice::cAtomicGate> lk(receiptM_);
-      if (receipts_.size() < 4096) receipts_.push_back(ok ? 1 : 0);
+      if (receipts_.sizeHint() < 4096) receipts_.push(uint8_t(ok ? 1 : 0));  // handoff (sim thread)
     }
     return ok;
   }
@@ -559,7 +556,7 @@ bool cSimThread::applyPlace(EditCmd& e) {
   if (!w.set(x, y, z, e.block)) return false;
   if (reg.has(e.block, kDirectional) || face) w.setState(x, y, z, makeState(0, e.facing));  // 2026-10-24: attachables keep a facing (floor / ceiling)
   if (face) w.setState(x, y, z, withAttach(w.getState(x, y, z), face));
-  if (reg.has(e.block, kFacing8)) w.setState(x, y, z, withFacing8(0, e.facing & 7));  // 2026-10-25 Posts: octant 0..7
+  if (reg.has(e.block, kFacing8)) w.setState(x, y, z, withFacing8(w.getState(x, y, z), e.facing & 7));  // 2026-10-25 Posts: octant 0..7 (base = current state: literal 0 erased the attach face written above)
   sim_->onBlockChanged(w, x, y, z, e.block);
   markDirty(x, y, z);
   return true;
@@ -857,6 +854,7 @@ void cSimThread::run() {
         uint64_t steppedWorld = 0;
         while (steppedWorld < steps) {
           const uint64_t before = worldTickN_;
+          if (parkReq_) break;  // mutexfree 2a: a hook asked for a park at the last tick
           if (!stepMasterOnce(true)) break;  // froze mid-stepping: remaining steps are dropped
                                              // (the freeze pauses the sim; unfreeze + re-step to continue)
           if (worldTickN_ != before) { ++steppedWorld; ticksStepped_.fetch_add(1, std::memory_order_relaxed); }
@@ -875,7 +873,7 @@ void cSimThread::run() {
         // PlayI (JD): no fixed tick cap; a pass keeps working a backlog until kPassBudget.
         const auto passStart = Clock::now();
         const Ns kPassBudget = std::chrono::milliseconds(6);
-        while (acc_ >= stepDur_ && (steps == 0 || Clock::now() - passStart < kPassBudget)) {
+        while (!parkReq_ && acc_ >= stepDur_ && (steps == 0 || Clock::now() - passStart < kPassBudget)) {  // mutexfree 2a: park ends the pass
           if (!stepMasterOnce(true)) {
             // Frozen step (A-M5): not consumed — masterStep_ unchanged and
             // the step re-runs on resume. Charge the pacing slot anyway
@@ -991,6 +989,9 @@ void cSimThread::run() {
 
     locktiming::setBlockHolder(locktiming::kHolderNone);  // 0.0.1.60 diagnostic
     postLock.unlock();  // tail wait runs unlocked (stream hand-off can take the mutex here)
+    // mutexfree 2a: PARK phase. Requested by a hook at the end of a world tick; runs here, after the post
+    // section and with blockMutex_ released, so main/MCP readers and stream inserts are never blocked by it.
+    if (parkReq_) { parkReq_ = false; if (parkHook_) parkHook_(); }
     // ---- tail wait (review A-M7) ----
     // Live: pace to the next master step as before. Paused with nothing
     // pending: PARK on wakeCv_ instead of waking at masterHz (512/s) to

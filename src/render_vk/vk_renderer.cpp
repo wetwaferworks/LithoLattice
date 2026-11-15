@@ -385,6 +385,7 @@ class cVulkanRenderer final : public IRenderer {
     if (p.spriteQuads && p.spriteQuadCount > 0 && !p.spriteAtlasPages.empty() &&
         p.spriteAtlasVersion != spriteAtlasUploaded_)
       uploadSpriteAtlas(p);
+    uploadHudIcons(p);  // textured icons: no-op unless the snapshot moved
     tpLap(::litholattice::tickprof::kSprite);  // LL_TICK_PROFILE
     // Culling-cache prototypes (JD 2026-10-11): arm per-frame state. All default off.
     cullProto_.beginFrame(p.viewProj, p.yawRad, p.pitchRad, p.timeSec);
@@ -595,6 +596,11 @@ class cVulkanRenderer final : public IRenderer {
     // always valid; real pages replace it on the first sprite frame whose
     // atlas version differs (uploadSpriteAtlas).
     if (!uploadSpritePages(std::span<const ::litholattice::Image>{}, 0)) return false;
+    {  // textured icons: 1x1 dummy at binding 8 until a real snapshot arrives
+      const uint8_t dummyPx[4] = {0, 0, 0, 0};
+      hudIcons_ = uploadImage2D(*dev_, pool_.get(), VK_FORMAT_R8G8B8A8_UNORM, 1, 1, dummyPx, 4);
+      if (!hudIcons_) return false;
+    }
     return font_.has_value() && fontSampler_ && spriteSampler_;
   }
 
@@ -643,7 +649,7 @@ class cVulkanRenderer final : public IRenderer {
   bool createDescriptors() {
     const VkDevice d = dev_->device();
     const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
-                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kFramesInFlight},
+                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 * kFramesInFlight},  // + binding 8 HUD icons (2026-11-10)
                                           {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight * (2 + kMaxPullBlocks)}};  // + P7 reveal  // mega-draw V2b + Phase 2 arena array
     auto ci = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     ci.maxSets = kFramesInFlight;
@@ -686,6 +692,9 @@ class cVulkanRenderer final : public IRenderer {
     const VkDescriptorImageInfo spriteAtlas{spriteSampler_.get(),
                                             spriteAtlas_ ? spriteAtlas_->view() : VK_NULL_HANDLE,
                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo hudIcons{fontSampler_.get(),
+                                         hudIcons_ ? hudIcons_->view() : VK_NULL_HANDLE,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     for (const FrameSlot& f : frames_) {
       const VkDescriptorBufferInfo ubo{f.uniforms->handle(), 0, sizeof(FrameUniforms)};
       VkWriteDescriptorSet w[5]{};
@@ -703,6 +712,14 @@ class cVulkanRenderer final : public IRenderer {
       w[kBindingFont].pImageInfo = &font;
       w[kBindingSpriteAtlas].pImageInfo = &spriteAtlas;
       vkUpdateDescriptorSets(dev_->device(), 5, w, 0, nullptr);
+      VkWriteDescriptorSet iw{};
+      iw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      iw.dstSet = f.set;
+      iw.dstBinding = kBindingHudIcons;
+      iw.descriptorCount = 1;
+      iw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      iw.pImageInfo = &hudIcons;
+      vkUpdateDescriptorSets(dev_->device(), 1, &iw, 0, nullptr);
       // Thread Handshake P7: the chunk vertex shader declares binding 7 statically, so it is always written.
       const VkDescriptorBufferInfo rv{f.reveal->handle(), 0, kRevealBytes};
       VkWriteDescriptorSet rw{};
@@ -1681,6 +1698,25 @@ class cVulkanRenderer final : public IRenderer {
     return true;
   }
 
+  /// Textured icons: (re)upload the HUD icon atlas snapshot when the
+  /// frame's (pointer, version) moved. Same device-idle discipline as
+  /// the sprite atlas upload; runs before the frame's slot is waited.
+  void uploadHudIcons(const FrameParams& p) {
+    const std::shared_ptr<const ::litholattice::Image> snap = p.hudStatic.layer ? p.hudStatic.layer->iconAtlas : p.hud.iconAtlas;
+    const uint64_t ver = p.hudStatic.layer ? p.hudStatic.layer->iconAtlasVersion : p.hud.iconAtlasVersion;
+    if (!snap || snap->empty()) return;
+    if (hudIconsUploadedPtr_ == snap.get() && hudIconsUploadedVer_ == ver) return;
+    vkDeviceWaitIdle(dev_->device());
+    auto img = uploadImage2D(*dev_, pool_.get(), VK_FORMAT_R8G8B8A8_UNORM, uint32_t(snap->width()), uint32_t(snap->height()),
+                             snap->pixels().data(), 4);
+    if (!img) { logError("vulkan: HUD icon atlas upload failed"); return; }
+    hudIcons_ = std::move(img);
+    hudIconsUploadedPtr_ = snap.get();
+    hudIconsUploadedVer_ = ver;
+    hudIconsSnap_ = snap;
+    if (frames_[0].set != VK_NULL_HANDLE) writeDescriptors();
+  }
+
   void uploadSpriteAtlas(const FrameParams& p) {
     if (!uploadSpritePages(p.spriteAtlasPages, p.spriteAtlasVersion))
       logError("vulkan: sprite atlas upload failed; sprites skipped for atlas version %llu",
@@ -1744,17 +1780,140 @@ class cVulkanRenderer final : public IRenderer {
 
   // Block outline (depth tested), crosshair (always on top), then the HUD, from this frame's
   // overlay buffer: lines at offset 0, HUD vertices at kHudOffset.
+  // P1 proof trace (Build217 flicker diagnosis follow-up, 2026-11-11):
+  // LL_VK_HUD_TRACE=1 makes drawOverlay log, per frame and slot,
+  // whether each overlay range was copied or skipped, stamped with
+  // fenceWaited=1... drawOverlay only runs from record(), which
+  // renderFrame calls strictly after waitSlot(that slot), so the
+  // stamp is structural, and the log is the countable evidence: a
+  // steady frame sequence must show skip/skip on BOTH slots in
+  // alternation, and no COPY may ever appear for a slot whose fence
+  // was not waited this frame. Off by default; read once.
+  static bool hudTrace() {
+    static const bool on = [] {
+      const char* e = std::getenv("LL_VK_HUD_TRACE");
+      return e && std::atoi(e) == 1;
+    }();
+    return on;
+  }
+
   void drawOverlay(VkCommandBuffer cmd, FrameSlot& f, const FrameParams& p) {
     // 2026-10-25 (JD: Vulkan console / pause menu / hotbar tail missing): the HUD is built first and
     // this frame's overlay buffer grows to fit it (its fence was waited, so it is not in flight).
     // The fixed 4 MB cap dropped the LAST vertices: the hotbar tail, then console and pause menu.
-    buildHudVertices(p.hud, hudVerts_);
+    // GUI draw-cost program (2026-11-10), cures 1+2: with split streams
+    // the static and dynamic layers expand under separate keys into
+    // separate persistent buffers, and each stream's vertices are
+    // memcpy'd into the overlay ONLY on the frames that stream
+    // actually re-expanded (the vertex-persistence rule: a cache hit
+    // must not re-upload). The two expansions are laid out back to
+    // back in the overlay (static first, matching the old composed
+    // paint order: rects, texts, draws of the static stream, then the
+    // dynamic stream's), each drawn with its own vkCmdDraw... the
+    // dynamic range re-copies only when the readouts changed. The
+    // legacy composed path (no split streams) keeps its exact old
+    // behaviour except the same persistence win: copy only on a miss.
+    if (p.hudStatic.layer) {
+      const uint32_t slotIdx = uint32_t(&f - frames_.data());
+      HudSlotState& hs = hudSlots_[slotIdx];
+      // P1 (Build217 flicker diagnosis, JD approved 2026-11-11): the
+      // copy decision below reads THIS slot's own ledger, and this
+      // function only ever runs while recording this slot's command
+      // buffer, after renderFrame's waitSlot(f)... so any copy made
+      // here lands after this slot's own fence wait, never while its
+      // previous submission may still be executing. The trace (below,
+      // LL_VK_HUD_TRACE) numbers that ordering claim per frame.
+      const bool staticFresh = hudVertsForStream(*p.hudStatic.layer, p.hudStatic.generation, hudStaticCache_, hudStaticVerts_);
+      const bool dynFresh = p.hudDynamic.layer
+                                ? hudVertsForStream(*p.hudDynamic.layer, p.hudDynamic.generation, hudDynCache_, hudDynVerts_)
+                                : false;
+      const size_t dynCount = p.hudDynamic.layer ? hudDynVerts_.size() : 0;
+      const size_t total = hudStaticVerts_.size() + dynCount;
+      if (const VkDeviceSize need = kHudOffset + VkDeviceSize(total) * sizeof(HudVertex); need > f.overlay->size()) {
+        const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        const VkDeviceSize grown = std::max<VkDeviceSize>(need + need / 2, f.overlay->size() * 2);
+        if (auto b = Buffer::create(*dev_, grown, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible)) {
+          logInfo("vulkan: HUD overlay buffer %llu -> %llu KB (%zu HUD vertices)", (unsigned long long)(f.overlay->size() >> 10), (unsigned long long)(grown >> 10), total);
+          f.overlay = std::move(b);
+          hs.stat.reset();  // fresh buffer: both ranges re-copy
+          hs.dyn.reset();
+        }
+      }
+      const VkBuffer buffer = f.overlay->handle();
+      uint8_t* const base = f.overlay->mapped();
+      VkDeviceSize offset = 0;
+      auto drawLines = [&](VkPipeline pipeline, std::span<const Vec3> pts, const Mat4& m, Vec3 color) {
+        std::memcpy(base + offset, pts.data(), pts.size_bytes());
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        LinePush pc{};
+        std::memcpy(pc.matrix, m.m, sizeof pc.matrix);
+        pc.color[0] = color.x; pc.color[1] = color.y; pc.color[2] = color.z; pc.color[3] = 1.f;
+        push(cmd, &pc, sizeof pc);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
+        vkCmdDraw(cmd, uint32_t(pts.size()), 1, 0, 0);
+        offset += pts.size_bytes();
+      };
+      if (p.highlight)
+        drawLines(pipelines_->lineDepth(), blockOutlineLines(p.hx, p.hy, p.hz), p.viewProj, {0.05f, 0.05f, 0.08f});
+      if (p.crosshair) drawLines(pipelines_->lineOverlay(), crosshairLines(p.width, p.height), Mat4::identity(), {1, 1, 1});
+      const size_t maxVerts = size_t((f.overlay->size() - kHudOffset) / sizeof(HudVertex));
+      size_t sCount = std::min(hudStaticVerts_.size(), maxVerts / 6 * 6);
+      size_t dCount = std::min(dynCount, (maxVerts - sCount) / 6 * 6);
+      if (sCount + dCount < total) {
+        static bool warnedHudTruncSplit = false;
+        if (!warnedHudTruncSplit) { warnedHudTruncSplit = true; logWarn("vulkan: HUD overlay buffer full — %zu of %zu HUD vertices dropped", total - (sCount + dCount), total); }
+      }
+      // P1 copy rule: a range is (re)filled only when ITS OWN content
+      // moved (fresh expansion), when THIS slot does not already hold
+      // exactly it (count mismatch against the slot's own ledger), or
+      // when it changes address in the slot (the dynamic range rides
+      // at kHudOffset + sCount, so a static-count move relocates it
+      // even when its own bytes are unchanged... the old code keyed
+      // that relocation on the slot's stale static count; the ledger
+      // now records where the dynamic range was last written, which
+      // is the same test stated exactly). A steady frame hits none of
+      // these and copies nothing, per slot, in alternation.
+      // B9 hotbar-render fix (2026-11-11): the ledger now also records
+      // the CONTENT KEY each slot holds. staticFresh/dynFresh are true
+      // on one frame only, so a same-count content change (hotbar
+      // selection frame moving, hover colour) reached only the slot
+      // recorded on that frame; the other slot kept the old bytes and
+      // presented frames alternated old/new. Each slot now refills
+      // until it holds exactly (key, count, offset).
+      const bool needStatic = hudSlotRangeNeedsCopy(hs.stat, hudStaticCache_.content.key, sCount, 0);
+      const bool needDyn = hudSlotRangeNeedsCopy(hs.dyn, p.hudDynamic.layer ? hudDynCache_.content.key : 0, dCount, sCount);
+      const bool copyStatic = staticFresh || needStatic;
+      const bool copyDyn = dynFresh || needDyn;
+      if (copyStatic)
+        std::memcpy(base + kHudOffset, hudStaticVerts_.data(), sCount * sizeof(HudVertex));
+      if (copyDyn)
+        std::memcpy(base + kHudOffset + sCount * sizeof(HudVertex), hudDynVerts_.data(), dCount * sizeof(HudVertex));
+      if (hudTrace())
+        logInfo("vk hud trace: frame %llu slot %u fenceWaited=1 static %s (%zu verts) dyn %s (%zu verts at static %zu)",
+                (unsigned long long)frameNumber_, slotIdx, copyStatic ? "COPY" : "skip", sCount, copyDyn ? "COPY" : "skip",
+                dCount, sCount);
+      if (sCount + dCount == 0) return;
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_->hud());
+      const HudPush pc{{float(p.width), float(p.height)}};
+      push(cmd, &pc, sizeof pc);
+      VkDeviceSize hudOffset = kHudOffset;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &hudOffset);
+      if (sCount) vkCmdDraw(cmd, uint32_t(sCount), 1, 0, 0);
+      if (dCount) {
+        hudOffset = kHudOffset + sCount * sizeof(HudVertex);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &hudOffset);
+        vkCmdDraw(cmd, uint32_t(dCount), 1, 0, 0);
+      }
+      return;
+    }
+    const bool hudFresh = buildHudVerticesCached(p.hud, hudCache_, hudVerts_);
     if (const VkDeviceSize need = kHudOffset + VkDeviceSize(hudVerts_.size()) * sizeof(HudVertex); need > f.overlay->size()) {
       const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
       const VkDeviceSize grown = std::max<VkDeviceSize>(need + need / 2, f.overlay->size() * 2);
       if (auto b = Buffer::create(*dev_, grown, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, hostVisible)) {
         logInfo("vulkan: HUD overlay buffer %llu -> %llu KB (%zu HUD vertices)", (unsigned long long)(f.overlay->size() >> 10), (unsigned long long)(grown >> 10), hudVerts_.size());
         f.overlay = std::move(b);
+        hudSlots_[uint32_t(&f - frames_.data())].legacy.reset();  // B9: fresh buffer holds nothing
       }
     }
     const VkBuffer buffer = f.overlay->handle();
@@ -1784,7 +1943,26 @@ class cVulkanRenderer final : public IRenderer {
       if (!warnedHudTrunc) { warnedHudTrunc = true; logWarn("vulkan: HUD overlay buffer full — %zu of %zu HUD vertices dropped", hudVerts_.size() - count, hudVerts_.size()); }
     }
     if (count == 0) return;
-    std::memcpy(base + kHudOffset, hudVerts_.data(), count * sizeof(HudVertex));
+    // Vertex persistence (cure 2): the overlay slots alternate, so a
+    // slot must be (re)filled when the expansion changed OR when this
+    // slot does not already hold exactly this vertex range (first use,
+    // or the count moved under it). A steady frame hits neither and
+    // skips the copy entirely... before this fix the whole HUD vertex
+    // buffer was memcpy'd into the mapped overlay on EVERY frame,
+    // cache hit or not.
+    {
+      const uint32_t slotIdx = uint32_t(&f - frames_.data());
+      HudSlotState& hs = hudSlots_[slotIdx];
+      // P1: the same per-slot rule as the split path above (this slot's
+      // own ledger, written only while recording after its fence wait).
+      // B9: key-aware residency (see the split path): a same-count
+      // content change must reach BOTH slots, not just the fresh one.
+      const bool copyLegacy = hudSlotRangeNeedsCopy(hs.legacy, hudCache_.key, count, 0) || hudFresh;
+      if (copyLegacy) std::memcpy(base + kHudOffset, hudVerts_.data(), count * sizeof(HudVertex));
+      if (hudTrace())
+        logInfo("vk hud trace: frame %llu slot %u fenceWaited=1 legacy %s (%zu verts)", (unsigned long long)frameNumber_,
+                slotIdx, copyLegacy ? "COPY" : "skip", count);
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_->hud());
     const HudPush pc{{float(p.width), float(p.height)}};
     push(cmd, &pc, sizeof pc);
@@ -1802,6 +1980,14 @@ class cVulkanRenderer final : public IRenderer {
   std::optional<Buffer> quadIndices_;
   std::optional<vk::Image> font_;
   UniqueSampler fontSampler_;
+  // Textured icons (GUI draw-cost program, 2026-11-10): the HUD icon
+  // atlas image (binding 8), uploaded when the frame's snapshot
+  // (pointer, version) moves; starts as a 1x1 dummy so binding 8 is
+  // always valid. NEAREST sampler (fontSampler_) is shared.
+  std::optional<vk::Image> hudIcons_;
+  const void* hudIconsUploadedPtr_ = nullptr;
+  uint64_t hudIconsUploadedVer_ = 0;
+  std::shared_ptr<const ::litholattice::Image> hudIconsSnap_;
   // Sprite pass state (JD wiring 2026-10-13): atlas pages as one texture
   // array + its sampler; spriteAtlasUploaded_ is the registry version on
   // the GPU (UINT64_MAX = nothing real uploaded yet, dummy array bound).
@@ -1852,6 +2038,25 @@ class cVulkanRenderer final : public IRenderer {
   std::optional<Buffer> grabStaging_;
   FrameUniforms materials_{};
   std::vector<HudVertex> hudVerts_;
+  HudVertexCache hudCache_;  ///< GUI lag fix item 2: content key of hudVerts_' current expansion
+  // GUI draw-cost program (2026-11-10): split-stream HUD state. The
+  // static/dynamic expansions persist across frames in their own
+  // buffers with their own stream caches; per overlay slot, the vertex
+  // counts last copied in, so a stream whose expansion did not change
+  // is never re-copied into that slot (vertex persistence, cure 2).
+  std::vector<HudVertex> hudStaticVerts_, hudDynVerts_;
+  HudStreamCache hudStaticCache_, hudDynCache_;
+  // P1 (2026-11-11): dynAtStaticCount is the static count at which
+  // this slot's dynamic range was last written... the dynamic range's
+  // address in the slot is kHudOffset + staticCount verts, so its
+  // residency test is (dynCount, dynAtStaticCount), not the raw dyn
+  // count alone. Every field here is per slot by construction: slot
+  // A's ledger can never speak for slot B.
+  // B9 hotbar-render fix (2026-11-11): each range records (content key,
+  // count, offset) via HudSlotRange (overlay_geometry.h); the old
+  // count-only fields could not see a same-count content change.
+  struct HudSlotState { HudSlotRange legacy, stat, dyn; };
+  std::array<HudSlotState, kFramesInFlight> hudSlots_;
   std::vector<PackedVertex> entityVerts_;  ///< Cortana 2026-10-16: this frame's entity batch
   float entityOrigin_[3] = {0.f, 0.f, 0.f};
   RenderStats stats_;

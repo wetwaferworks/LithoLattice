@@ -95,11 +95,19 @@ bool moveCollide(Entity& e, const std::function<bool(int x, int y, int z)>& isSo
   // through a 1-block floor between start and destination. Split the move so
   // no substep travels more than ~0.5 blocks on any axis. Ordinary frame dt
   // (<= ~0.4 blocks/step) stays a single step — bit-identical to before.
+  // Sanitize at entry: a non-finite velocity or dt would otherwise reach
+  // the int(std::floor(...)) casts in aabbCollides (UB) and poison the
+  // position with NaN permanently; dead components simply do not move.
+  if (!std::isfinite(dt)) dt = 0;
+  if (!std::isfinite(e.vx)) e.vx = 0;
+  if (!std::isfinite(e.vy)) e.vy = 0;
+  if (!std::isfinite(e.vz)) e.vz = 0;
+  if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z)) return false;  // no safe step from a non-finite position
   const double stepX = std::fabs(e.vx * dt), stepY = std::fabs(e.vy * dt),
                stepZ = std::fabs(e.vz * dt);
   const double longest = std::max(stepX, std::max(stepY, stepZ));
   int steps = 1;
-  if (longest > 0.5) steps = std::min(64, int(std::ceil(longest / 0.5)));
+  if (longest > 0.5) steps = int(std::min(64.0, std::ceil(longest / 0.5)));  // clamp in double: int(huge) is UB
   const double subDt = dt / steps;
   bool hit = false;
   for (int i = 0; i < steps; ++i) {

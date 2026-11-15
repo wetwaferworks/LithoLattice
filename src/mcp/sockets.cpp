@@ -119,6 +119,14 @@ void cTcpListener::close() {
 }
 bool cTcpListener::bind(const std::string& address, std::uint16_t port,
                        std::string& error) {
+  // IPv4-only listener: "localhost" maps to the IPv4 loopback literal;
+  // "::1" is refused explicitly until an AF_INET6 path exists.
+  if (address == "::1") {
+    error = "bind address '::1' is IPv6 loopback; only IPv4 binds are "
+            "supported (use 127.0.0.1)";
+    return false;
+  }
+  const std::string resolved = address == "localhost" ? "127.0.0.1" : address;
   std::string wsaErr;
   if (!wsaEnsure(wsaErr)) {
     error = wsaErr;
@@ -139,7 +147,7 @@ bool cTcpListener::bind(const std::string& address, std::uint16_t port,
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
-  if (InetPtonA(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
+  if (InetPtonA(AF_INET, resolved.c_str(), &addr.sin_addr) != 1) {
     error = "bad bind address '" + address + "'";
     closesocket(s);
     wsaRelease();
@@ -288,6 +296,14 @@ void cTcpListener::close() {
 }
 bool cTcpListener::bind(const std::string& address, std::uint16_t port,
                        std::string& error) {
+  // IPv4-only listener: "localhost" maps to the IPv4 loopback literal;
+  // "::1" is refused explicitly until an AF_INET6 path exists.
+  if (address == "::1") {
+    error = "bind address '::1' is IPv6 loopback; only IPv4 binds are "
+            "supported (use 127.0.0.1)";
+    return false;
+  }
+  const std::string resolved = address == "localhost" ? "127.0.0.1" : address;
   int s = ::socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) {
     error = "socket() failed";
@@ -298,7 +314,7 @@ bool cTcpListener::bind(const std::string& address, std::uint16_t port,
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
-  if (::inet_pton(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
+  if (::inet_pton(AF_INET, resolved.c_str(), &addr.sin_addr) != 1) {
     error = "bad bind address '" + address + "'";
     ::close(s);
     return false;

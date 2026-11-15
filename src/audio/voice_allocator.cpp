@@ -4,6 +4,7 @@
 namespace litholattice {
 
 size_t cVoiceAllocator::acquire(uint64_t key) {
+  if (slots_.empty()) return 0;  // no voices to hand out; never deref end() below
   for (size_t i = 0; i < slots_.size(); ++i)
     if (slots_[i].key == key) return i;
   auto it = std::find_if(slots_.begin(), slots_.end(), [](const Slot& s) { return !s.key; });

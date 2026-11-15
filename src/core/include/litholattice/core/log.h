@@ -21,6 +21,10 @@ namespace litholattice {
 void logInfo(const char* fmt, ...) LITHOLATTICE_PRINTF(1, 2);
 void logWarn(const char* fmt, ...) LITHOLATTICE_PRINTF(1, 2);
 void logError(const char* fmt, ...) LITHOLATTICE_PRINTF(1, 2);
+/// MCP stdout fix (2026-11-10, JD t5117u): when on, logInfo writes its console copy to
+/// stderr instead of stdout (the log file and tap are unchanged). The game turns this on
+/// for --mcp-stdio, where stdout belongs to JSON-RPC. Thread-safe.
+void logSetInfoToStderr(bool on);
 
 // ---- Engine-log record path (ring-buffer tap) ----
 // Every logInfo/logWarn/logError line is ALSO pushed into a fixed-size ring buffer

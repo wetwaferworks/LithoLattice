@@ -49,6 +49,9 @@ uint32_t cStatReg::registerStat(const StatDef& def) {
   // read out-of-band values.
   owned.def.defaultValue = clampTo(owned.def, owned.def.defaultValue);
   defs_.emplace(id, std::move(owned));
+  // P7 (scratch): moving an SSO std::string relocates its bytes, so re-point def.name at the
+  // map node's own copy (map nodes never move). Before this, def.name dangled into the local.
+  defs_.at(id).def.name = defs_.at(id).name.c_str();
   byName_[defs_[id].name] = id;
   return id;
 }

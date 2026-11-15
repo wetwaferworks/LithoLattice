@@ -173,25 +173,106 @@ class cGL33Renderer final : public IRenderer {
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, nullptr);
     glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, u)));
     glEnableVertexAttribArray(2); glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, r)));
+    glEnableVertexAttribArray(3); glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, tex)));
+  }
+
+  /// Textured icons (GUI draw-cost program, 2026-11-10): upload the
+  /// icon atlas snapshot when the composed frame's (pointer, version)
+  /// moved. NEAREST + clamp, matching the design's sampler discipline.
+  void ensureHudIconTexture(const FrameParams& p) {
+    const std::shared_ptr<const ::litholattice::Image> snap = p.hudStatic.layer ? p.hudStatic.layer->iconAtlas : p.hud.iconAtlas;
+    const uint64_t ver = p.hudStatic.layer ? p.hudStatic.layer->iconAtlasVersion : p.hud.iconAtlasVersion;
+    if (!snap || snap->empty()) return;
+    if (hudIconTex_ && hudIconUploadedPtr_ == snap.get() && hudIconUploadedVer_ == ver) return;
+    if (!hudIconTex_) glGenTextures(1, &hudIconTex_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, hudIconTex_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, snap->width(), snap->height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, snap->pixels().data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glActiveTexture(GL_TEXTURE0);
+    hudIconUploadedPtr_ = snap.get();
+    hudIconUploadedVer_ = ver;
+    hudIconSnap_ = snap;
   }
 
   void drawHud(const FrameParams& p) {
-    buildHudVertices(p.hud, hudVerts_);
+    // GUI draw-cost program (2026-11-10), cures 1+2: split streams.
+    // Static and dynamic layers expand under separate keys into
+    // separate persistent buffers; each range of the shared split VBO
+    // is re-uploaded ONLY when that stream re-expanded (or its
+    // resident count moved, or the VBO was reallocated)... a cache hit
+    // uploads nothing. Draw order matches the composed layer: static,
+    // then dynamic on top.
+    if (p.hudStatic.layer) {
+      const bool staticFresh = hudVertsForStream(*p.hudStatic.layer, p.hudStatic.generation, hudStaticCache_, hudStaticVerts_);
+      const bool dynFresh = p.hudDynamic.layer
+                                ? hudVertsForStream(*p.hudDynamic.layer, p.hudDynamic.generation, hudDynCache_, hudDynVerts_)
+                                : false;
+      const size_t dynCount = p.hudDynamic.layer ? hudDynVerts_.size() : 0;
+      if (hudStaticVerts_.empty() && dynCount == 0) return;
+      glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+      glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      hudProg_.use();
+      glUniform2f(uScreen_, float(p.width), float(p.height));
+      glBindTexture(GL_TEXTURE_2D, fontTex_);
+      ensureHudIconTexture(p);
+      if (hudIconTex_) { glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, hudIconTex_); glActiveTexture(GL_TEXTURE0); }
+      if (!hudSplitVbo_) { glGenBuffers(1, &hudSplitVbo_); hudSplitFresh_ = true; }
+      glBindVertexArray(hudVao_); glBindBuffer(GL_ARRAY_BUFFER, hudSplitVbo_);
+      const GLsizei stride = sizeof(HudVertex);
+      glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, nullptr);
+      glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, u)));
+      glEnableVertexAttribArray(2); glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, r)));
+      glEnableVertexAttribArray(3); glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(offsetof(HudVertex, tex)));
+      const size_t totalVerts = hudStaticVerts_.size() + dynCount;
+      if (totalVerts > hudSplitCapacityVerts_) {
+        hudSplitCapacityVerts_ = std::max(totalVerts, hudSplitCapacityVerts_ * 2);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudSplitCapacityVerts_ * sizeof(HudVertex)), nullptr, GL_DYNAMIC_DRAW);
+        hudSplitFresh_ = true;
+      }
+      if (staticFresh || hudSplitFresh_ || hudUploadedStatic_ != hudStaticVerts_.size())
+        glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(hudStaticVerts_.size() * sizeof(HudVertex)), hudStaticVerts_.data());
+      if (dynFresh || hudSplitFresh_ || hudUploadedDyn_ != dynCount || hudUploadedStatic_ != hudStaticVerts_.size())
+        glBufferSubData(GL_ARRAY_BUFFER, GLsizeiptr(hudStaticVerts_.size() * sizeof(HudVertex)),
+                        GLsizeiptr(dynCount * sizeof(HudVertex)), hudDynVerts_.data());
+      hudUploadedStatic_ = hudStaticVerts_.size();
+      hudUploadedDyn_ = dynCount;
+      hudSplitFresh_ = false;
+      if (!hudStaticVerts_.empty()) glDrawArrays(GL_TRIANGLES, 0, GLsizei(hudStaticVerts_.size()));
+      if (dynCount) glDrawArrays(GL_TRIANGLES, GLint(hudStaticVerts_.size()), GLsizei(dynCount));
+      glDisable(GL_BLEND);
+      glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
+      return;
+    }
+    const bool hudFresh = buildHudVerticesCached(p.hud, hudCache_, hudVerts_);
     if (hudVerts_.empty()) return;
     glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);  // pixel-space quads are clockwise in NDC
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     hudProg_.use();
     glUniform2f(uScreen_, float(p.width), float(p.height));
     glBindTexture(GL_TEXTURE_2D, fontTex_);
+    ensureHudIconTexture(p);
+    if (hudIconTex_) { glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, hudIconTex_); glActiveTexture(GL_TEXTURE0); }
     glBindVertexArray(hudVao_); glBindBuffer(GL_ARRAY_BUFFER, hudVbo_);
     // Q3 (Archie exec summary, 2026-10-28): same per-frame orphan
-    // pattern as the mega instance buffer... grow-only allocation,
-    // BufferSubData per frame.
+    // pattern as the mega instance buffer... grow-only allocation.
+    // Vertex persistence (GUI draw-cost program, cure 2, 2026-11-10):
+    // BufferSubData ONLY when the expansion actually changed (or the
+    // buffer was just reallocated); a cache hit uploads nothing.
+    // Before this fix the whole HUD vertex buffer re-uploaded every
+    // frame, hit or miss.
+    bool hudRealloc = false;
     if (hudVerts_.size() > hudVboCapacityVerts_) {
       hudVboCapacityVerts_ = std::max(hudVerts_.size(), hudVboCapacityVerts_ * 2);
       glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudVboCapacityVerts_ * sizeof(HudVertex)), nullptr, GL_DYNAMIC_DRAW);
+      hudRealloc = true;
     }
-    glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(hudVerts_.size() * sizeof(HudVertex)), hudVerts_.data());
+    if (hudFresh || hudRealloc)
+      glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(hudVerts_.size() * sizeof(HudVertex)), hudVerts_.data());
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(hudVerts_.size()));
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
@@ -300,6 +381,8 @@ class cGL33Renderer final : public IRenderer {
     if (entityVbo_) glDeleteBuffers(1, &entityVbo_);
     if (hudVao_) glDeleteVertexArrays(1, &hudVao_);
     if (hudVbo_) glDeleteBuffers(1, &hudVbo_);
+    if (hudSplitVbo_) glDeleteBuffers(1, &hudSplitVbo_);
+    if (hudIconTex_) glDeleteTextures(1, &hudIconTex_);
     if (spriteVao_) glDeleteVertexArrays(1, &spriteVao_);
     if (spriteVbo_) glDeleteBuffers(1, &spriteVbo_);
     for (GLuint t : spriteTex_) glDeleteTextures(1, &t);
@@ -586,6 +669,7 @@ class cGL33Renderer final : public IRenderer {
     }
     hudProg_.use();
     glUniform1i(hudProg_.uniform("uFont"), 0);
+    glUniform1i(hudProg_.uniform("uHudIcons"), 1);  // textured icons: icon atlas on unit 1
     applyMaterialUniforms();
     return fromPacks;
   }
@@ -1338,6 +1422,24 @@ class cGL33Renderer final : public IRenderer {
   size_t hudVboCapacityVerts_ = 0;  // verts allocated in hudVbo_ (Q3: grow-only, BufferSubData per frame)
   GLint uScreen_ = -1;
   std::vector<HudVertex> hudVerts_;
+  HudVertexCache hudCache_;  // GUI lag fix item 2: content key of hudVerts_' current expansion
+  // GUI draw-cost program (2026-11-10): split-stream HUD state (cure 1:
+  // static/dynamic expansions keyed separately) + vertex persistence
+  // (cure 2: each stream uploads ONLY on the frames it re-expanded).
+  // The two streams share one grow-only VBO, laid out static-then-
+  // dynamic like the Vulkan overlay. hudUploadedStatic_/Dyn_ count the
+  // vertices currently resident per range; a range is re-uploaded when
+  // its stream re-expanded or its resident count moved.
+  GLuint hudSplitVbo_ = 0;
+  size_t hudSplitCapacityVerts_ = 0;
+  std::vector<HudVertex> hudStaticVerts_, hudDynVerts_;
+  HudStreamCache hudStaticCache_, hudDynCache_;
+  size_t hudUploadedStatic_ = SIZE_MAX, hudUploadedDyn_ = SIZE_MAX;
+  bool hudSplitFresh_ = false;  // the split VBO was (re)allocated: both ranges re-upload
+  GLuint hudIconTex_ = 0;  // textured icons: the icon atlas texture (unit 1)
+  const void* hudIconUploadedPtr_ = nullptr;
+  uint64_t hudIconUploadedVer_ = 0;
+  std::shared_ptr<const ::litholattice::Image> hudIconSnap_;
   // Sprite pass state (2026-10-12): program + streamed VBO + atlas page
   // textures; spriteAtlasUploaded_ is the registry version on the GPU
   // (UINT64_MAX = nothing uploaded yet).

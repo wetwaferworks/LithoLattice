@@ -13,7 +13,7 @@ namespace litholattice::vk {
 /// Descriptor bindings of set 0 (see assets/shaders/vk/*).
 enum Binding : uint32_t { kBindingFrame = 0, kBindingTextureArray = 1, kBindingPalette = 2, kBindingFont = 3,
                           kBindingSpriteAtlas = 4, kBindingMegaDraws = 5 /* mega-draw V2b */, kBindingArenaQuads = 6 /* Mega-Pipeline Phase 2 */,
-                          kBindingWaferReveal = 7 /* Thread Handshake P7 */ };
+                          kBindingWaferReveal = 7 /* Thread Handshake P7 */, kBindingHudIcons = 8 /* textured icons (GUI draw-cost program) */ };
 constexpr uint32_t kMaxPullBlocks = 64;  ///< Mega-Pipeline Phase 2: arena blocks reachable by vertex pulling (binding 6 array)
 
 class RenderPipelines {

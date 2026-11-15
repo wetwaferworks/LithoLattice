@@ -21,10 +21,21 @@ namespace {
 struct Budget {
   std::chrono::steady_clock::time_point deadline;
   unsigned lines = 0;
+  // Bug hunt #20 (2026-11-08): deterministic executed-line ceiling. The wall
+  // clock deadline below made sim-hook outcomes host-speed dependent (a hook
+  // could complete on a fast machine and abort mid-hook, with partial side
+  // effects, on a slow one). The line ceiling is identical on every machine:
+  // 2^21 lines, far above the 500 ms hook budget at any realistic execution
+  // rate, so well-behaved hooks never reach it and the wall clock remains
+  // only as a runaway backstop.
+  static constexpr unsigned kMaxLines = 1u << 21;
 };
-// Called by AngelScript for every executed statement: read the clock only every 256 lines.
+// Called by AngelScript for every executed statement: count every line toward
+// the deterministic ceiling; read the clock only every 256 lines.
 void lineCallback(asIScriptContext* ctx, Budget* b) {
-  if ((++b->lines & 255u) == 0 && std::chrono::steady_clock::now() > b->deadline) ctx->Abort();  // runaway script
+  ++b->lines;
+  if (b->lines >= Budget::kMaxLines) { ctx->Abort(); return; }  // deterministic line budget spent
+  if ((b->lines & 255u) == 0 && std::chrono::steady_clock::now() > b->deadline) ctx->Abort();  // runaway script
 }
 
 // Header prepended to every AngelScript allocation: records the size and
@@ -528,7 +539,12 @@ bool cScriptEngine::run(asIScriptFunction* fn, const char* what, std::string* ar
     }
     const uint64_t elapsedUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
-    accountCpu(elapsedUs, what);
+    (void)elapsedUs;  // telemetry only since bug hunt #20 (accounting uses budget.lines)
+    // Bug hunt #20 (2026-11-08): account by executed instruction count, not
+    // measured wall time... host speed must not decide whether a mod is
+    // throttled or suspended for identical work. 1 line = 1 us of account
+    // keeps the existing budget scale (modBudgetUs_ per tick) meaningful.
+    accountCpu(budget.lines, what);
     ok = r == asEXECUTION_FINISHED;
     if (r == asEXECUTION_EXCEPTION && !cppThrew)
       logError("[script] exception in %s: %s", what, ctx->GetExceptionString());

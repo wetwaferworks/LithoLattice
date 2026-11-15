@@ -846,7 +846,12 @@ void cTimingHandshakeAuthority::lfWorkerLoop(int shard) {
 }
 
 void cTimingHandshakeAuthority::resetStats() {
-  litholattice::cGateGuard lk(statsM_);  // A-M6: same mutex as the fold + snapshots
+  // A-M6: same writer discipline as the fold — statsM_ in mutex mode; in
+  // lock-free mode the statsSeq_ odd/even protocol, since a bare statsM_
+  // hold does not stop a lock-free snapshot copying stats_ mid-replace.
+  ::litholattice::cGateLock statsLk(statsM_, ::litholattice::kDeferLock);
+  if (!lockfree_) statsLk.lock();
+  else statsSeq_.fetch_add(1, std::memory_order_acq_rel);  // odd: reset in progress (readers retry)
   HsStats fresh;
   fresh.perComponent.assign(stats_.perComponent.size(), HsComponentStats{});
   for (size_t i = 0; i < fresh.perComponent.size(); ++i)
@@ -855,6 +860,7 @@ void cTimingHandshakeAuthority::resetStats() {
   qpcViolations_.store(0);
   for (auto& c : comps_) c.offenderLogged = false;
   for (auto& a : cycleAccum_) a = CycleAccum{};  // partial-cycle own work does not survive a stats reset
+  if (lockfree_) statsSeq_.fetch_add(1, std::memory_order_release);  // even: reset done
 }
 
 }  // namespace litholattice

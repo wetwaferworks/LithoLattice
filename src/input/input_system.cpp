@@ -35,16 +35,14 @@ void cInputSystem::update(IInputBackend& backend) {
   {  // Model control (MCP player_control): synthetic events merge here,
      // the exact point keyboard input enters. Never in processFrame:
      // replay/test streams stay pure and deterministic.
-    litholattice::cGateGuard<litholattice::cAtomicGate> lk(syntheticMutex_);
-    frame_.insert(frame_.end(), synthetic_.begin(), synthetic_.end());
-    synthetic_.clear();
+    // Phase edge: take every batch handed off since the last update, in push order.
+    synthetic_.drain([this](std::vector<InputEvent>&& b) { frame_.insert(frame_.end(), b.begin(), b.end()); });
   }
   processFrame(frame_);
 }
 
 void cInputSystem::stageSyntheticEvents(std::vector<InputEvent> events) {
-  litholattice::cGateGuard<litholattice::cAtomicGate> lk(syntheticMutex_);
-  synthetic_.insert(synthetic_.end(), events.begin(), events.end());
+  if (!events.empty()) synthetic_.push(std::move(events));  // ownership handoff to update()
 }
 
 void cInputSystem::processFrame(std::span<const InputEvent> events) {

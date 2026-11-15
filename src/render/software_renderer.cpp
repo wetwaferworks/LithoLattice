@@ -1093,7 +1093,11 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
   };
   // 2026-10-31 (JD, CloudAtlas memor-seg7 v2): kShadeCells, CPU mirror of chunk_shading.glsl MODE_CELLS:
   // two-digit 7-seg 0..64 from 128-space texel coords, ghost 8 (alpha 40), ring squares (mask R == 3)
-  // lit #8B65DD / #C8A9F6 highlight when the value > 0; lit parts take +0.6 emissive (integer texel math).
+  // lit when the value > 0 (integer texel math). B9 2026-11-12 (JD): ring + digits = the shared solid readout
+  // purple kReadoutPurple #A970FF, emissive 0.9 (mirror of READOUT_PURPLE / READOUT_EMISSIVE; was ring
+  // #8B65DD / #C8A9F6 edge and digits #D6BEFA at +0.6).
+  static constexpr uint32_t kReadoutPurple = 0xA970FFu;
+  static constexpr float kReadoutEmissive = 0.9f;
   auto memorShade = [this](const FragmentInput& f, uint32_t shaded) -> uint32_t {
     if (memMask_ <= 0 || uint32_t(memMask_) >= f.texLayers || !f.texData || f.varyings.layer >= f.texLayers) return shaded;
     static const uint16_t kSeg[140] = {252,252,771,771,771,771,0,0,771,771,771,771,252,252, 0,0,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,768,768,768,768,252,252,3,3,3,3,252,252, 252,252,768,768,768,768,252,252,768,768,768,768,252,252, 0,0,771,771,771,771,252,252,768,768,768,768,0,0, 252,252,3,3,3,3,252,252,768,768,768,768,252,252, 252,252,3,3,3,3,252,252,771,771,771,771,252,252, 252,252,768,768,768,768,0,0,768,768,768,768,0,0, 252,252,771,771,771,771,252,252,771,771,771,771,252,252, 252,252,771,771,771,771,252,252,768,768,768,768,252,252};
@@ -1103,7 +1107,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     const int r = int((mk >> 16) & 0xFF), v = std::clamp(int(tlQuadValue & 127), 0, 64);
     uint32_t col = 0; float em = 0.f; float ghostA = 0.f;
     if (r == 3) {
-      if (v > 0) { col = (((mk >> 8) & 0xFF) == 0 || (mk & 0xFF) == 0) ? 0xC8A9F6u : 0x8B65DDu; em = 0.6f; }
+      if (v > 0) { col = kReadoutPurple; em = kReadoutEmissive; }
     } else {
       const int sc = std::max(1, int(f.texScale));
       const int X = int(tx) * 128 / sc, Y = int(ty) * 128 / sc;
@@ -1111,7 +1115,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
       if (slot) {
         const int gx = (X - (slot == 1 ? 42 : 66)) / 2, gy = (Y - 50) / 2;
         const int d = slot == 1 ? (v >= 10 ? v / 10 : -1) : v % 10;
-        if (d >= 0 && ((kSeg[d * 14 + gy] >> gx) & 1)) { col = 0xD6BEFAu; em = 0.6f; }
+        if (d >= 0 && ((kSeg[d * 14 + gy] >> gx) & 1)) { col = kReadoutPurple; em = kReadoutEmissive; }
         else if ((kSeg[8 * 14 + gy] >> gx) & 1) { col = 0x3C268Eu; ghostA = 40.f / 255.f; }
       }
     }
@@ -2600,7 +2604,7 @@ void cSoftwareRenderer::blendPixel(int x, int y, float r, float g, float b, floa
 }
 
 void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex& B,
-                                            const HudVertex& C) {
+                                            const HudVertex& C, const Image* icons) {
   // 2026-10-25 (JD/Archie HUD diet): same coverage rule as before (all three barycentrics >= 0
   // at the pixel centre), but the edge signs are tested without per-pixel divides, the row's
   // covered x-range is skipped to directly, and flat-colour triangles (every HUD rect and
@@ -2655,11 +2659,25 @@ void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex
       if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
       const float u = w0 * A.u + w1 * B.u + w2 * C.u;
       const float v = w0 * A.v + w1 * B.v + w2 * C.v;
-      const float r = w0 * A.r + w1 * B.r + w2 * C.r;
-      const float g = w0 * A.g + w1 * B.g + w2 * C.g;
-      const float b = w0 * A.b + w1 * B.b + w2 * C.b;
+      float r = w0 * A.r + w1 * B.r + w2 * C.r;
+      float g = w0 * A.g + w1 * B.g + w2 * C.g;
+      float b = w0 * A.b + w1 * B.b + w2 * C.b;
       float a = w0 * A.a + w1 * B.a + w2 * C.a;
-      if (u >= 0.f) {  // glyph: font-atlas coverage multiplies alpha (hud.frag)
+      const float tm = w0 * A.tex + w1 * B.tex + w2 * C.tex;
+      if (tm > 0.5f) {  // textured icon: NEAREST-sample this pass's atlas snapshot (Phase B)
+        if (icons && !icons->empty()) {
+          const int iw = icons->width(), ih = icons->height();
+          const int tx = std::clamp(int(u * float(iw)), 0, iw - 1);
+          const int ty = std::clamp(int(v * float(ih)), 0, ih - 1);
+          const uint8_t* tp = icons->pixel(tx, ty);
+          r *= float(tp[0]) / 255.f;
+          g *= float(tp[1]) / 255.f;
+          b *= float(tp[2]) / 255.f;
+          a *= float(tp[3]) / 255.f;
+        }
+        // No snapshot: the quad paints in its bare tint... a visible
+        // defect, never silently wrong art (producer contract broken).
+      } else if (u >= 0.f) {  // glyph: font-atlas coverage multiplies alpha (hud.frag)
         if (!hudAtlasReady_) {
           hudAtlas_ = buildHudFontAtlas();
           hudAtlasReady_ = true;
@@ -2674,9 +2692,67 @@ void cSoftwareRenderer::rasterizeHudTriangle(const HudVertex& A, const HudVertex
 }
 
 void cSoftwareRenderer::drawHud(const FrameParams& p) {
+  // GUI draw-cost program (2026-11-10), cure 1: split streams. The
+  // static and dynamic layers expand under separate keys; the vertex
+  // walk below then rasterizes the static expansion followed by the
+  // dynamic one (the old composed paint order: static rects, texts,
+  // draws, then the readouts on top).
+  if (p.hudStatic.layer) {
+    const auto tb = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    hudVertsForStream(*p.hudStatic.layer, p.hudStatic.generation, hudStaticCache_, hudStaticVerts_);
+    if (p.hudDynamic.layer) hudVertsForStream(*p.hudDynamic.layer, p.hudDynamic.generation, hudDynCache_, hudDynVerts_);
+    else hudDynVerts_.clear();
+    // Fix (2026-11-10): the two streams' atlas snapshots live in these
+    // frame locals, never in a member the band workers swap. Each
+    // raster pass receives its own stream's snapshot pointer, and the
+    // shared references here are released only after the pool run
+    // returns (or the single-threaded walk below ends).
+    const std::shared_ptr<const Image> iconsStatic = p.hudStatic.layer->iconAtlas;
+    const std::shared_ptr<const Image> iconsDyn =
+        p.hudDynamic.layer ? p.hudDynamic.layer->iconAtlas : nullptr;
+    if (litholattice::f3trace::on() && p.hudDynamic.layer) {  // F3 trace: the XYZ line as rasterized
+      for (const HudDraw& d : p.hudDynamic.layer->draws) {
+        const size_t at = d.text.find("XYZ ");
+        if (at == std::string::npos) continue;
+        const size_t ls = d.text.rfind('\n', at), le = d.text.find('\n', at);
+        const size_t b0 = ls == std::string::npos ? 0 : ls + 1;
+        litholattice::f3trace::noteDrawn(std::string_view(d.text).substr(b0, le == std::string::npos ? std::string::npos : le - b0),
+                                         hudStaticVerts_.size() + hudDynVerts_.size());
+        break;
+      }
+    }
+    if (g_swProfOn) g_hudBuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count();
+    if (!hudAtlasReady_) {
+      hudAtlas_ = buildHudFontAtlas();
+      hudAtlasReady_ = true;
+    }
+    static const bool kHudMtSw = [] { const char* e = std::getenv("LL_HUD_MT"); return !(e && e[0] == '0'); }();
+    cSwBandPool& pool = cSwBandPool::get();
+    const size_t totalVerts = hudStaticVerts_.size() + hudDynVerts_.size();
+    if (kHudMtSw && pool.bands() > 1 && totalVerts >= 6 * 64) {
+      constexpr int kRows = 32;
+      const int H = int(fb_.height), chunks = (H + kRows - 1) / kRows;
+      std::atomic<int> next{0};
+      pool.run([&](unsigned) {
+        for (int c; (c = next.fetch_add(1, std::memory_order_relaxed)) < chunks;) {
+          tlHudY0 = c * kRows;
+          tlHudY1 = std::min(H, tlHudY0 + kRows);
+          tlHudStats = c == 0;
+          drawHudList(hudStaticVerts_.data(), hudStaticVerts_.size(), iconsStatic.get());
+          drawHudList(hudDynVerts_.data(), hudDynVerts_.size(), iconsDyn.get());
+        }
+        tlHudY0 = 0; tlHudY1 = 1 << 30; tlHudStats = true;
+      });
+      return;
+    }
+    drawHudList(hudStaticVerts_.data(), hudStaticVerts_.size(), iconsStatic.get());
+    drawHudList(hudDynVerts_.data(), hudDynVerts_.size(), iconsDyn.get());
+    return;
+  }
   if (p.hud.rects.empty() && p.hud.texts.empty() && p.hud.draws.empty()) return;
   const auto tb = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-  buildHudVertices(p.hud, hudVerts_);
+  buildHudVerticesCached(p.hud, hudCache_, hudVerts_);
+  const std::shared_ptr<const Image> icons = p.hud.iconAtlas;  // textured icons: this frame's snapshot, held as a pass value
   if (litholattice::f3trace::on()) {  // LL_TRACE_F3: the XYZ line exactly as this frame rasterizes it
     for (const HudDraw& d : p.hud.draws) {
       const size_t at = d.text.find("XYZ ");
@@ -2706,16 +2782,16 @@ void cSoftwareRenderer::drawHud(const FrameParams& p) {
         tlHudY0 = c * kRows;
         tlHudY1 = std::min(H, tlHudY0 + kRows);
         tlHudStats = c == 0;
-        drawHudList(v, n);
+        drawHudList(v, n, icons.get());
       }
       tlHudY0 = 0; tlHudY1 = 1 << 30; tlHudStats = true;
     });
     return;
   }
-  drawHudList(v, n);
+  drawHudList(v, n, icons.get());
 }
 
-void cSoftwareRenderer::drawHudList(const HudVertex* v, size_t n) {
+void cSoftwareRenderer::drawHudList(const HudVertex* v, size_t n, const Image* icons) {
   for (size_t i = 0; i + 2 < n;) {
     // 2026-10-25 (HUD diet): a flat, whole-pixel, axis-aligned quad (quad()'s 6-vertex layout:
     // every UI rect and crisp-icon run) is filled as one rect span per row instead of two
@@ -2731,7 +2807,7 @@ void cSoftwareRenderer::drawHudList(const HudVertex* v, size_t n) {
       i += 6;
       continue;
     }
-    rasterizeHudTriangle(v[i], v[i + 1], v[i + 2]);
+    rasterizeHudTriangle(v[i], v[i + 1], v[i + 2], icons);
     i += 3;
   }
 }

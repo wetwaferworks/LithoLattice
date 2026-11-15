@@ -56,10 +56,13 @@ bool parseSemver(const std::string& s, Semver& out) {
         // "1" or "1.2": pad with zeros.
         for (int j = i + 1; j < 3; ++j) parts[j] = 0;
       }
+      pos = s.size();
       break;
     }
+    if (i == 2) return false;  // a third dot means a 4th component follows
     pos = dot + 1;
   }
+  if (pos != s.size()) return false;  // trailing junk/component: fail closed
   out = {parts[0], parts[1], parts[2]};
   return true;
 }

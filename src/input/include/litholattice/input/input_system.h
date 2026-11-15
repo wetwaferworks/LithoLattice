@@ -3,6 +3,7 @@
 // Context pushes / pops take effect at the next frame, so the key that opens a mode is never
 // seen again by the mode it opened.
 #pragma once
+#include "litholattice/core/phase_handoff.h"
 #include <array>
 #include <bitset>
 #include <span>
@@ -93,8 +94,9 @@ class cInputSystem {
   bool textEnabled_ = false;
   std::vector<InputEvent> frame_, lastFrame_, recorded_;
   bool recording_ = false;
-  mutable litholattice::cAtomicGate syntheticMutex_;
-  std::vector<InputEvent> synthetic_;  ///< staged by stageSyntheticEvents
+  // MUTEX-FREE (scratch, 2026-11-11): MCP threads hand batches off; update() (main, the input phase
+  // owner) drains them at the exact merge point. Replaces syntheticMutex_ + synthetic_.
+  litholattice::cPhaseHandoff<std::vector<InputEvent>> synthetic_;  ///< staged by stageSyntheticEvents
 };
 
 }  // namespace litholattice

@@ -179,6 +179,32 @@ bool recoverCrashedWrite(const std::filesystem::path& path,
     // moved aside (never silently destroyed) before any promotion below.
   }
 
+  // Step 1b (bug hunt #15, 2026-11-08): the primary is ABSENT but a validated
+  // temp exists. writeFileAtomic rotates the primary into .bak.1 BEFORE the
+  // rename commit point, so a crash in that window leaves the primary absent,
+  // .bak.1 holding the OLDER generation, and .tmp holding the COMPLETE,
+  // fsync'd newer one. The backup scan below would restore the old generation
+  // and the next write would silently overwrite the temp: the newest committed
+  // payload would be lost. A validating temp outranks every backup here (it is
+  // the newest complete generation by construction); Step 3 keeps handling the
+  // torn-primary case, where no rotation happened and the backup is newest.
+  if (!primaryExists) {
+    const auto tmpEarly = std::filesystem::path(path.string() + kAtomicTmpSuffix);
+    if (std::filesystem::exists(tmpEarly, ec)) {
+      ec.clear();
+      sawFootprint = true;
+      std::string verr;
+      if (validate(tmpEarly, &verr)) {
+        std::filesystem::rename(tmpEarly, path, ec);
+        if (ec) return fail("recoverCrashedWrite: cannot promote temp file: " + ec.message());
+        fsyncParentDir(path);
+        logWarn("storage: recovered '%s' by promoting its temp file over the backup chain (crash during backup rotation)",
+                path.string().c_str());
+        return true;
+      }
+    }
+  }
+
   // Step 2: scan the backup chain newest-first for an intact generation.
   std::filesystem::path good;
   std::string lastWhy;

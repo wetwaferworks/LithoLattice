@@ -5,6 +5,7 @@
 // the game's IWorldSim, and remesh snapshots. No GL, no render types: remeshing is
 // requested through the SubmitMesh callback with an immutable MeshInput.
 #pragma once
+#include "litholattice/core/phase_handoff.h"
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/gate_lock.h"
 #include "litholattice/core/lock_timing.h"
@@ -214,6 +215,12 @@ class cSimThread {
   /// window (getBlock from the hook is the sim thread's own recursive hold).
   /// Set before start(); the game steps the player body here.
   void setPlayerHook(std::function<void(uint64_t)> fn) { playerHook_ = std::move(fn); }
+  /// mutexfree pass 2a (phase boundary, replaces sleeping inside the player hook): SIM THREAD ONLY (call from
+  /// the player/tick hook). Ends the current pass after this world tick; once the post section has run and
+  /// blockMutex_ is RELEASED, the park hook runs on the sim thread with no gate held.
+  void requestParkAfterPass() { parkReq_ = true; }
+  /// Set before start(). Runs at the park phase (see requestParkAfterPass); must poll running() to exit on stop().
+  void setParkHook(std::function<void()> fn) { parkHook_ = std::move(fn); }
   /// True from start() until stop() returns (the thread is joined after).
   bool running() const { return running_.load(std::memory_order_acquire); }
   /// World TPS in force for the current tick. SIM THREAD ONLY (the player hook).
@@ -324,8 +331,9 @@ class cSimThread {
   /// edit changed the world (the caller re-casts before the next edit).
   bool applyOneEdit(EditCmd& e, const std::function<void(int, int, int)>& dirty);
   bool applyPlace(EditCmd& e);
-  cAtomicGate receiptM_;  // PlayL: was ::litholattice::cAtomicGate
-  std::vector<uint8_t> receipts_;
+  // MUTEX-FREE (scratch, 2026-11-11, JD t5192u): the sim thread (sole producer, inside applyOneEdit)
+  // hands each receipt off; the game drains them in order at its frame edge. Replaces receiptM_.
+  cPhaseHandoff<uint8_t> receipts_;
   /// Look-at raycast for the HUD highlight only (no edit application).
   void castRay(const RayInput& ray);
   /// simFailFast unless tps is a supported tick mode (kTickModes ∪ {512},
@@ -383,6 +391,8 @@ class cSimThread {
   std::function<void(uint64_t)> tickHook_;
   struct BoundaryJob { std::function<void()> fn; };
   std::atomic<BoundaryJob*> boundaryJob_{nullptr};  ///< see postBoundaryJob (single slot, lock-free)
+  std::function<void()> parkHook_;  // mutexfree 2a: runs gate-free after a pass that requested a park
+  bool parkReq_ = false;            // mutexfree 2a: SIM THREAD ONLY (set by a hook, consumed by loopBody)
   std::function<void(uint64_t)> playerHook_;  // player body step (see setPlayerHook)  // LL_HASH_AT_TICK probe (measure only)
   // LL_SIM_STALL_MS=<ms>@<tick>[x<n>] (measure only, default OFF; Proposed by Herominde; implemented by Cortana). At world tick <tick> (then every
   // 128 ticks, n times) the sim thread sleeps <ms> while holding blockMutex_, so streaming inserts and point reads queue up

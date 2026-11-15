@@ -209,6 +209,10 @@ float warpY(const Ctx& c, size_t i) { return c.warpV[i]; }
 // Noise FBM field for `node` (kind taken from the node unless forced).
 void evalNoise(Ctx& c, const TextureNode& node, NoiseKind kind, int salt, std::vector<float>& out) {
   const std::vector<Octave> octs = octaveParams(node);
+  // A programmatic recipe can carry scale == 0 (or negative / non-finite):
+  // the divisions below would yield inf/NaN sample coordinates and UB int
+  // casts in rawNoise. Treat such a scale as 1.
+  const float scale = (node.scale > 0.0f && std::isfinite(node.scale)) ? node.scale : 1.0f;
   const int sz = c.size;
   if (c.optimized) {
     // Octave-major: hoist the per-pixel scaled coordinates (identical float
@@ -223,13 +227,13 @@ void evalNoise(Ctx& c, const TextureNode& node, NoiseKind kind, int salt, std::v
       const float vBase = (float(y) + 0.5f) / float(sz);
       for (int x = 0; x < sz; ++x) {
         const size_t i = size_t(y) * size_t(sz) + size_t(x);
-        us[i] = ((float(x) + 0.5f) / float(sz) + warpX(c, i)) * node.scale;
-        vs[i] = (vBase + warpY(c, i)) * node.scale;
+        us[i] = ((float(x) + 0.5f) / float(sz) + warpX(c, i)) * scale;
+        vs[i] = (vBase + warpY(c, i)) * scale;
       }
     }
     for (const Octave& o : octs) {
       const LatticeMemo memo = c.buildMemo(o.period, salt);
-      const float ratio = float(o.period) / node.scale;
+      const float ratio = float(o.period) / scale;
       for (size_t i = 0; i < n; ++i)
         out[i] += o.amp * rawNoise(c.tables, &memo, kind, us[i] * ratio, vs[i] * ratio, o.period, salt);
     }
@@ -243,8 +247,8 @@ void evalNoise(Ctx& c, const TextureNode& node, NoiseKind kind, int salt, std::v
         const float v0 = vBase + warpY(c, i);
         float sum = 0.0f;
         for (const Octave& o : octs) {
-          const float ratio = float(o.period) / node.scale;
-          sum += o.amp * rawNoise(c.tables, nullptr, kind, u0 * node.scale * ratio, v0 * node.scale * ratio,
+          const float ratio = float(o.period) / scale;
+          sum += o.amp * rawNoise(c.tables, nullptr, kind, u0 * scale * ratio, v0 * scale * ratio,
                                   o.period, salt);
         }
         out[i] = sum;
@@ -277,7 +281,11 @@ void pushNoise(Ctx& c, const TextureNode& node, int nodeIndex) {
 }
 
 void evalVoronoi(Ctx& c, const TextureNode& node, int nodeIndex, std::vector<float>& out) {
-  const int period = std::max(1, static_cast<int>(std::llround(node.scale)));
+  // Same guard as octaveParams: parseRecipe bands scale to (0, 1024], but a
+  // programmatic recipe must not reach llround(±inf) or a huge int cast (UB).
+  int period = 1024;
+  if (std::isfinite(node.scale) && node.scale < 1024.0f)
+    period = std::max(1, static_cast<int>(std::llround(node.scale)));
   const int saltA = node.seedOffset * 31 + nodeIndex * 101 + 7001;
   const int saltB = saltA + 4099;
   // Optimised path: memoise every cell's feature point once per node.
@@ -564,13 +572,12 @@ uint64_t fnv1a(std::string_view s, uint64_t h) {
   return h;
 }
 
+// MUTEX-FREE (scratch, 2026-11-11, JD t5192u): single-owner per thread. The LRU cache is
+// thread_local, so each thread owns its own 64-entry list and no gate is needed. Generation is
+// deterministic (recipe, seed, size), so every thread produces the same image for the same key.
 std::list<CacheEntry>& cacheEntries() {
-  static std::list<CacheEntry> entries;
+  thread_local std::list<CacheEntry> entries;
   return entries;
-}
-litholattice::cAtomicGate& cacheMutex() {
-  static litholattice::cAtomicGate m;
-  return m;
 }
 
 }  // namespace
@@ -593,7 +600,6 @@ Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size
   uint64_t sm = h ^ seed;
   h ^= splitmix64(sm);
   h ^= static_cast<uint64_t>(static_cast<uint32_t>(keySize)) + 0x9E3779B97F4A7C15ULL;
-  litholattice::cGateGuard<litholattice::cAtomicGate> lock(cacheMutex());
   std::list<CacheEntry>& entries = cacheEntries();
   for (auto it = entries.begin(); it != entries.end(); ++it) {
     if (it->recipeHash == h && it->seed == seed && it->size == keySize) {
@@ -607,8 +613,7 @@ Image generateTextureCached(const TextureRecipe& recipe, uint64_t seed, int size
 }
 
 size_t textureCacheSize() {
-  litholattice::cGateGuard<litholattice::cAtomicGate> lock(cacheMutex());
-  return cacheEntries().size();
+  return cacheEntries().size();  // calling thread's cache
 }
 
 float textureValueNoise(float x, float y, int period, uint64_t seed) {

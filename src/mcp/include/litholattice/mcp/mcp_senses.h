@@ -83,6 +83,8 @@ struct VisionFrame {
   uint64_t tick = 0;         ///< sim tick the frame was captured on
   double camX = 0, camY = 0, camZ = 0;
   float yaw = 0, pitch = 0;
+  std::string source;          ///< SCRATCH vulkfb: "" (senses cone) or the display renderer name
+  int srcWidth = 0, srcHeight = 0;  ///< SCRATCH vulkfb: display framebuffer size before downsampling
 };
 
 /// A pilot's vision camera: an independent camera placeable anywhere in
@@ -116,6 +118,12 @@ class IVisionCapture {
   virtual bool trackPlayer(std::string_view pilot) = 0;
   /// Current camera (the pose the next capture will use).
   virtual bool cameraPose(std::string_view pilot, CameraPose& out) const = 0;
+  /// SCRATCH vulkfb (opt-in): the NEXT frame the active DISPLAY renderer draws (the player's actual
+  /// on-screen view), box-downsampled to width x height. Default: unsupported.
+  virtual bool captureDisplayFrame(std::string_view pilot, int width, int height, VisionFrame& out) {
+    (void)pilot; (void)width; (void)height; (void)out;
+    return false;
+  }
 };
 
 /// One captured audio chunk: mono s16le at the tier rate.

@@ -547,6 +547,26 @@ class cSoftwareRenderer : public IRenderer {
 
   // HUD overlay state (H3): built lazily, reused across frames.
   std::vector<HudVertex> hudVerts_;
+  HudVertexCache hudCache_;  // GUI lag fix item 2: content key of hudVerts_' current expansion
+  // GUI draw-cost program (2026-11-10), cure 1: split-stream expansions
+  // (static and dynamic readout layers keyed separately). The software
+  // path has no GPU upload at all... it rasterizes straight from these
+  // persistent buffers, so persistence was already its shape; the split
+  // buys it the same expansion-frequency win as the GPU backends.
+  std::vector<HudVertex> hudStaticVerts_, hudDynVerts_;
+  HudStreamCache hudStaticCache_, hudDynCache_;
+  // Textured icons (Phase B): the frame's icon atlas snapshots are NOT
+  // members. drawHud holds each stream's snapshot in a frame local and
+  // passes its Image pointer down into drawHudList /
+  // rasterizeHudTriangle as a per-pass value, so a band worker always
+  // rasterizes with the snapshot of the stream it is drawing. (Fix,
+  // 2026-11-10: the old shape kept the snapshots in members and swapped
+  // ONE shared member between the two streams inside the parallel band
+  // lambda... a worker could pass the null guard on one stream's
+  // snapshot and then dereference the other stream's null snapshot
+  // (the segfault in build 213), or sample the wrong stream's atlas
+  // mid-raster. No lock was added and none is needed: the value
+  // travels with the pass, and the frame locals outlive the pool run.)
   HudFontAtlas hudAtlas_;
   bool hudAtlasReady_ = false;
   std::vector<PackedVertex> entityVerts_;  ///< dynamic triangle verts (3 per triangle)
@@ -636,9 +656,11 @@ class cSoftwareRenderer : public IRenderer {
   void drawHud(const FrameParams& p);
   /// One HUD triangle: barycentric blend over fb_ with interpolated
   /// uv/color; coverage from the font atlas for glyph triangles.
-  void rasterizeHudTriangle(const HudVertex& a, const HudVertex& b, const HudVertex& c);
+  void rasterizeHudTriangle(const HudVertex& a, const HudVertex& b, const HudVertex& c,
+                            const Image* icons);
   void fillHudRectSpan(const HudVertex& c, int x0, int y0, int x1, int y1);  // 2026-10-25 HUD diet
-  void drawHudList(const HudVertex* v, size_t n);  // 2026-10-26: one in-order walk, row-clipped per chunk
+  void drawHudList(const HudVertex* v, size_t n,
+                   const Image* icons);  // 2026-10-26: one in-order walk, row-clipped per chunk
   /// Block highlight outline (depth-tested) + crosshair (on top), drawn as
   /// CPU line segments through the same projections the GPU backends use.
   void drawOverlayLines(const FrameParams& p);

@@ -48,7 +48,7 @@ void EffectChain::process(float* io, size_t frames) {
 void EffectChain::clear() {
   for (auto* b : {&combA_.buf, &combB_.buf, &ap_.buf})
     std::fill(b->begin(), b->end(), 0.f);
-  combA_.filter = 0.f;
+  combA_.filter = combB_.filter = 0.f;
   combA_.idx = combB_.idx = ap_.idx = 0;
 }
 

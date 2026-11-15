@@ -189,7 +189,7 @@ class cMcpHttpServer {
   /// timeout; createSession sweeps expired sessions and evicts LRU past the
   /// session cap.
   std::string createSession();
-  cMcpServer* findSession(const std::string& id);
+  std::shared_ptr<cMcpServer> findSession(const std::string& id);
   void eraseSession(const std::string& id);
 
   bool checkAuth(const HttpRequest& req) const;
@@ -221,7 +221,7 @@ class cMcpHttpServer {
   /// idle past the timeout expires fail-closed (the client re-handshakes),
   /// and the table is LRU-capped (see createSession).
   struct Session {
-    std::unique_ptr<cMcpServer> server;
+    std::shared_ptr<cMcpServer> server;
     std::chrono::steady_clock::time_point lastActivity{};
   };
 

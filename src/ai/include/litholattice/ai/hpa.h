@@ -91,7 +91,8 @@ class HpaGraph {
 
  private:
   struct Cluster {
-    std::array<uint64_t, 5> vers{};  // versions of self + E/W/N/S neighbours at build time
+    std::array<uint64_t, 25> vers{};  // versions of the 5x5 column neighbourhood at build time
+                                      // (maxRange-20 legs can read 2 columns out)
     std::vector<Cell> nodes;         // entrance cells inside this cluster
     std::vector<HpaPortal> portals;  // every crossing touching this cluster
     std::vector<std::vector<std::pair<int, NavCost>>> adj;  // intra-cluster edges over nodes
