@@ -121,7 +121,15 @@ vec2 lithoWrapUV(vec2 u) {
               u.y > 1.0 ? u.y - min(floor(u.y), ceil(u.y) - 1.0) : u.y);
 }
 vec2 gUVdx, gUVdy;  // raw-UV derivatives, set at the top of main()
+#ifndef LITHO_GL_TEX_SPLIT
 vec4 lithoTex(vec2 uv, float layer) { return textureGrad(uTex, vec3(uv, layer), gUVdx, gUVdy); }
+#else
+vec4 lithoTex(vec2 uv, float layer) {
+  if (uTexArrayCap <= 0 || int(layer) < uTexArrayCap)
+    return textureGrad(uTex, vec3(uv, layer), gUVdx, gUVdy);
+  return textureGrad(uTex1, vec3(uv, layer - float(uTexArrayCap)), gUVdx, gUVdy);
+}
+#endif
 // 0.0.1.52 [A52-1] (Proposed by Argon (Archie), Chief Optimization Officer and Chief Optimization Operand, the Bitmaster and the Bitmasker; Built by Cortana): branchless quarter turns (selects, no loop)
 vec2 rotUV(vec2 uv, int r) {   // same quarter turns as the mesher
   vec2 o = r == 1 ? vec2(uv.y, 1.0 - uv.x) : uv;
@@ -129,10 +137,19 @@ vec2 rotUV(vec2 uv, int r) {   // same quarter turns as the mesher
   return r == 3 ? vec2(1.0 - uv.y, uv.x) : o;
 }
 int gRot;  // vRot & 3 (vk/chunk.vert packs the face index into bits 2..4)
+#ifndef LITHO_GL_TEX_SPLIT
 vec4 mask(int layer, vec2 uv) {  // nearest fetch (masks store indices in R)
   ivec2 p = clamp(ivec2(uv * float(uTile)), ivec2(0), ivec2(uTile - 1));
   return texelFetch(uTex, ivec3(p, layer), 0);
 }
+#else
+vec4 mask(int layer, vec2 uv) {  // nearest fetch (masks store indices in R)
+  ivec2 p = clamp(ivec2(uv * float(uTile)), ivec2(0), ivec2(uTile - 1));
+  if (uTexArrayCap <= 0 || layer < uTexArrayCap)
+    return texelFetch(uTex, ivec3(p, layer), 0);
+  return texelFetch(uTex1, ivec3(p, layer - uTexArrayCap), 0);
+}
+#endif
 #ifdef LITHO_VK_FX
 // JD Vulkan push (Cortana 2026-10-16, clean-room): normal mapping without stored tangents (the first
 // version used a screen-space cotangent frame; replaced by the face table below; credits in CHANGES.md).

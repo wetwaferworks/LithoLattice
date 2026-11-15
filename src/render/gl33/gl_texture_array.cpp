@@ -32,7 +32,7 @@ void logArrayCapsOnce(int tile, int layers) {
           maxLayers, maxSize, tile, tile, layers);
   if (maxLayers >= 0 && layers > maxLayers)
     logWarn("gl33: requested layer count %d EXCEEDS GL_MAX_ARRAY_TEXTURE_LAYERS %d - "
-            "glTexImage3D allocation is expected to fail on this driver",
+            "upload will split across multiple texture arrays",
             layers, maxLayers);
   if (maxSize >= 0 && tile > maxSize)
     logWarn("gl33: requested tile size %d EXCEEDS GL_MAX_TEXTURE_SIZE %d", tile, maxSize);
@@ -56,22 +56,63 @@ bool checkUploadError(const char* op, int layer, int mip, int w, int h, int dept
 }  // namespace
 
 cGlTextureArray::~cGlTextureArray() {
-  if (array_) glDeleteTextures(1, &array_);
+  if (!arrays_.empty()) glDeleteTextures(int(arrays_.size()), arrays_.data());
   if (palette_) glDeleteTextures(1, &palette_);
 }
 
+namespace {
+int arrayIndexForLayer(int layer, int cap) { return (cap > 0) ? layer / cap : 0; }
+int localLayer(int layer, int cap) { return (cap > 0) ? layer % cap : layer; }
+int arrayDepth(int index, int layers, int cap) {
+  if (cap <= 0) return layers;
+  const int begin = index * cap;
+  return std::max(0, std::min(cap, layers - begin));
+}
+}  // namespace
+
 bool cGlTextureArray::upload(const cTextureReg& textures) {
-  if (!array_) glGenTextures(1, &array_);
   tile_ = textures.tileSize();
   layers_ = int(textures.textures().size());
   logArrayCapsOnce(tile_, layers_);  // G1 (2026-10-28): caps vs request, once
   bool ok = true;                     // G1: any error below still fails the upload
-  glBindTexture(GL_TEXTURE_2D_ARRAY, array_);
+
+  GLint maxLayers = 0;
+  if (glGetIntegerv) glGetIntegerv(kMaxArrayTextureLayers, &maxLayers);
+  if (glGetError) (void)glGetError();  // drain a failed query so it does not taint upload checks
+  if (maxLayers < 1) maxLayers = layers_ > 0 ? layers_ : 1;
+
+  arrayCap_ = 0;
+  int nArr = 1;
+  if (layers_ > maxLayers) {
+    nArr = (layers_ + maxLayers - 1) / maxLayers;
+    if (nArr > kMaxSplitArrays) {
+      logError("gl33: need %d texture arrays for %d layers (cap %d), this build splits at most %d - extra layers left empty",
+               nArr, layers_, maxLayers, kMaxSplitArrays);
+      nArr = kMaxSplitArrays;
+    }
+    arrayCap_ = maxLayers;
+    logInfo("gl33: splitting %d layers into %d arrays of up to %d (GL_MAX_ARRAY_TEXTURE_LAYERS=%d)",
+            layers_, nArr, maxLayers, maxLayers);
+  }
+
+  if (int(arrays_.size()) != nArr) {
+    if (!arrays_.empty()) glDeleteTextures(int(arrays_.size()), arrays_.data());
+    arrays_.assign(size_t(nArr), 0);
+    glGenTextures(nArr, arrays_.data());
+  }
+
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, tile_, tile_, layers_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  ok = checkUploadError("glTexImage3D array allocation", -1, 0, tile_, tile_, layers_) && ok;
+  for (int a = 0; a < nArr; ++a) {
+    const int depth = arrayDepth(a, layers_, arrayCap_);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_[size_t(a)]);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, tile_, tile_, std::max(1, depth), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ok = checkUploadError("glTexImage3D array allocation", a, 0, tile_, tile_, depth) && ok;
+  }
+
   std::vector<std::pair<int, std::vector<std::vector<uint8_t>>>> coverage;  // 2026-10-16 JD leaf pass
   for (int i = 0; i < layers_; ++i) {
+    if (arrayIndexForLayer(i, arrayCap_) >= nArr) continue;
+
     const Image& img = textures.textures()[size_t(i)].image;
     // Tile-geometry check (P3-3, Appendix D L1): glTexSubImage3D below
     // uploads tile_ x tile_ texels from the image's buffer unconditionally.
@@ -90,23 +131,37 @@ bool cGlTextureArray::upload(const cTextureReg& textures) {
     // per-layer copy; assign() fully overwrites it with this layer's pixels.
     dilScratch_.assign(img.pixels().begin(), img.pixels().end());
     if (!dilateSkipLayer(textures.textures()[size_t(i)].name)) dilateTransparentRGB(dilScratch_.data(), tile_, tile_);  // 2026-11-01: masks unbled (LL_MASK_NODILATE)
-    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, tile_, tile_, 1, GL_RGBA, GL_UNSIGNED_BYTE, dilScratch_.data());
+    const int a = arrayIndexForLayer(i, arrayCap_);
+    const int loc = localLayer(i, arrayCap_);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_[size_t(a)]);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, loc, tile_, tile_, 1, GL_RGBA, GL_UNSIGNED_BYTE, dilScratch_.data());
     ok = checkUploadError("glTexSubImage3D layer upload", i, 0, tile_, tile_, 1) && ok;
     if (coverageMipLayer(textures.textures()[size_t(i)].name)) coverage.emplace_back(i, coverageMips(dilScratch_.data(), tile_));
   }
-  glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
-  ok = checkUploadError("glGenerateMipmap texture array", -1, -1, tile_, tile_, layers_) && ok;
+  for (int a = 0; a < nArr; ++a) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_[size_t(a)]);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    ok = checkUploadError("glGenerateMipmap texture array", a, -1, tile_, tile_, arrayDepth(a, layers_, arrayCap_)) && ok;
+  }
   // 2026-10-16 (JD leaf pass): opted-in cutout layers replace the driver mips with
   // coverage-preserving CPU mips (texture_coverage.h). Other layers keep the driver's.
-  for (const auto& [layer, levels] : coverage)
+  for (const auto& [layer, levels] : coverage) {
+    if (arrayIndexForLayer(layer, arrayCap_) >= nArr) continue;
+    const int a = arrayIndexForLayer(layer, arrayCap_);
+    const int loc = localLayer(layer, arrayCap_);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_[size_t(a)]);
     for (size_t l = 0; l < levels.size(); ++l) {
       const int sz = std::max(1, tile_ >> int(l + 1));
-      glTexSubImage3D(GL_TEXTURE_2D_ARRAY, GLint(l + 1), 0, 0, layer, sz, sz, 1, GL_RGBA, GL_UNSIGNED_BYTE, levels[l].data());
+      glTexSubImage3D(GL_TEXTURE_2D_ARRAY, GLint(l + 1), 0, 0, loc, sz, sz, 1, GL_RGBA, GL_UNSIGNED_BYTE, levels[l].data());
       ok = checkUploadError("glTexSubImage3D coverage mip upload", layer, int(l + 1), sz, sz, 1) && ok;
     }
+  }
   applyFiltering();  // PROVISIONAL 2026-10-24: min/mag + anisotropy from the Graphics settings
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  for (GLuint id : arrays_) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, id);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  }
 
   // Palettes: row = PaletteId, padded with transparent black to the longest palette.
   const int w = textures.paletteWidth(), h = std::max<int>(1, int(textures.palettes().size()));
@@ -173,13 +228,15 @@ int cGlTextureArray::maxAnisotropy() {
 }
 
 void cGlTextureArray::applyFiltering() {
-  if (!array_) return;
-  glBindTexture(GL_TEXTURE_2D_ARRAY, array_);
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GLint(filter_ == 1 ? kLinearMipNearest : kLinearMipLinear));
-  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GLint(filter_ == 0 ? kNearest : kLinear));
+  if (arrays_.empty()) return;
   const int cap = maxAnisotropy();
   const float a = float(std::clamp(aniso_, 1, std::max(1, cap)));
-  if (cap > 1 && glTexParameterf) glTexParameterf(GL_TEXTURE_2D_ARRAY, kTexMaxAniso, a);
+  for (GLuint id : arrays_) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, id);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GLint(filter_ == 1 ? kLinearMipNearest : kLinearMipLinear));
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GLint(filter_ == 0 ? kNearest : kLinear));
+    if (cap > 1 && glTexParameterf) glTexParameterf(GL_TEXTURE_2D_ARRAY, kTexMaxAniso, a);
+  }
   logInfo("gl33: block textures: filter %s, anisotropy %.0fx [provisional]",
           filter_ == 0 ? "sharp" : filter_ == 1 ? "bilinear" : "trilinear", cap > 1 ? a : 1.f);
 }
@@ -192,9 +249,13 @@ void cGlTextureArray::setFiltering(int filter, int aniso) {
 
 void cGlTextureArray::bind() const {
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D_ARRAY, array_);
+  glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_.empty() ? 0 : arrays_[0]);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, palette_);
+  if (arrays_.size() > 1) {
+    glActiveTexture(GL_TEXTURE0 + kSecondArrayUnit);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arrays_[1]);
+  }
   glActiveTexture(GL_TEXTURE0);
 }
 

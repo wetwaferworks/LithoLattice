@@ -2,6 +2,7 @@
 // OpenGL 3.3 core backend for IRenderer. Owns all GL objects; call only from the thread
 // that owns the GL context (the main/render thread).
 #include <algorithm>
+#include <vector>
 #include <array>
 #include <cstddef>
 #include <cstdio>
@@ -819,6 +820,17 @@ class cGL33Renderer final : public IRenderer {
       frameCull_.emplace(key, cd);
       return cd;
     };
+    // TheReefs / Intel HD 2000 (2026-11-14): present is GPU-bound (~36 ms swap,
+    // ~1 ms CPU record). meshes_ is an unordered_map, so the classic/PBR
+    // loops used to issue draws in hash order. Sort visible opaque chunks
+    // front-to-back so early-z can reject far overdraw. GL only; Vulkan and
+    // software paths are untouched. Distance is chunk-centre to camera.
+    auto chunkDist2 = [&](int cx, int sy, int cz) {
+      const float dx = float(cx) * 16.f + 8.f - p.camPos.x;
+      const float dy = float(sy) * 16.f + 8.f - p.camPos.y;
+      const float dz = float(cz) * 16.f + 8.f - p.camPos.z;
+      return dx * dx + dy * dy + dz * dz;
+    };
     // Pacing pass (2026-10-19): the four per-mesh ground-effect uniforms
     // (wafer ground pulse P0/P1, ground traces P0/P1) repeat identically
     // across most meshes; re-uploading an identical value is a pure state
@@ -892,12 +904,22 @@ class cGL33Renderer final : public IRenderer {
         megaDrew = true;
       }
     }
-    if (!megaDrew) for (const auto& [k, g] : meshes_) {
+    if (!megaDrew) {
+    std::vector<const Gpu*> classicOrder;
+    classicOrder.reserve(meshes_.size());
+    for (const auto& [k, g] : meshes_) {
+      const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
+      if (decideOnce(k, mn) == CullDecision::Full) classicOrder.push_back(&g);
+    }
+    std::sort(classicOrder.begin(), classicOrder.end(), [&](const Gpu* a, const Gpu* b) {
+      return chunkDist2(a->cx, a->sy, a->cz) < chunkDist2(b->cx, b->sy, b->cz);
+    });
+    for (const Gpu* gp : classicOrder) {
+      const Gpu& g = *gp;
       const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
       // Prototype pipeline: Full draws; MeshOnly keeps the uploaded mesh but
       // skips the draw (outer tier); Cull skips. Base margin = foundation.
-      const CullDecision cd = decideOnce(k, mn);
-      if (cd != CullDecision::Full) continue;
+      // Visible set already filtered by decideOnce above (same Full-only rule).
       if (canonOn_ && canonModeSet_ != (g.canon ? 1 : 0)) { canonModeSet_ = g.canon ? 1 : 0; glUniform1i(uCanonMode_, canonModeSet_); }
       glUniform3f(uOffset_, mn.x, mn.y, mn.z);
       setEffect4(uPulseP0_, lastPulseP0, g.pulseP0);  // wafer ground pulse: this mesh's blended params
@@ -932,6 +954,7 @@ class cGL33Renderer final : public IRenderer {
       }
       ++stats_.drawn;
     }
+    }  // !megaDrew, front-to-back
     if (canonOn_ && canonModeSet_ != 0) { canonModeSet_ = 0; glUniform1i(uCanonMode_, 0); }  // entities etc. use the arrays
     // PBR (BinaryQuad) meshes: drawn with chunk_pbr. The classic meshes above are
     // untouched - program selection follows the uploaded meshes (coexistence).
@@ -941,10 +964,18 @@ class cGL33Renderer final : public IRenderer {
     // Draw helpers (lambdas, so the TrueRefraction two-pass path can reuse them):
     // drawPbrMeshes expects pbrProg_ current; drawEntities rebinds the classic prog_.
     auto drawPbrMeshes = [&]() {
+      std::vector<const PbrGpu*> pbrOrder;
+      pbrOrder.reserve(pbrMeshes_.size());
       for (const auto& [k, g] : pbrMeshes_) {
         const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
-        if (decideOnce(k, mn) != CullDecision::Full)  // decided once per frame (D-L5)
-          continue;
+        if (decideOnce(k, mn) == CullDecision::Full) pbrOrder.push_back(&g);
+      }
+      std::sort(pbrOrder.begin(), pbrOrder.end(), [&](const PbrGpu* a, const PbrGpu* b) {
+        return chunkDist2(a->cx, a->sy, a->cz) < chunkDist2(b->cx, b->sy, b->cz);
+      });
+      for (const PbrGpu* gp : pbrOrder) {
+        const PbrGpu& g = *gp;
+        const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
         glUniform3f(uPbrOffset_, mn.x, mn.y, mn.z);
         glBindVertexArray(g.vao);
         glDrawElements(GL_TRIANGLES, g.indexCount, GL_UNSIGNED_INT, nullptr);
@@ -1100,6 +1131,7 @@ class cGL33Renderer final : public IRenderer {
     auto u1 = [&](const std::string& n, int v) { glUniform1i(p.uniform(n.c_str()), v); };
     auto arr = [&](const char* n, size_t i) { return std::string(n) + "[" + std::to_string(i) + "]"; };
     u1("uTex", 0); u1("uPal", 1); u1("uTile", textures_.tileSize());
+    u1("uTex1", 4); u1("uTexArrayCap", textures_.arrayCap());
     for (size_t c = 0; c < 2; ++c) { u1(arr("uWirePal", c), bindings_.stripPalette[c]); u1(arr("uRing", c), bindings_.stripRing[c]); }
     for (size_t t = 0; t < 3; ++t) {
       u1(arr("uLampPal", t), bindings_.tierPalette[t]);

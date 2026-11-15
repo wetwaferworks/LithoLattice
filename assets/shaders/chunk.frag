@@ -5,6 +5,10 @@
 in vec3 vWorld; in vec3 vNormal; in float vAO; in vec2 vUV;
 flat in int vLayer; flat in int vVal; flat in int vMode; flat in int vRot;
 uniform sampler2DArray uTex; uniform sampler2D uPal;
+// Split array fallback when layer count exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (TheReefs / Intel HD 2000).
+// uTexArrayCap==0: single array in uTex (unchanged). Else layer>=cap is sampled from uTex1 at layer-cap.
+#define LITHO_GL_TEX_SPLIT
+uniform sampler2DArray uTex1; uniform int uTexArrayCap;
 uniform vec3 uCam; uniform vec3 uSky; uniform float uFogEnd; uniform float uTime; uniform int uDebug;
 // Near-camera model dithering (JD 2026-10-13): enables the guarded block
 // at the top of chunk_shading.glsl's main(); band = (near, far) blocks.
