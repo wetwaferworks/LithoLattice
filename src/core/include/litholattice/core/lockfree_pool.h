@@ -45,7 +45,13 @@ class cLockFreePool {
   }
 
   cLockFreePool(unsigned n, void (*threadInit)()) {
-    n = std::max(1u, n);
+    // n==0: no worker threads. submit() runs on the caller so a 0-reserve shared
+    // pool under LL_HS_LAYOUT=original cannot hang or do `% 0`. (The old floor of 1
+    // would spend a render-side thread we do not have on 4-core machines.)
+    if (n == 0) {
+      lendCap_.store(0, std::memory_order_relaxed);
+      return;
+    }
     lendCap_.store(n, std::memory_order_relaxed);
     if (cThreadReadout::enabled()) readout_ = std::make_unique<cThreadReadout>(n);  // LL_THREAD_READOUT
     workers_.reserve(n);
@@ -63,13 +69,18 @@ class cLockFreePool {
 
   unsigned size() const { return unsigned(workers_.size()); }
 
+  void runInline(std::function<void()> f) {
+    try { f(); } catch (...) { failed_.fetch_add(1, std::memory_order_relaxed); throw; }
+  }
   void submit(std::function<void()> f) {
+    if (workers_.empty()) { runInline(std::move(f)); return; }
     Job j = new std::function<void()>(std::move(f));
     { const int d = inFlight_.fetch_add(1, std::memory_order_acq_rel) + 1; if (readout_) readout_->depth(d); }
     pushNormal(j);
     wake(false);
   }
   void submitUrgent(std::function<void()> f) {
+    if (workers_.empty()) { runInline(std::move(f)); return; }
     Job j = new std::function<void()>(std::move(f));
     inFlight_.fetch_add(1, std::memory_order_acq_rel);
     if (readout_) readout_->depth(cThreadReadout::kUrgent, int(urgent_.pending()) + 1);
@@ -77,6 +88,7 @@ class cLockFreePool {
     wake(false);
   }
   void submitBackground(std::function<void()> f) {
+    if (workers_.empty()) { runInline(std::move(f)); return; }
     Job j = new std::function<void()>(std::move(f));
     inFlight_.fetch_add(1, std::memory_order_acq_rel);
     { const int d = int(bgCount_.fetch_add(1, std::memory_order_acq_rel)) + 1; if (readout_) readout_->depth(cThreadReadout::kBackground, d); }
@@ -86,7 +98,11 @@ class cLockFreePool {
   /// Gate 1: true on a worker thread of ANY cLockFreePool (fork-join callers run inline there).
   static bool onAnyWorker() { return tlsOwner() != nullptr && selfIndex() >= 0; }
   bool urgentPending() const { return urgent_.pending() > 0; }
-  void setLendCap(unsigned c) { lendCap_.store(std::max(1u, c), std::memory_order_release); wake(true); }
+  void setLendCap(unsigned c) {
+    if (workers_.empty()) { lendCap_.store(0, std::memory_order_release); return; }
+    lendCap_.store(std::max(1u, c), std::memory_order_release);
+    wake(true);
+  }
   unsigned lendCap() const { return lendCap_.load(std::memory_order_acquire); }
   void waitIdle() const {
     for (int v = inFlight_.load(std::memory_order_acquire); v != 0; v = inFlight_.load(std::memory_order_acquire))

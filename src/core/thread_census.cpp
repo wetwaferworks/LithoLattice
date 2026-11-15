@@ -49,18 +49,73 @@ CoresResolution resolveCores(unsigned cli, const char* env, unsigned hw) {
   return {std::max(1u, hw), CoresSource::Hardware};
 }
 
+unsigned remainingAfterPermanentThree(unsigned hw) {
+  hw = std::max(1u, hw);
+  return hw > 3u ? hw - 3u : 1u;
+}
+
+unsigned renderSideBudget(unsigned hw) { return remainingAfterPermanentThree(hw) + 2u; }
+
+// JD 2026-11-14: LK_RENDER_THREADS=1 opts into a four-thread-total shape:
+// the permanent three + exactly one render-side thread (1 software raster
+// band; mesh/vertex work is caller-runs; reserve 0). Unset keeps the default
+// 2+1+0 (and the larger-machine planner). Other values are ignored.
+bool compactFourThreadTotal() {
+  const char* e = std::getenv("LK_RENDER_THREADS");
+  if (!e || !*e) return false;
+  char* end = nullptr;
+  const unsigned long v = std::strtoul(e, &end, 10);
+  return end && *end == '\0' && v == 1ul;
+}
+
+RenderSidePlan planRenderSide(unsigned hw, bool wasm) {
+  RenderSidePlan p;
+  p.hw = std::max(1u, hw);
+  p.remaining = remainingAfterPermanentThree(p.hw);
+  p.budget = p.remaining + 2u;
+  if (compactFourThreadTotal()) {
+    p.swBands = 1u;
+    p.meshDedicated = 0u;
+    p.reservePool = 0u;
+    p.swSpawned = 0u;
+    p.swSpawnedDetached = 1u;
+    return p;
+  }
+  const unsigned rasterCap = wasm ? 4u : 16u;
+  // Split the render-side budget: about half raster, the rest mesh + a small reserve.
+  // Prefer at least 2 software bands when budget >= 3 (TheReefs 4 hw: budget 3 →
+  // 2 bands + 1 mesh + reserve 0). 12 hw: budget 11 → 5 bands + 4 mesh + reserve 2.
+  unsigned raster = p.budget / 2u;
+  if (p.budget >= 3u && raster < 2u) raster = 2u;
+  if (raster < 1u) raster = 1u;
+  if (raster > rasterCap) raster = rasterCap;
+  if (raster >= p.budget && p.budget > 1u) raster = p.budget - 1u;  // keep at least 1 for mesh/reserve
+  const unsigned meshRes = p.budget - raster;
+  // A leftover of 1 goes to the dedicated mesh worker, not the reserve
+  // pool, so TheReefs (budget 3) is 2 bands + 1 mesh + reserve 0. A 0-worker
+  // reserve is caller-runs under original handshake (shards already inline).
+  if (meshRes >= 6u) p.reservePool = 2u;
+  else if (meshRes >= 2u) p.reservePool = 1u;
+  else p.reservePool = 0u;
+  p.meshDedicated = meshRes - p.reservePool;
+  p.swBands = std::max(1u, raster);
+  p.swSpawned = p.swBands > 0u ? p.swBands - 1u : 0u;
+  p.swSpawnedDetached = p.swBands;
+  return p;
+}
+
 unsigned autoRenderBands(unsigned cores, bool wasm) {
-  const unsigned n = std::clamp(cores > 1 ? cores - 1 : 1u, 2u, 16u);
-  return wasm ? std::min(n, 4u) : n;  // web: Archie's raster lane count, caller included
+  return planRenderSide(cores, wasm).swBands;
 }
 
 unsigned resolveRenderBands(unsigned req, unsigned cores, bool wasm) {
   cores = std::max(1u, cores);
-  if (!req) return autoRenderBands(cores, wasm);  // auto: not limited by the hw clamp (2-core floor is 2)
-  // JD t3349u item 7: power-of-two was only a heuristic (rows are pulled as 32-row strips
-  // by any band count; the auto rule already yields 11 on 12 cores), so an explicit request
-  // is honoured as given. The one hard limit is the 64-band storage cap.
-  return std::min(req, kMaxRenderBands);
+  const RenderSidePlan p = planRenderSide(cores, wasm);
+  if (!req) return p.swBands;
+  // Honour an explicit --render-threads, but never take more than the raster slice of
+  // the shared render-side budget (or the storage cap).
+  const unsigned cap = std::min(kMaxRenderBands, std::max(1u, p.swBands));
+  return std::min(req, cap);
 }
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
@@ -68,53 +123,63 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
   b.hwRaw = hwRaw;
   b.hw = std::max(1u, hwRaw);
   b.smallMachine = b.hw <= 4;
-  // Class A: today's rules, unchanged (timing_handshake.cpp ctor; swAutoRenderThreads).
+  // Handshake shard *jobs* (not OS threads). Unchanged; they stay off the render-side budget.
   b.simShards = std::min(4u, b.hw > 1 ? b.hw - 1 : 1u);
-  b.renderBands = autoRenderBands(b.hw, wasm);
-  b.renderSpawned = b.renderBands - 1;
-  // Class B (Archie ruling 3/4): clamp(cores - 2, 1, kMaxPoolWorkers) on every size.
-  b.pool = std::clamp(b.hw > 2 ? b.hw - 2 : 1u, 1u, kMaxPoolWorkers);
-  // 2026-10-30 (JD t3557u) LL_THREAD_BUDGET=1 (implied by LL_HS_LOCKFREE=1 / LL_HS_LAYOUT=original):
-  // total compute threads <= cores. Dedicated: main + sim clock, plus the lock-free shard threads
-  // (LL_HS_LOCKFREE) or the control/event thread (original layout). The pool gets the rest.
-  // Render bands are spawned lazily by the software renderer only, so Vulkan spends none.
-  {
-    const char* tb = std::getenv("LL_THREAD_BUDGET");
-    const char* lf = std::getenv("LL_HS_LOCKFREE");
-    const char* ly = std::getenv("LL_HS_LAYOUT");
-    const bool orig = ly && std::strcmp(ly, "original") == 0;
-    const bool lock = lf && lf[0] == '1';
-    if ((tb && tb[0] == '1') || lock || orig) {
-      const unsigned dedicated = 2u + (orig ? 1u : lock ? b.simShards : 0u);
-      b.pool = std::clamp(b.hw > dedicated ? b.hw - dedicated : 1u, 1u, kMaxPoolWorkers);
-      b.capped = true; b.dedicatedExtra = dedicated - 2u; b.layoutOriginal = orig;
-    }
-  }
-  // Step 10 (JD 2026-10-31, default off): LL_DED_LAYOUT=6|8 dedicated layouts. 3 permanent
-  // threads (main, tick, control+event: run with LL_HS_LAYOUT=original), a dedicated render
-  // thread (LL_THREEWAY=1) and 2 dedicated mesh/vertex workers (the game's own lock-free
-  // job pool, main.cpp). The shared pool keeps 2 workers for layout 8 and its 1-worker floor
-  // for layout 6 (idle there: shards run inline on the tick thread).
-  if (const char* d = std::getenv("LL_DED_LAYOUT")) {
-    if (d[0] == '6' || d[0] == '8') { b.pool = d[0] == '8' ? 2u : 1u; b.capped = true; }
+
+  const RenderSidePlan p = planRenderSide(b.hw, wasm);
+  b.remaining = p.remaining;
+  b.renderSideBudget = p.budget;
+  b.renderBands = p.swBands;
+  b.capped = true;  // JD 2026-11-14: the render-side cap always applies
+
+  const char* ly = std::getenv("LL_HS_LAYOUT");
+  const char* lf = std::getenv("LL_HS_LOCKFREE");
+  const char* tw = std::getenv("LL_THREEWAY");
+  const char* ded = std::getenv("LL_DED_LAYOUT");
+  const bool orig = ly && std::strcmp(ly, "original") == 0;
+  (void)lf;
+  const bool threeway = tw && tw[0] == '1';
+  const bool dedOn = ded && (ded[0] == '6' || ded[0] == '8');
+  b.layoutOriginal = orig;
+  // Permanent three: main + tick/sim clock + control/event (original layout) or lock-free shards as jobs.
+  // Keep existing thread roles; this only records that the third reserved slot is the control/event
+  // thread under the default original layout (handshake shards still run inline on the tick thread).
+  b.dedicatedExtra = orig ? 1u : 0u;
+
+  // Detached software threeway (layout 8 default) spends the executor as a render-side thread.
+  // Without threeway the caller is main, so only extra band workers count.
+  b.renderSpawned = threeway ? p.swSpawnedDetached : p.swSpawned;
+
+  if (dedOn) {
+    b.meshDedicated = p.meshDedicated;
+    // 0 is allowed under LL_HS_LAYOUT=original: shards already run inline, so the shared
+    // reserve can be a no-thread, caller-runs pool (see cLockFreePool n==0).
+    b.pool = p.reservePool;
+  } else {
+    b.meshDedicated = 0;
+    b.pool = std::clamp(p.reservePool + p.meshDedicated, 1u, kMaxPoolWorkers);
   }
   b.activeCap = b.pool;
   return b;
 }
 
-unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned) { return b.pool + renderSpawned; }
+unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned) {
+  return b.pool + b.meshDedicated + renderSpawned;
+}
 
 static const char* sourceName(CoresSource s) {
   return s == CoresSource::Cli ? "--cores" : s == CoresSource::Env ? "LITHO_CORES" : "hardware";
 }
 
 std::string threadTally(const ThreadBudget& b) {
-  char buf[320];
+  char buf[400];
   std::snprintf(buf, sizeof buf,
-                "threads: census %u cores (%s; hardware reports %u): compute workers %u = shared pool %u + "
-                "render bands %u spawned; dedicated main %u + sim clock %u; system/I-O threads not budgeted",
-                b.hw, sourceName(b.source), b.hwRaw, computeWorkers(b, b.renderSpawned), b.pool, b.renderSpawned,
-                b.mainThreads, b.simClock);
+                "threads: census %u cores (%s; hardware reports %u): permanent 3 reserved "
+                "(main, timing-handshake+control, tick/sim); remaining %u; render-side budget %u "
+                "(remaining+2) used %u = mesh %u + reserve pool %u + render bands %u spawned; "
+                "system/I-O threads not budgeted",
+                b.hw, sourceName(b.source), b.hwRaw, b.remaining, b.renderSideBudget,
+                computeWorkers(b, b.renderSpawned), b.meshDedicated, b.pool, b.renderSpawned);
   return buf;
 }
 
@@ -126,13 +191,14 @@ std::string oversubscriptionWarning(const ThreadBudget& b, bool renderExplicit, 
   const unsigned hwCores = std::max(1u, b.hwRaw);
   const ThreadBudget a = computeThreadBudget(hwCores);  // what automatic settings plan here
   const unsigned autoCompute = computeWorkers(a, a.renderSpawned);
-  if (compute <= std::max(hwCores, autoCompute)) return {};
-  char buf[320];
+  if (compute <= std::max(a.renderSideBudget, autoCompute)) return {};
+  char buf[400];
   std::snprintf(buf, sizeof buf,
-                "threads: explicit %s%s%s plans %u compute workers (shared pool %u + render bands %u) on %u hardware "
-                "cores (automatic settings plan %u); oversubscribing, no pinning (ruling 6)",
+                "threads: explicit %s%s%s plans %u render-side workers (mesh %u + shared pool %u + render bands %u) on %u hardware "
+                "cores (automatic settings plan %u, render-side budget %u); oversubscribing, no pinning (ruling 6)",
                 coresExplicit ? sourceName(b.source) : "", coresExplicit && renderExplicit ? " + " : "",
-                renderExplicit ? "--render-threads" : "", compute, b.pool, rs, hwCores, autoCompute);
+                renderExplicit ? "--render-threads" : "", compute, b.meshDedicated, b.pool, rs, hwCores, autoCompute,
+                a.renderSideBudget);
   return buf;
 }
 
@@ -176,14 +242,15 @@ cThreadCensus& cThreadCensus::instance() {
     cc->budget_.hwRaw = hw;  // telemetry: what the hardware reported
     g_booted.store(true);
     logInfo("%s", threadTally(cc->budget_).c_str());  // t3353u: the tally is a summary, not a warning
-    if (cc->budget_.capped) {  // 2026-10-30 (JD t3557u): budget never exceeds the core count (--cores > LITHO_CORES > hardware)
+    if (cc->budget_.capped) {
       const ThreadBudget& b = cc->budget_;
-      const unsigned total = 2u + b.dedicatedExtra + b.pool;
-      logInfo("threads: budget capped at %u cores (%s): main 1 + sim clock 1 + %s %u + on-demand pool %u = %u; render bands run on the pool (software renderer spawns %u lazily)",
-              b.hw, sourceName(b.source), b.layoutOriginal ? "control/event" : "lock-free shards", b.dedicatedExtra, b.pool, total, b.renderSpawned);
-      if (total > b.hw)
-        logWarn("threads: budget %u exceeds %u cores (%s): main 1 + sim clock 1 + dedicated %u + pool %u (pool floor 1); oversubscribing, no pinning",
-                total, b.hw, sourceName(b.source), b.dedicatedExtra, b.pool);
+      logInfo("threads: permanent 3 (main, timing-handshake+control, tick/sim) reserved; remaining %u of %u cores (%s); "
+              "render-side budget %u (remaining+2) used %u = mesh %u + reserve pool %u + render bands %u spawned",
+              b.remaining, b.hw, sourceName(b.source), b.renderSideBudget, b.renderSideUsed(),
+              b.meshDedicated, b.pool, b.renderSpawned);
+      if (b.renderSideUsed() > b.renderSideBudget)
+        logWarn("threads: render-side used %u exceeds budget %u on %u cores (%s); oversubscribing, no pinning",
+                b.renderSideUsed(), b.renderSideBudget, b.hw, sourceName(b.source));
     }
     const std::string w = oversubscriptionWarning(cc->budget_);  // explicit --cores / LITHO_CORES only
     if (!w.empty()) logWarn("%s", w.c_str());

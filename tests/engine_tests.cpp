@@ -8702,42 +8702,49 @@ void testMarchRay() {
 void testThreadCensus() {
   std::printf("core: thread census (Thread Handshake P1, record-only)\n");
   struct Want { unsigned hw, shards, bands, pool, cap; bool small; };
+  // JD 2026-11-14: no LL_DED_LAYOUT in this process, so mesh is folded into the shared pool.
+  // remaining+2 budget: 4 hw -> 3 render-side, 12 hw -> 11. Auto bands share that budget.
   const Want wants[] = {
-      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 3, 2, 2, true},  // ruling 3/4: clamp(cores-2, 1, 64)
-      {8, 4, 7, 6, 6, false},  {16, 4, 15, 14, 14, false}, {32, 4, 16, 30, 30, false},
+      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 2, 1, 1, true},
+      {8, 4, 3, 4, 4, false},  {16, 4, 7, 8, 8, false}, {32, 4, 15, 16, 16, false},
   };
   bool mathOk = true;
-  // 2026-10-30: layout-aware. Under LL_THREAD_BUDGET / LL_HS_LOCKFREE / LL_HS_LAYOUT=original the
-  // pool is cores minus every dedicated thread (main + clock + extra), floor 1.
-  auto capPool = [](unsigned hw, unsigned legacy) {
-    const ThreadBudget c = computeThreadBudget(hw);
-    if (!c.capped) return legacy;
-    const unsigned ded = 2u + c.dedicatedExtra;
-    return std::clamp(c.hw > ded ? c.hw - ded : 1u, 1u, kMaxPoolWorkers);
-  };
   for (const Want& w : wants) {
     const ThreadBudget b = computeThreadBudget(w.hw);
+    const RenderSidePlan p = planRenderSide(w.hw);
     const bool ok = b.hw == w.hw && b.simShards == w.shards && b.renderBands == w.bands &&
-                    b.renderSpawned == w.bands - 1 && b.pool == capPool(w.hw, w.pool) && b.activeCap == capPool(w.hw, w.cap) &&
-                    b.smallMachine == w.small && b.simClock == 1 && b.mainThreads == 1;
-    std::printf("  census hw=%-2u: sim clock 1, shards %u, render bands %u (%u spawned), pool %u, cap %u%s -> %u spawned\n",
-                w.hw, b.simShards, b.renderBands, b.renderSpawned, b.pool, b.activeCap, b.smallMachine ? ", small" : "",
+                    b.renderSpawned == w.bands - 1 && b.pool == w.pool && b.activeCap == w.cap &&
+                    b.smallMachine == w.small && b.simClock == 1 && b.mainThreads == 1 &&
+                    b.renderSideBudget == p.budget && b.remaining == p.remaining &&
+                    b.meshDedicated == 0 && b.renderSideUsed() <= b.renderSideBudget &&
+                    p.usedDetached() == p.budget;
+    std::printf("  census hw=%-2u: sim clock 1, shards %u, render bands %u (%u spawned), pool %u, cap %u, "
+                "render-side %u/%u%s -> %u spawned\n",
+                w.hw, b.simShards, b.renderBands, b.renderSpawned, b.pool, b.activeCap,
+                b.renderSideUsed(), b.renderSideBudget, b.smallMachine ? ", small" : "",
                 b.spawnedTotal());
     mathOk = mathOk && ok;
   }
-  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the rules");
-  check(computeThreadBudget(0).hw == 1 && computeThreadBudget(0).pool == 1, "thread census: unknown core count (0) treated as 1");
-  // Today's owners use the same numbers (record-only P1 must not change any count).
+  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the render-side remaining+2 rule");
+  check(computeThreadBudget(0).hw == 1 && computeThreadBudget(0).pool == computeThreadBudget(1).pool,
+        "thread census: unknown core count (0) treated as 1");
+  check(renderSideBudget(4) == 3 && renderSideBudget(12) == 11 && remainingAfterPermanentThree(4) == 1 &&
+            remainingAfterPermanentThree(12) == 9,
+        "thread census: TheReefs 4 hw -> remaining 1 budget 3; 12-hw workstation -> remaining 9 budget 11");
   bool same = true;
   for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 12u, 16u, 32u, 64u}) {
     const ThreadBudget b = computeThreadBudget(hw);
-    same = same && b.simShards == std::min(4u, hw > 1 ? hw - 1 : 1u) && b.renderBands == std::clamp(hw > 1 ? hw - 1 : 1u, 2u, 16u);
+    const RenderSidePlan p = planRenderSide(hw);
+    same = same && b.simShards == std::min(4u, hw > 1 ? hw - 1 : 1u) && b.renderBands == p.swBands &&
+           b.renderSideUsed() <= b.renderSideBudget;
   }
-  check(same, "thread census: shard and band counts equal the Timing Handshake and renderer auto rules");
-  // Small machines: the pool never takes the dedicated cores.
+  check(same, "thread census: shard counts unchanged; bands follow planRenderSide and stay in budget");
   bool small = true;
-  for (unsigned hw = 1; hw <= 4; ++hw) { const ThreadBudget b = computeThreadBudget(hw); small = small && b.pool == capPool(hw, std::max(1u, hw > 2 ? hw - 2 : 0u)); }
-  check(small, "thread census: on <= 4 cores dedicated threads claim first, pool shrinks (floor 1)");
+  for (unsigned hw = 1; hw <= 4; ++hw) {
+    const ThreadBudget b = computeThreadBudget(hw);
+    small = small && b.renderSideBudget == 3 && b.pool == 1 && b.renderBands == 2 && b.renderSideUsed() <= 3;
+  }
+  check(small, "thread census: on <= 4 cores the render-side budget is 3 and stays filled in-budget");
   // hardware_concurrency is read once.
   const ThreadBudget& b1 = cThreadCensus::instance().budget();
   const ThreadBudget& b2 = cThreadCensus::instance().budget();
@@ -8799,22 +8806,50 @@ void testThreadCensusRulings() {
         "census cores: CLI beats LITHO_CORES");
   check(resolveCores(0, "0", 12).cores == 12 && resolveCores(0, "x4", 12).cores == 12 && resolveCores(0, "", 0).cores == 1,
         "census cores: invalid / zero env ignored, unknown hardware -> 1");
-  bool poolOk = true;
-  const bool capped = computeThreadBudget(12).capped;  // 2026-10-30: layout-aware (cores minus dedicated)
+  bool planOk = true;
   for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 16u, 32u, 64u, 128u}) {
     const ThreadBudget c = computeThreadBudget(hw);
-    const unsigned ded = capped ? 2u + c.dedicatedExtra : 2u;
-    poolOk = poolOk && c.pool == std::clamp(hw > ded ? hw - ded : 1u, 1u, kMaxPoolWorkers);
+    const RenderSidePlan p = planRenderSide(hw);
+    const unsigned folded = std::clamp(p.reservePool + p.meshDedicated, 1u, kMaxPoolWorkers);
+    planOk = planOk && c.renderSideBudget == p.budget && c.remaining == p.remaining && c.renderBands == p.swBands &&
+             c.pool == folded && c.meshDedicated == 0 && c.renderSideUsed() <= c.renderSideBudget &&
+             (p.reservePool + p.meshDedicated <= kMaxPoolWorkers ? p.usedDetached() == p.budget : true);
   }
-  check(poolOk && (capped || computeThreadBudget(4).pool == 2) && computeThreadBudget(2).pool == 1 && computeThreadBudget(1).pool == 1 &&
-            computeThreadBudget(128).pool == kMaxPoolWorkers,
-        "census pool: clamp(cores-2, 1, MAX_POOL_WORKERS); 4 cores -> 2, 1-2 cores -> 1");
-  check(resolveRenderBands(0, 12, false) == 11 && resolveRenderBands(0, 2, false) == 2 && resolveRenderBands(0, 64, false) == 16,
-        "census bands: auto = clamp(cores-1, 2, 16)");
-  check(resolveRenderBands(0, 12, true) == 4 && resolveRenderBands(0, 2, true) == 2, "census bands: WASM auto capped at 4");
-  check(resolveRenderBands(3, 8, false) == 3 && resolveRenderBands(100, 16, false) == 64 && resolveRenderBands(8, 4, false) == 8 &&
-            resolveRenderBands(1, 1, false) == 1 && resolveRenderBands(500, 128, false) == 64 && resolveRenderBands(16, 12, true) == 16,
-        "census bands: an explicit request is honoured as given, capped only at 64 (JD t3349u item 7)");
+  check(planOk && renderSideBudget(4) == 3 && renderSideBudget(12) == 11 && computeThreadBudget(4).pool == 1 &&
+            computeThreadBudget(12).pool == 6 && planRenderSide(4).swBands == 2 && planRenderSide(4).meshDedicated == 1 &&
+            planRenderSide(4).reservePool == 0 && planRenderSide(12).swBands == 5 && planRenderSide(12).meshDedicated == 4 &&
+            planRenderSide(12).reservePool == 2,
+        "census pool/bands: planRenderSide remaining+2 (4 hw -> budget 3, 12 hw -> 11); mesh folded into pool here");
+#ifdef _WIN32
+  _putenv_s("LK_RENDER_THREADS", "1");
+#else
+  setenv("LK_RENDER_THREADS", "1", 1);
+#endif
+  const RenderSidePlan c4 = planRenderSide(4), c12 = planRenderSide(12);
+  const bool compactOk = c4.swBands == 1 && c4.meshDedicated == 0 && c4.reservePool == 0 &&
+                         c12.swBands == 1 && c12.meshDedicated == 0 && c12.reservePool == 0 &&
+                         c4.usedDetached() == 1 && c12.usedDetached() == 1;
+#ifdef _WIN32
+  _putenv_s("LK_RENDER_THREADS", "");
+#else
+  unsetenv("LK_RENDER_THREADS");
+#endif
+  check(compactOk && planRenderSide(4).swBands == 2 && planRenderSide(4).meshDedicated == 1,
+        "census: LK_RENDER_THREADS=1 is 1 band + mesh caller-runs + reserve 0; unset restores the default plan");
+  check(resolveRenderBands(0, 12, false) == planRenderSide(12, false).swBands &&
+            resolveRenderBands(0, 2, false) == planRenderSide(2, false).swBands &&
+            resolveRenderBands(0, 64, false) == planRenderSide(64, false).swBands,
+        "census bands: auto follows planRenderSide");
+  check(resolveRenderBands(0, 12, true) == planRenderSide(12, true).swBands &&
+            resolveRenderBands(0, 2, true) == planRenderSide(2, true).swBands,
+        "census bands: WASM auto follows planRenderSide (raster cap 4)");
+  check(resolveRenderBands(3, 8, false) == std::min(3u, planRenderSide(8).swBands) &&
+            resolveRenderBands(100, 16, false) == planRenderSide(16).swBands &&
+            resolveRenderBands(8, 4, false) == planRenderSide(4).swBands &&
+            resolveRenderBands(1, 1, false) == 1 &&
+            resolveRenderBands(500, 128, false) == planRenderSide(128).swBands &&
+            resolveRenderBands(16, 12, true) == planRenderSide(12, true).swBands,
+        "census bands: an explicit request is clamped to the render-side raster slice");
   {  // Archie t3353u: compute workers only; automatic settings never warn
     const ThreadBudget a = computeThreadBudget(12);
     ThreadBudget cli = computeThreadBudget(32); cli.hwRaw = 12; cli.source = CoresSource::Cli;
@@ -8823,14 +8858,19 @@ void testThreadCensusRulings() {
     for (unsigned hw : {1u, 2u, 4u, 8u, 12u, 16u, 64u, 128u}) autoQuiet = autoQuiet && oversubscriptionWarning(computeThreadBudget(hw)).empty();
     const std::string w = oversubscriptionWarning(cli);
     const std::string wr = oversubscriptionWarning(a, true, 63);
-    check(autoQuiet && oversubscriptionWarning(same).empty() && oversubscriptionWarning(a, true, 10).empty() && !w.empty() &&
+    check(autoQuiet && oversubscriptionWarning(same).empty() &&
+              oversubscriptionWarning(a, true, a.renderSpawned).empty() &&
+              !oversubscriptionWarning(a, true, 10).empty() && !w.empty() &&
               w.find("--cores") != std::string::npos && w.find("shared pool " + std::to_string(cli.pool) + " ") != std::string::npos &&
-              w.find("render bands 15") != std::string::npos && !wr.empty() && wr.find("--render-threads") != std::string::npos,
-          "census: automatic settings never warn; only an explicit override past the hardware does (t3353u)");
-    const unsigned cw = a.pool + a.renderSpawned;  // 20 by default; layout-aware under the cap
-    check(threadTally(a).find("compute workers " + std::to_string(cw) + " ") != std::string::npos && computeWorkers(a, a.renderSpawned) == cw &&
-              (a.capped || cw == 20) && poolInvariantViolation(a.pool, a).empty() && !poolInvariantViolation(a.pool + 1, a).empty(),
-          "census: the tally counts compute workers only (pool + render bands); pool invariant check");
+              w.find("render bands " + std::to_string(cli.renderSpawned)) != std::string::npos && !wr.empty() &&
+              wr.find("--render-threads") != std::string::npos,
+          "census: automatic settings never warn; only an explicit override past the render-side budget does");
+    const unsigned cw = a.pool + a.meshDedicated + a.renderSpawned;
+    check(threadTally(a).find("render-side budget " + std::to_string(a.renderSideBudget)) != std::string::npos &&
+              threadTally(a).find("used " + std::to_string(cw)) != std::string::npos &&
+              computeWorkers(a, a.renderSpawned) == cw && a.renderSideBudget == 11 &&
+              poolInvariantViolation(a.pool, a).empty() && !poolInvariantViolation(a.pool + 1, a).empty(),
+          "census: the tally counts render-side workers (mesh + pool + bands) against remaining+2; pool invariant check");
   }
   {
     const uint64_t prev = cThreadCensus::lastCommittedTick();

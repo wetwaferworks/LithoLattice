@@ -52,9 +52,9 @@ struct CoresResolution { unsigned cores = 1; CoresSource source = CoresSource::H
 /// Pure: cli 0 = not given; env nullptr/empty/invalid/0 = not given; hw 0 = unknown (-> 1).
 CoresResolution resolveCores(unsigned cli, const char* env, unsigned hw);
 
-/// Ruling 5: the single software-renderer band resolver (renderer and rasterizer stop
-/// clamping locally). req 0 = auto: clamp(cores-1, 2, 16), and 4 on WASM. An explicit
-/// req rounds down to a power of two <= min(req, kMaxRenderBands, cores), floor 1.
+/// Ruling 5 + JD 2026-11-14: auto bands come from planRenderSide() so they share the
+/// render-side budget with mesh/vertex/reserve workers. req 0 = auto. An explicit req
+/// is clamped to the plan's raster slice (and kMaxRenderBands), never past the budget.
 unsigned autoRenderBands(unsigned cores, bool wasm);
 unsigned resolveRenderBands(unsigned req, unsigned cores, bool wasm);
 #ifdef __wasm__
@@ -63,6 +63,30 @@ constexpr bool kCensusWasm = true;
 constexpr bool kCensusWasm = false;
 #endif
 
+/// JD 2026-11-14: after the permanent three (main, timing-handshake+control, tick/sim),
+/// remaining = max(hw-3, 1). All render / vertex / mesh OS threads share at most
+/// remaining+2 (TheReefs 4 hw -> 3; 12-hw workstation -> 11).
+unsigned remainingAfterPermanentThree(unsigned hw);
+unsigned renderSideBudget(unsigned hw);
+
+/// One allocation used by the census, the shared/reserve pool, the dedicated mesh
+/// pool, and the software raster bands (including a detached threeway executor).
+struct RenderSidePlan {
+  unsigned hw = 1;
+  unsigned remaining = 1;          ///< max(hw-3, 1)
+  unsigned budget = 3;             ///< remaining+2
+  unsigned meshDedicated = 0;      ///< dedicated mesh/vertex workers
+  unsigned reservePool = 0;        ///< shared job-pool workers (render-side reserve)
+  unsigned swBands = 1;            ///< software bands, caller included
+  unsigned swSpawned = 0;          ///< extra band workers when the caller is main
+  unsigned swSpawnedDetached = 0;  ///< executor + extra band workers (threeway software)
+  unsigned usedSync() const { return meshDedicated + reservePool + swSpawned; }
+  unsigned usedDetached() const { return meshDedicated + reservePool + swSpawnedDetached; }
+};
+/// LK_RENDER_THREADS=1: opt-in four-thread-total plan (1 software band, mesh
+/// caller-runs, reserve 0). Default (unset) is the usual budget split.
+RenderSidePlan planRenderSide(unsigned hw, bool wasm = kCensusWasm);
+
 /// Pure budget for a given logical core count. computeThreadBudget is the single rule.
 struct ThreadBudget {
   unsigned hwRaw = 0;          ///< hardware_concurrency() as reported (0 = unknown)
@@ -70,31 +94,35 @@ struct ThreadBudget {
   bool smallMachine = false;   ///< hw <= 4: dedicated threads claim first, the pool shrinks
   // Class A
   unsigned mainThreads = 1;    ///< the caller / window thread (not spawned)
-  unsigned simClock = 1;       ///< Timing Handshake clock thread
-  unsigned simShards = 1;      ///< Timing Handshake shard workers: min(4, hw-1), floor 1
-  unsigned renderBands = 2;    ///< software renderer bands incl. caller: clamp(hw-1, 2, 16)
-  unsigned renderSpawned = 1;  ///< bands spawned as threads (caller runs one band)
-  // Class B (Archie ruling 3/4, t3340u): pool = clamp(cores-2, 1, kMaxPoolWorkers);
-  // 4 cores -> 2 workers, 1-2 cores -> 1 (never 0). System threads never deduct from it.
+  unsigned simClock = 1;       ///< Timing Handshake clock thread (tick/sim)
+  unsigned simShards = 1;      ///< Timing Handshake shard workers: min(4, hw-1), floor 1 (jobs, not OS threads)
+  unsigned renderBands = 1;    ///< software renderer bands incl. caller (from planRenderSide)
+  unsigned renderSpawned = 0;  ///< band OS threads counted against the render-side budget
+  // Class B: reserve/shared pool, sized from planRenderSide (no longer clamp(cores-2)).
   unsigned pool = 1;           ///< pooled workers (single physical backing: cJobPool, P3)
   unsigned activeCap = 1;      ///< adaptive cap seed: max pooled workers active at once
   CoresSource source = CoresSource::Hardware;  ///< where hw came from (ruling 5)
-  bool capped = false;           ///< 2026-10-30 (JD t3557u): LL_THREAD_BUDGET / lock-free / original layout
-  unsigned dedicatedExtra = 0;   ///< dedicated threads beyond main + sim clock (shards or control/event)
+  bool capped = false;           ///< render-side budget is always capped (JD 2026-11-14)
+  unsigned dedicatedExtra = 0;   ///< dedicated threads beyond main + sim clock (control/event)
   bool layoutOriginal = false;
+  unsigned remaining = 1;        ///< max(hw-3, 1) after the permanent three
+  unsigned renderSideBudget = 3; ///< remaining+2
+  unsigned meshDedicated = 0;    ///< dedicated mesh/vertex workers (0 if folded into pool)
   /// Cores the always-running dedicated threads hold (main + sim clock).
   unsigned dedicatedCores() const { return mainThreads + simClock; }
   /// Every OS thread the engine would own at boot (main excluded: it already exists).
   /// P3 (ruling 2): shards are pool jobs, not threads, so they no longer add to the spawn count.
-  unsigned spawnedTotal() const { return simClock + renderSpawned + pool; }
+  /// meshDedicated is spawned by the game when LL_DED_LAYOUT=6|8.
+  unsigned spawnedTotal() const { return simClock + renderSpawned + pool + meshDedicated; }
+  /// Render/vertex/mesh OS threads (must be <= renderSideBudget).
+  unsigned renderSideUsed() const { return meshDedicated + pool + renderSpawned; }
 };
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm = kCensusWasm);
 
-/// Archie t3353u (via JD): only COMPUTE workers count toward oversubscription, i.e. the
-/// shared pool plus the spawned render bands. Main, the sim clock and every System / I/O
-/// thread (MCP/HTTP, web drain, audio, input, world store) are never counted: the
-/// cores-2 reserve exists to give them headroom.
+/// JD 2026-11-14: compute/render-side workers are mesh + reserve pool + spawned render
+/// bands/executor. The permanent three (main, handshake+control, tick/sim) and System / I/O
+/// threads are never counted against the render-side budget.
 unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned);
 /// The full tally for the census summary (instance() logs it at info level on every boot).
 std::string threadTally(const ThreadBudget& b);

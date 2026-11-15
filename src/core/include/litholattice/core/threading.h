@@ -139,6 +139,7 @@ class cJobPool {
   void submit(std::function<void()> job) {
     if (backing_) { viewSubmit(std::move(job)); return; }
     if (lf_) { lf_->submit(std::move(job)); return; }
+    if (workers_.empty()) { job(); return; }  // 0-worker reserve: caller-runs
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; jobs_.push_back(std::move(job)); }  // 0.0.1.60 timing (diagnostic)
     cv_.notify_one();
   }
@@ -149,6 +150,7 @@ class cJobPool {
   void submitUrgent(std::function<void()> job) {
     if (backing_) { backing_->submitUrgent(std::move(job)); return; }
     if (lf_) { lf_->submitUrgent(std::move(job)); return; }
+    if (workers_.empty()) { job(); return; }
     {
       locktiming::TimedGuard l(m_, locktiming::kJobPool);
       ++inFlight_;
@@ -161,6 +163,7 @@ class cJobPool {
   void submitBackground(std::function<void()> job) {
     if (backing_) { backing_->submitBackground(std::move(job)); return; }
     if (lf_) { lf_->submitBackground(std::move(job)); return; }
+    if (workers_.empty()) { job(); return; }
     { locktiming::TimedGuard l(m_, locktiming::kJobPool); ++inFlight_; bg_.push_back(std::move(job)); }
     cv_.notify_one();
   }

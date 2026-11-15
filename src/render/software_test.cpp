@@ -485,10 +485,11 @@ int testSoftwareRenderer() {
     const bool same = a == b && drawn > 0;
     std::printf("Hi-Z order independence: same=%d drawn=%zu\n", int(same), drawn);
     if (!same) return 1;
-  }  {  // Cortana 2026-10-15 1450 (JD ruling 14:41): auto render threads.
-    const bool ok = cSoftwareRenderer::autoRenderThreads(12) == 11 && cSoftwareRenderer::autoRenderThreads(8) == 7 &&
-                    cSoftwareRenderer::autoRenderThreads(4) == 3 && cSoftwareRenderer::autoRenderThreads(2) == 2 &&
-                    cSoftwareRenderer::autoRenderThreads(1) == 2 && cSoftwareRenderer::autoRenderThreads(18) == 16 &&
+  }  {  // Auto render threads follow the shared render-side budget (JD 2026-11-14): after the permanent
+     // three, bands take about half of remaining+2, at least 2, at most 16. 12 hw -> 5, 8 -> 3, 4 -> 2.
+    const bool ok = cSoftwareRenderer::autoRenderThreads(12) == 5 && cSoftwareRenderer::autoRenderThreads(8) == 3 &&
+                    cSoftwareRenderer::autoRenderThreads(4) == 2 && cSoftwareRenderer::autoRenderThreads(2) == 2 &&
+                    cSoftwareRenderer::autoRenderThreads(1) == 2 && cSoftwareRenderer::autoRenderThreads(18) == 8 &&
                     cSoftwareRenderer::autoRenderThreads(64) == 16;
     std::printf("Auto render threads: 12->%u 8->%u 4->%u 2->%u 64->%u %s\n", cSoftwareRenderer::autoRenderThreads(12),
                 cSoftwareRenderer::autoRenderThreads(8), cSoftwareRenderer::autoRenderThreads(4),
