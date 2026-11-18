@@ -1,5 +1,4 @@
 #include "litholattice/world/column_edge_shell.h"
-#include "litholattice/world/far_lod_section.h"
 
 namespace litholattice {
 
@@ -16,11 +15,9 @@ struct RingLut {
 const RingLut& ringLut() { static const RingLut l; return l; }
 }  // namespace
 
-cColumnEdgeShell::~cColumnEdgeShell() = default;
-
 int cColumnEdgeShell::ringIndex(int lx, int lz) { return ringLut().v[size_t((lz & 15) * 16 + (lx & 15))]; }
 
-std::shared_ptr<const cColumnEdgeShell> cColumnEdgeShell::build(const ChunkColumn& c, const cBlockReg* reg, bool withLod) {
+std::shared_ptr<const cColumnEdgeShell> cColumnEdgeShell::build(const ChunkColumn& c) {
   auto sh = std::make_shared<cColumnEdgeShell>();
   sh->bytes_ = sizeof(cColumnEdgeShell);
   for (int sy = 0; sy < kSubChunks; ++sy) {
@@ -48,10 +45,6 @@ std::shared_ptr<const cColumnEdgeShell> cColumnEdgeShell::build(const ChunkColum
     if (!any) continue;  // ring all air: the sub reads air
     sh->bytes_ += sizeof(Layer) + L->palette.capacity() * sizeof(StableId);
     sh->subs_[size_t(sy)] = std::move(L);
-  }
-  if (withLod) {
-    sh->lod_ = cFarLodSection::build(c, reg);
-    sh->bytes_ += sh->lod_->bytes();
   }
   return sh;
 }

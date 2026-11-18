@@ -411,11 +411,16 @@ int rand(void) {
 
 /* ---- exit family -------------------------------------------------------- */
 
+/* atexit handlers are void(void); the registry calls void(void*). Calling
+ * one through the other's type traps on wasm (call_indirect checks the
+ * signature), so the handler rides in the argument and a void(void*)
+ * trampoline calls it with its real type. */
+static void atexit_trampoline(void* fn) { ((void (*)(void))fn)(); }
+
 int atexit(void (*func)(void)) {
-  /* One registry for C and C++ (LithoAbi's), as in musl: the
-   * handler adapts to the registry's (void (*)(void*), arg) shape
-   * with a NULL argument. */
-  return __cxa_atexit((void (*)(void*))func, NULL, NULL);
+  /* One registry for C and C++ (LithoAbi's), as in musl. */
+  if (!func) return -1;
+  return __cxa_atexit(atexit_trampoline, (void*)func, NULL);
 }
 
 #define QUICK_EXIT_MAX 32
@@ -481,11 +486,72 @@ void __litholibc_env_inject(const char* name_eq_value) {
   }
 }
 
+/* setenv / unsetenv (2026-11-16): an append-only, lock-free overlay over the
+ * injected table. Each call claims the next slot with one atomic fetch-add and
+ * publishes a heap copy "NAME=value" (or the tombstone "NAME" for unsetenv)
+ * with a release store; getenv scans the overlay newest-first with acquire
+ * loads, then the injected table. Entries are never freed or rewritten, so a
+ * pointer getenv returned stays valid for the life of the module. Bounded:
+ * ENV_DYN_MAX calls in total, then ENOMEM. */
+#define ENV_DYN_MAX 64
+static const char* g_env_dyn[ENV_DYN_MAX];
+static int g_env_dyn_claimed = 0;
+
+static int env_name_ok(const char* name) {
+  return name != NULL && *name != '\0' && strchr(name, '=') == NULL;
+}
+
+/* 1 = set (*value_out points at the value), 0 = unset by a tombstone, -1 = not in the overlay */
+static int env_dyn_find(const char* name, size_t nlen, const char** value_out) {
+  int n = __atomic_load_n(&g_env_dyn_claimed, __ATOMIC_ACQUIRE);
+  int i;
+  if (n > ENV_DYN_MAX) n = ENV_DYN_MAX;
+  for (i = n - 1; i >= 0; i--) {
+    const char* e = __atomic_load_n(&g_env_dyn[i], __ATOMIC_ACQUIRE);
+    if (e == NULL || strncmp(e, name, nlen) != 0) continue; /* NULL: claimed, not yet published */
+    if (e[nlen] == '=') { *value_out = e + nlen + 1; return 1; }
+    if (e[nlen] == '\0') return 0;
+  }
+  return -1;
+}
+
+static int env_dyn_push(const char* name, size_t nlen, const char* value) {
+  size_t vlen = value != NULL ? strlen(value) : 0;
+  char* e = (char*)malloc(nlen + (value != NULL ? 1 + vlen : 0) + 1);
+  int idx;
+  if (e == NULL) { errno = ENOMEM; return -1; }
+  memcpy(e, name, nlen);
+  if (value != NULL) { e[nlen] = '='; memcpy(e + nlen + 1, value, vlen); e[nlen + 1 + vlen] = '\0'; }
+  else e[nlen] = '\0';
+  idx = __atomic_fetch_add(&g_env_dyn_claimed, 1, __ATOMIC_ACQ_REL);
+  if (idx >= ENV_DYN_MAX) { free(e); errno = ENOMEM; return -1; }
+  __atomic_store_n(&g_env_dyn[idx], (const char*)e, __ATOMIC_RELEASE);
+  return 0;
+}
+
+int setenv(const char* name, const char* value, int overwrite) {
+  if (!env_name_ok(name) || value == NULL) { errno = EINVAL; return -1; }
+  if (!overwrite && getenv(name) != NULL) return 0;
+  return env_dyn_push(name, strlen(name), value);
+}
+
+int unsetenv(const char* name) {
+  if (!env_name_ok(name)) { errno = EINVAL; return -1; }
+  if (getenv(name) == NULL) return 0;
+  return env_dyn_push(name, strlen(name), NULL);
+}
+
 char* getenv(const char* name) {
   size_t nlen;
   int i;
+  const char* v = NULL;
   if (name == NULL || *name == '\0' || strchr(name, '=') != NULL) return NULL;
   nlen = strlen(name);
+  switch (env_dyn_find(name, nlen, &v)) {
+    case 1: return (char*)v;
+    case 0: return NULL;
+    default: break;
+  }
   for (i = 0; i < g_env_count; i++) {
     const char* e = g_env[i];
     if (strncmp(e, name, nlen) == 0 && e[nlen] == '=') {

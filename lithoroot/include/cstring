@@ -31,6 +31,10 @@ using ::strspn;
 using ::strcspn;
 using ::strpbrk;
 using ::strtok_r;
+using ::strtok;
+using ::strerror;
+using ::strcoll;
+using ::strxfrm;
 
 } /* namespace std */
 

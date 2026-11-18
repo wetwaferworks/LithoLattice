@@ -114,6 +114,10 @@ LITHOLIBC_NORETURN void abort(void);
  * everything until a native back-end or a test injects entries
  * through the internal hook (litholibc_internal.h). */
 char* getenv(const char* name);
+/* setenv / unsetenv: POSIX, over a lock-free append-only overlay (at most
+ * 64 calls per module, then -1 with ENOMEM); EINVAL for a bad name. */
+int setenv(const char* name, const char* value, int overwrite);
+int unsetenv(const char* name);
 
 /* system: no command processor exists on any frozen host. Always
  * fails soft: returns -1 and sets errno to ENOSYS. */

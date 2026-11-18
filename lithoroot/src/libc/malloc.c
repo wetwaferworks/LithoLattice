@@ -18,17 +18,33 @@
 #include <string.h>
 
 #include "waferheap.h"
+#include "lithoheap.h"
+
+/* Once crt1 installs the lock-free shared heap (lithothread_heap.c),
+ * every allocation goes through it. Weak, so builds without
+ * LithoThread (the native suites) keep the single default heap. */
+#pragma weak lh_installed
+#pragma weak lh_malloc
+#pragma weak lh_free
+#pragma weak lh_realloc
+#pragma weak lh_calloc
+#pragma weak lh_aligned_alloc
+#pragma weak lh_usable_size
+#define LR_SHARED() (lh_installed != 0 && lh_installed())
 
 void* malloc(size_t size) {
-  void* p = wh_libc_malloc(size);
+  void* p = (LR_SHARED() ? lh_malloc(size) : wh_libc_malloc(size));
   if (p == NULL) errno = ENOMEM;
   return p;
 }
 
-void free(void* ptr) { wh_libc_free(ptr); }
+void free(void* ptr) {
+  if (LR_SHARED()) lh_free(ptr);
+  else wh_libc_free(ptr);
+}
 
 void* realloc(void* ptr, size_t size) {
-  void* p = wh_libc_realloc(ptr, size);
+  void* p = (LR_SHARED() ? lh_realloc(ptr, size) : wh_libc_realloc(ptr, size));
   /* wh_libc_realloc with size 0 frees and returns NULL by design;
    * that NULL is a success, not an out-of-memory failure. */
   if (p == NULL && size != 0) errno = ENOMEM;
@@ -36,7 +52,7 @@ void* realloc(void* ptr, size_t size) {
 }
 
 void* calloc(size_t count, size_t size) {
-  void* p = wh_libc_calloc(count, size);
+  void* p = (LR_SHARED() ? lh_calloc(count, size) : wh_libc_calloc(count, size));
   if (p == NULL) errno = ENOMEM;
   return p;
 }
@@ -52,7 +68,7 @@ void* aligned_alloc(size_t alignment, size_t size) {
     errno = EINVAL;
     return NULL;
   }
-  p = wh_libc_aligned_alloc(alignment, size);
+  p = (LR_SHARED() ? lh_aligned_alloc(alignment, size) : wh_libc_aligned_alloc(alignment, size));
   if (p == NULL) errno = ENOMEM;
   return p;
 }
@@ -66,14 +82,16 @@ int posix_memalign(void** memptr, size_t alignment, size_t size) {
       (alignment & (alignment - 1)) != 0) {
     return EINVAL;
   }
-  p = wh_libc_aligned_alloc(alignment, size);
+  p = (LR_SHARED() ? lh_aligned_alloc(alignment, size) : wh_libc_aligned_alloc(alignment, size));
   if (p == NULL) return ENOMEM;
   *memptr = p;
   return 0;
 }
 
 size_t malloc_usable_size(const void* ptr) {
-  wh_heap_t* heap = wh_default_heap();
+  wh_heap_t* heap;
+  if (LR_SHARED()) return lh_usable_size(ptr);
+  heap = wh_default_heap();
   if (heap == NULL || ptr == NULL) return 0;
   return wh_malloc_usable_size(heap, ptr);
 }

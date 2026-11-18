@@ -1,0 +1,99 @@
+/* bitset ... LithoRoot std L6 (S4, 2026-11-16): bitset<N> over 64-bit words. */
+#ifndef LITHOROOT_BITSET
+#define LITHOROOT_BITSET
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <stdexcept>
+#include <string>
+
+namespace std {
+
+template <size_t N>
+class bitset {
+  static constexpr size_t W = N == 0 ? 1 : (N + 63) / 64;
+  uint64_t w_[W] = {};
+  constexpr void trim() noexcept { if constexpr (N % 64 != 0) w_[W - 1] &= (uint64_t(1) << (N % 64)) - 1; }
+ public:
+  class reference {
+    friend class bitset;
+    uint64_t* w_; uint64_t m_;
+    constexpr reference(uint64_t* w, uint64_t m) noexcept : w_(w), m_(m) {}
+   public:
+    constexpr reference& operator=(bool b) noexcept { if (b) *w_ |= m_; else *w_ &= ~m_; return *this; }
+    constexpr reference& operator=(const reference& r) noexcept { return *this = bool(r); }
+    constexpr operator bool() const noexcept { return (*w_ & m_) != 0; }
+    constexpr bool operator~() const noexcept { return !bool(*this); }
+    constexpr reference& flip() noexcept { *w_ ^= m_; return *this; }
+  };
+  constexpr bitset() noexcept = default;
+  constexpr bitset(unsigned long long v) noexcept { w_[0] = v; trim(); }
+  explicit bitset(const string& s, size_t pos = 0, size_t n = string::npos, char zero = '0', char one = '1') {
+    if (pos > s.size()) __lk::throw_out_of_range("bitset");
+    const size_t len = n < s.size() - pos ? n : s.size() - pos;
+    const size_t m = len < N ? len : N;
+    for (size_t i = 0; i < m; ++i) {
+      const char ch = s[pos + m - 1 - i];
+      if (ch == one) set(i); else if (ch != zero) __lk::throw_invalid_argument("bitset: bad character");
+    }
+  }
+  constexpr bool operator[](size_t i) const { return (w_[i / 64] >> (i % 64)) & 1u; }
+  constexpr reference operator[](size_t i) { return reference(&w_[i / 64], uint64_t(1) << (i % 64)); }
+  bool test(size_t i) const { if (i >= N) __lk::throw_out_of_range("bitset::test"); return (*this)[i]; }
+  constexpr bitset& set() noexcept { for (auto& w : w_) w = ~uint64_t(0); trim(); return *this; }
+  bitset& set(size_t i, bool v = true) { if (i >= N) __lk::throw_out_of_range("bitset::set"); (*this)[i] = v; return *this; }
+  constexpr bitset& reset() noexcept { for (auto& w : w_) w = 0; return *this; }
+  bitset& reset(size_t i) { return set(i, false); }
+  constexpr bitset& flip() noexcept { for (auto& w : w_) w = ~w; trim(); return *this; }
+  bitset& flip(size_t i) { if (i >= N) __lk::throw_out_of_range("bitset::flip"); (*this)[i].flip(); return *this; }
+  constexpr size_t count() const noexcept { size_t n = 0; for (auto w : w_) n += size_t(std::popcount(w)); return n; }
+  constexpr size_t size() const noexcept { return N; }
+  constexpr bool all() const noexcept { return count() == N; }
+  constexpr bool any() const noexcept { for (auto w : w_) if (w) return true; return false; }
+  constexpr bool none() const noexcept { return !any(); }
+  unsigned long long to_ullong() const {
+    for (size_t i = 1; i < W; ++i) if (w_[i]) __lk::throw_invalid_argument("bitset::to_ullong: overflow");
+    return w_[0];
+  }
+  unsigned long to_ulong() const { const auto v = to_ullong(); if (v > 0xffffffffull) __lk::throw_invalid_argument("bitset::to_ulong: overflow"); return (unsigned long)v; }
+  string to_string(char zero = '0', char one = '1') const { string s(N, zero); for (size_t i = 0; i < N; ++i) if ((*this)[i]) s[N - 1 - i] = one; return s; }
+  constexpr bitset& operator&=(const bitset& o) noexcept { for (size_t i = 0; i < W; ++i) w_[i] &= o.w_[i]; return *this; }
+  constexpr bitset& operator|=(const bitset& o) noexcept { for (size_t i = 0; i < W; ++i) w_[i] |= o.w_[i]; return *this; }
+  constexpr bitset& operator^=(const bitset& o) noexcept { for (size_t i = 0; i < W; ++i) w_[i] ^= o.w_[i]; return *this; }
+  constexpr bitset operator~() const noexcept { bitset r(*this); return r.flip(); }
+  constexpr bitset& operator<<=(size_t s) noexcept {
+    if (s >= N) return reset();
+    const size_t ws = s / 64, bs = s % 64;
+    for (size_t i = W; i-- > 0;) {
+      uint64_t v = i >= ws ? w_[i - ws] << bs : 0;
+      if (bs && i > ws) v |= w_[i - ws - 1] >> (64 - bs);
+      w_[i] = v;
+    }
+    trim(); return *this;
+  }
+  constexpr bitset& operator>>=(size_t s) noexcept {
+    if (s >= N) return reset();
+    const size_t ws = s / 64, bs = s % 64;
+    for (size_t i = 0; i < W; ++i) {
+      uint64_t v = i + ws < W ? w_[i + ws] >> bs : 0;
+      if (bs && i + ws + 1 < W) v |= w_[i + ws + 1] << (64 - bs);
+      w_[i] = v;
+    }
+    return *this;
+  }
+  constexpr bitset operator<<(size_t s) const noexcept { bitset r(*this); return r <<= s; }
+  constexpr bitset operator>>(size_t s) const noexcept { bitset r(*this); return r >>= s; }
+  constexpr bool operator==(const bitset& o) const noexcept { for (size_t i = 0; i < W; ++i) if (w_[i] != o.w_[i]) return false; return true; }
+  size_t __hash() const noexcept { uint64_t h = 0; for (auto w : w_) h = h * 0x100000001b3ull ^ w; return size_t(h ^ (h >> 32)); }
+};
+template <size_t N> constexpr bitset<N> operator&(const bitset<N>& a, const bitset<N>& b) noexcept { bitset<N> r(a); return r &= b; }
+template <size_t N> constexpr bitset<N> operator|(const bitset<N>& a, const bitset<N>& b) noexcept { bitset<N> r(a); return r |= b; }
+template <size_t N> constexpr bitset<N> operator^(const bitset<N>& a, const bitset<N>& b) noexcept { bitset<N> r(a); return r ^= b; }
+template <size_t N> struct hash<bitset<N>> { size_t operator()(const bitset<N>& b) const noexcept { return b.__hash(); } };
+
+}  // namespace std
+#endif

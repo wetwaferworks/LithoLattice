@@ -3,6 +3,8 @@
 // Ascii-Renderer-2026-10-13.md for the survey + economics.
 #include "litholattice/render/software_ascii.h"
 
+#include "font_data.h"
+
 #include <algorithm>
 #include <cmath>
 #include <string_view>
@@ -272,5 +274,246 @@ void framebufferToAsciiImage(SoftwareFramebuffer& fb, int cols, AsciiGlyphSet se
   }
   fb.pixels = std::move(img);
 }
+
+
+bool asciiGridGeometry(int fbW, int fbH, int cols, AsciiGridGeom& out) {
+  if (fbW < 8 || fbH < 8) return false;
+  out.cols = std::clamp(cols, 8, fbW);
+  out.cellW = float(fbW) / float(out.cols);
+  out.cellH = out.cellW * 2.f;
+  out.rows = std::max(1, int(std::lround(float(fbH) / out.cellH)));
+  out.cellH = float(fbH) / float(out.rows);
+  return out.cols > 0 && out.rows > 0 && out.cellW > 0.f && out.cellH > 0.f;
+}
+
+void asciiPointerToCell(const AsciiGridGeom& g, float px, float py, int& cx, int& cy) {
+  cx = g.cols <= 1 ? 0 : std::clamp(int(px / g.cellW), 0, g.cols - 1);
+  cy = g.rows <= 1 ? 0 : std::clamp(int(py / g.cellH), 0, g.rows - 1);
+}
+
+void asciiCellCenter(const AsciiGridGeom& g, int cx, int cy, float& px, float& py) {
+  px = (float(cx) + 0.5f) * g.cellW;
+  py = (float(cy) + 0.5f) * g.cellH;
+}
+
+void asciiSnapPointer(const AsciiGridGeom& g, float& px, float& py) {
+  int cx = 0, cy = 0;
+  asciiPointerToCell(g, px, py, cx, cy);
+  asciiCellCenter(g, cx, cy, px, py);
+}
+
+namespace {
+
+void cellPixelRect(const AsciiGridGeom& g, int cx, int cy, int fbW, int fbH, int& x0, int& y0, int& x1, int& y1) {
+  x0 = int(float(cx) * g.cellW);
+  y0 = int(float(cy) * g.cellH);
+  x1 = int(float(cx + 1) * g.cellW);
+  y1 = int(float(cy + 1) * g.cellH);
+  if (x1 <= x0) x1 = x0 + 1;
+  if (y1 <= y0) y1 = y0 + 1;
+  x0 = std::clamp(x0, 0, fbW);
+  y0 = std::clamp(y0, 0, fbH);
+  x1 = std::clamp(x1, 0, fbW);
+  y1 = std::clamp(y1, 0, fbH);
+}
+
+uint32_t packColor(float r, float g, float b, float a) {
+  auto ch = [](float v) {
+    return uint32_t(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+  };
+  return (ch(a) << 24) | (ch(r) << 16) | (ch(g) << 8) | ch(b);
+}
+
+uint32_t blendOver(uint32_t dst, uint32_t src) {
+  const int sa = int((src >> 24) & 0xFF);
+  if (sa >= 250) return 0xFF000000u | (src & 0x00FFFFFFu);
+  if (sa <= 0) return dst;
+  const int da = 255 - sa;
+  auto mix = [&](int s, int d) { return (s * sa + d * da + 127) / 255; };
+  const int r = mix(int((src >> 16) & 0xFF), int((dst >> 16) & 0xFF));
+  const int g = mix(int((src >> 8) & 0xFF), int((dst >> 8) & 0xFF));
+  const int b = mix(int(src & 0xFF), int(dst & 0xFF));
+  return 0xFF000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+}
+
+void fillCell(SoftwareFramebuffer& fb, const AsciiGridGeom& g, int cx, int cy, uint32_t rgba) {
+  if (cx < 0 || cy < 0 || cx >= g.cols || cy >= g.rows) return;
+  int x0, y0, x1, y1;
+  cellPixelRect(g, cx, cy, int(fb.width), int(fb.height), x0, y0, x1, y1);
+  for (int y = y0; y < y1; ++y)
+    for (int x = x0; x < x1; ++x) {
+      uint32_t& p = fb.pixels[size_t(y) * fb.width + size_t(x)];
+      p = blendOver(p, rgba);
+    }
+}
+
+// Mid-line box strokes in a cell: bits 1=N, 2=E, 4=S, 8=W.
+void strokeCell(SoftwareFramebuffer& fb, const AsciiGridGeom& g, int cx, int cy, uint32_t rgba, int arms) {
+  if (cx < 0 || cy < 0 || cx >= g.cols || cy >= g.rows || arms == 0) return;
+  int x0, y0, x1, y1;
+  cellPixelRect(g, cx, cy, int(fb.width), int(fb.height), x0, y0, x1, y1);
+  if (x1 - x0 < 2 || y1 - y0 < 2) {
+    fillCell(fb, g, cx, cy, rgba);
+    return;
+  }
+  const int t = std::max(1, std::min((x1 - x0), (y1 - y0)) / 8);
+  const int mx = (x0 + x1) / 2;
+  const int my = (y0 + y1) / 2;
+  auto stamp = [&](int x, int y) {
+    if (x >= x0 && x < x1 && y >= y0 && y < y1)
+      fb.pixels[size_t(y) * fb.width + size_t(x)] = blendOver(fb.pixels[size_t(y) * fb.width + size_t(x)], rgba);
+  };
+  auto barH = [&](int xa, int xb) {
+    if (xb < xa) std::swap(xa, xb);
+    for (int y = my - t / 2; y < my - t / 2 + t; ++y)
+      for (int x = xa; x < xb; ++x) stamp(x, y);
+  };
+  auto barV = [&](int ya, int yb) {
+    if (yb < ya) std::swap(ya, yb);
+    for (int y = ya; y < yb; ++y)
+      for (int x = mx - t / 2; x < mx - t / 2 + t; ++x) stamp(x, y);
+  };
+  if (arms & 1) barV(y0, my + t);          // N
+  if (arms & 4) barV(my, y1);              // S
+  if (arms & 8) barH(x0, mx + t);          // W
+  if (arms & 2) barH(mx, x1);              // E
+}
+
+void glyphCell(SoftwareFramebuffer& fb, const AsciiGridGeom& g, int cx, int cy, char ch, uint32_t rgba) {
+  if (cx < 0 || cy < 0 || cx >= g.cols || cy >= g.rows) return;
+  const int ci = int(static_cast<unsigned char>(ch)) - font::kFirst;
+  if (ci < 0 || ci >= font::kCount) return;
+  const char* bits = font::kGlyphs[ci];
+  int x0, y0, x1, y1;
+  cellPixelRect(g, cx, cy, int(fb.width), int(fb.height), x0, y0, x1, y1);
+  const int cw = std::max(1, x1 - x0), chh = std::max(1, y1 - y0);
+  for (int y = y0; y < y1; ++y) {
+    const int gy = std::min(font::kCellH - 1, (y - y0) * font::kCellH / chh);
+    for (int x = x0; x < x1; ++x) {
+      const int gx = std::min(font::kCellW - 1, (x - x0) * font::kCellW / cw);
+      const char d = bits[gy * font::kCellW + gx];
+      const int cov = d >= 'a' ? d - 'a' + 10 : d >= 'A' ? d - 'A' + 10 : d - '0';
+      if (cov <= 0) continue;
+      const int sa = int((rgba >> 24) & 0xFF) * cov / 15;
+      const uint32_t src = (uint32_t(sa) << 24) | (rgba & 0x00FFFFFFu);
+      uint32_t& p = fb.pixels[size_t(y) * fb.width + size_t(x)];
+      p = blendOver(p, src);
+    }
+  }
+}
+
+bool clipContains(const HudClip& c, float x, float y) { return x >= c.x0 && y >= c.y0 && x < c.x1 && y < c.y1; }
+
+void fillRectCells(SoftwareFramebuffer& fb, const AsciiGridGeom& g, float x, float y, float w, float h,
+                   uint32_t rgba, const HudClip& clip, bool box) {
+  if (w <= 0.f || h <= 0.f || ((rgba >> 24) & 0xFF) == 0) return;
+  const bool thinH = h < g.cellH * 0.6f;
+  const bool thinW = w < g.cellW * 0.6f;
+  int cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
+  if (thinH && !thinW) {
+    asciiPointerToCell(g, x, y + h * 0.5f, cx0, cy0);
+    asciiPointerToCell(g, x + w - 0.01f, y + h * 0.5f, cx1, cy1);
+    cy1 = cy0;
+  } else if (thinW && !thinH) {
+    asciiPointerToCell(g, x + w * 0.5f, y, cx0, cy0);
+    asciiPointerToCell(g, x + w * 0.5f, y + h - 0.01f, cx1, cy1);
+    cx1 = cx0;
+  } else {
+    // Cells whose centres sit inside the rect — matches mouse snap.
+    asciiPointerToCell(g, x + g.cellW * 0.5f, y + g.cellH * 0.5f, cx0, cy0);
+    asciiPointerToCell(g, x + std::max(0.f, w - g.cellW * 0.5f), y + std::max(0.f, h - g.cellH * 0.5f), cx1, cy1);
+    // A rect smaller than a cell still paints the cell it covers.
+    if (cx1 < cx0) cx1 = cx0;
+    if (cy1 < cy0) cy1 = cy0;
+  }
+  if (cx1 < cx0) std::swap(cx0, cx1);
+  if (cy1 < cy0) std::swap(cy0, cy1);
+  for (int cy = cy0; cy <= cy1; ++cy)
+    for (int cx = cx0; cx <= cx1; ++cx) {
+      float px, py;
+      asciiCellCenter(g, cx, cy, px, py);
+      if (!clipContains(clip, px, py)) continue;
+      if (thinH && !thinW) strokeCell(fb, g, cx, cy, rgba, 8 | 2);
+      else if (thinW && !thinH) strokeCell(fb, g, cx, cy, rgba, 1 | 4);
+      else fillCell(fb, g, cx, cy, rgba);
+    }
+  if (box && !thinH && !thinW && (cx1 > cx0 || cy1 > cy0)) {
+    for (int cx = cx0; cx <= cx1; ++cx)
+      for (int cy = cy0; cy <= cy1; ++cy) {
+        float px, py;
+        asciiCellCenter(g, cx, cy, px, py);
+        if (!clipContains(clip, px, py)) continue;
+        int arms = 0;
+        if (cy == cy0) arms |= 1;
+        if (cy == cy1) arms |= 4;
+        if (cx == cx0) arms |= 8;
+        if (cx == cx1) arms |= 2;
+        if (arms) strokeCell(fb, g, cx, cy, rgba | 0xFF000000u, arms);
+      }
+  }
+}
+
+void textCells(SoftwareFramebuffer& fb, const AsciiGridGeom& g, float x, float y, std::string_view text,
+               uint32_t rgba, float scale, const HudClip& clip) {
+  if (text.empty() || ((rgba >> 24) & 0xFF) == 0) return;
+  const float gw = float(kHudGlyphW) * std::max(1.f, scale);
+  const float gh = float(kHudGlyphH) * std::max(1.f, scale);
+  int cx = 0, cy = 0;
+  asciiPointerToCell(g, x + gw * 0.5f, y + gh * 0.5f, cx, cy);
+  for (size_t i = 0; i < text.size(); ++i) {
+    const int ccx = cx + int(i);
+    if (ccx >= g.cols) break;
+    float px, py;
+    asciiCellCenter(g, ccx, cy, px, py);
+    if (!clipContains(clip, px, py)) continue;
+    const char ch = text[i];
+    if (ch == ' ') continue;
+    glyphCell(fb, g, ccx, cy, ch, rgba);
+  }
+}
+
+void paintLayer(SoftwareFramebuffer& fb, const AsciiGridGeom& g, const HudLayer& layer) {
+  for (const HudRect& r : layer.rects)
+    fillRectCells(fb, g, r.x, r.y, r.w, r.h, packColor(r.r, r.g, r.b, r.a), HudClip{}, false);
+  for (const HudText& t : layer.texts)
+    textCells(fb, g, t.x, t.y, t.text, packColor(t.r, t.g, t.b, t.a), layer.scale, HudClip{});
+  for (const HudDraw& d : layer.draws) {
+    const uint32_t rgba = packColor(d.r, d.g, d.b, d.a);
+    if (d.icon || d.text.empty()) {
+      // Icons become a tinted cell fill (and a '#' if the cell is large enough
+      // to hold a glyph). Wide panels also get a box frame.
+      const bool panel = !d.icon && d.w >= g.cellW * 2.f && d.h >= g.cellH * 2.f && d.a >= 0.4f;
+      fillRectCells(fb, g, d.x, d.y, d.w, d.h, rgba, d.clip, panel);
+      if (d.icon) {
+        int cx = 0, cy = 0;
+        asciiPointerToCell(g, d.x + d.w * 0.5f, d.y + d.h * 0.5f, cx, cy);
+        float px, py;
+        asciiCellCenter(g, cx, cy, px, py);
+        if (clipContains(d.clip, px, py)) glyphCell(fb, g, cx, cy, '#', rgba | 0xFF000000u);
+      }
+    } else {
+      textCells(fb, g, d.x, d.y, d.text, rgba, d.scale > 0.f ? d.scale : layer.scale, d.clip);
+    }
+  }
+}
+
+}  // namespace
+
+void paintAsciiHud(SoftwareFramebuffer& fb, const FrameParams& p, int cols) {
+  AsciiGridGeom g;
+  if (!asciiGridGeometry(int(fb.width), int(fb.height), cols, g)) return;
+  if (p.hudStatic.layer || p.hudDynamic.layer) {
+    if (p.hudStatic.layer) paintLayer(fb, g, *p.hudStatic.layer);
+    if (p.hudDynamic.layer) paintLayer(fb, g, *p.hudDynamic.layer);
+  } else {
+    paintLayer(fb, g, p.hud);
+  }
+  if (p.crosshair) {
+    int cx = 0, cy = 0;
+    asciiPointerToCell(g, float(fb.width) * 0.5f, float(fb.height) * 0.5f, cx, cy);
+    glyphCell(fb, g, cx, cy, '+', 0xFFFFFFFFu);
+  }
+}
+
 
 }  // namespace litholattice

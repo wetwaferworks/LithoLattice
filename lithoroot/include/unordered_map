@@ -1,0 +1,116 @@
+/* unordered_map ... LithoRoot std L6 (S4, 2026-11-16): unordered_map over the
+ * shared node-based hash table (lithoroot_hashtable.h). No multimap form.
+ * DETERMINISM RULE: never iterate one where the order can reach a
+ * determinism hash (see lithoroot_hashtable.h). */
+#ifndef LITHOROOT_UNORDERED_MAP
+#define LITHOROOT_UNORDERED_MAP
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <functional>
+#include <initializer_list>
+#include <lithoroot_hashtable.h>
+#include <stdexcept>
+#include <tuple>
+#include <utility>
+
+namespace std {
+
+template <class K, class T, class H = hash<K>, class Eq = equal_to<K>, class A = allocator<pair<const K, T>>>
+class unordered_map {
+  struct key_of { const K& operator()(const pair<const K, T>& v) const noexcept { return v.first; } };
+  using table = __lk::hashtable<K, pair<const K, T>, key_of, H, Eq>;
+  using node = typename table::node;
+  table t_;
+  static constexpr bool transparent = requires { typename H::is_transparent; typename Eq::is_transparent; };
+ public:
+  using key_type = K;
+  using mapped_type = T;
+  using value_type = pair<const K, T>;
+  using hasher = H;
+  using key_equal = Eq;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = value_type&;
+  using const_reference = const value_type&;
+  using iterator = typename table::iterator;
+  using const_iterator = typename table::const_iterator;
+
+  unordered_map() = default;
+  explicit unordered_map(size_type n, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) {}
+  template <class It> unordered_map(It f, It l, size_type n = 0, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) { insert(f, l); }
+  unordered_map(initializer_list<value_type> il, size_type n = 0, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) { insert(il.begin(), il.end()); }
+  unordered_map& operator=(initializer_list<value_type> il) { clear(); insert(il.begin(), il.end()); return *this; }
+
+  iterator begin() noexcept { return t_.begin(); }
+  const_iterator begin() const noexcept { return t_.begin(); }
+  iterator end() noexcept { return t_.end(); }
+  const_iterator end() const noexcept { return t_.end(); }
+  const_iterator cbegin() const noexcept { return t_.begin(); }
+  const_iterator cend() const noexcept { return t_.end(); }
+  [[nodiscard]] bool empty() const noexcept { return t_.empty(); }
+  size_type size() const noexcept { return t_.size(); }
+  size_type max_size() const noexcept { return size_type(-1) / sizeof(node); }
+
+  template <class... Args> pair<iterator, bool> emplace(Args&&... a) { return t_.insert_unique(new node(std::forward<Args>(a)...)); }
+  template <class... Args> iterator emplace_hint(const_iterator, Args&&... a) { return emplace(std::forward<Args>(a)...).first; }
+  pair<iterator, bool> insert(const value_type& v) { return t_.find_or_make(v.first, [&] { return new node(v); }); }
+  pair<iterator, bool> insert(value_type&& v) { return t_.find_or_make(v.first, [&] { return new node(std::move(v)); }); }
+  template <class P, class = enable_if_t<is_constructible_v<value_type, P&&>>> pair<iterator, bool> insert(P&& p) { return emplace(std::forward<P>(p)); }
+  iterator insert(const_iterator, const value_type& v) { return insert(v).first; }
+  template <class It> void insert(It f, It l) { for (; f != l; ++f) emplace(*f); }
+  void insert(initializer_list<value_type> il) { insert(il.begin(), il.end()); }
+  template <class... Args> pair<iterator, bool> try_emplace(const K& k, Args&&... a) {
+    return t_.find_or_make(k, [&] { return new node(piecewise_construct, forward_as_tuple(k), forward_as_tuple(std::forward<Args>(a)...)); });
+  }
+  template <class... Args> pair<iterator, bool> try_emplace(K&& k, Args&&... a) {
+    return t_.find_or_make(k, [&] { return new node(piecewise_construct, forward_as_tuple(std::move(k)), forward_as_tuple(std::forward<Args>(a)...)); });
+  }
+  template <class M> pair<iterator, bool> insert_or_assign(const K& k, M&& m) { auto r = try_emplace(k, std::forward<M>(m)); if (!r.second) r.first->second = std::forward<M>(m); return r; }
+  template <class M> pair<iterator, bool> insert_or_assign(K&& k, M&& m) { auto r = try_emplace(std::move(k), std::forward<M>(m)); if (!r.second) r.first->second = std::forward<M>(m); return r; }
+  T& operator[](const K& k) { return try_emplace(k).first->second; }
+  T& operator[](K&& k) { return try_emplace(std::move(k)).first->second; }
+  T& at(const K& k) { auto it = find(k); if (it == end()) __lk::throw_out_of_range("unordered_map::at"); return it->second; }
+  const T& at(const K& k) const { auto it = find(k); if (it == end()) __lk::throw_out_of_range("unordered_map::at"); return it->second; }
+
+  iterator erase(iterator it) { return t_.erase(it); }
+  iterator erase(const_iterator it) { return t_.erase(it); }
+  iterator erase(const_iterator f, const_iterator l) { while (f != l) f = t_.erase(f); return t_.unconst(l); }
+  size_type erase(const K& k) { return t_.erase_key(k); }
+  void clear() noexcept { t_.clear(); }
+  void swap(unordered_map& o) noexcept { t_.swap(o.t_); }
+
+  iterator find(const K& k) { return t_.find(k); }
+  const_iterator find(const K& k) const { return t_.find(k); }
+  template <class Q, class = enable_if_t<transparent && sizeof(Q)>> iterator find(const Q& k) { return t_.find(k); }
+  template <class Q, class = enable_if_t<transparent && sizeof(Q)>> const_iterator find(const Q& k) const { return t_.find(k); }
+  size_type count(const K& k) const { return find(k) != end() ? 1 : 0; }
+  bool contains(const K& k) const { return find(k) != end(); }
+  template <class Q, class = enable_if_t<transparent && sizeof(Q)>> bool contains(const Q& k) const { return find(k) != end(); }
+  pair<iterator, iterator> equal_range(const K& k) { auto it = find(k); return {it, it == end() ? it : std::next(it)}; }
+
+  size_type bucket_count() const noexcept { return t_.bucket_count(); }
+  float load_factor() const noexcept { return t_.load_factor(); }
+  float max_load_factor() const noexcept { return t_.max_load_factor(); }
+  void max_load_factor(float f) noexcept { t_.max_load_factor(f); }
+  void rehash(size_type n) { t_.rehash(n); }
+  void reserve(size_type n) { t_.reserve(n); }
+  hasher hash_function() const { return t_.hasher_ref(); }
+  key_equal key_eq() const { return t_.eq_ref(); }
+};
+
+template <class K, class T, class H, class E, class A> bool operator==(const unordered_map<K, T, H, E, A>& a, const unordered_map<K, T, H, E, A>& b) {
+  if (a.size() != b.size()) return false;
+  for (const auto& kv : a) { auto it = b.find(kv.first); if (it == b.end() || !(it->second == kv.second)) return false; }
+  return true;
+}
+template <class K, class T, class H, class E, class A> void swap(unordered_map<K, T, H, E, A>& a, unordered_map<K, T, H, E, A>& b) noexcept { a.swap(b); }
+template <class K, class T, class H, class E, class A, class P> size_t erase_if(unordered_map<K, T, H, E, A>& m, P p) {
+  size_t n = 0;
+  for (auto it = m.begin(); it != m.end();) { if (p(*it)) { it = m.erase(it); ++n; } else ++it; }
+  return n;
+}
+
+}  // namespace std
+#endif

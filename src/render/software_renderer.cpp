@@ -1,4 +1,4 @@
-﻿// Cortana 2026-10-15 1010-1116: RND-H4/H3/H2, GAME-H1, RND-MT band raster
+// Cortana 2026-10-15 1010-1116: RND-H4/H3/H2, GAME-H1, RND-MT band raster
 // Software renderer: full CPU rasterizer implementation.
 // Optimized for voxels: backface culling, depth buffer, scanline rasterization.
 // Shading: flat face colors, or per-pixel fragment shaders (basic / PBR tiers)
@@ -6,17 +6,19 @@
 // Implements IRenderer (mesh stores + renderFrame) on top of the same direct
 // renderMesh path the headless consumers have always driven.
 #include "litholattice/render/software_renderer.h"
+#include "litholattice/core/thread_name.h"
+#include "litholattice/core/idle_backoff.h"  // t46u item 5b
 #include "litholattice/core/atomic_gate.h"
-#include "litholattice/render/sw_lod_rings.h"  // PlayB: the shared far-LOD ladder
+#include "litholattice/render/view_radius.h"  // draw-side view bound
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/unified_mesher.h"
 #include "litholattice/core/thread_census.h"  // Thread Handshake P2
 #include "litholattice/core/threading.h"
 #include "litholattice/core/f3_trace.h"
 #include <array>
+#include <system_error>
 #include <vector>
 #include "litholattice/core/bitops.h"
-#include "litholattice/core/threeway.h"  // Design B Stage 1: detached renderFrame runs under RendererGuard, like RenderWorker::loop
 #include "font_data.h"  // Cortana 2026-10-15 1610: Debug Overlay strip glyphs
 #include "litholattice/render/model_dither.h"
 #include "litholattice/render/software_aa.h"
@@ -66,7 +68,7 @@ bool cCpuTextureArray::upload(const cTextureReg& textures) {
   int cap = maxTile_;
   if (const char* e = std::getenv("LL_SW_TEXRES")) cap = std::atoi(e);
   if (cap != 16 && cap != 32 && cap != 64)
-    cap = (std::thread::hardware_concurrency() != 0 && std::thread::hardware_concurrency() <= 4) ? 32 : 64;
+    cap = censusCores() <= 4 ? 32 : 64;  // t46u: census cores (--cores), not the raw hardware
   int srcMax = kTileSize;
   for (const Texture& t : src) srcMax = std::max(srcMax, t.image.width());
   tile_ = srcMax >= 64 && cap >= 64 ? 64 : srcMax >= 32 && cap >= 32 ? 32 : 16;
@@ -196,6 +198,12 @@ cSoftwareRenderer::~cSoftwareRenderer() = default;
 void cSoftwareRenderer::resize(uint32_t w, uint32_t h) {
   fb_.resize(w, h);
   depth_.assign(size_t(w) * h, 0xFFFF);
+  if (objectsOn_) {
+    objects_.assign(size_t(w) * h, 0);
+    faces_.assign(size_t(w) * h, 7);
+    layers_.assign(size_t(w) * h, 0);
+  }
+  if (aaMode_ == SoftwareAaMode::Fxaa || aaMode_ == SoftwareAaMode::Cmaa) ensureAaId(w, h);
   hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z off until the next clear()
 }
 
@@ -231,7 +239,6 @@ static thread_local uint8_t tlQuadValue = 0;
 // Cortana 2026-10-15 1755 [ENGINE]: blended chunk pass filter for renderMesh's per-pixel
 // path: -1 every quad, 0 opaque quads only, 1 kShadeAlphaBlend quads only.
 static thread_local int8_t tlBlendPass = -1;
-static thread_local bool tlFlatLod = false;  // 2026-10-25: this mesh is >= 4x far LOD (flat shade)
 // Cortana 2026-10-15 1345: sign verified on real walk frames (no holes vs cull-off).
 static constexpr float g_backSign = 1.0f;
 // Ginny (Argon) 2026-10-16 Pass 2 feature bits (Cortana). LL_SW_P2=<mask> overrides the
@@ -247,18 +254,10 @@ static std::atomic<unsigned> g_p2{[] {
 }()};
 static inline bool swP2(unsigned bit) { return (g_p2.load(std::memory_order_relaxed) & bit) != 0; }
 static const bool g_swProfOn = std::getenv("LL_SW_PROF") != nullptr;
-// 2026-10-25 (Archie): far-LOD (>= 4x) meshes flat-shade with the layer's average colour
-// (LL_SW_FLAT_LOD=0 off) and drop quads under LL_SW_LOD4_MINH px tall (default 1.5; 0 = off).
-static const bool g_swFlatLod = [] { const char* e = std::getenv("LL_SW_FLAT_LOD"); return !(e && *e == '0'); }();
-// Strike 2 (Elfie bench, 2026-10-26, Archie battle plan): extend the flat-LOD path to
-// 2x meshes (the largest tri ring). Opt-in LL_SW_FLAT_LOD2=1 until the picture and the
-// counts are judged; the >= 4x path above stays as shipped.
 // Cortana 2026-10-26 (Archie item 6, Candidate D): LL_SW_TILE64=K (1-4) = 64x64 tiles, K per grab; 0/unset = strips.
 static std::atomic<int> g_swTile64{[] { const char* e = std::getenv("LL_SW_TILE64"); return e ? std::clamp(std::atoi(e), 0, 4) : 0; }()};
 static const bool g_swNearBinOld = std::getenv("LL_SW_NEARBIN_OLD") != nullptr;  // Cortana 2026-10-26: A/B the near-plane quad binning
 static const float g_swMipBias = [] { const char* e = std::getenv("LL_SW_MIP_BIAS"); return e ? float(std::atof(e)) : 0.0f; }();  // Cortana 2026-10-26: distant moire A/B (mip levels added to the per-triangle pick)
-static const bool g_swFlatLod2 = [] { const char* e = std::getenv("LL_SW_FLAT_LOD2"); return e && *e == '1'; }();
-static const float g_swLod4MinH = [] { const char* e = std::getenv("LL_SW_LOD4_MINH"); return e ? float(std::atof(e)) : 1.5f; }();
 // 2026-10-26 (Archie triage, HUD fill): the HUD is drawn in parallel row chunks. Each chunk walks
 // the whole primitive list in order, clipped to its rows, so every pixel sees the same blend
 // sequence as the serial walk (bit-identical output). Stats count on the unclipped primitive,
@@ -289,8 +288,6 @@ struct SwTlCounters { uint64_t pxScan = 0, pxCov = 0, pxShade = 0, tris = 0, hiz
 static thread_local SwTlCounters tlC;
 static double g_bandMs[64] = {};
 static double g_thrMinAcc = 0, g_thrMaxAcc = 0;
-static std::atomic<uint64_t> g_ringTris[4]{};  // 2026-10-25 (Archie step 6): binned tris per far-LOD ring (LL_SW_PROF)
-static int g_ringEdge[3] = {32, 64, 96};  // = game LL_SW_LOD_RINGS default; PlayB: refreshed from cSwLodRings::shared() (clamped to view) (JD's 32-chunk full-fidelity core, 2026-10-28)
 static std::atomic<uint64_t> g_fcCulled{0}, g_fcQuads{0};  // Pass 2 step 3 (LL_SW_PROF): quads culled by face bucket / total  // Cortana 2026-10-15 1715: rows skipped by Hi-Z (LL_SW_PROF)
 
 namespace {
@@ -329,13 +326,93 @@ unsigned swResolveThreads(unsigned req) {
   // Archie ruling 5 (t3340u): rounding, the auto rule and the WASM cap live in the census.
   return cThreadCensus::instance().renderBands(req);
 }
+// JD 2026-11-17 (phase-local render bands): the permanent three reserve a core each for
+// main, the timing-handshake/control thread and the tick/sim thread. Main is already the
+// render caller; the other two sit idle through most of the render phase (a play tick is a
+// small slice of the frame), so the renderer borrows them for that phase only. Off for an
+// explicit --render-threads, for LK_RENDER_THREADS=1 (JD's four-thread-total opt-in), on
+// WASM, below 3 cores, and with LL_SW_BORROW=0. Never past kMaxRenderBands.
+std::atomic<int> g_swBorrowOverride{-1};  // selftests: force N borrowed bands (-1 = the rule above)
+// When true, every available borrow worker is used in the render phase (forced-count
+// selftests). When false, borrow is armed only if the previous frame's render was heavy.
+std::atomic<bool> g_swBorrowAlwaysOn{false};
+// JD 2026-11-17 (adaptive borrow): iRB1 rebench on TheWorkstation, 83395cfd, software,
+// --cores 4, 1280x720 scale 0.5. Always-on borrow halved a heavy still (render 59.0 ->
+// 29.5 ms) but cost ~3.3 ms on a light forward walk (render 2.58 -> 5.89 ms, frame
+// 4.30 -> 7.53). Arm at >= 10 ms (fwd-fxaa ~19-21 ms still wants the help), drop below
+// 8 ms, hold in the gap so a single mid frame does not flap.
+static constexpr uint64_t kBorrowOnNs  = 10'000'000ull;
+static constexpr uint64_t kBorrowOffNs =  8'000'000ull;
+unsigned swBorrowBands(unsigned bands) {
+  const unsigned room = kSwMaxRenderThreads > bands ? kSwMaxRenderThreads - bands : 0u;
+  if (const int o = g_swBorrowOverride.load(std::memory_order_relaxed); o >= 0) return std::min(unsigned(o), room);
+  if constexpr (kCensusWasm) return 0;
+  if (g_swRequestedThreads.load(std::memory_order_relaxed) != 0) return 0;
+  static const bool envOff = [] {
+    const char* b = std::getenv("LL_SW_BORROW");
+    const char* r = std::getenv("LK_RENDER_THREADS");
+    return (b && b[0] == '0') || (r && r[0] == '1' && r[1] == '\0');
+  }();
+  if (envOff) return 0;
+  const unsigned hw = censusCores();
+  if (hw < 3) return 0;
+  const unsigned lendable = 2u;  // timing-handshake/control + tick/sim
+  return std::min(lendable, room);
+}
 class cSwBandPool {
  public:
   static cSwBandPool& get() { static cSwBandPool p; return p; }
-  unsigned bands() const { return bands_; }
+  // JD 2026-11-17 (phase-local render bands): bands() is the count for the current phase:
+  // the census bands, plus the borrowed reserved cores while a render phase is open.
+  unsigned bands() const { return curBands_.load(std::memory_order_relaxed); }
+  unsigned baseBands() const { return bands_; }
+  unsigned borrowedBands() const { return activeBorrow_.load(std::memory_order_relaxed); }
+  uint64_t phaseTicket() const { return phase_.load(std::memory_order_relaxed); }
+  void noteRenderNs(uint64_t ns) { lastRenderNs_.store(ns, std::memory_order_relaxed); }
+  void resetBorrowHysteresis() {
+    lastRenderNs_.store(0, std::memory_order_relaxed);
+    borrowArmed_ = false;
+    activeBorrow_.store(0, std::memory_order_relaxed);
+  }
+  // Open / close the render phase. Caller-owned (the render caller: main or the detached
+  // executor), never from a band callback. While open, the borrow workers spawned at start()
+  // take band indices bands_ .. bands_+borrow_-1 in every run() only when borrow is armed;
+  // at close they go back to idle and stop taking work, so the lent cores are handed back
+  // at the phase boundary. Atomics and a ticket only: no lock, no thread creation, no allocation.
+  // Armed when the previous frame's render time was over kBorrowOnNs, cleared below
+  // kBorrowOffNs (hysteresis). Forced-count selftests (g_swBorrowAlwaysOn) stay always on.
+  void beginRenderPhase() {
+    if (tlInRun_ || phaseDepth_++) return;
+    phaseOpen_ = true;
+    unsigned extra = 0;
+    if (borrow_ && !folded_) {
+      if (g_swBorrowAlwaysOn.load(std::memory_order_relaxed)) {
+        borrowArmed_ = true;
+      } else {
+        const uint64_t last = lastRenderNs_.load(std::memory_order_relaxed);
+        if (borrowArmed_) {
+          if (last < kBorrowOffNs) borrowArmed_ = false;
+        } else if (last >= kBorrowOnNs) {
+          borrowArmed_ = true;
+        }
+      }
+      extra = borrowArmed_ ? borrow_ : 0;
+    } else {
+      borrowArmed_ = false;
+    }
+    activeBorrow_.store(extra, std::memory_order_relaxed);
+    curBands_.store(folded_ ? bands_ : bands_ + extra, std::memory_order_relaxed);
+    phase_.fetch_add(1, std::memory_order_acq_rel);  // odd: open
+  }
+  void endRenderPhase() {
+    if (tlInRun_ || !phaseDepth_ || --phaseDepth_) return;
+    phaseOpen_ = false;
+    curBands_.store(bands_, std::memory_order_relaxed);
+    phase_.fetch_add(1, std::memory_order_acq_rel);  // even: closed, cores handed back
+  }
   void run(const std::function<void(unsigned)>& fn) {
     // Nested run() from a band callback: inline (same result, no re-entry).
-    if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands_); ++b) fn(b); return; }
+    if (tlInRun_) { for (unsigned b = 0; b < std::max(1u, bands()); ++b) fn(b); return; }
     struct InRun { InRun() { tlInRun_ = true; } ~InRun() { tlInRun_ = false; } } inRun;
     // Frame slot first (serialises sync vs detached), then runGate_ (serialises start/stop).
     if (!tlDetachedBody_) acquireFrameSlot();
@@ -343,20 +420,23 @@ class cSwBandPool {
     runGate_.lock();
     struct RunUnlock { cAtomicGate& g; ~RunUnlock() { g.unlock(); } } runUnlock{runGate_};
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
-    if (want != bands_ && !tlDetachedBody_) { stopAll(); start(want); }
-    if (bands_ <= 1) { fn(0); return; }
-    if (folded_) { runFolded(fn); return; }
+    if ((want != bands_ || swBorrowBands(want) != borrow_) && !tlDetachedBody_) { stopAll(); start(want); }
+    if (folded_) { if (bands_ <= 1) { fn(0); return; } runFolded(fn); return; }
+    const unsigned active = curBands_.load(std::memory_order_relaxed);
+    if (active <= 1) { fn(0); return; }
     // Publish band work: fn_ before gen_ (release), workers acquire gen then load fn_.
+    // The word carries the run's generation and its active band count together, so a
+    // worker can never pair one run's generation with another run's count. Workers with
+    // index >= active (borrow workers outside a render phase) skip the run untouched.
     workerErr_ = nullptr;
     hasWorkerErr_.store(false, std::memory_order_relaxed);
-    remaining_.store(bands_ - 1, std::memory_order_relaxed);
+    remaining_.store(active - 1, std::memory_order_relaxed);
     fn_ = &fn;
-    gen_.fetch_add(1, std::memory_order_release);
-    gen_.notify_all();
+    gen_.store(packGen(genSeq(gen_.load(std::memory_order_relaxed)) + 1, active), std::memory_order_release);  // band workers re-read it (t46u 5b)
     std::exception_ptr mine;
     try { fn(0); } catch (...) { mine = std::current_exception(); }
     for (unsigned v; (v = remaining_.load(std::memory_order_acquire)) != 0;)
-      remaining_.wait(v, std::memory_order_acquire);
+      lkIdleWaitUntil([&] { return remaining_.load(std::memory_order_acquire) != v; });  // t46u 5b
     fn_ = nullptr;
     std::exception_ptr err = mine ? mine : workerErr_;
     workerErr_ = nullptr;
@@ -377,7 +457,7 @@ class cSwBandPool {
     acquireFrameSlot();
     runGate_.lock();
     const unsigned want = swResolveThreads(g_swRequestedThreads.load(std::memory_order_relaxed));
-    if (want != bands_) { stopAll(); start(want); }
+    if (want != bands_ || swBorrowBands(want) != borrow_) { stopAll(); start(want); }
     if (!detachedMode_) {
       runGate_.unlock();
       std::exception_ptr err;
@@ -392,9 +472,17 @@ class cSwBandPool {
     detachedDone_ = std::move(onDone);
     detachedPending_.store(true, std::memory_order_release);
     runGate_.unlock();
-    detachedPending_.notify_all();
   }
   ~cSwBandPool() { stopAll(); }
+  // t46u item 2: the executor polls an installed pump (the app's frame mailbox) instead of
+  // waiting for runDetached posts. Dekker pair on (pump_, inPump_), both seq_cst: the
+  // executor raises inPump_ and re-reads pump_; the uninstaller clears pump_ and then
+  // sleeps until inPump_ drops, so it never returns while pumpOnce() is running.
+  void setPump(cSoftwareRenderer::IDetachedPump* p) {
+    pump_.store(p, std::memory_order_seq_cst);
+    if (p) return;
+    while (inPump_.load(std::memory_order_seq_cst)) std::this_thread::sleep_for(std::chrono::microseconds(100));
+  }
   static bool foldWanted() {
     static const bool on = [] {
       const char* e = std::getenv("LL_RENDER_POOL");
@@ -421,11 +509,11 @@ class cSwBandPool {
           if (!st->failed.exchange(true, std::memory_order_acq_rel)) st->err = std::current_exception();
         }
         tlInRun_ = false;
-        if (st->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) st->remaining.notify_all();
+        st->remaining.fetch_sub(1, std::memory_order_acq_rel);  // t46u 5b: the caller re-reads it
       });
     std::exception_ptr mine;
     try { fn(0); } catch (...) { mine = std::current_exception(); }
-    for (unsigned v; (v = st->remaining.load(std::memory_order_acquire)) != 0;) st->remaining.wait(v, std::memory_order_acquire);
+    lkIdleWaitUntil([&] { return st->remaining.load(std::memory_order_acquire) == 0; });  // t46u 5b
     std::atomic_thread_fence(std::memory_order_acquire);
     std::exception_ptr err = mine ? mine : st->err;
     if (err) std::rethrow_exception(err);
@@ -435,12 +523,11 @@ class cSwBandPool {
       bool expected = false;
       if (frameActive_.compare_exchange_weak(expected, true, std::memory_order_acquire, std::memory_order_relaxed))
         return;
-      frameActive_.wait(true, std::memory_order_relaxed);
+      { ::litholattice::spinstats::WaitScope ws(::litholattice::spinstats::kSwFrameSlot); lkIdleWaitUntil([&] { return !frameActive_.load(std::memory_order_relaxed); }); }  // t46u 5b
     }
   }
   void releaseFrameSlot() {
     frameActive_.store(false, std::memory_order_release);
-    frameActive_.notify_all();
   }
   struct FrameSlot {
     cSwBandPool& p;
@@ -453,10 +540,8 @@ class cSwBandPool {
   }
   void stopAll() {
     stop_.store(true, std::memory_order_release);
-    gen_.fetch_add(1, std::memory_order_release);
-    gen_.notify_all();
+    gen_.store(packGen(genSeq(gen_.load(std::memory_order_relaxed)) + 1, 0), std::memory_order_release);
     detachedPending_.store(true, std::memory_order_release);  // wake executor so it can see stop_
-    detachedPending_.notify_all();
     for (auto& t : threads_) if (t.joinable()) t.join();
     threads_.clear();
     records_.retireAll();
@@ -467,33 +552,85 @@ class cSwBandPool {
   }
   void start(unsigned n) {
     bands_ = n;
+    borrow_ = 0;
     {
-      const unsigned hw = std::thread::hardware_concurrency();
+      const unsigned hw = censusCores();  // t46u: the allocator's cores, not hardware_concurrency()
       const unsigned spawned = detachedMode_ ? n : (n ? n - 1 : 0);
-      std::fprintf(stderr, "software renderer: hardware_concurrency=%u, render bands=%u (%u spawned workers%s)\n", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
-      logInfo("software renderer: hardware_concurrency=%u, render bands=%u (%u spawned workers%s)", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
+      std::fprintf(stderr, "software renderer: census cores=%u, render bands=%u (%u spawned workers%s)\n", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
+      logInfo("software renderer: census cores=%u, render bands=%u (%u spawned workers%s)", hw, n, spawned, detachedMode_ ? " incl. detached executor" : " + caller");
     }
     const uint64_t g = gen_.load(std::memory_order_relaxed);
     if (detachedMode_) {
-      threads_.emplace_back([this] { executorLoop(); });
-      records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
+      // Single-thread WASM (no COOP/COEP) gets EAGAIN from std::thread: stay the caller-runs pool
+      // (not detached) instead of letting the system_error escape main(); the app checks
+      // cSoftwareRenderer::detachedPoolMode() and keeps its single-thread software path.
+      try {
+        threads_.emplace_back([this] { ::litholattice::setCurrentThreadName("lk-sw-exec"); executorLoop(); });
+        records_.add(ThreadClass::Dedicated, ThreadRole::RenderExecutor, 0, "sw-executor");
+      } catch (const std::system_error& e) {
+        detachedMode_ = false;
+        logInfo("software renderer: detached executor unavailable (thread spawn failed: %s); caller-runs pool", e.what());
+      }
     }
     folded_ = n > 1 && foldWanted();
     if (folded_) {
+      curBands_.store(bands_, std::memory_order_relaxed);
       logInfo("software renderer: %u render bands folded into the shared job pool (Gate 1; 0 band threads spawned)", n);
       return;
     }
     for (unsigned i = 1; i < bands_; ++i) {
-      threads_.emplace_back([this, i, g] { loop(i, g); });
+      threads_.emplace_back([this, i, g] { char nm[16]; std::snprintf(nm, sizeof nm, "lk-sw-band-%u", i); ::litholattice::setCurrentThreadName(nm); loop(i, g); });
       records_.add(ThreadClass::Dedicated, ThreadRole::RenderBand, uint16_t(i), "sw-band");
     }
+    // JD 2026-11-17: persistent borrow workers for the idle reserved cores. Spawned here
+    // once (never per frame); they only take band work while a render phase is open.
+    borrow_ = swBorrowBands(bands_);
+    for (unsigned i = bands_; i < bands_ + borrow_; ++i) {
+      threads_.emplace_back([this, i, g] { char nm[16]; std::snprintf(nm, sizeof nm, "lk-sw-borrow-%u", i); ::litholattice::setCurrentThreadName(nm); loop(i, g); });
+      records_.add(ThreadClass::Dedicated, ThreadRole::RenderBand, uint16_t(i), "sw-borrow");
+    }
+    if (borrow_) {
+      std::fprintf(stderr, "software renderer: +%u borrow band(s) available (used when the last frame's render is heavy; %u in a heavy render phase, %u otherwise)\n", borrow_, bands_ + borrow_, bands_);
+      logInfo("software renderer: +%u borrow band(s) available (used when the last frame's render is heavy; %u in a heavy render phase, %u otherwise)", borrow_, bands_ + borrow_, bands_);
+    }
+    // If start() runs while a render phase is already open (thread-count change this frame),
+    // keep the armed decision from beginRenderPhase, except forced-count tests which stay on.
+    if (phaseOpen_ && g_swBorrowAlwaysOn.load(std::memory_order_relaxed) && borrow_) borrowArmed_ = true;
+    const unsigned extra = (phaseOpen_ && !folded_ && borrowArmed_) ? borrow_ : 0;
+    activeBorrow_.store(extra, std::memory_order_relaxed);
+    curBands_.store(folded_ ? bands_ : bands_ + extra, std::memory_order_relaxed);
+  }
+  // t46u item 2: one pass over the installed pump. True when it rendered something.
+  bool pumpPass() {
+    cSoftwareRenderer::IDetachedPump* p = pump_.load(std::memory_order_seq_cst);
+    if (!p) return false;
+    bool did = false;
+    inPump_.store(true, std::memory_order_seq_cst);
+    if (pump_.load(std::memory_order_seq_cst) == p) {
+      bool expected = false;
+      if (frameActive_.compare_exchange_strong(expected, true, std::memory_order_acquire, std::memory_order_relaxed)) {
+        tlDetachedBody_ = true;
+        try { did = p->pumpOnce(); } catch (...) { did = true; }  // the pump hands its own errors to main
+        tlDetachedBody_ = false;
+        releaseFrameSlot();
+      }
+    }
+    inPump_.store(false, std::memory_order_seq_cst);
+    return did;
   }
   void executorLoop() {
+    unsigned idle = 0;
     for (;;) {
       for (;;) {
         if (stop_.load(std::memory_order_acquire)) return;
         if (detachedPending_.load(std::memory_order_acquire)) break;
-        detachedPending_.wait(false, std::memory_order_relaxed);
+        if (pump_.load(std::memory_order_relaxed)) {  // t46u: pump mode, poll with backoff
+          if (pumpPass()) { idle = 0; continue; }
+          if (++idle < 64) std::this_thread::yield();
+          else std::this_thread::sleep_for(std::chrono::microseconds(100));
+          continue;
+        }
+        { ::litholattice::spinstats::WaitScope ws(::litholattice::spinstats::kSwExecIdle); lkIdleWaitUntil([&] { return detachedPending_.load(std::memory_order_acquire) || stop_.load(std::memory_order_acquire) || pump_.load(std::memory_order_relaxed); }); }  // t46u 5b
       }
       if (stop_.load(std::memory_order_acquire)) return;
       std::function<void()> fn = std::move(detachedFn_);
@@ -517,10 +654,11 @@ class cSwBandPool {
         if (stop_.load(std::memory_order_acquire)) return;
         g = gen_.load(std::memory_order_acquire);
         if (g != seen) break;
-        gen_.wait(seen, std::memory_order_relaxed);
+        { ::litholattice::spinstats::WaitScope ws(::litholattice::spinstats::kSwBandIdle); lkIdleWaitUntil([&] { return gen_.load(std::memory_order_acquire) != seen || stop_.load(std::memory_order_acquire); }); }  // t46u 5b
       }
       if (stop_.load(std::memory_order_acquire)) return;
       seen = g;
+      if (band >= genActive(g)) continue;  // not in this run (borrow worker outside a render phase)
       const std::function<void(unsigned)>* fn = fn_;
       if (!fn) continue;
       tlInRun_ = true;
@@ -528,10 +666,22 @@ class cSwBandPool {
       try { (*fn)(band); } catch (...) { err = std::current_exception(); }
       tlInRun_ = false;
       if (err && !hasWorkerErr_.exchange(true, std::memory_order_acq_rel)) workerErr_ = err;
-      if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) remaining_.notify_all();
+      remaining_.fetch_sub(1, std::memory_order_acq_rel);  // the caller re-reads it (t46u 5b)
     }
   }
+  // gen_ word: [sequence:56 | active bands:8] (kMaxRenderBands = 64 fits).
+  static constexpr uint64_t packGen(uint64_t seq, unsigned active) { return (seq << 8) | uint64_t(active & 0xFFu); }
+  static constexpr uint64_t genSeq(uint64_t w) { return w >> 8; }
+  static constexpr unsigned genActive(uint64_t w) { return unsigned(w & 0xFFu); }
   unsigned bands_ = 1;
+  unsigned borrow_ = 0;              // persistent borrow workers (JD 2026-11-17)
+  bool borrowArmed_ = false;         // caller-owned: hysteresis latch for this phase
+  std::atomic<uint64_t> lastRenderNs_{0};  // previous renderFrame wall time
+  std::atomic<unsigned> activeBorrow_{0};  // armed borrow count for the open / last phase
+  std::atomic<unsigned> curBands_{1};  // bands for the current phase (bands_ or bands_ + active borrow)
+  std::atomic<uint64_t> phase_{0};     // render-phase ticket: odd = open, even = closed
+  unsigned phaseDepth_ = 0;          // caller-owned nesting count
+  bool phaseOpen_ = false;           // caller-owned
   bool folded_ = false;
   std::vector<std::thread> threads_;
   cThreadRecordSet records_;
@@ -545,6 +695,8 @@ class cSwBandPool {
   std::function<void()> detachedFn_;
   std::function<void(std::exception_ptr)> detachedDone_;
   std::atomic<bool> detachedPending_{false};
+  std::atomic<cSoftwareRenderer::IDetachedPump*> pump_{nullptr};  // t46u item 2
+  std::atomic<bool> inPump_{false};
   inline static thread_local bool tlInRun_ = false;
   inline static thread_local bool tlDetachedBody_ = false;
   std::atomic<uint64_t> gen_{0};
@@ -560,6 +712,18 @@ void cSoftwareRenderer::setShotHold(bool hold) { g_swShotHold.store(hold, std::m
 static std::atomic<bool> g_swShotTaken{false};
 bool cSoftwareRenderer::shotTaken() { return g_swShotTaken.load(std::memory_order_acquire); }
 unsigned cSoftwareRenderer::renderThreads() { return swResolveThreads(g_swRequestedThreads.load()); }
+unsigned cSoftwareRenderer::borrowedRenderThreads() { return cSwBandPool::get().borrowedBands(); }
+void cSoftwareRenderer::setBorrowedBandsOverride(int n) {
+  g_swBorrowOverride.store(n < 0 ? -1 : n, std::memory_order_relaxed);
+  g_swBorrowAlwaysOn.store(n >= 0, std::memory_order_relaxed);
+}
+void cSoftwareRenderer::setBorrowedBandsAdaptiveOverride(int n) {
+  g_swBorrowOverride.store(n < 0 ? -1 : n, std::memory_order_relaxed);
+  g_swBorrowAlwaysOn.store(false, std::memory_order_relaxed);
+}
+void cSoftwareRenderer::noteRenderTimeNs(uint64_t ns) { cSwBandPool::get().noteRenderNs(ns); }
+void cSoftwareRenderer::resetBorrowHysteresis() { cSwBandPool::get().resetBorrowHysteresis(); }
+uint64_t cSoftwareRenderer::renderPhaseTicket() { return cSwBandPool::get().phaseTicket(); }
 
 // Design B Stage 2: forward declaration (defined with the store, below) +
 // the (store key, ring kind) map key for drain coalescing.
@@ -571,10 +735,10 @@ struct PairHash {
 };
 
 // Design B Stage 1: detached frame execution for the software threeway
-// split. The body runs on the band pool's executor worker; the
-// RendererGuard mirrors RenderWorker::loop on the Vulkan path, so the
-// game's remaining guarded renderer calls (which take the same guard)
-// stay serialised with the in-flight render.
+// split. The body runs on the band pool's executor worker. t46u item 2: no
+// lock any more; the game's renderer calls reach the renderer only
+// through the command mailbox (renderer_mailbox.h), applied by the executor
+// at the seal, so nothing on main touches renderer state mid-frame.
 //
 // Design B Stage 2: the body opens with the frame seal â€” the upload ring
 // drains (drainUploadRing) BEFORE the guard is taken and before
@@ -591,7 +755,6 @@ void cSoftwareRenderer::renderFrameDetached(const FrameParams& fp, uint64_t drai
         std::exception_ptr err;
         try {
           drainUploadRing(drainTarget);  // the seal (no-op unless the ring is enabled)
-          litholattice::threeway::RendererGuard rg;
           renderFrame(fp);
         } catch (...) {
           err = std::current_exception();
@@ -659,6 +822,13 @@ cSoftwareRenderer::UploadRingStats cSoftwareRenderer::uploadRingStats() const {
   st.applied = ringApplied_;
   st.coalesced = ringCoalesced_;
   st.clears = ringClears_;
+  st.refusedSlots = uploadRing_.refusedSlots();
+  st.refusedBytes = uploadRing_.refusedBytes();
+  st.maxBytesInFlight = uploadRing_.maxBytesInFlight();
+  st.maxDrainPerSeal = uploadRing_.maxDrainPerSeal();
+  st.pushedBytes = uploadRing_.pushedBytesTotal();
+  st.slots = cSwUploadRing::kSlots;
+  st.byteBudget = cSwUploadRing::kByteBudget;
   return st;
 }
 
@@ -723,12 +893,54 @@ void cSoftwareRenderer::drainUploadRing(uint64_t target) {
   ringCoalesced_ += n - appliedNow;  // pre-clear wipe + superseded: drained but never applied
 }
 void cSoftwareRenderer::setDetachedPoolMode(bool on) { cSwBandPool::get().setDetachedMode(on); }
+bool cSoftwareRenderer::detachedPoolMode() { return cSwBandPool::get().detachedMode(); }
+void cSoftwareRenderer::setDetachedPump(IDetachedPump* p) { cSwBandPool::get().setPump(p); }
+void cSoftwareRenderer::renderJobOnExecutor(const FrameParams& fp, uint64_t drainTarget) {
+  std::exception_ptr err;
+  try {
+    drainUploadRing(drainTarget);  // the seal
+    renderFrame(fp);
+  } catch (...) {
+    err = std::current_exception();
+  }
+  retireDrainedMeshes();  // frees happen here, off the seal, throw or not
+  if (err) std::rethrow_exception(err);
+}
 
 void cSoftwareRenderer::clear(uint32_t color) {
   // Cortana 2026-10-15 1455: runtime-dispatched fill (AVX2 or baseline; identical bytes).
   swsimd::fill32(fb_.pixels.data(), fb_.pixels.size(), color);
   swsimd::fill16(depth_.data(), depth_.size(), 0xFFFF);
+  if (!aaId_.empty() && aaId_.size() == depth_.size()) swsimd::fill16(aaId_.data(), aaId_.size(), 0xFFFF);
+  if (objectsOn_) {
+    objects_.assign(depth_.size(), 0);
+    faces_.assign(depth_.size(), 7);
+    layers_.assign(depth_.size(), 0);
+  }
   hizReset();  // Cortana 2026-10-15 1715: Hi-Z
+}
+
+// Nemo View object ids: off unless a table is set; the colour/depth path never reads them.
+static thread_local uint8_t tlObject = 0;
+static thread_local uint8_t tlFace = 7;  // 7 = unknown (valid faces are 0-5)
+static thread_local uint16_t tlLayer = 0;
+
+void cSoftwareRenderer::setObjectCapture(const uint8_t* layerToObject, size_t count) {
+  objectsOn_ = layerToObject != nullptr && count > 0;
+  if (objectsOn_) {
+    layerObject_.assign(layerToObject, layerToObject + count);
+    objects_.assign(depth_.size(), 0);
+    faces_.assign(depth_.size(), 7);
+    layers_.assign(depth_.size(), 0);
+  } else {
+    layerObject_.clear();
+    objects_.clear();
+    objects_.shrink_to_fit();
+    faces_.clear();
+    faces_.shrink_to_fit();
+    layers_.clear();
+    layers_.shrink_to_fit();
+  }
 }
 
 // Cortana 2026-10-15 1715: hierarchical-Z [ENGINE] (see software_renderer.h).
@@ -860,6 +1072,12 @@ void cSoftwareRenderer::rasterizeTriangle(const float* v0, const float* v1,
       }
       depth_[idx] = q;
       fb_.pixels[idx] = color;
+      if (!aaId_.empty()) aaId_[idx] = uint16_t(tlLayer) | (uint16_t(tlFace & 7) << 10) | (uint16_t(tlObject) << 13);
+      if (objectsOn_) {
+        objects_[idx] = tlObject;
+        faces_[idx] = tlFace;
+        layers_[idx] = tlLayer;
+      }
     }
   }
 }
@@ -1272,6 +1490,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
         span.texShift = int(mipShift(tileSz)); span.texScale = float(tileSz - 1);
       }
       span.morton = fin.texMorton;
+      span.aaStamp = uint16_t(s0->layer) | (uint16_t(tlFace & 7) << 10) | (uint16_t(tlObject) << 13);
     }
     Y0 = std::min(Y0, y0); Y1 = std::max(Y1, y1);
   }
@@ -1347,6 +1566,7 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
     if (simdSpan && x1 >= x0) {
       span.sw0 = sw0; span.sw1 = sw1; span.sw2 = sw2; span.sdepth = sdepth;
       span.depth = depth_.data() + sidx; span.pixels = fb_.pixels.data() + sidx; span.n = x1 - x0 + 1;
+      span.aaId = aaId_.empty() ? nullptr : aaId_.data() + sidx;
       swsimd::shadeSpanBasic(span);
       lc = span.lc; ls = span.ls;
       if (span.wxHi >= 0) { wxLo = x0 + span.wxLo; wxHi = x0 + span.wxHi; }
@@ -1474,6 +1694,8 @@ void cSoftwareRenderer::rasterizeTrisShaded(int nt, const float* const (*tv)[3],
           }
           depth_[idx] = q;
           fb_.pixels[idx] = color;
+          if (!aaId_.empty())
+            aaId_[idx] = uint16_t(fin.varyings.layer) | (uint16_t(tlFace & 7) << 10) | (uint16_t(tlObject) << 13);
           if (x < wxLo) wxLo = x;
           wxHi = x;
         }
@@ -1553,6 +1775,14 @@ void cSoftwareRenderer::renderFlatQuads(const PackedVertex* verts, size_t count,
            screen[(i+2)*4+3] > 0 && screen[(i+3)*4+3] > 0;
   };
   for (size_t i = 0; i + 3 < count; i += 4) {
+    if (objectsOn_ || !aaId_.empty()) {
+      const uint32_t layer = verts[i].layerIndex();
+      tlLayer = uint16_t(layer);
+      tlObject = objectOverride_ >= 0 ? uint8_t(objectOverride_)
+                                      : (layer < layerObject_.size() ? layerObject_[layer] : uint8_t(0));
+      const uint8_t raw = uint8_t(verts[i].faceAo & 7);
+      tlFace = raw < 6 ? raw : uint8_t(7);
+    }
     if (!quadVisible(i)) {
       // Cortana 2026-10-15 1420 (Elfie Â§1.2): the flat/sprite path dropped
       // quads crossing the near plane (RND-H2 fixed only the per-pixel
@@ -1719,23 +1949,6 @@ void cSoftwareRenderer::renderMesh(const PackedVertex* verts, size_t vertCount,
         if (cx0 > cx1 || cy0 > cy1) { ++tlQuadCentreCulled; continue; }
       }
     }
-    if (tlFlatLod) {
-      const uint8_t md = verts[i].mode;
-      if ((md == kShadeTex || md == kShadeGroundPulse || md == kShadeCutout || md == kShadeLeaf) && tlBlendPass <= 0) {
-        // 2026-10-25 (Archie): >= 4x far LOD: average layer colour x face light x mean AO; no UV
-        // setup, no texture fetch. Same light model as basicFragmentShader (0.35 + 0.65 N.L).
-        static constexpr float kFaceLight[6] = {0.35f + 0.65f * 0.44f, 0.35f, 0.35f + 0.65f * 0.88f, 0.35f, 0.35f + 0.65f * 0.26f, 0.35f};
-        const uint32_t layer = verts[i].layerIndex();
-        const uint32_t avg = layer < layerAvg_.size() ? layerAvg_[layer] : 0xFF808080u;
-        float ao = 1.f;
-        if (g_swAo) ao = 0.25f * (kSwAoLut[(verts[i].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 1].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 2].faceAo >> 3) & 3] + kSwAoLut[(verts[i + 3].faceAo >> 3) & 3]);
-        const float l = kFaceLight[std::min(5, verts[i].faceAo & 7)] * ao;
-        const uint32_t col = 0xFF000000u | (uint32_t(float((avg >> 16) & 0xFF) * l) << 16) | (uint32_t(float((avg >> 8) & 0xFF) * l) << 8) | uint32_t(float(avg & 0xFF) * l);
-        rasterizeTriangle(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4], col);
-        rasterizeTriangle(&screen[i*4], &screen[(i+2)*4], &screen[(i+3)*4], col);
-        continue;
-      }
-    }
     for (int k = 0; k < 4; ++k) varyingsFromPackedVertex(verts[i + k], sv[k]);
     // Ground pulse/traces tag: only kShadeGroundPulse quads of a mesh whose
     // baked params renderFrame supplied (direct renderMesh callers leave
@@ -1780,27 +1993,6 @@ void cSoftwareRenderer::renderEntityVerts(const float* viewProj) {
     if (!triVisible(i)) continue;
     const uint32_t color = faceColor(verts[i].faceAo & 0x7, verts[i].value, verts[i].mode);
     rasterizeTriangle(&screen[i*4], &screen[(i+1)*4], &screen[(i+2)*4], color);
-  }
-}
-
-void cSoftwareRenderer::refreshLayerAvg() {
-  // 2026-10-25 (Archie): average colour per layer of the base texture array (opaque texels only),
-  // recomputed when the pack changes (data pointer / layer count).
-  const uint32_t* d = textures_.data();
-  const uint32_t n = textures_.layers();
-  if (d == layerAvgSrc_ && n == layerAvgN_) return;
-  layerAvgSrc_ = d; layerAvgN_ = n;
-  layerAvg_.assign(n, 0xFF808080u);
-  if (!d) return;
-  const size_t area = size_t(textures_.tileSize()) * size_t(textures_.tileSize());
-  for (uint32_t l = 0; l < n; ++l) {
-    uint64_t r = 0, g = 0, b = 0, c = 0;
-    for (size_t k = 0; k < area; ++k) {
-      const uint32_t t = d[size_t(l) * area + k];
-      if ((t >> 24) < 128) continue;
-      r += (t >> 16) & 0xFF; g += (t >> 8) & 0xFF; b += t & 0xFF; ++c;
-    }
-    if (c) layerAvg_[l] = 0xFF000000u | uint32_t(r / c) << 16 | uint32_t(g / c) << 8 | uint32_t(b / c);
   }
 }
 
@@ -1981,35 +2173,16 @@ bool cSoftwareRenderer::canonIngestEnabled() {
   const int o = g_swCanonOverride.load(std::memory_order_relaxed);
   return o < 0 ? v : o == 1;
 }
-int cSoftwareRenderer::canonLodOf(int cx, int sy, int cz) const {
+int cSoftwareRenderer::canonDecodedOf(int cx, int sy, int cz) const {
   auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
-  return it == canonStore_.entries().end() ? -1 : it->second.lod;
+  return it == canonStore_.entries().end() ? -1 : it->second.decoded ? 1 : 0;
 }
-static int swCanonDist(int cx, int cz, int camCx, int camCz) {
-  return std::max(std::abs(cx - camCx), std::abs(cz - camCz));
-}
-int cSoftwareRenderer::canonSkirtMaskOf(int cx, int sy, int cz) const {
-  auto it = canonStore_.entries().find(swMeshKey(cx, sy, cz));
-  return it == canonStore_.entries().end() ? -1 : int(it->second.skirtMask);
-}
-// M10 (Archie ruling 2): skirts only toward neighbours drawn at another LOD.
-uint8_t cSoftwareRenderer::canonSkirtMaskFor(int cx, int sy, int cz, int lod) const {
-  static const int kD[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-  int nbr[6];
-  for (int f = 0; f < 6; ++f) {
-    const int64_t k = swMeshKey(cx + kD[f][0], sy + kD[f][1], cz + kD[f][2]);
-    auto it = canonStore_.entries().find(k);
-    nbr[f] = it != canonStore_.entries().end() ? it->second.pend : meshes_.count(k) ? -1 : -2;
-  }
-  return canonSkirtMask(lod, nbr);
-}
-bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
-  const uint8_t mask = canonSkirtMaskFor(src.meta.cx, src.meta.sy, src.meta.cz, lod);
-  if (lod == src.lod && mask == src.skirtMask) return true;
+bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src) {
+  if (src.decoded) return true;
   ChunkMesh dm = src.meta;  // verts empty in the stored meta
   dm.canonical.reset();
-  if (!decodeCanonicalMesh(*src.meta.canonical, lod, dm.verts, mask) || dm.verts.empty()) return false;
-  src.lod = lod; src.pend = lod; src.skirtMask = mask;
+  if (!decodeCanonicalMesh(*src.meta.canonical, dm.verts) || dm.verts.empty()) return false;
+  src.decoded = true;
   canonInner_ = true;
   uploadChunkMesh(dm);
   canonInner_ = false;  // legacy store path (canonical reset: no recursion into this branch)
@@ -2019,18 +2192,15 @@ bool cSoftwareRenderer::redecodeCanon(SwCanonSrc& src, int lod) {
     decodeCache_.onDecoded(key, it->second.quads.size() * sizeof(StoredQuad) + it->second.verts.size() * sizeof(PackedVertex), decodeFrame_);
   return true;
 }
-// Fix (e): an evicted canonical chunk (lod -1) that is in view decodes again at its pending lod.
+// Fix (e): an evicted canonical chunk that is in view decodes again.
 void cSoftwareRenderer::redecodeEvictedInView(const FrameParams& p) {
-  const int view = cSwLodRings::shared().view();  // Archie Phase 1: never redecode beyond the view
   const int ccx = int(std::floor(p.camPos.x / 16.f)), ccz = int(std::floor(p.camPos.z / 16.f));
   for (auto& [key, src] : canonStore_.entries()) {
-    if (src.lod >= 0) continue;
-    if (view > 0 && view < (1 << 20) &&
-        std::max(std::abs(src.meta.cx - ccx), std::abs(src.meta.cz - ccz)) > view) continue;
+    if (src.decoded) continue;
+    if (cViewRadius::beyond(std::max(std::abs(src.meta.cx - ccx), std::abs(src.meta.cz - ccz)))) continue;  // never beyond the view
     const Vec3 mn{src.meta.cx * 16.f, src.meta.sy * 16.f, src.meta.cz * 16.f};
     if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos, frustumMarginDeg_) != CullDecision::Full) continue;
-    const int want = src.pend >= 0 ? src.pend : 0;
-    if (redecodeCanon(src, want)) decodeCache_.countRedecode();
+    if (redecodeCanon(src)) decodeCache_.countRedecode();
   }
 }
 // Fix (e): drop the least-recently-drawn decodes over the cap (never one drawn this frame).
@@ -2041,53 +2211,23 @@ void cSoftwareRenderer::evictColdDecodes() {
     if (it == canonStore_.entries().end()) { decodeCache_.onErased(key); continue; }
     ++storeGen_;
     meshes_.erase(key);
-    it->second.lod = -1;
+    it->second.decoded = false;
     decodeCache_.onErased(key);
     decodeCache_.countEviction();
   }
-}
-void cSoftwareRenderer::refreshCanonNeighbours(int cx, int sy, int cz) {
-  static const int kD[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};  // same column = same lod: no Y seam
-  for (const auto& d : kD) {
-    auto it = canonStore_.entries().find(swMeshKey(cx + d[0], sy, cz + d[1]));
-    if (it != canonStore_.entries().end() && it->second.lod >= 0) redecodeCanon(it->second, it->second.lod);
-  }
-}
-void cSoftwareRenderer::reselectCanonLods(const Vec3& cam) {
-  const int ccx = int(std::floor(cam.x / 16.f)), ccz = int(std::floor(cam.z / 16.f));
-  if (ccx == canonCamCx_ && ccz == canonCamCz_) return;
-  canonCamCx_ = ccx; canonCamCz_ = ccz;
-  if (canonStore_.entries().empty()) return;
-  int r1 = 0, r2 = 0;
-  canonLodRings(r1, r2);
-  const int view = cSwLodRings::shared().view();  // Archie Phase 1: rings already clamped; skip beyond view
-  // Two passes (M10): pick every lod first so the skirt masks see the new neighbours.
-  for (auto& [key, src] : canonStore_.entries()) {
-    const int d = swCanonDist(src.meta.cx, src.meta.cz, ccx, ccz);
-    if (view > 0 && view < (1 << 20) && d > view) { src.pend = -1; continue; }  // beyond view: leave decoded until tombstone
-    src.pend = selectCanonLod(d, src.lod, r1, r2);
-  }
-  for (auto& [key, src] : canonStore_.entries())
-    if (src.pend >= 0 && src.lod >= 0 && !redecodeCanon(src, src.pend)) src.pend = src.lod;  // keep current lod (evicted: decode when in view)
 }
 
 void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
   const int64_t key = swMeshKey(mesh.cx, mesh.sy, mesh.cz);
   if (canonIngestEnabled() && !canonInner_) {
     if (!canonStore_.prepare(mesh)) {  // step 3b: no decodable canonical payload
-      if (canonStore_.entries().erase(key) || mesh.verts.empty()) refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);
+      canonStore_.entries().erase(key);
     } else {
-      int r1 = 0, r2 = 0;
-      canonLodRings(r1, r2);
-      const int want = canonCamCx_ == (1 << 30) ? 0 : selectCanonLod(swCanonDist(mesh.cx, mesh.cz, canonCamCx_, canonCamCz_), -1, r1, r2);
       MeshPlacement placed;
-      canonStore_.commit(placed);  // stores the staged entry at key (fresh: lod -1, skirtMask 0xFF)
+      canonStore_.commit(placed);  // stores the staged entry at key (fresh: not decoded)
       SwCanonSrc& st = canonStore_.entries()[key];
-      st.lod = -1; st.pend = want;
-      if (redecodeCanon(st, want) || (st.pend = 0, redecodeCanon(st, 0))) {
-        refreshCanonNeighbours(mesh.cx, mesh.sy, mesh.cz);  // M10: their seams may have changed
-        return;
-      }
+      st.decoded = false;
+      if (redecodeCanon(st)) return;
       canonStore_.entries().erase(key);  // nothing decodable: fall through to the legacy stream
     }
   }
@@ -2122,44 +2262,8 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
       s.emit.insert(s.emit.end(), e, e + 6);
     }
   }
-  // Cortana 2026-10-16: LOD-tagged quads (foliage) split into a near set (detail) and a far set.
-  // The far set keeps only untagged quads: far foliage is skipped on the software path.
-  // Elfie 2026-10-17 (Argon counsel pt 1, phase A): the two sets are no longer both stored.
-  // One vector, reordered: untagged quads first (original relative order â€” the exact old far
-  // set), then kShadeLodNear quads with tag bits masked (with the prefix, the exact old near
-  // set selectLod produced). kShadeLodFar quads were dropped by BOTH old sets on this path,
-  // so they are not stored. Far mode draws the prefix [0, untaggedCount) quads only.
-  s.hasLod = hasLodTags(mesh.verts);
-  // Elfie 2026-10-18 phase B: the phase-A ordered set is built in a local,
-  // then packed into StoredQuad form (legacy store kept if packing declines).
-  // CREW TILE (shake 2026-10-18): the no-LOD common path used to copy the
-  // whole mesh into `ordered` just to read it back below. Readers now work
-  // on mesh.verts directly; only the LOD path builds a reordered set, in a
-  // reused member scratch. Contents seen by every consumer are unchanged.
-  const std::vector<PackedVertex>* orderedPtr = &mesh.verts;
-  if (s.hasLod) {
-    std::vector<PackedVertex>& ordered = uploadOrderedScratch_;
-    ordered.clear();
-    ordered.reserve(mesh.verts.size());
-    size_t untagged = 0;
-    for (size_t q = 0; q + 3 < mesh.verts.size(); q += 4)
-      if (!(mesh.verts[q].mode & (kShadeLodNear | kShadeLodFar))) {
-        ordered.insert(ordered.end(), mesh.verts.begin() + q, mesh.verts.begin() + q + 4);
-        ++untagged;
-      }
-    for (size_t q = 0; q + 3 < mesh.verts.size(); q += 4)
-      if (mesh.verts[q].mode & kShadeLodNear)
-        for (size_t k = 0; k < 4; ++k) {
-          PackedVertex v = mesh.verts[q + k];
-          v.mode = uint8_t(v.mode & kShadeModeMask);
-          ordered.push_back(v);
-        }
-    s.untaggedCount = untagged;
-    orderedPtr = &ordered;
-  } else {
-    s.untaggedCount = mesh.verts.size() / 4;
-  }
-  const std::vector<PackedVertex>& ordered = *orderedPtr;
+  // Full geometry at every distance (LOD removed 2026-11-17): the stored set is mesh.verts.
+  const std::vector<PackedVertex>& ordered = mesh.verts;
   swFaceBuckets(ordered, s.quadFace, s.planeLim);  // Pass 2 step 3 (one set now)
   s.hasBlend = false;  // Cortana 2026-10-15 1755: route to the blended pass
   for (size_t q = 0; q < ordered.size(); q += 4)
@@ -2169,13 +2273,8 @@ void cSoftwareRenderer::uploadChunkMesh(const ChunkMesh& mesh) {
     s.verts.shrink_to_fit();  // release the legacy buffer: memory is the point
   } else {
     s.quads.clear();
-    // CREW TILE: `ordered` is mesh.verts (no-LOD) or the member scratch
-    // (LOD) now -- copy in the first case, move in the second, exactly the
-    // values the old local held either way.
-    if (s.hasLod) s.verts = std::move(uploadOrderedScratch_);
-    else s.verts = mesh.verts;
+    s.verts = mesh.verts;
   }
-  s.lodScale = mesh.lodScale;
   for (int i = 0; i < 4; ++i) {
     s.pulseP0[i] = mesh.pulseP0[i];
     s.pulseP1[i] = mesh.pulseP1[i];
@@ -2238,25 +2337,58 @@ SoftwareAaScratch& cSoftwareRenderer::ensureAaScratch() {
 
 void cSoftwareRenderer::setAo(bool on) { g_swAo = on; }  // Cortana 2026-10-16: render.ao
 
+void cSoftwareRenderer::ensureAaId(uint32_t w, uint32_t h) {
+  const size_t n = size_t(w) * size_t(h);
+  if (aaId_.size() < n) aaId_.assign(n, 0xFFFF);
+  else if (aaId_.size() > n) aaId_.resize(n);
+}
+
 void cSoftwareRenderer::setAaMode(const char* modeName) {
   SoftwareAaMode mode;
   if (modeName && softwareAaModeFromName(modeName, mode)) aaMode_ = mode;
+  if ((aaMode_ == SoftwareAaMode::Fxaa || aaMode_ == SoftwareAaMode::Cmaa) && fb_.width && fb_.height)
+    ensureAaId(fb_.width, fb_.height);
 }
 
 const char* cSoftwareRenderer::aaModeName() const { return softwareAaModeName(aaMode_); }
 
 void cSoftwareRenderer::applyAaPostPass() {
   if (aaMode_ == SoftwareAaMode::Fxaa) {
-    // Cortana 2026-10-16 (texture-preserving AA): depth gates FXAA to geometry edges.
-    applyFxaaPost(fb_, ensureAaScratch(), (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr);
+    const uint16_t* depth = (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr;
+    const uint16_t* prim = (aaId_.size() == fb_.pixels.size()) ? aaId_.data() : nullptr;
+    SoftwareAaScratch& scratch = ensureAaScratch();
+    cSwBandPool& pool = cSwBandPool::get();
+    const int h = int(fb_.height);
+    const unsigned nb = std::max(1u, pool.bands());
+    // Grow once on the caller (never shrinks; no per-frame heap once warm).
+    // Luma, blend, and commit are three disjoint row splits over the same
+    // band pool. With one render band the pool has no extra workers to
+    // enlist without changing the thread census, so all three run on the caller.
+    const size_t n = size_t(fb_.width) * size_t(fb_.height);
+    if (scratch.src.size() < n) scratch.src.resize(n);
+    if (scratch.lumaQ.size() < n) scratch.lumaQ.resize(n);
+    if (scratch.edge.size() < n) scratch.edge.resize(n);
+    pool.run([&](unsigned b) {
+      const int y0 = int((uint64_t(h) * b) / nb);
+      const int y1 = int((uint64_t(h) * (b + 1)) / nb);
+      prepareFxaaRows(fb_, scratch, y0, y1);
+    });
+    pool.run([&](unsigned b) {
+      const int y0 = int((uint64_t(h) * b) / nb);
+      const int y1 = int((uint64_t(h) * (b + 1)) / nb);
+      applyFxaaRows(fb_, scratch, depth, prim, y0, y1);
+    });
+    pool.run([&](unsigned b) {
+      const int y0 = int((uint64_t(h) * b) / nb);
+      const int y1 = int((uint64_t(h) * (b + 1)) / nb);
+      commitFxaaRows(fb_, scratch, y0, y1);
+    });
   } else if (aaMode_ == SoftwareAaMode::Cmaa) {
-    // depth_ matches fb_ on the direct surface (resize keeps them paired);
-    // pass it only when the pairing holds, else run luma-only.
     const uint16_t* depth =
         (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr;
     applyCmaaPost(fb_, depth, ensureAaScratch());
   }
-  // Off: no-op. Ssaa2x: render-time mode â€” nothing to post-apply.
+  // Off: no-op. Ssaa2x: render-time mode — nothing to post-apply.
 }
 
 void cSoftwareRenderer::setAsciiMode(bool enabled, int cols) {
@@ -2990,14 +3122,6 @@ struct SwProf {
     std::fprintf(stderr, "swprof thread-summed ms/frame: renderMesh=%.1f calls=%llu\n", g_meshUs.exchange(0) / 1000.0 / frames, (unsigned long long)(g_meshCalls.exchange(0) / frames));
     std::fprintf(stderr, "swprof quad centrecull=%llu /frame\n", (unsigned long long)(g_quadCentreCulled.exchange(0) / frames));
     std::fprintf(stderr, "swprof centrecull tris=%llu emitmemo vertex hits=%llu /frame\n", (unsigned long long)(g_centreCulled.exchange(0)/frames), (unsigned long long)(g_emitMemoHits.exchange(0)/frames));  // Cortana 2026-10-25 box
-    {
-      static const bool once = [] { if (const char* r = std::getenv("LL_SW_LOD_RINGS")) std::sscanf(r, "%d,%d,%d", &g_ringEdge[0], &g_ringEdge[1], &g_ringEdge[2]); return true; }();
-      for (int i = 0; i < 3; ++i) g_ringEdge[i] = litholattice::cSwLodRings::shared().edge(i);  // PlayB: same edges the game meshes with
-      (void)once;
-      const uint64_t r0 = g_ringTris[0].exchange(0) / frames, r1 = g_ringTris[1].exchange(0) / frames, r2 = g_ringTris[2].exchange(0) / frames, r3 = g_ringTris[3].exchange(0) / frames;
-      std::fprintf(stderr, "swprof ring tris (binned): near<=%d=%llu mid<=%d=%llu mid2<=%d(2x)=%llu far>%d(4x)=%llu /frame\n", g_ringEdge[0], (unsigned long long)r0,
-                   g_ringEdge[1], (unsigned long long)r1, g_ringEdge[2], (unsigned long long)r2, g_ringEdge[2], (unsigned long long)r3);
-    }
     std::fprintf(stderr, "swprof facecull quads culled=%llu of %llu /frame\n", (unsigned long long)(g_fcCulled.exchange(0)/frames), (unsigned long long)(g_fcQuads.exchange(0)/frames));  // Pass 2 step 3
     std::fprintf(stderr, "swprof ms/frame: clear+cull=%.2f transform+bin=%.2f strips=%.2f pbr+ent+sprites=%.2f post+hud=%.2f\n",
                  acc[0]/frames, acc[1]/frames, acc[2]/frames, acc[3]/frames, acc[4]/frames);
@@ -3014,7 +3138,22 @@ SwProf g_swProf;
 }  // namespace
 
 void cSoftwareRenderer::renderFrame(const FrameParams& p) {
-  if (canonIngestEnabled()) reselectCanonLods(p.camPos);  // M8 draw-side LOD (store-owned here)
+  // JD 2026-11-17: the render phase may borrow the idle reserved cores (when the last
+  // frame was heavy) and hands them back when the frame ends (RAII, so an exception
+  // still closes the phase). The measured wall time arms or clears borrow for next frame.
+  cSwBandPool& phasePool = cSwBandPool::get();
+  phasePool.beginRenderPhase();
+  const auto phaseT0 = std::chrono::steady_clock::now();
+  struct PhaseEnd {
+    cSwBandPool& p;
+    std::chrono::steady_clock::time_point t0;
+    ~PhaseEnd() {
+      const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      p.noteRenderNs(ns > 0 ? uint64_t(ns) : 0ull);
+      p.endRenderPhase();
+    }
+  } phaseEnd{phasePool, phaseT0};
   // Ginny (Argon) 2026-10-16 Pass 2 A/B proof (Cortana): LL_SW_AB=<n> renders frame n with
   // the LL_SW_AB_A mask (default 0 = pre-Pass-2), then again with the active mask, and logs
   // how many pixels differ. Off (zero cost beyond one branch) unless the env var is set.
@@ -3062,6 +3201,13 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   const bool scaled = rscale < 0.999f;
   const uint32_t renderW = ssaa ? targetW * 2 : scaled ? std::max(1u, uint32_t(float(targetW) * rscale + 0.5f)) : targetW;
   const uint32_t renderH = ssaa ? targetH * 2 : scaled ? std::max(1u, uint32_t(float(targetH) * rscale + 0.5f)) : targetH;
+  // Reclaim the retained 2x colour/depth before resize, so SSAA does not heap-allocate every frame.
+  if (ssaa && ssaaHi_.width == renderW && ssaaHi_.height == renderH && !ssaaHi_.pixels.empty()) {
+    std::swap(fb_.pixels, ssaaHi_.pixels);
+    fb_.width = ssaaHi_.width;
+    fb_.height = ssaaHi_.height;
+    if (ssaaHiDepth_.size() == size_t(renderW) * renderH) depth_.swap(ssaaHiDepth_);
+  }
   if (fb_.width != renderW || fb_.height != renderH) resize(renderW, renderH);
   {  // 2026-10-25 (Archie step 0): LL_SW_BLANK=1 skips the scene and HUD; the frame is a solid
      // colour cycling every frame, so present/blit cost can be measured alone. Off unless set.
@@ -3137,12 +3283,10 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     for (size_t i = 0; i < keep; ++i) frameEmit_.insert(frameEmit_.end(), src[cand[i].second], src[cand[i].second] + 6);
   }
   drawOrder_.clear();
-  const int viewCull = cSwLodRings::shared().view();  // Archie Phase 1 follow-up: draw-side view bound
   const int eyeCx = int(std::floor(p.camPos.x / 16.f)), eyeCz = int(std::floor(p.camPos.z / 16.f));
   for (auto& [key, m] : meshes_) {
     (void)key;
-    if (viewCull > 0 && viewCull < (1 << 20) &&
-        std::max(std::abs(m.cx - eyeCx), std::abs(m.cz - eyeCz)) > viewCull) continue;
+    if (cViewRadius::beyond(std::max(std::abs(m.cx - eyeCx), std::abs(m.cz - eyeCz)))) continue;  // draw-side view bound
     const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
     if (cullProto_.decide(p.viewProj, mn, mn + Vec3{16, 16, 16}, p.camPos,
                           frustumMarginDeg_) != CullDecision::Full)
@@ -3152,16 +3296,6 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     if (canonCache) decodeCache_.touch(key, decodeFrame_);  // fix (e)
   }
   if (canonCache) evictColdDecodes();  // fix (e): only non-drawn entries; drawOrder_ pointers stay valid
-  // Elfie 2026-10-17: LOD is now a draw range, not a swap (the mesh pointer sort
-  // below makes per-index state fragile, so the range is derived where used).
-  // Beyond the switch distance only the untagged prefix is active.
-  auto drawVertsOf = [&p](const StoredMesh& m) -> size_t {
-    if (m.hasLod) {  // Cortana 2026-10-16: per-sub-chunk LOD by horizontal centre distance
-      const float lx = m.cx * 16.f + 8.f - p.camPos.x, lz = m.cz * 16.f + 8.f - p.camPos.z;
-      if (lx * lx + lz * lz > kLodSwitchBlocks * kLodSwitchBlocks) return m.untaggedCount * 4;
-    }
-    return m.storedVerts();
-  };
   std::stable_sort(drawOrder_.begin(), drawOrder_.end(),
                    [](const auto& a, const auto& b) { return a.first < b.first; });
   // RND-H3 banding (2026-10-15): each band thread walks the same
@@ -3263,7 +3397,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
         if (di >= drawOrder_.size()) break;
         if (p2par) meshRowSpan(di);
         const StoredMesh& m = *drawOrder_[di].second;
-        const size_t drawVerts = drawVertsOf(m);  // Elfie 2026-10-17: far LOD = untagged prefix
+        const size_t drawVerts = m.storedVerts();
         const Vec3 mn{m.cx * 16.f, m.sy * 16.f, m.cz * 16.f};
         const Mat4 mvp = mul(p.viewProj, swTranslation(mn.x, mn.y, mn.z));
         float* dst = frameScreen_.data() + meshScreenOff_[di];
@@ -3319,7 +3453,6 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           auto& bins = meshBins_[di];
           off.assign(size_t(nStripsF) + 1, 0u);
           const bool cullBin = swP2(kP2CentreCull);
-          const float minH = (perPixel_ && m.lodScale >= 4) ? g_swLod4MinH : 0.f;
           auto range = [&](size_t q, int& s0, int& s1) {
             const float* s = dst + q * 16;
             float y0, y1;
@@ -3358,7 +3491,6 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
             y0 = std::min(std::min(s[1], s[5]), std::min(s[9], s[13]));
             y1 = std::max(std::max(s[1], s[5]), std::max(s[9], s[13]));
             if (!(y1 >= -1.f) || !(y0 <= float(fb_.height) + 1.f)) { s0 = 1; s1 = 0; return; }
-            if (minH > 0.f && y1 - y0 < minH) { s0 = 1; s1 = 0; return; }  // 2026-10-25: thin 4x-LOD faces
             if (cullBin) {  // 2026-10-25 (Archie step 4): no pixel centre in the quad bbox -> never binned
               constexpr float kEps = 1e-3f;  // same conservative test as the per-strip quad cull
               const float x0 = std::min(std::min(s[0], s[4]), std::min(s[8], s[12]));
@@ -3378,12 +3510,6 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           auto& fill = p2par ? tlFill : binFill_[band];
           fill.assign(off.begin(), off.end() - 1);
           for (size_t q = 0; q < nqd; ++q) { if (qface && !((vis >> qface[q]) & 1u)) continue; int s0, s1; range(q, s0, s1); for (int s = s0; s <= s1; ++s) bins[fill[size_t(s)]++] = uint32_t(q); }
-          if (g_swProfOn && std::isfinite(eye[0]) && std::isfinite(eye[2])) {  // tris per ring: Chebyshev chunk distance from the eye's chunk
-            uint64_t nb = 0;
-            for (size_t q = 0; q < nqd; ++q) { if (qface && !((vis >> qface[q]) & 1u)) continue; int s0, s1; range(q, s0, s1); if (s0 <= s1) ++nb; }
-            const int d = std::max(std::abs(m.cx - int(std::floor(eye[0] / 16.0))), std::abs(m.cz - int(std::floor(eye[2] / 16.0))));
-            g_ringTris[d > g_ringEdge[2] ? 3 : d > g_ringEdge[1] ? 2 : d > g_ringEdge[0] ? 1 : 0].fetch_add(nb * 2, std::memory_order_relaxed);
-          }
         }
       }
     });
@@ -3400,7 +3526,6 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // left finishing one alone. Strips own disjoint rows, so pixels do not depend on the order.
   // A strip far heavier than a thread's fair share (the horizon rows) is split into 64-px-
   // multiple x tiles (Hi-Z tiles never straddle two), each its own work item.
-  if (perPixel_ && g_swFlatLod) refreshLayerAvg();
   stripWork_.clear();
   const int tileK = g_swTile64.load(std::memory_order_relaxed);
   int nTiles = 0;
@@ -3455,6 +3580,16 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
      unsigned i; std::chrono::steady_clock::time_point t0;
      ~BandTimer() { if (g_swProfOn && i < 64) g_bandMs[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
    } bandTimer{bandIdx, tBand0};
+   // JD 2026-11-17: the chunk pass stamps aaId_ with tlFace/tlObject but never sets them, so
+   // a strip drawn by a thread that had just run the flat/sprite path stamped that thread's
+   // leftover face and object, and FXAA's prim gate then depended on which thread drew the
+   // strip. Every strip now starts from the same values a fresh band thread has (face 7 =
+   // unknown, object 0); the caller's values come back afterwards for its own flat path.
+   struct TlStamp {
+     uint8_t f = tlFace, o = tlObject; uint16_t l = tlLayer;
+     TlStamp() { tlFace = 7; tlObject = 0; tlLayer = 0; }
+     ~TlStamp() { tlFace = f; tlObject = o; tlLayer = l; }
+   } tlStamp;
    // Cortana 2026-10-26 (Archie item 6, Candidate D, LL_SW_TILE64=K opt-in): the work list is
    // 64x64 tiles (4 bin strips x 64 px) over a framebuffer height padded up to a multiple of
    // 64; each atomic grab takes K (2-4) consecutive tiles. Each tile draws its 4 strips in turn
@@ -3483,6 +3618,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
        const size_t o = size_t(y) * fb_.width + size_t(cx0), n = size_t(cx1 - cx0);
        swsimd::fill32(fb_.pixels.data() + o, n, skyColor);
        swsimd::fill16(depth_.data() + o, n, 0xFFFF);
+       if (!aaId_.empty() && aaId_.size() == depth_.size()) swsimd::fill16(aaId_.data() + o, n, 0xFFFF);
      }
    }
    // Cortana 2026-10-15 1755 [ENGINE]: pass 0 = opaque front-to-back (as before); pass 1 =
@@ -3522,8 +3658,7 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
     tlBlendPass = (perPixel_ && m.hasBlend) ? int8_t(pass) : int8_t(-1);
     const auto tm0 = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (g_swProfOn) ++tlMeshCalls;
-    tlFlatLod = perPixel_ && g_swFlatLod && (m.lodScale >= 4 || (g_swFlatLod2 && m.lodScale >= 2));
-    renderMesh(frameVerts_.data() + meshVertOff_[di], drawVertsOf(m), mvp.m);  // Elfie 2026-10-17: far LOD prefix bound; 2026-10-18 phase B: frame scratch
+    renderMesh(frameVerts_.data() + meshVertOff_[di], m.storedVerts(), mvp.m);  // 2026-10-18 phase B: frame scratch
     if (g_swProfOn) tlMeshMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm0).count();
     tlBlendPass = -1;
     tlCullBack = false;
@@ -3588,13 +3723,31 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   // visualization. Overlays/HUD draw after, at native resolution.
   if (scaled) {
     // Pass sw3: nearest-neighbour upscale of the scaled world frame to the target size,
-    // split across the band threads by row. Depth resets like the SSAA path.
-    aaOut_.resize(targetW, targetH);
-    swScaleX_.resize(targetW);
+    // split across the band threads by row. Colour, depth, and prim-id all upscale
+    // together so FXAA/CMAA still see geometry edges (wiping depth first made the
+    // post pass a pixel no-op, while still paying for a full-frame walk). Overlay
+    // depth is reset after the post pass, same as the SSAA path.
+    // Grow-only present-size colour (do not assign-black via resize; do not
+    // move the vector out, or the next frame reallocates).
+    if (aaOut_.pixels.size() < size_t(targetW) * size_t(targetH))
+      aaOut_.pixels.resize(size_t(targetW) * size_t(targetH));
+    aaOut_.width = targetW;
+    aaOut_.height = targetH;
+    if (swScaleX_.size() != targetW) swScaleX_.resize(targetW);
     for (uint32_t x = 0; x < targetW; ++x) swScaleX_[x] = std::min(renderW - 1, uint32_t((uint64_t(x) * renderW) / targetW));
+    const size_t srcN = size_t(renderW) * size_t(renderH);
+    const size_t dstN = size_t(targetW) * size_t(targetH);
+    const bool upDepth = depth_.size() == srcN;
+    const bool upId = aaId_.size() == srcN;
+    if (upDepth && scaleDepth_.size() < dstN) scaleDepth_.resize(dstN);
+    if (upId && scaleAaId_.size() < dstN) scaleAaId_.resize(dstN);
     const uint32_t* src = fb_.pixels.data();
     uint32_t* dstPx = aaOut_.pixels.data();
     const uint32_t* xm = swScaleX_.data();
+    const uint16_t* srcD = upDepth ? depth_.data() : nullptr;
+    const uint16_t* srcI = upId ? aaId_.data() : nullptr;
+    uint16_t* dstD = upDepth ? scaleDepth_.data() : nullptr;
+    uint16_t* dstI = upId ? scaleAaId_.data() : nullptr;
     std::atomic<uint32_t> nextRow{0};
     bandPool.run([&](unsigned) {
       for (uint32_t y0; (y0 = nextRow.fetch_add(16, std::memory_order_relaxed)) < targetH;) {
@@ -3602,26 +3755,57 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
           const uint32_t sy = std::min(renderH - 1, uint32_t((uint64_t(y) * renderH) / targetH));
           const uint32_t* s = src + size_t(sy) * renderW;
           uint32_t* d = dstPx + size_t(y) * targetW;
-          if (y > 0 && sy == std::min(renderH - 1, uint32_t((uint64_t(y - 1) * renderH) / targetH)) && y != y0) {
+          uint16_t* dd = dstD ? dstD + size_t(y) * targetW : nullptr;
+          uint16_t* di = dstI ? dstI + size_t(y) * targetW : nullptr;
+          const bool repeat = y > 0 && sy == std::min(renderH - 1, uint32_t((uint64_t(y - 1) * renderH) / targetH)) && y != y0;
+          if (repeat) {
             std::memcpy(d, d - targetW, size_t(targetW) * sizeof(uint32_t));  // repeated source row
+            if (dd) std::memcpy(dd, dd - targetW, size_t(targetW) * sizeof(uint16_t));
+            if (di) std::memcpy(di, di - targetW, size_t(targetW) * sizeof(uint16_t));
           } else {
-            for (uint32_t x = 0; x < targetW; ++x) d[x] = s[xm[x]];
+            const uint16_t* sD = srcD ? srcD + size_t(sy) * renderW : nullptr;
+            const uint16_t* sI = srcI ? srcI + size_t(sy) * renderW : nullptr;
+            for (uint32_t x = 0; x < targetW; ++x) {
+              const uint32_t sx = xm[x];
+              d[x] = s[sx];
+              if (dd) dd[x] = sD[sx];
+              if (di) di[x] = sI[sx];
+            }
           }
         }
       }
     });
+    // Present-size colour into fb_ by swap; park the render-size vector in aaOut_
+    // and grow it back so the retained present-size storage stays put.
+    std::swap(fb_.pixels, aaOut_.pixels);
     fb_.width = targetW;
     fb_.height = targetH;
-    fb_.pixels = std::move(aaOut_.pixels);
-    depth_.assign(size_t(targetW) * targetH, 0xFFFF);
+    if (aaOut_.pixels.size() < dstN) aaOut_.pixels.resize(dstN);
+    aaOut_.width = targetW;
+    aaOut_.height = targetH;
+    // Swap the upscaled gates in for the post pass, then swap them back so
+    // scaleDepth_/scaleAaId_ stay at dstN (a one-way swap would realloc next frame).
+    if (upDepth) depth_.swap(scaleDepth_);
+    if (upId) aaId_.swap(scaleAaId_);
     hizFbW_ = 0;
     applyAaPostPass();
+    if (upDepth) depth_.swap(scaleDepth_);
+    if (upId) aaId_.swap(scaleAaId_);
+    if (depth_.size() != dstN) depth_.resize(dstN);
+    swsimd::fill16(depth_.data(), dstN, 0xFFFF);  // overlay depth tests start fresh
+    // Restore aaOut_ to present size so the next frame does not realloc
+  } else if (ssaa) {
   } else if (ssaa) {
     aaOut_.resize(targetW, targetH);
     resolveSsaa2x(fb_, aaOut_);
+    // Stash the 2x colour and depth (swap, no new alloc once warmed up) and present at native size.
+    ssaaHi_.width = fb_.width;
+    ssaaHi_.height = fb_.height;
+    std::swap(ssaaHi_.pixels, fb_.pixels);
+    ssaaHiDepth_.swap(depth_);
+    std::swap(fb_.pixels, aaOut_.pixels);
     fb_.width = targetW;
     fb_.height = targetH;
-    fb_.pixels = std::move(aaOut_.pixels);
     depth_.assign(size_t(targetW) * targetH, 0xFFFF);  // overlay depth tests start fresh
     hizFbW_ = 0;  // Cortana 2026-10-15 1715: Hi-Z bounds no longer valid (depth went UP)
   } else {
@@ -3629,13 +3813,19 @@ void cSoftwareRenderer::renderFrame(const FrameParams& p) {
   }
   if (bloom_) applyBloomPost(fb_, (depth_.size() == fb_.pixels.size()) ? depth_.data() : nullptr, ensureAaScratch());  // Cortana 2026-10-16
   if (asciiEnabled_) applyAsciiPass();
-  // Overlays (H3): highlight + crosshair lines, then the HUD layer â€” the
-  // same order the GPU backends draw them (lines before HUD).
-  drawOverlayLines(p);
-  {  // 2026-10-25 (Archie bucket 5): HUD alone, split out of post+hud (LL_SW_PROF)
-    const auto th = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    drawHud(p);
-    if (g_swProfOn) { g_hudMsAcc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count(); g_hudTris += hudVerts_.size() / 3; }
+  // Overlays (H3): highlight + crosshair lines, then the HUD layer - the
+  // same order the GPU backends draw them (lines before HUD). In ASCII
+  // mode the menus are painted onto the same glyph grid as the world, so
+  // a person can operate them without a pixel overlay sitting on top.
+  if (asciiEnabled_) {
+    paintAsciiHud(fb_, p, asciiCols_);
+  } else {
+    drawOverlayLines(p);
+    {  // 2026-10-25 (Archie bucket 5): HUD alone, split out of post+hud (LL_SW_PROF)
+      const auto th = g_swProfOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+      drawHud(p);
+      if (g_swProfOn) { g_hudMsAcc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count(); g_hudTris += hudVerts_.size() / 3; }
+    }
   }
   if (grabArmed_) {
     grabArmed_ = false;

@@ -1,0 +1,123 @@
+/* map ... LithoRoot std L6 (S4, 2026-11-16): map<K, T, Cmp> over the shared
+ * red-black tree (lithoroot_rbtree.h). Ordered iteration: safe to feed a
+ * determinism hash. No multimap (census: unused). */
+#ifndef LITHOROOT_MAP
+#define LITHOROOT_MAP
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <compare>
+#include <functional>
+#include <initializer_list>
+#include <lithoroot_rbtree.h>
+#include <stdexcept>
+#include <tuple>
+#include <utility>
+#include <algorithm>
+
+namespace std {
+
+template <class K, class T, class Cmp = less<K>, class A = allocator<pair<const K, T>>>
+class map {
+  struct key_of { const K& operator()(const pair<const K, T>& v) const noexcept { return v.first; } };
+  template <class Q> static constexpr bool transparent = requires { typename Cmp::is_transparent; };
+  using tree = __lk::rb_tree<K, pair<const K, T>, key_of, Cmp>;
+  tree t_;
+ public:
+  using key_type = K;
+  using mapped_type = T;
+  using value_type = pair<const K, T>;
+  using key_compare = Cmp;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = value_type&;
+  using const_reference = const value_type&;
+  using iterator = typename tree::iterator;
+  using const_iterator = typename tree::const_iterator;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+  struct value_compare { Cmp c; bool operator()(const value_type& a, const value_type& b) const { return c(a.first, b.first); } };
+
+  map() = default;
+  explicit map(const Cmp& c) : t_(c) {}
+  template <class It> map(It f, It l, const Cmp& c = Cmp()) : t_(c) { insert(f, l); }
+  map(initializer_list<value_type> il, const Cmp& c = Cmp()) : t_(c) { insert(il.begin(), il.end()); }
+  map& operator=(initializer_list<value_type> il) { clear(); insert(il.begin(), il.end()); return *this; }
+
+  iterator begin() noexcept { return t_.begin(); }
+  const_iterator begin() const noexcept { return t_.begin(); }
+  iterator end() noexcept { return t_.end(); }
+  const_iterator end() const noexcept { return t_.end(); }
+  const_iterator cbegin() const noexcept { return t_.begin(); }
+  const_iterator cend() const noexcept { return t_.end(); }
+  reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+  const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+  reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+  const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+  [[nodiscard]] bool empty() const noexcept { return t_.empty(); }
+  size_type size() const noexcept { return t_.size(); }
+  size_type max_size() const noexcept { return size_type(-1) / sizeof(typename tree::node); }
+  key_compare key_comp() const { return t_.cmp(); }
+  value_compare value_comp() const { return value_compare{t_.cmp()}; }
+
+  T& operator[](const K& k) { return try_emplace(k).first->second; }
+  T& operator[](K&& k) { return try_emplace(std::move(k)).first->second; }
+  T& at(const K& k) { auto it = find(k); if (it == end()) __lk::throw_out_of_range("map::at"); return it->second; }
+  const T& at(const K& k) const { auto it = find(k); if (it == end()) __lk::throw_out_of_range("map::at"); return it->second; }
+
+  template <class... Args> pair<iterator, bool> try_emplace(const K& k, Args&&... a) {
+    return t_.find_or_make(k, [&] { return new typename tree::node(piecewise_construct, forward_as_tuple(k), forward_as_tuple(std::forward<Args>(a)...)); });
+  }
+  template <class... Args> pair<iterator, bool> try_emplace(K&& k, Args&&... a) {
+    return t_.find_or_make(k, [&] { return new typename tree::node(piecewise_construct, forward_as_tuple(std::move(k)), forward_as_tuple(std::forward<Args>(a)...)); });
+  }
+  template <class... Args> iterator try_emplace(const_iterator, const K& k, Args&&... a) { return try_emplace(k, std::forward<Args>(a)...).first; }
+  template <class... Args> iterator try_emplace(const_iterator, K&& k, Args&&... a) { return try_emplace(std::move(k), std::forward<Args>(a)...).first; }
+  template <class M> pair<iterator, bool> insert_or_assign(const K& k, M&& m) { auto r = try_emplace(k, std::forward<M>(m)); if (!r.second) r.first->second = std::forward<M>(m); return r; }
+  template <class M> pair<iterator, bool> insert_or_assign(K&& k, M&& m) { auto r = try_emplace(std::move(k), std::forward<M>(m)); if (!r.second) r.first->second = std::forward<M>(m); return r; }
+  template <class... Args> pair<iterator, bool> emplace(Args&&... a) { return t_.emplace_unique(std::forward<Args>(a)...); }
+  template <class... Args> iterator emplace_hint(const_iterator h, Args&&... a) { return t_.emplace_hint_unique(h, std::forward<Args>(a)...); }
+  pair<iterator, bool> insert(const value_type& v) { return t_.find_or_make(v.first, [&] { return new typename tree::node(v); }); }
+  pair<iterator, bool> insert(value_type&& v) { return t_.find_or_make(v.first, [&] { return new typename tree::node(std::move(v)); }); }
+  template <class P, class = enable_if_t<is_constructible_v<value_type, P&&>>> pair<iterator, bool> insert(P&& p) { return emplace(std::forward<P>(p)); }
+  iterator insert(const_iterator, const value_type& v) { return insert(v).first; }
+  iterator insert(const_iterator, value_type&& v) { return insert(std::move(v)).first; }
+  template <class It> void insert(It f, It l) { for (; f != l; ++f) emplace(*f); }
+  void insert(initializer_list<value_type> il) { insert(il.begin(), il.end()); }
+
+  iterator erase(iterator it) { return t_.erase(it); }
+  iterator erase(const_iterator it) { return t_.erase(it); }
+  iterator erase(const_iterator f, const_iterator l) { return t_.erase(f, l); }
+  size_type erase(const K& k) { return t_.erase_key(k); }
+  void clear() noexcept { t_.clear(); }
+  void swap(map& o) noexcept { t_.swap(o.t_); }
+
+  iterator find(const K& k) { return t_.find(k); }
+  const_iterator find(const K& k) const { return t_.find(k); }
+  template <class Q, class = enable_if_t<transparent<Q>>> iterator find(const Q& k) { return t_.find(k); }
+  template <class Q, class = enable_if_t<transparent<Q>>> const_iterator find(const Q& k) const { return t_.find(k); }
+  size_type count(const K& k) const { return find(k) != end() ? 1 : 0; }
+  template <class Q, class = enable_if_t<transparent<Q>>> size_type count(const Q& k) const { return find(k) != end() ? 1 : 0; }
+  bool contains(const K& k) const { return find(k) != end(); }
+  template <class Q, class = enable_if_t<transparent<Q>>> bool contains(const Q& k) const { return find(k) != end(); }
+  iterator lower_bound(const K& k) { return t_.lower_bound(k); }
+  const_iterator lower_bound(const K& k) const { return t_.lower_bound(k); }
+  iterator upper_bound(const K& k) { return t_.upper_bound(k); }
+  const_iterator upper_bound(const K& k) const { return t_.upper_bound(k); }
+  pair<iterator, iterator> equal_range(const K& k) { return {lower_bound(k), upper_bound(k)}; }
+  pair<const_iterator, const_iterator> equal_range(const K& k) const { return {lower_bound(k), upper_bound(k)}; }
+  int __verify() const noexcept { return t_.verify(); }
+};
+
+template <class K, class T, class C, class A> bool operator==(const map<K, T, C, A>& a, const map<K, T, C, A>& b) { return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin()); }
+template <class K, class T, class C, class A> auto operator<=>(const map<K, T, C, A>& a, const map<K, T, C, A>& b) { return __lk::lex3(a.begin(), a.end(), b.begin(), b.end()); }
+template <class K, class T, class C, class A> void swap(map<K, T, C, A>& a, map<K, T, C, A>& b) noexcept { a.swap(b); }
+template <class K, class T, class C, class A, class P> size_t erase_if(map<K, T, C, A>& m, P p) {
+  size_t n = 0;
+  for (auto it = m.begin(); it != m.end();) { if (p(*it)) { it = m.erase(it); ++n; } else ++it; }
+  return n;
+}
+
+}  // namespace std
+#endif

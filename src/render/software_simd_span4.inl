@@ -120,6 +120,10 @@ LL_SPAN4_TARGET void LL_SPAN4_FN(ShadeSpanBasic& s) {
       if (base + lo < wxLo) wxLo = base + lo;
       wxHi = base + hi;
     }
+    if (s.aaId) {
+      for (int j = 0; j < 4; ++j)
+        if ((passBits >> j) & 1) s.aaId[base + j] = s.aaStamp;
+    }
   }
   s.wxLo = wxHi >= 0 ? wxLo : 0; s.wxHi = wxHi; s.lc = lc; s.ls = ls;
 }

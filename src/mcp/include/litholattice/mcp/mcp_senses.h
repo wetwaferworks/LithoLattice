@@ -99,6 +99,28 @@ struct CameraPose {
   bool trackPlayer = true;  ///< true = follow the piloted player (the default)
 };
 
+/// Nemo View request (opt-in tool vision.capture_ascii, LL_MCP_NEMO_VIEW=1).
+struct AsciiRequest {
+  int cols = 80;                 ///< hashing default 80; also 40, 96, 160, 180, 240. Fovea is always 32x12
+  bool fovea = false;            ///< centre crop of the 80x45 hashing view at 32x12 (prompt budget unchanged)
+  bool objects = true;           ///< true: object characters (default); false: pixels and depth only
+  /// Comma-separated channels to return. Default is glyph only (Nemo default, cheap).
+  /// Also accepted: depth, class, fg, tex8, tex16, qword (the full 64-bit word as hex).
+  std::string channels = "glyph";
+};
+
+/// One Nemo View frame as text channels (the bytes Nemo reads). No position, by design.
+struct AsciiCapture {
+  int cols = 0, rows = 0;
+  uint64_t tick = 0;
+  std::string mode;              ///< "objects" | "pixels_depth"
+  std::string lutSha;            ///< first 16 hex of the baked depth-band table
+  std::string glyph, fg, depth, cls;  ///< rows joined by '\n'; empty when not requested
+  std::string tex8, tex16, qword;    ///< opt-in compact or full-word slices; empty when not requested
+  std::string sha256;            ///< 64 hex of the canonical record
+  float yaw = 0, pitch = 0;      ///< heading only, degrees
+};
+
 /// Game-side vision: renders the software renderer from a pilot's camera.
 class IVisionCapture {
  public:
@@ -122,6 +144,11 @@ class IVisionCapture {
   /// on-screen view), box-downsampled to width x height. Default: unsupported.
   virtual bool captureDisplayFrame(std::string_view pilot, int width, int height, VisionFrame& out) {
     (void)pilot; (void)width; (void)height; (void)out;
+    return false;
+  }
+  /// Nemo View (opt-in): the pilot's software view as an integer ASCII frame. Default: unsupported.
+  virtual bool captureAsciiFrame(std::string_view pilot, const AsciiRequest& req, AsciiCapture& out) {
+    (void)pilot; (void)req; (void)out;
     return false;
   }
 };

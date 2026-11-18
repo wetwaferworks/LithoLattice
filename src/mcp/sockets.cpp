@@ -196,6 +196,41 @@ bool cTcpListener::accept(cTcpConn& conn, int timeoutMs, std::string& error) {
 }
 }  // namespace litholattice::mcp
 
+#elif defined(__wasm__)
+// ---- Web build (2026-11-16): no sockets in a browser ------------------------
+// A browser tab has no raw TCP (only fetch/WebSocket through the page), so the
+// MCP HTTP server cannot listen. Every call fails safe: bind() refuses with a
+// clear error (cMcpHttpServer::start logs it), nothing ever holds a socket.
+namespace litholattice::mcp {
+namespace {
+constexpr const char* kNoSockets = "TCP sockets are not available in the web build (browsers have no raw sockets)";
+}  // namespace
+
+cTcpConn::cTcpConn() = default;
+cTcpConn::cTcpConn(NativeSocket) {}
+cTcpConn::~cTcpConn() = default;
+cTcpConn::cTcpConn(cTcpConn&&) noexcept {}
+cTcpConn& cTcpConn::operator=(cTcpConn&&) noexcept { return *this; }
+void cTcpConn::close() {}
+void cTcpConn::setTimeout(int) {}
+std::string cTcpConn::readSome(std::size_t) { return {}; }
+bool cTcpConn::sendAll(std::string_view) { return false; }
+
+cTcpListener::cTcpListener() = default;
+cTcpListener::~cTcpListener() = default;
+cTcpListener::cTcpListener(cTcpListener&&) noexcept {}
+cTcpListener& cTcpListener::operator=(cTcpListener&&) noexcept { return *this; }
+void cTcpListener::close() {}
+bool cTcpListener::bind(const std::string&, std::uint16_t, std::string& error) {
+  error = kNoSockets;
+  return false;
+}
+bool cTcpListener::accept(cTcpConn&, int, std::string& error) {
+  error = kNoSockets;
+  return false;
+}
+}  // namespace litholattice::mcp
+
 #else
 // ---- POSIX implementation (built and tested on Linux) ----------------------
 #include <arpa/inet.h>

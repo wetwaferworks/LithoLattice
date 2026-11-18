@@ -2,7 +2,8 @@
 // pipeline of stages that run the existing code in the same order. Moved verbatim, no output
 // change (Gate G anchors + LL_CANON_VERIFY at every sub-step). Private to the render library.
 //
-// Step 4d: stage order is cell pass, flush, packedFallback, canonLods, capGuard, perMeshParams.
+// Step 4d: stage order is cell pass, flush, packedFallback, capGuard, perMeshParams
+// (the M6 canonLods stage was removed with LOD, 2026-11-17).
 // The cell pass (the per-voxel loop: the jobDef table, opaque mask, foliage thinning, the
 // MeshWriter emit lambdas and greedy parking) stays inline in meshSubChunkPass as the first
 // stage. Its lambdas share about 20 locals by reference per voxel, so extracting it would mean
@@ -33,9 +34,6 @@ class cMeshPipeline {
   /// Stage: Packed12 fallback of the per-cell stream (M7) and the M11 palette split.
   /// legacyVerts = stream size before the flush.
   void packedFallback(size_t legacyVerts, FallbackReasonStats::Local& fbr, cWorkerScratch& ws);
-  /// Stage: M6 L1/L2 LODs from UnifiedMesher over the per-job material table, merged into
-  /// the canonical mesh. look / fancyLeaves are the pass's values for this job.
-  void canonLods(cWorkerScratch& ws, const IBlockAppearance& look, bool fancyLeaves);
   /// Stage: trim an oversized legacy stream (cannot happen for 16^3 cubes; guards custom shapes).
   void capGuard();
   /// Stage: per-mesh draw params (wafer ground pulse, Trace-mix pulse colour, ground traces).

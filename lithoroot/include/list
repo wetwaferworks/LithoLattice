@@ -1,0 +1,249 @@
+/* list ... LithoRoot std L6 (S4 tail, 2026-11-16): doubly linked list<T, A>
+ * with a sentinel node. Census use is one LRU cache (push_front, splice,
+ * erase, back, pop_back), so this carries the core members plus splice,
+ * remove/remove_if, reverse and a stable merge sort. Iterators and references
+ * stay valid until their element is erased, including across splice. */
+#ifndef LITHOROOT_LIST
+#define LITHOROOT_LIST
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <compare>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
+#include <type_traits>
+#include <utility>
+#include <algorithm>
+
+namespace std {
+namespace __lk {
+struct list_link { list_link* prev; list_link* next; };
+inline void link_before(list_link* pos, list_link* n) noexcept {
+  n->next = pos; n->prev = pos->prev; pos->prev->next = n; pos->prev = n;
+}
+inline void unlink(list_link* n) noexcept { n->prev->next = n->next; n->next->prev = n->prev; }
+/* Move [f, l) to before pos (pos not inside the range). */
+inline void transfer(list_link* pos, list_link* f, list_link* l) noexcept {
+  if (f == l || pos == l) return;
+  list_link* last = l->prev;
+  f->prev->next = l; l->prev = f->prev;
+  last->next = pos; f->prev = pos->prev; pos->prev->next = f; pos->prev = last;
+}
+}  // namespace __lk
+
+template <class T, class A = allocator<T>>
+class list {
+  struct node : __lk::list_link { T v; };
+  using NA = typename allocator_traits<A>::template rebind_alloc<node>;
+  using NT = allocator_traits<NA>;
+ public:
+  using value_type = T;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = T&;
+  using const_reference = const T&;
+  using pointer = T*;
+  using const_pointer = const T*;
+
+  template <bool C>
+  class iter {
+    friend class list;
+    __lk::list_link* p_ = nullptr;
+    explicit iter(const __lk::list_link* p) : p_(const_cast<__lk::list_link*>(p)) {}
+   public:
+    using iterator_category = bidirectional_iterator_tag;
+    using value_type = T;
+    using difference_type = ptrdiff_t;
+    using reference = conditional_t<C, const T&, T&>;
+    using pointer = conditional_t<C, const T*, T*>;
+    iter() = default;
+    template <bool D> requires (C && !D) iter(const iter<D>& o) : p_(o.p_) {}
+    reference operator*() const { return static_cast<node*>(p_)->v; }
+    pointer operator->() const { return &static_cast<node*>(p_)->v; }
+    iter& operator++() { p_ = p_->next; return *this; }
+    iter operator++(int) { iter t = *this; p_ = p_->next; return t; }
+    iter& operator--() { p_ = p_->prev; return *this; }
+    iter operator--(int) { iter t = *this; p_ = p_->prev; return t; }
+    friend bool operator==(const iter& a, const iter& b) { return a.p_ == b.p_; }
+    template <bool> friend class iter;
+  };
+  using iterator = iter<false>;
+  using const_iterator = iter<true>;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+  list() noexcept { init(); }
+  explicit list(const A& a) noexcept : na_(a) { init(); }
+  explicit list(size_type n) : list() { while (n--) emplace_back(); }
+  list(size_type n, const T& v) : list() { while (n--) push_back(v); }
+  template <class I, class = typename iterator_traits<I>::iterator_category>
+  list(I f, I l) : list() { for (; f != l; ++f) emplace_back(*f); }
+  list(initializer_list<T> il) : list(il.begin(), il.end()) {}
+  list(const list& o) : list() { for (auto& x : o) push_back(x); }
+  list(list&& o) noexcept : na_(std::move(o.na_)) { init(); swap_links(o); }
+  ~list() { clear(); }
+  list& operator=(const list& o) { if (this != &o) { list t(o); swap(t); } return *this; }
+  list& operator=(list&& o) noexcept { if (this != &o) { clear(); swap_links(o); } return *this; }
+  list& operator=(initializer_list<T> il) { list t(il); swap(t); return *this; }
+  void assign(size_type n, const T& v) { list t(n, v); swap(t); }
+  template <class I, class = typename iterator_traits<I>::iterator_category>
+  void assign(I f, I l) { list t(f, l); swap(t); }
+  allocator_type get_allocator() const { return allocator_type(na_); }
+
+  iterator begin() noexcept { return iterator(h_.next); }
+  const_iterator begin() const noexcept { return const_iterator(h_.next); }
+  iterator end() noexcept { return iterator(&h_); }
+  const_iterator end() const noexcept { return const_iterator(&h_); }
+  const_iterator cbegin() const noexcept { return begin(); }
+  const_iterator cend() const noexcept { return end(); }
+  reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+  const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+  reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+  const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+
+  bool empty() const noexcept { return n_ == 0; }
+  size_type size() const noexcept { return n_; }
+  size_type max_size() const noexcept { return size_type(-1) / sizeof(node); }
+  reference front() { return *begin(); }
+  const_reference front() const { return *begin(); }
+  reference back() { return *--end(); }
+  const_reference back() const { return *--end(); }
+
+  template <class... Args>
+  iterator emplace(const_iterator pos, Args&&... args) {
+    node* n = NT::allocate(na_, 1);
+    try { ::new (static_cast<void*>(&n->v)) T(std::forward<Args>(args)...); }
+    catch (...) { NT::deallocate(na_, n, 1); throw; }
+    __lk::link_before(pos.p_, n);
+    ++n_;
+    return iterator(n);
+  }
+  template <class... Args> reference emplace_back(Args&&... a) { return *emplace(end(), std::forward<Args>(a)...); }
+  template <class... Args> reference emplace_front(Args&&... a) { return *emplace(begin(), std::forward<Args>(a)...); }
+  void push_back(const T& v) { emplace(end(), v); }
+  void push_back(T&& v) { emplace(end(), std::move(v)); }
+  void push_front(const T& v) { emplace(begin(), v); }
+  void push_front(T&& v) { emplace(begin(), std::move(v)); }
+  iterator insert(const_iterator pos, const T& v) { return emplace(pos, v); }
+  iterator insert(const_iterator pos, T&& v) { return emplace(pos, std::move(v)); }
+  template <class I, class = typename iterator_traits<I>::iterator_category>
+  iterator insert(const_iterator pos, I f, I l) {
+    list t(f, l);
+    iterator r(pos.p_);
+    if (!t.empty()) { r = t.begin(); splice(pos, t); }
+    return r;
+  }
+  void pop_back() { erase(--end()); }
+  void pop_front() { erase(begin()); }
+  iterator erase(const_iterator pos) {
+    __lk::list_link* nx = pos.p_->next;
+    __lk::unlink(pos.p_);
+    destroy(static_cast<node*>(pos.p_));
+    return iterator(nx);
+  }
+  iterator erase(const_iterator f, const_iterator l) {
+    while (f != l) f = erase(f);
+    return iterator(l.p_);
+  }
+  void clear() noexcept {
+    __lk::list_link* p = h_.next;
+    while (p != &h_) { __lk::list_link* nx = p->next; destroy(static_cast<node*>(p)); p = nx; }
+    init();
+  }
+  void resize(size_type n) { while (n_ > n) pop_back(); while (n_ < n) emplace_back(); }
+  void resize(size_type n, const T& v) { while (n_ > n) pop_back(); while (n_ < n) push_back(v); }
+  void swap(list& o) noexcept { using std::swap; swap(na_, o.na_); swap_links(o); }
+
+  /* splice: nodes move, nothing is copied; iterators to them stay valid. */
+  void splice(const_iterator pos, list& o) noexcept {
+    if (o.empty() || &o == this) return;
+    size_type k = o.n_;
+    __lk::transfer(pos.p_, o.h_.next, &o.h_);
+    n_ += k; o.n_ = 0;
+  }
+  void splice(const_iterator pos, list&& o) noexcept { splice(pos, o); }
+  void splice(const_iterator pos, list& o, const_iterator it) noexcept {
+    __lk::list_link* nx = it.p_->next;
+    if (pos.p_ == it.p_ || pos.p_ == nx) return;
+    __lk::transfer(pos.p_, it.p_, nx);
+    if (&o != this) { ++n_; --o.n_; }
+  }
+  void splice(const_iterator pos, list&& o, const_iterator it) noexcept { splice(pos, o, it); }
+  void splice(const_iterator pos, list& o, const_iterator f, const_iterator l) noexcept {
+    if (f == l) return;
+    if (&o != this) { size_type k = 0; for (auto i = f; i != l; ++i) ++k; n_ += k; o.n_ -= k; }
+    __lk::transfer(pos.p_, f.p_, l.p_);
+  }
+  void splice(const_iterator pos, list&& o, const_iterator f, const_iterator l) noexcept { splice(pos, o, f, l); }
+
+  template <class P> size_type remove_if(P p) {
+    size_type k = 0;
+    for (auto i = begin(); i != end();) { if (p(*i)) { i = erase(i); ++k; } else ++i; }
+    return k;
+  }
+  size_type remove(const T& v) { return remove_if([&](const T& x) { return x == v; }); }
+  template <class E = equal_to<>> size_type unique(E eq = E()) {
+    size_type k = 0;
+    if (n_ < 2) return 0;
+    for (auto i = begin(), j = std::next(i); j != end();) {
+      if (eq(*i, *j)) { j = erase(j); ++k; } else { i = j; ++j; }
+    }
+    return k;
+  }
+  void reverse() noexcept {
+    __lk::list_link* p = &h_;
+    do { std::swap(p->prev, p->next); p = p->prev; } while (p != &h_);
+  }
+  template <class C = less<>> void merge(list& o, C c = C()) {
+    if (&o == this) return;
+    auto i = begin();
+    while (!o.empty()) {
+      auto j = o.begin();
+      while (i != end() && !c(*j, *i)) ++i;   // stable: equal elements of *this stay first
+      splice(i, o, j);
+    }
+  }
+  template <class C = less<>> void merge(list&& o, C c = C()) { merge(o, c); }
+  /* Stable bottom-up merge sort over splices: O(n log n), no element moves. */
+  template <class C = less<>> void sort(C c = C()) {
+    if (n_ < 2) return;
+    list carry, bins[64];
+    int fill = 0;
+    while (!empty()) {
+      carry.splice(carry.begin(), *this, begin());
+      int i = 0;
+      for (; i < fill && !bins[i].empty(); ++i) { bins[i].merge(carry, c); carry.swap_links(bins[i]); }
+      carry.swap_links(bins[i]);
+      if (i == fill) ++fill;
+    }
+    for (int i = 1; i < fill; ++i) bins[i].merge(bins[i - 1], c);
+    swap_links(bins[fill - 1]);
+  }
+
+  friend bool operator==(const list& a, const list& b) { return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin()); }
+  friend auto operator<=>(const list& a, const list& b) { return __lk::lex3(a.begin(), a.end(), b.begin(), b.end()); }
+
+ private:
+  void init() noexcept { h_.prev = h_.next = &h_; n_ = 0; }
+  void destroy(node* n) noexcept { n->v.~T(); NT::deallocate(na_, n, 1); --n_; }
+  void swap_links(list& o) noexcept {
+    __lk::list_link a = h_, b = o.h_;
+    size_type an = n_, bn = o.n_;
+    if (bn) { h_ = b; h_.next->prev = &h_; h_.prev->next = &h_; } else h_.prev = h_.next = &h_;
+    if (an) { o.h_ = a; o.h_.next->prev = &o.h_; o.h_.prev->next = &o.h_; } else o.h_.prev = o.h_.next = &o.h_;
+    n_ = bn; o.n_ = an;
+  }
+  __lk::list_link h_;
+  size_type n_ = 0;
+  [[no_unique_address]] NA na_;
+};
+
+template <class T, class A> void swap(list<T, A>& a, list<T, A>& b) noexcept { a.swap(b); }
+template <class T, class A, class P> typename list<T, A>::size_type erase_if(list<T, A>& l, P p) { return l.remove_if(p); }
+template <class T, class A, class U> typename list<T, A>::size_type erase(list<T, A>& l, const U& v) { return l.remove_if([&](const T& x) { return x == v; }); }
+
+}  // namespace std
+#endif

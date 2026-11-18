@@ -1,0 +1,196 @@
+/* format ... LithoRoot std L9 (S4 tail, 2026-11-16): the std::format subset
+ * from plan §1.3 (a). The census has 19 files and 189 replacement fields: 185
+ * plain {} plus {:.1f}, {:02x} and {:04x}.
+ *   format / format_to / formatted_size; format_string checked at compile time
+ *   (field count, field syntax, {{ and }} escapes), so a bad format string
+ *   fails the build as with std::format.
+ *   Spec subset: [0][width][.precision][type], types d x X b o f e g s c.
+ *   Arguments: bool, char, every integer type, float, double, const char*,
+ *   string, string_view. Anything else fails to compile.
+ * Not provided: fill/align/sign/#, positional {0}, dynamic width {:{}},
+ * chrono and user formatter<> specializations, wide strings, locales.
+ * Floats print through LithoLibC snprintf: digits are not guaranteed to match
+ * MSVC's std::format (plan §3.7; never feed formatted floats to a hash). */
+#ifndef LITHOROOT_FORMAT
+#define LITHOROOT_FORMAT
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstdio>
+#include <cstdlib>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
+namespace std {
+
+class format_error : public runtime_error {
+ public:
+  explicit format_error(const char* w) : runtime_error(w) {}
+  explicit format_error(const string& w) : runtime_error(w) {}
+};
+
+namespace __lk {
+enum class fkind : unsigned char { b, c, i, u, f, s };
+struct farg {
+  fkind k;
+  union { bool b; char c; long long i; unsigned long long u; double f; struct { const char* p; size_t n; } s; };
+};
+template <class T> constexpr bool fmt_ok =
+    is_same_v<T, bool> || is_same_v<T, char> || is_integral_v<T> || is_same_v<T, float> || is_same_v<T, double> ||
+    is_same_v<T, const char*> || is_same_v<T, char*> || is_same_v<T, string> || is_same_v<T, string_view>;
+template <class T> farg mkarg(const T& v) {
+  farg a;
+  if constexpr (is_same_v<T, bool>) { a.k = fkind::b; a.b = v; }
+  else if constexpr (is_same_v<T, char>) { a.k = fkind::c; a.c = v; }
+  else if constexpr (is_integral_v<T> && is_signed_v<T>) { a.k = fkind::i; a.i = v; }
+  else if constexpr (is_integral_v<T>) { a.k = fkind::u; a.u = v; }
+  else if constexpr (is_floating_point_v<T>) { a.k = fkind::f; a.f = v; }
+  else if constexpr (is_same_v<T, const char*> || is_same_v<T, char*>) { a.k = fkind::s; a.s.p = v; a.s.n = __builtin_strlen(v); }
+  else { a.k = fkind::s; a.s.p = v.data(); a.s.n = v.size(); }
+  return a;
+}
+struct fspec { bool zero = false; int width = -1, prec = -1; char type = 0; };
+/* Parses the spec between ':' and '}'. Returns false on anything outside the subset. */
+constexpr bool parse_spec(const char* p, const char* e, fspec& s) {
+  if (p < e && *p == '0') { s.zero = true; ++p; }
+  if (p < e && *p >= '0' && *p <= '9') { s.width = 0; while (p < e && *p >= '0' && *p <= '9') s.width = s.width * 10 + (*p++ - '0'); }
+  if (p < e && *p == '.') { ++p; if (p == e || *p < '0' || *p > '9') return false; s.prec = 0; while (p < e && *p >= '0' && *p <= '9') s.prec = s.prec * 10 + (*p++ - '0'); }
+  if (p < e) { char t = *p++; if (t != 'd' && t != 'x' && t != 'X' && t != 'b' && t != 'o' && t != 'f' && t != 'e' && t != 'g' && t != 's' && t != 'c') return false; s.type = t; }
+  return p == e;
+}
+/* Counts replacement fields; -1 on a malformed string. */
+constexpr int count_fields(const char* f, size_t n) {
+  int k = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (f[i] == '{') {
+      if (i + 1 < n && f[i + 1] == '{') { ++i; continue; }
+      size_t j = i + 1;
+      while (j < n && f[j] != '}' && f[j] != '{') ++j;
+      if (j >= n || f[j] != '}') return -1;
+      if (j > i + 1) { if (f[i + 1] != ':') return -1; fspec s; if (!parse_spec(f + i + 2, f + j, s)) return -1; }
+      ++k; i = j;
+    } else if (f[i] == '}') {
+      if (i + 1 < n && f[i + 1] == '}') { ++i; continue; }
+      return -1;
+    }
+  }
+  return k;
+}
+void vformat_into(string& out, string_view f, const farg* a, size_t na);
+inline void emit_padded(string& out, const char* p, size_t n, const fspec& s, bool numeric) {
+  size_t w = s.width > 0 ? size_t(s.width) : 0;
+  if (n >= w) { out.append(p, n); return; }
+  size_t pad = w - n;
+  if (numeric && s.zero) {
+    size_t sign = (n && (p[0] == '-' || p[0] == '+')) ? 1 : 0;
+    out.append(p, sign); out.append(pad, '0'); out.append(p + sign, n - sign);
+  } else if (numeric) { out.append(pad, ' '); out.append(p, n); }   // numbers align right
+  else { out.append(p, n); out.append(pad, ' '); }                  // strings align left
+}
+inline void emit_uint(string& out, unsigned long long u, bool neg, const fspec& s) {
+  char t = s.type ? s.type : 'd';
+  unsigned base = t == 'x' || t == 'X' ? 16 : t == 'b' ? 2 : t == 'o' ? 8 : 10;
+  const char* dg = t == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+  char buf[72]; char* e = buf + sizeof buf; char* p = e;
+  do { *--p = dg[u % base]; u /= base; } while (u);
+  if (neg) *--p = '-';
+  emit_padded(out, p, size_t(e - p), s, true);
+}
+inline void emit_arg(string& out, const farg& a, const fspec& s) {
+  switch (a.k) {
+    case fkind::b:
+      if (s.type && s.type != 's') { emit_uint(out, a.b ? 1 : 0, false, s); return; }
+      emit_padded(out, a.b ? "true" : "false", a.b ? 4 : 5, s, false); return;
+    case fkind::c:
+      if (s.type && s.type != 'c') { emit_uint(out, (unsigned char)a.c, false, s); return; }
+      emit_padded(out, &a.c, 1, s, false); return;
+    case fkind::i: {
+      if (s.type == 'c') { char c = char(a.i); emit_padded(out, &c, 1, s, false); return; }
+      bool neg = a.i < 0;
+      emit_uint(out, neg ? 0ull - (unsigned long long)a.i : (unsigned long long)a.i, neg, s); return;
+    }
+    case fkind::u:
+      if (s.type == 'c') { char c = char(a.u); emit_padded(out, &c, 1, s, false); return; }
+      emit_uint(out, a.u, false, s); return;
+    case fkind::f: {
+      char pf[16]; char* q = pf; *q++ = '%';
+      char t = s.type ? s.type : 'g';
+      if (s.prec >= 0) { *q++ = '.'; int p = s.prec > 99 ? 99 : s.prec; if (p >= 10) *q++ = char('0' + p / 10); *q++ = char('0' + p % 10); }
+      else if (!s.type) t = 'g';   // {} : shortest-ish; std::format's shortest round-trip is not reproduced
+      *q++ = t; *q = 0;
+      char buf[384];
+      int n = snprintf(buf, sizeof buf, (s.prec < 0 && !s.type) ? "%.17g" : pf, a.f);
+      if (s.prec < 0 && !s.type) {   // trim to the shortest of %.6g..%.17g that round-trips
+        for (int pr = 6; pr <= 17; ++pr) {
+          char f2[8] = {'%', '.', char('0' + pr / 10), char('0' + pr % 10), 'g', 0};
+          if (pr < 10) { f2[2] = char('0' + pr); f2[3] = 'g'; f2[4] = 0; }
+          char b2[64]; int n2 = snprintf(b2, sizeof b2, f2, a.f);
+          if (strtod(b2, nullptr) == a.f) { __builtin_memcpy(buf, b2, size_t(n2) + 1); n = n2; break; }
+        }
+      }
+      if (n < 0) n = 0;
+      if (size_t(n) >= sizeof buf) n = sizeof buf - 1;
+      emit_padded(out, buf, size_t(n), s, true); return;
+    }
+    case fkind::s: {
+      size_t n = a.s.n;
+      if (s.prec >= 0 && size_t(s.prec) < n) n = size_t(s.prec);
+      emit_padded(out, a.s.p, n, s, false); return;
+    }
+  }
+}
+}  // namespace __lk
+
+template <class... Args>
+struct basic_format_string {
+  string_view str;
+  template <class S> requires is_convertible_v<const S&, string_view>
+  consteval basic_format_string(const S& s) : str(s) {
+    static_assert((__lk::fmt_ok<remove_cvref_t<decay_t<Args>>> && ...), "std::format (LithoRoot subset): unsupported argument type");
+    if (__lk::count_fields(str.data(), str.size()) != int(sizeof...(Args)))
+      __lk_format_string_error();   // not constexpr: a bad string fails to compile here
+  }
+  constexpr string_view get() const noexcept { return str; }
+ private:
+  static void __lk_format_string_error();
+};
+template <class... Args> using format_string = basic_format_string<type_identity_t<Args>...>;
+
+template <class... Args>
+string format(format_string<Args...> f, Args&&... args) {
+  const __lk::farg a[sizeof...(Args) + 1] = {__lk::mkarg(static_cast<const remove_cvref_t<decay_t<Args>>&>(args))..., {}};
+  string out;
+  __lk::vformat_into(out, f.get(), a, sizeof...(Args));
+  return out;
+}
+template <class Out, class... Args>
+Out format_to(Out it, format_string<Args...> f, Args&&... args) {
+  string s = std::format(f, std::forward<Args>(args)...);
+  for (char c : s) *it++ = c;
+  return it;
+}
+template <class... Args>
+size_t formatted_size(format_string<Args...> f, Args&&... args) { return std::format(f, std::forward<Args>(args)...).size(); }
+
+namespace __lk {
+inline void vformat_into(string& out, string_view f, const farg* a, size_t na) {
+  size_t next = 0;
+  for (size_t i = 0; i < f.size(); ++i) {
+    char c = f[i];
+    if (c == '{' && i + 1 < f.size() && f[i + 1] == '{') { out.push_back('{'); ++i; continue; }
+    if (c == '}' && i + 1 < f.size() && f[i + 1] == '}') { out.push_back('}'); ++i; continue; }
+    if (c != '{') { out.push_back(c); continue; }
+    size_t j = i + 1;
+    while (j < f.size() && f[j] != '}') ++j;
+    fspec s;
+    if (j > i + 1) parse_spec(f.data() + i + 2, f.data() + j, s);
+    if (next < na) emit_arg(out, a[next++], s);
+    i = j;
+  }
+}
+}  // namespace __lk
+}  // namespace std
+#endif

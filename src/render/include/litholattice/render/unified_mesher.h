@@ -1,11 +1,12 @@
-// UnifiedMesher: one bitwise greedy mesher emitting CanonicalMesh L0/L1/L2 (Archie
+// UnifiedMesher: one bitwise greedy mesher emitting a CanonicalMesh (Archie
 // rulings Q21-Q28, Q35-Q39, Q42, Q50-Q53; migration step 3 core, 2026-10-29).
+// 2026-11-17 (JD): LOD is gone. The mesher emits full geometry only; the L1/L2
+// downsample and the perimeter skirts were removed.
 //
 // WHAT: reads an 18^3 apron (1..16 core) of material IDs + packed light, builds the six
 //   face-visibility bitmasks with AND-NOT on 18-bit occupancy rows, and greedy-merges
-//   each face slice with countr_zero/countr_one over 16-bit rows. L1 (8^3) and L2 (4^3)
-//   come from a top-preserving, hull-conservative downsample of the same scratch, in the
-//   same call. Output is one CanonicalMesh whose MeshHash is FNV-1a over its packed bytes.
+//   each face slice with countr_zero/countr_one over 16-bit rows. Output is one
+//   CanonicalMesh whose MeshHash is FNV-1a over its packed bytes.
 // JD-approved fixes over the sketch:
 //   (1) real AO: per exposed face an 8-bit neighbour-solid mask is built from shifted
 //       occupancy rows (one pass per slice row), cornerAo comes from a 256-entry LUT, and
@@ -13,15 +14,9 @@
 //   (2) no palette pollution: merging compares raw material IDs; a palette slot is
 //       taken only when a quad is emitted, in first-seen order. More than 1024 slots
 //       returns Status::PaletteOverflow (logged once by the caller) - never a clamp.
-//   (3) skirts on every L1/L2 quad edge that lies on the sub-chunk perimeter, all six
-//       face directions, in a per-LOD skirt range (coordScale = LOD skirt).
-//       M10 (Archie ruling 2): a skirt cell is culled when every fine apron cell behind
-//       it (the s x s neighbour patch it would face) occludes - such a seam can never
-//       show a crack. LL_SKIRT_CULL=0 keeps every perimeter skirt (overhead A/B). Draw
-//       side keeps only directions whose neighbour is at another LOD (canonSkirtMask).
 //   (4) a match-key grid (raw material, AO, light, uvRot) is filled once per face slice
 //       before merging, so the merge loop is integer compares only.
-// Deterministic by construction: fixed LOD -> face -> slice -> row -> bit order, no
+// Deterministic by construction: fixed face -> slice -> row -> bit order, no
 // hashing containers, no thread-locals; the same input bytes give the same mesh bytes.
 #pragma once
 #include <array>
@@ -44,30 +39,30 @@ struct UnifiedMaterial {
 
 struct BucketRange { uint32_t start = 0, count = 0; };
 
-struct CanonicalLod {
+/// Quad ranges of a canonical mesh (full geometry; the only level since LOD was removed).
+struct CanonicalRanges {
   std::array<BucketRange, 6> face{};  ///< opaque/cutout/dither/OIT quads per face direction
-  BucketRange skirt{};                ///< L1/L2 perimeter skirts (empty at L0)
   BucketRange blend{};                ///< alpha-blend quads, drawn back-to-front last
 };
 
 struct CanonicalMesh {
   uint16_t magic = canon::kMeshMagic, version = canon::kMeshVersion;
-  std::array<CanonicalLod, 3> lods{};
+  CanonicalRanges ranges{};
   std::vector<uint64_t> quads;
   std::vector<uint64_t> palette;
   std::vector<canon::Packed12> fallback;  ///< non-cube geometry (filled by later steps)
   /// M11 (Archie ruling 1): palette overflow splits the sub-chunk into two meshes instead
   /// of falling back to the legacy stream. `next` is the second half (own palette of up to
   /// kMaxPalette entries). Stream order is preserved: decode(this) ++ decode(next) is the
-  /// unsplit stream (this = fallback prefix [+ L0 quad prefix], next = the rest). LOD
-  /// ranges live in whichever half had palette room. Null for every normal mesh.
+  /// unsplit stream (this = fallback prefix [+ quad prefix], next = the rest). Null for
+  /// every normal mesh.
   std::shared_ptr<CanonicalMesh> next;
   size_t residentBytes() const noexcept {
     return 64 + quads.size() * 8 + palette.size() * 8 + fallback.size() * 12 + (next ? next->residentBytes() : 0);
   }
 };
 
-/// FNV-1a 64 over header, LOD ranges, quads, palette and fallback, little-endian words.
+/// FNV-1a 64 over header, ranges, quads, palette and fallback, little-endian words.
 uint64_t canonicalMeshHash(const CanonicalMesh& m) noexcept;
 
 /// 18^3 apron input, index (y*18+z)*18+x, core 1..16. matId 0 = air.
@@ -78,7 +73,6 @@ struct UnifiedMeshInput {
   const uint16_t* light = nullptr;               ///< may be null (full sky, no block light)
   const UnifiedMaterial* materials = nullptr;    ///< indexed by matId
   uint32_t materialCount = 0;
-  int firstLod = 0;  ///< M6: 1 = build L1/L2 only (the game path emits L0 from the registry pass)
   static constexpr int apronIdx(int x, int y, int z) noexcept { return (y * 18 + z) * 18 + x; }
 };
 
@@ -86,20 +80,19 @@ class UnifiedMesher {
  public:
   enum class Status { Ok, PaletteOverflow, BadInput };
   UnifiedMesher();
-  /// Builds L0/L1/L2 into `out` (cleared first). On PaletteOverflow `out` is cleared and
+  /// Builds the mesh into `out` (cleared first). On PaletteOverflow `out` is cleared and
   /// the caller must mesh this sub-chunk on the legacy path.
   Status mesh(const UnifiedMeshInput& in, CanonicalMesh& out);
-  uint32_t lastQuadCount(int lod) const noexcept { return lastQuads_[lod]; }
+  uint32_t lastQuadCount() const noexcept { return lastQuads_; }
 
  private:
-  struct Grid;  // (dim+2)^3 mat/light grid for one LOD
-  void buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& overflow);
+  struct Grid;  // 18^3 mat/light apron grid
+  void build(const Grid& g, CanonicalMesh& out, bool& overflow);
   int paletteSlot(uint16_t mat, uint32_t face, CanonicalMesh& out);
   const UnifiedMeshInput* in_ = nullptr;
   std::vector<uint32_t> slotStamp_;  // per (material ID, face slot): (stamp << 10) | slot
   uint32_t stamp_ = 0;
-  uint32_t lastQuads_[3] = {};
-  const Grid* fine_ = nullptr;  // M10: the L0 apron grid (skirt cull reads its neighbour patch)
+  uint32_t lastQuads_ = 0;
   std::vector<uint64_t> blendTmp_;
 };
 

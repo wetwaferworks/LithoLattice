@@ -204,7 +204,7 @@ int testSoftwareRenderer() {
     if (useCmaa)
       applyCmaaPost(f, depthQv.data(), scratch);
     else
-      applyFxaaPost(f, scratch);
+      applyFxaaPost(f, scratch, depthQv.data());
     // Flat interiors untouched (columns far from the boundary).
     for (int y = 0; y < 16; ++y)
       for (int x : {0, 2, 29, 31})
@@ -254,6 +254,385 @@ int testSoftwareRenderer() {
   }
   std::printf("AA ladder checks: names OK, fxaa/cmaa soften edges + keep flats, ssaa resolve OK\n");
 
+  // --- AA, JD 2026-11-17: geometry-only FXAA, pinned hashes, thread determinism ---
+  auto hashPixels = [](const std::vector<uint32_t>& px) -> uint64_t {
+    uint64_t h = 1469598103934665603ull;  // FNV-1a 64
+    for (uint32_t p : px) {
+      for (int i = 0; i < 4; ++i) {
+        h ^= uint64_t((p >> (8 * i)) & 0xFF);
+        h *= 1099511628211ull;
+      }
+    }
+    return h;
+  };
+  auto paintTexturedFlat = [](SoftwareFramebuffer& f, std::vector<uint16_t>& depthQ,
+                              std::vector<uint16_t>& prim, bool stepAtMid) {
+    const int w = int(f.width), h = int(f.height);
+    depthQ.assign(size_t(w) * h, 0);
+    prim.assign(size_t(w) * h, 0);
+    for (int y = 0; y < h; ++y)
+      for (int x = 0; x < w; ++x) {
+        // 4x4 pixel-art checker (high luma contrast) on a flat surface.
+        const int cx = (x / 4) & 1, cy = (y / 4) & 1;
+        const uint32_t lo = 0xFF2060A0u, hi = 0xFFE0C040u;
+        f.pixels[size_t(y) * w + size_t(x)] = (cx ^ cy) ? hi : lo;
+        const bool far = stepAtMid && x >= w / 2;
+        depthQ[size_t(y) * w + size_t(x)] = far ? uint16_t(40000) : uint16_t(20000);
+        prim[size_t(y) * w + size_t(x)] = far ? uint16_t(2) : uint16_t(1);
+      }
+  };
+  {
+    SoftwareFramebuffer f;
+    f.resize(64, 32);
+    std::vector<uint16_t> depthQ, prim;
+    paintTexturedFlat(f, depthQ, prim, false);  // one surface, high-contrast texture
+    const auto before = f.pixels;
+    SoftwareAaScratch scratch;
+    applyFxaaPost(f, scratch, depthQ.data(), prim.data());
+    if (f.pixels != before) {
+      std::printf("FAIL: fxaa touched a flat textured interior\n");
+      return 1;
+    }
+    // Geometry step down the middle must soften at least one boundary pixel
+    // and still leave the far interiors (columns 0-4 and 59-63) untouched.
+    paintTexturedFlat(f, depthQ, prim, true);
+    const auto before2 = f.pixels;
+    applyFxaaPost(f, scratch, depthQ.data(), prim.data());
+    bool changedInterior = false, softened = false;
+    const int w = 64, h = 32;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const uint32_t a = before2[size_t(y) * w + size_t(x)];
+        const uint32_t b = f.pixels[size_t(y) * w + size_t(x)];
+        if (a == b) continue;
+        if (x <= 4 || x >= w - 5) changedInterior = true;
+        else softened = true;
+      }
+    }
+    if (changedInterior) {
+      std::printf("FAIL: fxaa changed a textured interior far from the geometry edge\n");
+      return 1;
+    }
+    if (!softened) {
+      std::printf("FAIL: fxaa left a depth+prim geometry edge untouched\n");
+      return 1;
+    }
+  }
+  {
+    // Far block-vs-sky silhouette: depth 65420 vs clear 0xFFFF is only 115 LSBs
+    // (a block at ~50 units with near 0.05 / far 1000). The old fixed 164
+    // threshold missed this, and the same prim id (0) models a SIMD span that
+    // never stamped aaId. FXAA must soften the silhouette and leave the
+    // textured interior alone.
+    SoftwareFramebuffer f;
+    f.resize(64, 32);
+    std::vector<uint16_t> depthQ(size_t(64) * 32), prim(size_t(64) * 32, 0);
+    for (int y = 0; y < 32; ++y)
+      for (int x = 0; x < 64; ++x) {
+        const bool sky = x >= 40;
+        const int cx = (x / 4) & 1, cy = (y / 4) & 1;
+        const uint32_t lo = 0xFF2060A0u, hi = 0xFFE0C040u, skyCol = 0xFF87CEFAu;
+        f.pixels[size_t(y) * 64 + size_t(x)] = sky ? skyCol : ((cx ^ cy) ? hi : lo);
+        depthQ[size_t(y) * 64 + size_t(x)] = sky ? uint16_t(0xFFFF) : uint16_t(65420);
+      }
+    const auto before = f.pixels;
+    SoftwareAaScratch scratch;
+    applyFxaaPost(f, scratch, depthQ.data(), prim.data());
+    bool changedInterior = false, softened = false;
+    for (int y = 0; y < 32; ++y) {
+      for (int x = 0; x < 64; ++x) {
+        const uint32_t a = before[size_t(y) * 64 + size_t(x)];
+        const uint32_t b = f.pixels[size_t(y) * 64 + size_t(x)];
+        if (a == b) continue;
+        if (x <= 4 || x >= 59) changedInterior = true;
+        else softened = true;
+      }
+    }
+    if (changedInterior) {
+      std::printf("FAIL: fxaa changed a textured interior on a far block-vs-sky silhouette\n");
+      return 1;
+    }
+    if (!softened) {
+      std::printf("FAIL: fxaa left a far block-vs-sky silhouette untouched\n");
+      return 1;
+    }
+    std::printf("FXAA far block-vs-sky silhouette: softened, textured interior untouched\n");
+  }
+  {
+    // Scaled path (the default play path, --sw-scale 0.5): nearest-upscale
+    // colour, depth, and prim-id, then FXAA, then wipe depth. A far
+    // block-vs-sky silhouette at render resolution must still soften at
+    // present resolution; textured interiors and open sky must not move.
+    // (Wiping depth before the post pass, the 07:40 bug, leaves every
+    // present-size depth at 0xFFFF and FXAA is a no-op.)
+    auto nnScale2x = [](const SoftwareFramebuffer& src, const std::vector<uint16_t>& srcD,
+                        const std::vector<uint16_t>& srcI, SoftwareFramebuffer& dst,
+                        std::vector<uint16_t>& dstD, std::vector<uint16_t>& dstI) {
+      const int sw = int(src.width), sh = int(src.height);
+      const int dw = sw * 2, dh = sh * 2;
+      dst.resize(uint32_t(dw), uint32_t(dh));
+      dstD.assign(size_t(dw) * size_t(dh), 0);
+      dstI.assign(size_t(dw) * size_t(dh), 0);
+      for (int y = 0; y < dh; ++y) {
+        const int sy = (y * sh) / dh;
+        for (int x = 0; x < dw; ++x) {
+          const int sx = (x * sw) / dw;
+          const size_t si = size_t(sy) * size_t(sw) + size_t(sx);
+          const size_t di = size_t(y) * size_t(dw) + size_t(x);
+          dst.pixels[di] = src.pixels[si];
+          dstD[di] = srcD[si];
+          dstI[di] = srcI[si];
+        }
+      }
+    };
+    SoftwareFramebuffer low;
+    low.resize(32, 16);
+    std::vector<uint16_t> lowD(size_t(32) * 16), lowI(size_t(32) * 16, 0);
+    for (int y = 0; y < 16; ++y)
+      for (int x = 0; x < 32; ++x) {
+        const bool sky = x >= 20;
+        const int cx = (x / 4) & 1, cy = (y / 4) & 1;
+        const uint32_t lo = 0xFF2060A0u, hi = 0xFFE0C040u, skyCol = 0xFF87CEFAu;
+        low.pixels[size_t(y) * 32 + size_t(x)] = sky ? skyCol : ((cx ^ cy) ? hi : lo);
+        lowD[size_t(y) * 32 + size_t(x)] = sky ? uint16_t(0xFFFF) : uint16_t(65420);
+      }
+    SoftwareFramebuffer up, wiped;
+    std::vector<uint16_t> upD, upI, wipedD, wipedI;
+    nnScale2x(low, lowD, lowI, up, upD, upI);
+    nnScale2x(low, lowD, lowI, wiped, wipedD, wipedI);
+    wipedD.assign(wipedD.size(), 0xFFFF);  // the 07:40 bug
+    const auto before = up.pixels;
+    SoftwareAaScratch scratch, scratchW;
+    applyFxaaPost(up, scratch, upD.data(), upI.data());
+    applyFxaaPost(wiped, scratchW, wipedD.data(), wipedI.data());
+    if (wiped.pixels != before) {
+      std::printf("FAIL: fxaa changed a scaled frame whose depth was wiped to sky\n");
+      return 1;
+    }
+    bool changedInterior = false, softened = false, skyTouched = false;
+    for (int y = 0; y < 32; ++y) {
+      for (int x = 0; x < 64; ++x) {
+        const uint32_t a = before[size_t(y) * 64 + size_t(x)];
+        const uint32_t b = up.pixels[size_t(y) * 64 + size_t(x)];
+        if (a == b) continue;
+        if (x <= 8) changedInterior = true;
+        else if (x >= 50) skyTouched = true;
+        else softened = true;
+      }
+    }
+    if (changedInterior) {
+      std::printf("FAIL: fxaa changed a textured interior on the scaled far silhouette\n");
+      return 1;
+    }
+    if (skyTouched) {
+      std::printf("FAIL: fxaa changed open sky on the scaled far silhouette\n");
+      return 1;
+    }
+    if (!softened) {
+      std::printf("FAIL: fxaa left a scaled far block-vs-sky silhouette untouched\n");
+      return 1;
+    }
+    // Integration: the same silhouette through renderFrame at --sw-scale 0.5.
+    // A far axis-aligned wall sits against a known sky; present size is 2x the
+    // world stage. FXAA must differ from off at the silhouette and match in
+    // the wall interior and open sky. Scale is restored even on failure.
+    struct RestoreScale {
+      RestoreScale() { cSoftwareRenderer::setRenderScale(0.5f); }
+      ~RestoreScale() { cSoftwareRenderer::setRenderScale(1.0f); }
+    } restoreScale;
+    auto makeWall = [](cSoftwareRenderer& r) {
+      r.setModelDither(false);
+      r.setPerPixelShading(false);
+      ChunkMesh cm;
+      cm.cx = 0;
+      cm.sy = 0;
+      cm.cz = 3;  // world z = 48
+      // Both windings of a 16x16 wall in the XY plane at the near face, so
+      // back-face culling cannot drop it. Packed units are 1/16 block.
+      const uint16_t p[4][3] = {{0, 0, 0}, {256, 0, 0}, {256, 256, 0}, {0, 256, 0}};
+      for (int wind = 0; wind < 2; ++wind) {
+        for (int v = 0; v < 4; ++v) {
+          const int s = wind ? 3 - v : v;
+          PackedVertex pv{};
+          pv.x = p[s][0];
+          pv.y = p[s][1];
+          pv.z = p[s][2];
+          pv.faceAo = 4;
+          pv.value = 200;
+          pv.u = uint8_t(v == 1 || v == 2 ? 255 : 0);
+          pv.v = uint8_t(v >= 2 ? 255 : 0);
+          pv.mode = kShadeTex;
+          cm.verts.push_back(pv);
+        }
+      }
+      r.uploadChunkMesh(cm);
+    };
+    FrameParams fp;
+    fp.width = 128;
+    fp.height = 64;
+    fp.camPos = {8.f, 8.f, 32.f};
+    fp.sky = {0.529f, 0.808f, 0.980f};
+    fp.viewProj = mul(perspective(1.2f, 128.f / 64.f, 0.05f, 1000.f),
+                      lookDir(fp.camPos, normalize(Vec3{0.f, 0.f, 1.f})));
+    fp.crosshair = false;
+    fp.groundPulseOn = false;
+    fp.groundTraceOn = false;
+    cSoftwareRenderer rOff, rFx;
+    makeWall(rOff);
+    makeWall(rFx);
+    rOff.setAaMode("off");
+    rFx.setAaMode("fxaa");
+    rOff.renderFrame(fp);
+    rFx.renderFrame(fp);
+    const auto& offPx = rOff.framebuffer().pixels;
+    const auto& fxPx = rFx.framebuffer().pixels;
+    if (offPx.size() != size_t(128) * 64 || fxPx.size() != offPx.size() ||
+        rOff.framebuffer().width != 128 || rOff.framebuffer().height != 64) {
+      std::printf("FAIL: scaled path present size is %ux%u, expected 128x64\n",
+                  rOff.framebuffer().width, rOff.framebuffer().height);
+      return 1;
+    }
+    const uint32_t skyCol = offPx[0];
+    size_t solid = 0, changed = 0, interiorHit = 0, skyHit = 0;
+    for (int y = 0; y < 64; ++y) {
+      for (int x = 0; x < 128; ++x) {
+        const size_t i = size_t(y) * 128 + size_t(x);
+        const bool isSky = offPx[i] == skyCol;
+        if (!isSky) ++solid;
+        if (offPx[i] == fxPx[i]) continue;
+        ++changed;
+        // A 6-pixel margin from any opposite-class pixel is the silhouette;
+        // farther than that is interior / open sky and must not move.
+        bool nearSky = isSky;
+        bool nearSolid = !isSky;
+        for (int dy = -6; dy <= 6 && !(nearSky && nearSolid); ++dy) {
+          const int yy = y + dy;
+          if (yy < 0 || yy >= 64) continue;
+          for (int dx = -6; dx <= 6; ++dx) {
+            const int xx = x + dx;
+            if (xx < 0 || xx >= 128) continue;
+            if (offPx[size_t(yy) * 128 + size_t(xx)] == skyCol) nearSky = true;
+            else nearSolid = true;
+          }
+        }
+        if (isSky && !nearSolid) ++skyHit;
+        if (!isSky && !nearSky) ++interiorHit;
+      }
+    }
+    rFx.renderFrame(fp);
+    if (rFx.framebuffer().pixels != fxPx) {
+      std::printf("FAIL: scaled-path fxaa is not stable across two frames\n");
+      return 1;
+    }
+    if (solid < 200) {
+      std::printf("FAIL: scaled-path wall covered only %zu pixels\n", solid);
+      return 1;
+    }
+    if (changed == 0) {
+      std::printf("FAIL: scaled-path fxaa matched off (upscale gate missed the wall)\n");
+      return 1;
+    }
+    if (interiorHit || skyHit) {
+      std::printf("FAIL: scaled-path fxaa touched interior=%zu open-sky=%zu\n", interiorHit, skyHit);
+      return 1;
+    }
+    std::printf("FXAA scaled path (NN-upscale depth and prim-id): softened, textured interior untouched\n");
+  }
+  {
+    // Pinned hashes + 1/2/4-thread and across-run determinism for each mode.
+    auto makeScene = [](SoftwareFramebuffer& f, std::vector<uint16_t>& depthQ, std::vector<uint16_t>& prim) {
+      f.resize(48, 24);
+      depthQ.resize(size_t(48) * 24);
+      prim.resize(size_t(48) * 24);
+      for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 48; ++x) {
+          const bool right = x >= 24;
+          const int cx = (x / 3) & 1, cy = (y / 3) & 1;
+          const uint32_t a = 0xFF102030u, b = 0xFFF0D080u, c = 0xFF208040u, d = 0xFFC0E0FFu;
+          f.pixels[size_t(y) * 48 + size_t(x)] = right ? ((cx ^ cy) ? d : c) : ((cx ^ cy) ? b : a);
+          depthQ[size_t(y) * 48 + size_t(x)] = right ? uint16_t(42000) : uint16_t(18000);
+          prim[size_t(y) * 48 + size_t(x)] = right ? uint16_t(7) : uint16_t(3);
+        }
+    };
+    SoftwareFramebuffer f, f2;
+    std::vector<uint16_t> depthQ, prim;
+    makeScene(f, depthQ, prim);
+    SoftwareAaScratch scratch;
+    const auto offPix = f.pixels;
+    const uint64_t offH = hashPixels(offPix);
+
+    applyFxaaPost(f, scratch, depthQ.data(), prim.data());
+    const uint64_t fxaaH = hashPixels(f.pixels);
+    if (fxaaH == offH) {
+      std::printf("FAIL: fxaa pinned scene was a no-op\n");
+      return 1;
+    }
+    // Run again from the same input: identical.
+    makeScene(f2, depthQ, prim);
+    applyFxaaPost(f2, scratch, depthQ.data(), prim.data());
+    if (f2.pixels != f.pixels) {
+      std::printf("FAIL: fxaa not deterministic across runs\n");
+      return 1;
+    }
+    // 1 vs 2 vs 4 row bands, same input (serial bands must match, and so must
+    // a fresh prepare + disjoint row writes).
+    auto runBands = [&](int bands, SoftwareFramebuffer& out) {
+      makeScene(out, depthQ, prim);
+      SoftwareAaScratch sc;
+      prepareFxaa(out, sc);
+      const int h = int(out.height);
+      for (int b = 0; b < bands; ++b) {
+        const int y0 = (h * b) / bands;
+        const int y1 = (h * (b + 1)) / bands;
+        applyFxaaRows(out, sc, depthQ.data(), prim.data(), y0, y1);
+      }
+      commitFxaaRows(out, sc, 0, h);
+    };
+    SoftwareFramebuffer t1, t2, t4;
+    runBands(1, t1);
+    runBands(2, t2);
+    runBands(4, t4);
+    if (t1.pixels != f.pixels || t2.pixels != f.pixels || t4.pixels != f.pixels) {
+      std::printf("FAIL: fxaa 1/2/4-band hashes differ (1=%016llx 2=%016llx 4=%016llx full=%016llx)\n",
+                  (unsigned long long)hashPixels(t1.pixels), (unsigned long long)hashPixels(t2.pixels),
+                  (unsigned long long)hashPixels(t4.pixels), (unsigned long long)fxaaH);
+      return 1;
+    }
+
+    SoftwareFramebuffer hi, out, out2;
+    hi.resize(96, 48);
+    out.resize(48, 24);
+    out2.resize(48, 24);
+    for (int y = 0; y < 48; ++y)
+      for (int x = 0; x < 96; ++x) {
+        const int cx = (x / 2) & 1, cy = (y / 2) & 1;
+        hi.pixels[size_t(y) * 96 + size_t(x)] = (cx ^ cy) ? 0xFFE8C060u : 0xFF184878u;
+      }
+    resolveSsaa2x(hi, out);
+    resolveSsaa2x(hi, out2);
+    if (out.pixels != out2.pixels) {
+      std::printf("FAIL: ssaa2x resolve not deterministic across runs\n");
+      return 1;
+    }
+    const uint64_t ssaaH = hashPixels(out.pixels);
+
+    // Pinned values are printed on mismatch so a deliberate algorithm change
+    // can update them. Default (off) is the input hash; fxaa/ssaa must stay put.
+    std::printf("AA hashes: off=%016llx fxaa=%016llx ssaa2x=%016llx\n",
+                (unsigned long long)offH, (unsigned long long)fxaaH, (unsigned long long)ssaaH);
+    // Pinned 2026-11-17 on the box Linux DebugOpt build of the geometry-edge fixed-point path.
+    const uint64_t kOff  = 0x3008422cca928783ull;
+    const uint64_t kFxaa = 0x2a113a20cd02913cull;
+    const uint64_t kSsaa = 0xec27646a53b65d83ull;
+    if (offH != kOff || fxaaH != kFxaa || ssaaH != kSsaa) {
+      std::printf("FAIL: AA pinned hash moved (off %016llx want %016llx, fxaa %016llx want %016llx, ssaa %016llx want %016llx)\n",
+                  (unsigned long long)offH, (unsigned long long)kOff,
+                  (unsigned long long)fxaaH, (unsigned long long)kFxaa,
+                  (unsigned long long)ssaaH, (unsigned long long)kSsaa);
+      return 1;
+    }
+  }
+
   // --- ASCII pipeline (JD 2026-10-13) ---------------------------------------
   {
     SoftwareFramebuffer f;
@@ -285,6 +664,82 @@ int testSoftwareRenderer() {
     }
   }
   std::printf("ASCII checks: grid geometry + ramp mapping + image output OK\n");
+
+
+  // ASCII GUI (JD 2026-11-15): cell mapping and a painted label must not
+  // change the world text grid produced by framebufferToAsciiText.
+  {
+    AsciiGridGeom g;
+    if (!asciiGridGeometry(320, 180, 80, g) || g.cols != 80 || g.rows < 20) {
+      std::printf("FAIL: ascii GUI grid geometry (%d x %d)\n", g.cols, g.rows);
+      return 1;
+    }
+    float sx = g.cellW * 3.2f, sy = g.cellH * 5.2f;
+    int cx = 0, cy = 0;
+    asciiPointerToCell(g, sx, sy, cx, cy);
+    float px = 0, py = 0;
+    asciiCellCenter(g, cx, cy, px, py);
+    asciiSnapPointer(g, sx, sy);
+    if (cx != 3 || cy != 5 || sx != px || sy != py) {
+      std::printf("FAIL: ascii pointer-to-cell snap (%d,%d %f,%f)\n", cx, cy, sx, sy);
+      return 1;
+    }
+    SoftwareFramebuffer f;
+    f.width = 320;
+    f.height = 180;
+    f.pixels.assign(size_t(320) * 180, 0xFF202020u);
+    const std::string before = framebufferToAsciiText(f, 80);
+    FrameParams p;
+    p.width = 320;
+    p.height = 180;
+    p.crosshair = false;
+    HudDraw panel;
+    panel.x = 40; panel.y = 40; panel.w = 160; panel.h = 64;
+    panel.r = 0.1f; panel.g = 0.1f; panel.b = 0.15f; panel.a = 1.f;
+    HudDraw label;
+    label.x = 56; label.y = 56; label.w = 0; label.h = 0;
+    label.text = "Play";
+    label.r = 1; label.g = 1; label.b = 1; label.a = 1;
+    label.scale = 1.f;
+    p.hud.draws.push_back(panel);
+    p.hud.draws.push_back(label);
+    paintAsciiHud(f, p, 80);
+    // HUD paint is display-only and should leave cells far from the panel alone.
+    // (The panel itself is supposed to change those cells.)
+    const std::string after = framebufferToAsciiText(f, 80);
+    const int farCol = g.cols - 4, farRow = g.rows - 3;
+    auto cellCh = [&](const std::string& s, int col, int row) -> char {
+      size_t pos = 0;
+      for (int r = 0; r < row; ++r) {
+        const size_t nl = s.find('\n', pos);
+        if (nl == std::string::npos) return '?';
+        pos = nl + 1;
+      }
+      if (pos + size_t(col) >= s.size()) return '?';
+      return s[pos + size_t(col)];
+    };
+    if (cellCh(after, farCol, farRow) != cellCh(before, farCol, farRow)) {
+      std::printf("FAIL: paintAsciiHud touched a cell outside the panel\n");
+      return 1;
+    }
+    // The 'P' of "Play" should light some pixels near its cell.
+    int lcx = 0, lcy = 0;
+    asciiPointerToCell(g, 56.f + 4.f, 56.f + 8.f, lcx, lcy);
+    int lit = 0;
+    const int x0 = int(float(lcx) * g.cellW), x1 = int(float(lcx + 1) * g.cellW);
+    const int y0 = int(float(lcy) * g.cellH), y1 = int(float(lcy + 1) * g.cellH);
+    for (int y = y0; y < y1 && y < 180; ++y)
+      for (int x = x0; x < x1 && x < 320; ++x) {
+        const uint32_t pxv = f.pixels[size_t(y) * 320 + size_t(x)];
+        if ((pxv & 0xFF) > 0x80 && ((pxv >> 16) & 0xFF) > 0x80) ++lit;
+      }
+    if (lit < 8) {
+      std::printf("FAIL: ascii GUI label was not painted (lit %d)\n", lit);
+      return 1;
+    }
+    std::printf("ASCII GUI checks: cell snap + label paint + world text unchanged OK\n");
+  }
+
 
   // --- cSysterian glyph set (JD 2026-10-13; AMENDED by JD ruling 2026-10-13
   // 15:52 EDT: full 0-255 value span) --------------------------------------
@@ -409,6 +864,81 @@ int testSoftwareRenderer() {
     for (uint32_t px : ref) if (px != ref[0]) ++lit;
     std::printf("Multithreaded chunk pass: 1/2/4/8 threads %s (%zu non-sky px)\n", same ? "bit-identical" : "DIFFER", lit);
     if (!same || lit < 1000) return 1;
+    // JD 2026-11-17: phase-local render bands. The renderer borrows the idle reserved cores
+    // for the render phase only. Every borrowed count must give the same pixels (off and
+    // FXAA), the phase ticket must be closed (even) between frames and advance by exactly
+    // one open/close pair per frame, so the cores are handed back at the boundary.
+    {
+      bool bsame = true, tickOk = true;
+      std::vector<uint32_t> refOff, refFx;
+      for (int borrow : {0, 0, 1, 2, 3, 5}) {
+        cSoftwareRenderer::setBorrowedBandsOverride(borrow);
+        mt.setAaMode("off");
+        const uint64_t t0 = cSoftwareRenderer::renderPhaseTicket();
+        mt.renderFrame(fp);
+        const uint64_t t1 = cSoftwareRenderer::renderPhaseTicket();
+        if ((t0 & 1) || (t1 & 1) || t1 != t0 + 2) { tickOk = false; std::printf("FAIL: render phase ticket %llu -> %llu at borrow %d\n", (unsigned long long)t0, (unsigned long long)t1, borrow); }
+        if (cSoftwareRenderer::borrowedRenderThreads() != unsigned(borrow)) { tickOk = false; std::printf("FAIL: borrowed bands %u, wanted %d\n", cSoftwareRenderer::borrowedRenderThreads(), borrow); }
+        if (borrow == 0 && refOff.empty()) refOff = mt.framebuffer().pixels;
+        else if (mt.framebuffer().pixels != refOff) { bsame = false; std::printf("FAIL: chunk pass differs with %d borrowed band(s)\n", borrow); }
+        mt.setAaMode("fxaa");
+        mt.renderFrame(fp);
+        if (borrow == 0 && refFx.empty()) refFx = mt.framebuffer().pixels;
+        else if (mt.framebuffer().pixels != refFx) { bsame = false; std::printf("FAIL: FXAA frame differs with %d borrowed band(s)\n", borrow); }
+      }
+      mt.setAaMode("off");
+      cSoftwareRenderer::setBorrowedBandsOverride(-1);
+      std::printf("Phase-local render bands: 0/1/2/3/5 borrowed %s (off and FXAA), phase ticket %s\n",
+                  bsame ? "bit-identical" : "DIFFER", tickOk ? "closed between frames" : "WRONG");
+      if (!bsame || !tickOk || refOff == refFx) return 1;
+    }
+    // JD 2026-11-17: borrow only when the last frame was heavy (hysteresis), so light
+    // frames keep the single-band cost. The forced-count checks above stay always-on.
+    {
+      bool ok = true;
+      cSoftwareRenderer::setBorrowedBandsAdaptiveOverride(2);
+      cSoftwareRenderer::resetBorrowHysteresis();
+      mt.setAaMode("off");
+      mt.renderFrame(fp);  // last time is 0, so this frame must not borrow
+      if (cSoftwareRenderer::borrowedRenderThreads() != 0) {
+        ok = false;
+        std::printf("FAIL: first/light frame borrowed %u, wanted 0\n", cSoftwareRenderer::borrowedRenderThreads());
+      }
+      const std::vector<uint32_t> lightPx = mt.framebuffer().pixels;
+      cSoftwareRenderer::noteRenderTimeNs(15'000'000ull);  // 15 ms: over the 10 ms on-threshold
+      mt.renderFrame(fp);
+      if (cSoftwareRenderer::borrowedRenderThreads() != 2) {
+        ok = false;
+        std::printf("FAIL: heavy frame borrowed %u, wanted 2\n", cSoftwareRenderer::borrowedRenderThreads());
+      }
+      if (mt.framebuffer().pixels != lightPx) {
+        ok = false;
+        std::printf("FAIL: adaptive borrow changed pixels\n");
+      }
+      cSoftwareRenderer::noteRenderTimeNs(9'000'000ull);  // mid gap: hold on
+      mt.renderFrame(fp);
+      if (cSoftwareRenderer::borrowedRenderThreads() != 2) {
+        ok = false;
+        std::printf("FAIL: hysteresis mid gap dropped borrow (%u)\n", cSoftwareRenderer::borrowedRenderThreads());
+      }
+      cSoftwareRenderer::noteRenderTimeNs(7'000'000ull);  // under the 8 ms off-threshold
+      mt.renderFrame(fp);
+      if (cSoftwareRenderer::borrowedRenderThreads() != 0) {
+        ok = false;
+        std::printf("FAIL: light frame after heavy still borrowed %u\n", cSoftwareRenderer::borrowedRenderThreads());
+      }
+      cSoftwareRenderer::noteRenderTimeNs(9'000'000ull);  // mid gap: hold off
+      mt.renderFrame(fp);
+      if (cSoftwareRenderer::borrowedRenderThreads() != 0) {
+        ok = false;
+        std::printf("FAIL: hysteresis mid gap armed borrow (%u)\n", cSoftwareRenderer::borrowedRenderThreads());
+      }
+      cSoftwareRenderer::setBorrowedBandsOverride(-1);
+      cSoftwareRenderer::resetBorrowHysteresis();
+      std::printf("Adaptive render-band borrow: on at 15 ms, hold at 9 ms, off at 7 ms, mid-gap holds, pixels %s\n",
+                  ok ? "unchanged" : "WRONG");
+      if (!ok) return 1;
+    }
   }
 
   {  // Cortana 2026-10-15 1335: traces fast path == reference, bit for bit.
@@ -486,10 +1016,10 @@ int testSoftwareRenderer() {
     std::printf("Hi-Z order independence: same=%d drawn=%zu\n", int(same), drawn);
     if (!same) return 1;
   }  {  // Auto render threads follow the shared render-side budget (JD 2026-11-14): after the permanent
-     // three, bands take about half of remaining+2, at least 2, at most 16. 12 hw -> 5, 8 -> 3, 4 -> 2.
-    const bool ok = cSoftwareRenderer::autoRenderThreads(12) == 5 && cSoftwareRenderer::autoRenderThreads(8) == 3 &&
-                    cSoftwareRenderer::autoRenderThreads(4) == 2 && cSoftwareRenderer::autoRenderThreads(2) == 2 &&
-                    cSoftwareRenderer::autoRenderThreads(1) == 2 && cSoftwareRenderer::autoRenderThreads(18) == 8 &&
+     // three, bands take about half of remaining (t46u: no +2), at most 16. 12 hw -> 4, 8 -> 2, 4 -> 1.
+    const bool ok = cSoftwareRenderer::autoRenderThreads(12) == 4 && cSoftwareRenderer::autoRenderThreads(8) == 2 &&
+                    cSoftwareRenderer::autoRenderThreads(4) == 1 && cSoftwareRenderer::autoRenderThreads(2) == 1 &&
+                    cSoftwareRenderer::autoRenderThreads(1) == 1 && cSoftwareRenderer::autoRenderThreads(18) == 7 &&
                     cSoftwareRenderer::autoRenderThreads(64) == 16;
     std::printf("Auto render threads: 12->%u 8->%u 4->%u 2->%u 64->%u %s\n", cSoftwareRenderer::autoRenderThreads(12),
                 cSoftwareRenderer::autoRenderThreads(8), cSoftwareRenderer::autoRenderThreads(4),

@@ -18,11 +18,13 @@
  * cell and notifies its address. lw_join waits on the cell,
  * collects the return value, and reaps the block.
  *
- * Locking: one spinlock guards the registry and every control
- * block state transition. It is never held across a wait, across
- * user code (entries, destructors), or across a malloc / free:
- * reaping collects blocks under the lock and frees them after
- * unlocking, in that order, everywhere.
+ * No locks: the registry is a fixed array of LW_MAX_THREADS control
+ * blocks. A slot is claimed, flagged and released only by
+ * compare-and-swap on its state word (see "The registry" below);
+ * exactly one party (joiner, reaper, or the thread itself) wins the
+ * release of each incarnation. Blocks are never freed, so a scan
+ * racing a release reads a recycled slot at worst, and the
+ * generation in the word makes any CAS against it fail.
  *
  * Dependencies: <stdlib.h> and <string.h> resolve to LithoLibC in
  * the LithoRoot build (control blocks and destructor nodes are
@@ -64,13 +66,30 @@ typedef struct lw_dtor_node {
   struct lw_dtor_node* next;
 } lw_dtor_node_t;
 
-#define LW__STATE_RUNNING 0u
-#define LW__STATE_DONE 1u
-
-#define LW__F_DETACHED 0x1u    /* no join will ever be accepted */
-#define LW__F_JOIN_CLAIMED 0x2u /* a join owns the reap */
-#define LW__F_SELF 0x4u        /* born by lazy attach, not by spawn */
-#define LW__F_MAIN 0x8u        /* holds tid 1 */
+/* The registry is a fixed slot array with no lock (JD's doctrine).
+ * Each slot's state, flags and a generation count share one 32-bit
+ * word that only ever changes by compare-and-swap:
+ *   bits 0..7   flags (LW__F_*)
+ *   bits 8..9   slot state: FREE, CLAIMING (being filled), LIVE
+ *   bits 10..31 generation, bumped on every claim
+ * A CAS against a word read earlier fails if the slot was released
+ * and re-claimed in between (the generation moved), which is what
+ * makes a stale view of a recycled slot harmless. Control blocks
+ * live in the array and are never freed, so no reader can touch
+ * freed memory. */
+#define LW__F_DETACHED 0x01u     /* no join will ever be accepted */
+#define LW__F_JOIN_CLAIMED 0x02u /* a join owns the reap */
+#define LW__F_SELF 0x04u         /* born by lazy attach, not by spawn */
+#define LW__F_MAIN 0x08u         /* holds tid 1 */
+#define LW__F_DONE 0x10u         /* trampoline finished */
+#define LW__F_REAPED 0x20u       /* one reaper won the release */
+#define LW__F_MASK 0xFFu
+#define LW__S_MASK 0x300u
+#define LW__S_FREE 0x000u
+#define LW__S_CLAIMING 0x100u
+#define LW__S_LIVE 0x200u
+#define LW__GEN_ONE 0x400u
+#define LW__KEEP_GEN (~(uint32_t)0x3FFu)
 
 struct lw_control {
   volatile uint32_t tid_cell; /* offset 0: frozen spawn word 0 */
@@ -79,8 +98,6 @@ struct lw_control {
   lw_start_fn entry;
   void* entry_arg;
   void* retval;
-  uint32_t state; /* LW__STATE_*, under the registry lock */
-  uint32_t flags; /* LW__F_*, under the registry lock */
   int spawned;    /* born by lw_spawn (trampoline armed its jumps) */
   int exiting;    /* destructor phase running on this thread */
   lw_dtor_node_t* dtors; /* only the owning thread touches this list */
@@ -89,10 +106,11 @@ struct lw_control {
                                    * longjmp out of a destructor
                                    * leaves the remainder reachable
                                    * for the landing pad to drop */
-  lw_control_t* next;    /* registry chain, under the registry lock */
   jmp_buf jmp_entry;     /* trampoline's landing pad for lw_exit */
   jmp_buf jmp_dtor;      /* destructor phase landing pad */
   char name[LW_NAME_MAX];
+  volatile uint32_t tid_word; /* tid, atomic: registry scans read it */
+  volatile uint32_t word;     /* flags | slot state | generation */
 };
 
 /* Compile-time check of the frozen spawn block layout. */
@@ -106,34 +124,34 @@ typedef char lw__assert_stack_offset[(offsetof(lw_control_t, stack_word) ==
                                          : -1];
 
 /* ---- globals --------------------------------------------------------- */
-static volatile uint32_t lw__lock_word; /* the registry spinlock */
-static lw_control_t* lw__registry;      /* live control blocks */
-static volatile uint32_t lw__next_tid = 2u; /* tid allocator */
-static int lw__main_claimed;              /* tid 1 taken (under lock) */
+static lw_control_t lw__slots[LW_MAX_THREADS]; /* the registry */
+static volatile uint32_t lw__next_tid = 2u;    /* tid allocator */
+static volatile uint32_t lw__main_claimed;     /* tid 1 taken */
 static LW__THREAD_LOCAL lw_control_t* lw__current;
 
-static void lw__lock(void) {
-  while (lw_at_exchange32(&lw__lock_word, 1u) != 0u) {
-    while (lw_at_load32(&lw__lock_word) != 0u) lw_at_spin_pause();
-  }
-}
+/* The heap gives a thread's arena back when the thread ends
+ * (lithothread_heap.c). Weak so LithoWeave links without it. */
+extern void lh_thread_release(void) __attribute__((weak));
 
-static void lw__unlock(void) { lw_at_store32(&lw__lock_word, 0u); }
+static uint32_t lw__word(lw_control_t* c) { return lw_at_load32(&c->word); }
 
 /* Review L7: tids are positive int32. The allocator wraps from
- * INT32_MAX back to 2 instead of running negative (where every
- * handle would be refused), and skips a tid still held by a
- * registered block, so a live thread's tid is never reissued.
- * Registry lock held. */
-static int32_t lw__alloc_tid_locked(void) {
+ * INT32_MAX back to 2 instead of running negative, and skips a tid
+ * still held by a claimed slot, so a live thread's tid is never
+ * reissued. fetch_add makes every draw unique until the 2^31 wrap. */
+static int32_t lw__alloc_tid(void) {
   for (;;) {
-    uint32_t t = lw__next_tid;
-    lw_control_t* c;
+    uint32_t t = lw_at_fetch_add32(&lw__next_tid, 1u);
+    unsigned i;
     int live = 0;
-    lw__next_tid = (t >= 0x7FFFFFFFu) ? 2u : t + 1u;
-    if (t < 2u || t > 0x7FFFFFFFu) continue;
-    for (c = lw__registry; c != NULL; c = c->next) {
-      if (c->tid == (int32_t)t) {
+    if (t < 2u || t > 0x7FFFFFFFu) {
+      uint32_t seen = t + 1u;
+      (void)lw_at_cas32(&lw__next_tid, &seen, 2u);
+      continue;
+    }
+    for (i = 0; i < LW_MAX_THREADS; ++i) {
+      if ((lw__word(&lw__slots[i]) & LW__S_MASK) != LW__S_FREE &&
+          lw_at_load32(&lw__slots[i].tid_word) == t) {
         live = 1;
         break;
       }
@@ -142,78 +160,101 @@ static int32_t lw__alloc_tid_locked(void) {
   }
 }
 
-/* Find a registered block by handle identity (tid AND pointer, so
- * a stale handle whose block was reaped and whose address was
- * recycled cannot alias a new thread). Caller holds the lock. The
- * handle's pointer itself is only ever compared, never
- * dereferenced, before this lookup succeeds. */
-static lw_control_t* lw__find_locked(int32_t tid, const lw_control_t* ptr) {
-  lw_control_t* c;
-  for (c = lw__registry; c != NULL; c = c->next) {
-    if (c == ptr && c->tid == tid) return c;
+/* Claim a free slot: CAS FREE -> CLAIMING (bumping the generation),
+ * fill it, then publish LIVE with the given flags. tid 0 means draw
+ * one. The cell carries the tid from here until the host zeroes it
+ * at exit. Returns NULL when every slot is taken. */
+static lw_control_t* lw__claim(uint32_t flags, int32_t tid) {
+  unsigned i;
+  for (i = 0; i < LW_MAX_THREADS; ++i) {
+    lw_control_t* c = &lw__slots[i];
+    uint32_t w = lw__word(c);
+    uint32_t mine;
+    if ((w & LW__S_MASK) != LW__S_FREE) continue;
+    mine = ((w & LW__KEEP_GEN) + LW__GEN_ONE) | LW__S_CLAIMING;
+    if (!lw_at_cas32(&c->word, &w, mine)) continue;
+    memset((char*)c + offsetof(lw_control_t, stack_word), 0,
+           offsetof(lw_control_t, tid_word) - offsetof(lw_control_t, stack_word));
+    if (tid == 0) tid = lw__alloc_tid();
+    c->tid = tid;
+    lw_at_store32(&c->tid_word, (uint32_t)tid);
+    lw_at_store32(&c->tid_cell, (uint32_t)tid);
+    lw_at_store32(&c->word, (mine & LW__KEEP_GEN) | LW__S_LIVE | flags);
+    return c;
   }
   return NULL;
 }
 
-/* Unlink a block from the registry. Caller holds the lock and
- * frees the block after unlocking. */
-static void lw__unlink_locked(lw_control_t* ctl) {
-  lw_control_t** pp = &lw__registry;
-  while (*pp != NULL && *pp != ctl) pp = &(*pp)->next;
-  if (*pp == ctl) *pp = ctl->next;
+/* Hand a slot back. Only the party that owns the reap calls this
+ * (the joiner, the winning reaper, or the thread itself). */
+static void lw__release(lw_control_t* c) {
+  uint32_t w = lw__word(c);
+  lw_at_store32(&c->tid_word, 0u);
+  lw_at_store32(&c->word, w & LW__KEEP_GEN);
 }
 
-/* Reap detached blocks that are DONE with a zeroed cell. Collected
- * under the lock, freed after it. Called at the top of the public
- * entry points that can observe completion; reclamation of a
- * detached block is therefore lazy by design (see the header). */
+/* Set flag bits on a slot's word by CAS. Returns the new word. */
+static uint32_t lw__set_flags(lw_control_t* c, uint32_t bits) {
+  uint32_t w = lw__word(c);
+  while (!lw_at_cas32(&c->word, &w, w | bits)) {
+  }
+  return w | bits;
+}
+
+/* Resolve a handle to its slot by identity: the pointer must be a
+ * slot of the array, the slot LIVE, and its tid the handle's tid.
+ * Returns the word observed, which the caller CASes against: the
+ * CAS fails if the slot was recycled after this check. */
+static int lw__find(int32_t tid, const lw_control_t* ptr, uint32_t* out_word) {
+  uintptr_t base = (uintptr_t)&lw__slots[0];
+  uintptr_t p = (uintptr_t)ptr;
+  uint32_t w;
+  if (p < base || p >= base + sizeof(lw__slots) ||
+      (p - base) % sizeof(lw_control_t) != 0u) {
+    return 0;
+  }
+  w = lw__word((lw_control_t*)ptr);
+  if ((w & LW__S_MASK) != LW__S_LIVE) return 0;
+  if (lw_at_load32(&((lw_control_t*)ptr)->tid_word) != (uint32_t)tid) return 0;
+  *out_word = w;
+  return 1;
+}
+
+/* Release a detached, DONE block whose cell the host zeroed. The CAS
+ * that sets REAPED picks exactly one releaser per incarnation. */
+static void lw__try_reap(lw_control_t* c, uint32_t w) {
+  if ((w & LW__S_MASK) != LW__S_LIVE ||
+      (w & (LW__F_DETACHED | LW__F_DONE | LW__F_REAPED)) !=
+          (LW__F_DETACHED | LW__F_DONE)) {
+    return;
+  }
+  if (lw_at_load32(&c->tid_cell) != 0u) return;
+  if (lw_at_cas32(&c->word, &w, w | LW__F_REAPED)) lw__release(c);
+}
+
+/* Reap detached blocks that are DONE with a zeroed cell. Called at
+ * the top of the public entry points that can observe completion;
+ * reclamation of a detached block is lazy by design. */
 static void lw__sweep(void) {
-  lw_control_t* dead = NULL;
-  lw_control_t** pp;
-  lw__lock();
-  pp = &lw__registry;
-  while (*pp != NULL) {
-    lw_control_t* c = *pp;
-    if (c->state == LW__STATE_DONE && (c->flags & LW__F_DETACHED) != 0u &&
-        lw_at_load32(&c->tid_cell) == 0u) {
-      *pp = c->next;
-      c->next = dead;
-      dead = c;
-    } else {
-      pp = &c->next;
-    }
-  }
-  lw__unlock();
-  while (dead != NULL) {
-    lw_control_t* next = dead->next;
-    free(dead);
-    dead = next;
+  unsigned i;
+  for (i = 0; i < LW_MAX_THREADS; ++i) {
+    lw__try_reap(&lw__slots[i], lw__word(&lw__slots[i]));
   }
 }
 
-/* Attach the calling thread with a self-born control block (main
- * thread and foreign threads). The first attacher in the process
- * claims tid 1. Returns the block, or NULL out of memory. */
+/* Attach the calling thread with a self-born block (main thread and
+ * foreign threads). The first attacher claims tid 1. Returns NULL
+ * when the registry is full. The cell of a self-born thread holds
+ * its tid for life: no host wrapper exists to zero it. */
 static lw_control_t* lw__attach_self(void) {
-  lw_control_t* ctl = (lw_control_t*)malloc(sizeof(lw_control_t));
-  if (ctl == NULL) return NULL;
-  memset(ctl, 0, sizeof(lw_control_t));
-  ctl->flags = LW__F_DETACHED | LW__F_SELF;
-  ctl->state = LW__STATE_RUNNING;
-  lw__lock();
-  if (!lw__main_claimed) {
-    lw__main_claimed = 1;
-    ctl->tid = 1;
-    ctl->flags |= LW__F_MAIN;
+  uint32_t zero = 0u;
+  lw_control_t* ctl;
+  if (lw_at_cas32(&lw__main_claimed, &zero, 1u)) {
+    ctl = lw__claim(LW__F_DETACHED | LW__F_SELF | LW__F_MAIN, 1);
   } else {
-    ctl->tid = lw__alloc_tid_locked();
+    ctl = lw__claim(LW__F_DETACHED | LW__F_SELF, 0);
   }
-  ctl->next = lw__registry;
-  lw__registry = ctl;
-  lw__unlock();
-  /* The cell of a self-born thread holds its tid for life: no host
-   * wrapper exists to zero it, and nothing may join this thread. */
-  lw_at_store32(&ctl->tid_cell, (uint32_t)ctl->tid);
+  if (ctl == NULL) return NULL;
   lw__current = ctl;
   return ctl;
 }
@@ -291,13 +332,12 @@ lithosys_err_t lw_spawn(const lw_descriptor_t* desc, lw_thread_t* out_handle) {
 #endif
   lw__sweep();
 
-  ctl = (lw_control_t*)malloc(sizeof(lw_control_t));
-  if (ctl == NULL) return LITHOSYS_ENOMEM;
-  memset(ctl, 0, sizeof(lw_control_t));
+  /* A full registry is "try again later", like pthread_create. */
+  ctl = lw__claim(0u, 0);
+  if (ctl == NULL) return LITHOSYS_EAGAIN;
   ctl->entry = desc->entry;
   ctl->entry_arg = desc->arg;
   ctl->spawned = 1;
-  ctl->state = LW__STATE_RUNNING;
   ctl->stack_word = (uint32_t)desc->stack_size;
   if (desc->name != NULL) {
     size_t i = 0;
@@ -308,25 +348,12 @@ lithosys_err_t lw_spawn(const lw_descriptor_t* desc, lw_thread_t* out_handle) {
     ctl->name[i] = '\0';
   }
 
-  lw__lock();
-  ctl->tid = lw__alloc_tid_locked();
-  /* The cell carries the tid from before the spawn call until the
-   * host zeroes it at exit. This store is the last write the
-   * module ever makes to the cell. */
-  lw_at_store32(&ctl->tid_cell, (uint32_t)ctl->tid);
-  ctl->next = lw__registry;
-  lw__registry = ctl;
-  lw__unlock();
-
   rc = lithosys_thread_spawn((uint32_t)(uintptr_t)ctl);
   if (rc < 0) {
     /* Host refused: retire the block ourselves. No thread exists,
      * so no host store is coming; the registry removal and free
      * are safe and immediate. */
-    lw__lock();
-    lw__unlink_locked(ctl);
-    lw__unlock();
-    free(ctl);
+    lw__release(ctl);
     return (lithosys_err_t)(-rc);
   }
   /* A conforming host returns the tid it read from the cell. The
@@ -345,15 +372,15 @@ lithosys_err_t lw_join(lw_thread_t th, void** out_retval) {
   if (th.control == NULL || th.tid <= 0) return LITHOSYS_EINVAL;
   lw__sweep();
 
-  lw__lock();
-  ctl = lw__find_locked(th.tid, th.control);
-  if (ctl == NULL || ctl == lw__current ||
-      (ctl->flags & (LW__F_DETACHED | LW__F_JOIN_CLAIMED)) != 0u) {
-    lw__unlock();
-    return LITHOSYS_EINVAL;
+  ctl = th.control;
+  for (;;) {
+    uint32_t w;
+    if (!lw__find(th.tid, ctl, &w) || ctl == lw__current ||
+        (w & (LW__F_DETACHED | LW__F_JOIN_CLAIMED)) != 0u) {
+      return LITHOSYS_EINVAL;
+    }
+    if (lw_at_cas32(&ctl->word, &w, w | LW__F_JOIN_CLAIMED)) break;
   }
-  ctl->flags |= LW__F_JOIN_CLAIMED;
-  lw__unlock();
 
   /* The frozen wait: sleep on the cell while it still holds the
    * tid. The host's seq-cst store of 0 is the release edge, so
@@ -365,37 +392,30 @@ lithosys_err_t lw_join(lw_thread_t th, void** out_retval) {
     lw__cell_wait(&ctl->tid_cell, v);
   }
 
-  lw__lock();
   retval = ctl->retval;
-  lw__unlink_locked(ctl);
-  lw__unlock();
-  free(ctl);
+  lw__release(ctl);
   if (out_retval != NULL) *out_retval = retval;
   return LITHOSYS_OK;
 }
 
 lithosys_err_t lw_detach(lw_thread_t th) {
   lw_control_t* ctl;
-  int reap_now = 0;
 
   if (th.control == NULL || th.tid <= 0) return LITHOSYS_EINVAL;
   lw__sweep();
 
-  lw__lock();
-  ctl = lw__find_locked(th.tid, th.control);
-  if (ctl == NULL ||
-      (ctl->flags & (LW__F_DETACHED | LW__F_JOIN_CLAIMED)) != 0u) {
-    lw__unlock();
-    return LITHOSYS_EINVAL;
+  ctl = th.control;
+  for (;;) {
+    uint32_t w;
+    if (!lw__find(th.tid, ctl, &w) ||
+        (w & (LW__F_DETACHED | LW__F_JOIN_CLAIMED)) != 0u) {
+      return LITHOSYS_EINVAL;
+    }
+    if (lw_at_cas32(&ctl->word, &w, w | LW__F_DETACHED)) {
+      lw__try_reap(ctl, w | LW__F_DETACHED); /* already finished? */
+      return LITHOSYS_OK;
+    }
   }
-  ctl->flags |= LW__F_DETACHED;
-  if (ctl->state == LW__STATE_DONE && lw_at_load32(&ctl->tid_cell) == 0u) {
-    lw__unlink_locked(ctl);
-    reap_now = 1;
-  }
-  lw__unlock();
-  if (reap_now) free(ctl);
-  return LITHOSYS_OK;
 }
 
 int32_t lw_thread_tid(lw_thread_t th) { return th.control != NULL ? th.tid : 0; }
@@ -460,17 +480,15 @@ void lw_run_tls_destructors(void) {
 
 void lw_release_self(void) {
   lw_control_t* ctl = lw__current;
-  if (ctl == NULL || ctl->spawned || (ctl->flags & LW__F_SELF) == 0u ||
-      (ctl->flags & LW__F_MAIN) != 0u || ctl->exiting) {
+  if (ctl == NULL || ctl->spawned || (lw__word(ctl) & LW__F_SELF) == 0u ||
+      (lw__word(ctl) & LW__F_MAIN) != 0u || ctl->exiting) {
     return;
   }
   lw_run_tls_destructors();
   lw__drop_dtors(ctl); /* anything a destructor registered late */
-  lw__lock();
-  lw__unlink_locked(ctl);
-  lw__unlock();
   lw__current = NULL;
-  free(ctl);
+  if (lh_thread_release) lh_thread_release();
+  lw__release(ctl);
 }
 
 /* ---- exit ------------------------------------------------------------------ */
@@ -511,9 +529,18 @@ void lw_exit(void* retval) {
  * destructor landing pad, mark DONE, return. The host wrapper
  * completes the protocol from here: store 0 into the tid cell,
  * notify its address, retire the worker. */
+/* Plan §3.4 rule 1: memory.atomic.wait32 traps on the browser page thread
+ * and on unshared memory. Only threads this trampoline starts are host
+ * workers, so only they may block; the page thread and single-thread mode
+ * (no workers) never set the flag. LithoRoot's <atomic> and the static-local
+ * guard read it through __lk_can_block_here and spin instead when it is 0. */
+static _Thread_local int lw__can_block;
+int __lk_can_block_here(void) { return lw__can_block; }
+
 void lithosys_thread_start(uint32_t start_arg) {
   lw_control_t* ctl = (lw_control_t*)(uintptr_t)start_arg;
   lw__current = ctl;
+  lw__can_block = 1;
 
   if (setjmp(ctl->jmp_entry) == 0) {
     ctl->retval = ctl->entry(ctl->entry_arg);
@@ -535,9 +562,8 @@ void lithosys_thread_start(uint32_t start_arg) {
    * freed here: its cell has not been zeroed yet, and the cell
    * must stay valid for the host's store. Reapers collect it
    * later (lw__sweep). */
-  lw__lock();
-  ctl->state = LW__STATE_DONE;
-  lw__unlock();
+  if (lh_thread_release) lh_thread_release();
+  (void)lw__set_flags(ctl, LW__F_DONE);
 
   lw__current = NULL;
 }

@@ -11,7 +11,6 @@
 #include <iterator>
 #include <map>
 #include <optional>
-#include <regex>
 #include <cstdlib>
 #include <unordered_map>
 #include <string_view>
@@ -31,6 +30,7 @@ extern "C" __attribute__((import_module("env"), import_name("lk_mega_draw"))) in
 #include "litholattice/assets/shader_library.h"
 #include "litholattice/core/log.h"
 #include "litholattice/render/block_materials.h"
+#include "litholattice/render/glsl_attr_parse.h"  // canonPullVariant: chunk.vert attribute rewrite
 #include "litholattice/render/overlay_geometry.h"
 #include "litholattice/render/pbr_gl_upload.h"
 #include "litholattice/render/pbr_quad_mesh.h"
@@ -77,29 +77,14 @@ std::string builtinSource(std::string_view file, std::string* error) {
 /// the vertex-array path (legacy meshes, entities), so one program serves both and the
 /// shading code below the attributes is the unmodified chunk.vert by construction.
 std::optional<std::string> canonPullVariant(const std::string& vs, std::string* why) {
-  static const std::regex attr(R"(layout\s*\(\s*location\s*=\s*([0-3])\s*\)\s*in\s+(uvec[234]|uint)\s+(aPos|aInfo|aShade|aLayerHi)\s*;)");
+  // 2026-11-16 (S5 web): bounded hand parser (glsl_attr_parse.h), same grammar as the old regexes.
   std::string out;
-  int found = 0;
-  auto it = std::sregex_iterator(vs.begin(), vs.end(), attr);
-  size_t last = 0;
-  for (; it != std::sregex_iterator(); ++it) {
-    const std::smatch& m = *it;
-    out += vs.substr(last, size_t(m.position(0)) - last);
-    out += "layout(location = " + m[1].str() + ") in " + m[2].str() + " " + m[3].str() + "_lkIn; " + m[2].str() + " " + m[3].str() + ";";
-    last = size_t(m.position(0) + m.length(0));
-    ++found;
-  }
-  out += vs.substr(last);
-  if (found != 4) { *why = "chunk.vert does not declare aPos/aInfo/aShade/aLayerHi as plain attributes"; return std::nullopt; }
-  static const std::regex mainRe(R"(void\s+main\s*\(\s*(void)?\s*\))");
-  std::smatch mm;
-  if (!std::regex_search(out, mm, mainRe)) { *why = "no main() in chunk.vert"; return std::nullopt; }
-  out.replace(size_t(mm.position(0)), size_t(mm.length(0)), "void lk_chunk_main()");
+  if (!glslparse::rewriteChunkVert(vs, &out, why)) return std::nullopt;
   const std::optional<std::string> hdr = builtinFile("canonical_pull_legacy.glsl");
   if (!hdr) { *why = "missing built-in canonical_pull_legacy.glsl"; return std::nullopt; }
   out += "\n" + *hdr + R"(
 uniform usamplerBuffer uCanonTbo;
-uniform int uCanonMode; uniform int uCanonBase; uniform int uCanonFb; uniform int uCanonLod;
+uniform int uCanonMode; uniform int uCanonBase; uniform int uCanonFb;
 void main() {
   if (uCanonMode == 0) { aPos = aPos_lkIn; aInfo = aInfo_lkIn; aShade = aShade_lkIn; aLayerHi = aLayerHi_lkIn; }
   else {
@@ -107,7 +92,7 @@ void main() {
     uint corner = uint(k < 3 ? k : (k == 3 ? 0 : k - 2));  // the shared quad pattern {0,1,2,0,2,3}
     CanonLegacyVertex cv;
     if (q < uCanonFb) cv = canonPullFallback(texelFetch(uCanonTbo, uCanonBase + q * 4 + int(corner)));
-    else cv = canonPullQuadLegacy(texelFetch(uCanonTbo, uCanonBase + uCanonFb * 4 + (q - uCanonFb)), corner, uint(uCanonLod));
+    else cv = canonPullQuadLegacy(texelFetch(uCanonTbo, uCanonBase + uCanonFb * 4 + (q - uCanonFb)), corner);
     aPos = cv.pos; aInfo = cv.info; aShade = cv.shade; aLayerHi = cv.layerHi;
   }
   lk_chunk_main();
@@ -582,7 +567,7 @@ class cGL33Renderer final : public IRenderer {
         canonOn_ = canonUp_.pool().init(sl ? std::atoi(sl) : 2);  // fix (c): 64 MiB slabs, preallocated
         if (canonOn_ && !canonVao_) glGenVertexArrays(1, &canonVao_);
         uCanonMode_ = prog_.uniform("uCanonMode"); uCanonBase_ = prog_.uniform("uCanonBase");
-        uCanonFb_ = prog_.uniform("uCanonFb"); uCanonLod_ = prog_.uniform("uCanonLod");
+        uCanonFb_ = prog_.uniform("uCanonFb");
         prog_.use();
         glUniform1i(prog_.uniform("uCanonTbo"), kCanonTexUnit);
         glUniform1i(uCanonMode_, 0);
@@ -911,8 +896,12 @@ class cGL33Renderer final : public IRenderer {
       const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
       if (decideOnce(k, mn) == CullDecision::Full) classicOrder.push_back(&g);
     }
+    // R3 (B9): nearest first with a (cx, sy, cz) tie-break, so equal distances never fall back
+    // to hash-map order (VK breaks ties the same way).
     std::sort(classicOrder.begin(), classicOrder.end(), [&](const Gpu* a, const Gpu* b) {
-      return chunkDist2(a->cx, a->sy, a->cz) < chunkDist2(b->cx, b->sy, b->cz);
+      const auto da = chunkDist2(a->cx, a->sy, a->cz), db = chunkDist2(b->cx, b->sy, b->cz);
+      if (da != db) return da < db;
+      return std::tie(a->cx, a->sy, a->cz) < std::tie(b->cx, b->sy, b->cz);
     });
     for (const Gpu* gp : classicOrder) {
       const Gpu& g = *gp;
@@ -937,7 +926,6 @@ class cGL33Renderer final : public IRenderer {
         }
         glUniform1i(uCanonBase_, GLint(g.cFirst));
         glUniform1i(uCanonFb_, g.cFb);
-        glUniform1i(uCanonLod_, 0);
         glDrawArrays(GL_TRIANGLES, 0, g.cVerts);
       } else if (useArena_) {
         if (boundVao != arenaVao_) { glBindVertexArray(arenaVao_); boundVao = arenaVao_; }
@@ -970,8 +958,10 @@ class cGL33Renderer final : public IRenderer {
         const Vec3 mn{g.cx * 16.f, g.sy * 16.f, g.cz * 16.f};
         if (decideOnce(k, mn) == CullDecision::Full) pbrOrder.push_back(&g);
       }
-      std::sort(pbrOrder.begin(), pbrOrder.end(), [&](const PbrGpu* a, const PbrGpu* b) {
-        return chunkDist2(a->cx, a->sy, a->cz) < chunkDist2(b->cx, b->sy, b->cz);
+      std::sort(pbrOrder.begin(), pbrOrder.end(), [&](const PbrGpu* a, const PbrGpu* b) {  // R3 (B9): key tie-break
+        const auto da = chunkDist2(a->cx, a->sy, a->cz), db = chunkDist2(b->cx, b->sy, b->cz);
+        if (da != db) return da < db;
+        return std::tie(a->cx, a->sy, a->cz) < std::tie(b->cx, b->sy, b->cz);
       });
       for (const PbrGpu* gp : pbrOrder) {
         const PbrGpu& g = *gp;
@@ -1433,7 +1423,7 @@ class cGL33Renderer final : public IRenderer {
   GLuint canonVao_ = 0;
   gl33::cGlTboSlabUploader canonUp_;  // refactor step 3: IMeshUploader (owns the fix (c) slab pool)
   uint32_t canonBoundSlab_ = ~uint32_t(0);
-  GLint uCanonMode_ = -1, uCanonBase_ = -1, uCanonFb_ = -1, uCanonLod_ = -1;
+  GLint uCanonMode_ = -1, uCanonBase_ = -1, uCanonFb_ = -1;
   static constexpr GLint kPbrMatTexUnit = 2;  // material table texture unit (0/1 are classic)
   GLint uPbrVP_ = -1, uPbrOffset_ = -1, uPbrCam_ = -1, uPbrMat_ = -1;
   GLint uPbrLightPos_ = -1, uPbrLightColor_ = -1, uPbrLightCount_ = -1, uPbrTier_ = -1;

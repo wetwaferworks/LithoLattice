@@ -1,4 +1,5 @@
 #include "litholattice/storage/storage.h"
+#include "litholattice/core/thread_name.h"
 #include "litholattice/core/atomic_gate.h"
 #include "litholattice/core/gate_lock.h"
 #include "litholattice/storage/file_contract.h"
@@ -352,7 +353,7 @@ cWorldStore::cWorldStore(std::filesystem::path dir, const cPayloadReg& payloads,
   std::filesystem::create_directories(dir_);
   if (!jobsys_) {
     logInfo("threads: world store starting its own worker thread (no job system)");  // Q5b census naming (2026-10-28)
-    thread_ = std::thread([this] { run(); });
+    thread_ = std::thread([this] { ::litholattice::setCurrentThreadName("lk-storage-io"); run(); });
     sysRecord_.add(ThreadClass::System, ThreadRole::Storage, 0, "world-store");
   }
 }

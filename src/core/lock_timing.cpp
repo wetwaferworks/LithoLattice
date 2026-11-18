@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "litholattice/core/log.h"
+#include "litholattice/core/spin_stats.h"
+#include <string>
 
 namespace litholattice::locktiming {
 namespace {
@@ -84,3 +86,44 @@ void frameEnd() {
 }
 
 }  // namespace litholattice::locktiming
+
+// ---- LL_SPIN_STATS readout (instrumentation only, JD t40u 2026-11-16). See spin_stats.h.
+namespace litholattice::spinstats {
+void frameEnd() {
+  if (!enabled()) return;
+  static int frames = 0;
+  static uint64_t prev[kMaxSlots][5][kSiteCount] = {};
+  if (++frames < 120) return;
+  const int n = std::min(g_next.load(std::memory_order_acquire), kMaxSlots);
+  std::string line = "spin stats: 120 frames, per thread per frame (waits / wait ms / pauses / yields / sleeps):";
+  for (int i = 0; i < n; ++i) {
+    Slot& s = g_slots[i];
+    if (!s.used.load(std::memory_order_acquire)) continue;
+    char nm[kNameWords * 8 + 1] = {};
+    for (int w = 0; w < kNameWords; ++w) {
+      const uint64_t v = s.name[w].load(std::memory_order_relaxed);
+      for (int b = 0; b < 8; ++b) nm[w * 8 + b] = char((v >> (8 * b)) & 0xff);
+    }
+    std::string part;
+    for (int k = 0; k < kSiteCount; ++k) {
+      const uint64_t cur[5] = {s.waits[k].load(std::memory_order_relaxed), s.waitNs[k].load(std::memory_order_relaxed),
+                               s.spins[k].load(std::memory_order_relaxed), s.yields[k].load(std::memory_order_relaxed),
+                               s.sleeps[k].load(std::memory_order_relaxed)};
+      uint64_t d[5];
+      for (int j = 0; j < 5; ++j) { d[j] = cur[j] - prev[i][j][k]; prev[i][j][k] = cur[j]; }
+      if (!d[0] && !d[2] && !d[3] && !d[4]) continue;
+      char b[192];
+      std::snprintf(b, sizeof b, " %s %.2f/%.3f/%.0f/%.1f/%.2f;", siteName(k), d[0] / double(frames), d[1] / 1e6 / frames,
+                    d[2] / double(frames), d[3] / double(frames), d[4] / double(frames));
+      part += b;
+    }
+    if (part.empty()) continue;
+    char h[96];
+    std::snprintf(h, sizeof h, " | [%s tid %u]", nm[0] ? nm : "unnamed", s.osTid.load(std::memory_order_relaxed));
+    line += h;
+    line += part;
+  }
+  frames = 0;
+  logInfo("%s", line.c_str());
+}
+}  // namespace litholattice::spinstats

@@ -1,0 +1,80 @@
+/* LithoRoot <sstream>: stringbuf and the three string streams, char only.
+ * Standard positioning: one buffer, separate get and put positions; out without
+ * ate/app writes from the start (overwriting), app always appends. */
+#pragma once
+#include <lithoroot_streams.h>
+
+namespace std {
+
+class stringbuf : public streambuf {
+public:
+  explicit stringbuf(ios_base::openmode m = ios_base::in | ios_base::out) : m_(m) {}
+  explicit stringbuf(const string& s, ios_base::openmode m = ios_base::in | ios_base::out) : m_(m) { str(s); }
+  string str() const { return s_; }
+  void str(const string& s) { s_ = s; g_ = 0; p_ = (m_ & (ios_base::ate | ios_base::app)) ? s_.size() : 0; }
+protected:
+  int peekc() override { return (m_ & ios_base::in) && g_ < s_.size() ? static_cast<unsigned char>(s_[g_]) : eof; }
+  void advance() override { ++g_; }
+  streamsize xsgetn(char* d, streamsize n) override {
+    if (!(m_ & ios_base::in) || g_ >= s_.size() || n <= 0) return 0;
+    size_t k = s_.size() - g_; if (size_t(n) < k) k = size_t(n);
+    __builtin_memcpy(d, s_.data() + g_, k); g_ += k; return streamsize(k);
+  }
+  streamsize xsputn(const char* d, streamsize n) override {
+    if (!(m_ & ios_base::out) || n <= 0) return 0;
+    if (m_ & ios_base::app) p_ = s_.size();
+    const size_t k = size_t(n);
+    if (p_ + k > s_.size()) s_.resize(p_ + k);
+    __builtin_memcpy(s_.data() + p_, d, k); p_ += k; return n;
+  }
+  streampos seekoff(streamoff off, ios_base::seekdir d, ios_base::openmode w) override {
+    const bool gi = (w & ios_base::in) && (m_ & ios_base::in), po = (w & ios_base::out) && (m_ & ios_base::out);
+    if (!gi && !po) return -1;
+    if (gi && po && d == ios_base::cur) return -1;  // ambiguous, as in the standard
+    const long long base = d == ios_base::beg ? 0 : d == ios_base::end ? (long long)s_.size() : (long long)(gi ? g_ : p_);
+    const long long np = base + off;
+    if (np < 0 || np > (long long)s_.size()) return -1;
+    if (gi) g_ = size_t(np);
+    if (po) p_ = size_t(np);
+    return np;
+  }
+private:
+  string s_;
+  size_t g_ = 0, p_ = 0;
+  ios_base::openmode m_;
+};
+
+class istringstream : public istream {
+public:
+  explicit istringstream(ios_base::openmode m = ios_base::in) : sb_(m | ios_base::in) { init(&sb_); }
+  explicit istringstream(const string& s, ios_base::openmode m = ios_base::in) : sb_(s, m | ios_base::in) { init(&sb_); }
+  stringbuf* rdbuf() const noexcept { return const_cast<stringbuf*>(&sb_); }
+  string str() const { return sb_.str(); }
+  void str(const string& s) { sb_.str(s); }
+private:
+  stringbuf sb_;
+};
+
+class ostringstream : public ostream {
+public:
+  explicit ostringstream(ios_base::openmode m = ios_base::out) : sb_(m | ios_base::out) { init(&sb_); }
+  explicit ostringstream(const string& s, ios_base::openmode m = ios_base::out) : sb_(s, m | ios_base::out) { init(&sb_); }
+  stringbuf* rdbuf() const noexcept { return const_cast<stringbuf*>(&sb_); }
+  string str() const { return sb_.str(); }
+  void str(const string& s) { sb_.str(s); }
+private:
+  stringbuf sb_;
+};
+
+class stringstream : public iostream {
+public:
+  explicit stringstream(ios_base::openmode m = ios_base::in | ios_base::out) : sb_(m) { init(&sb_); }
+  explicit stringstream(const string& s, ios_base::openmode m = ios_base::in | ios_base::out) : sb_(s, m) { init(&sb_); }
+  stringbuf* rdbuf() const noexcept { return const_cast<stringbuf*>(&sb_); }
+  string str() const { return sb_.str(); }
+  void str(const string& s) { sb_.str(s); }
+private:
+  stringbuf sb_;
+};
+
+}  // namespace std

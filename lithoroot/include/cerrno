@@ -1,0 +1,12 @@
+/* cerrno ... LithoRoot std L2 (S2, 2026-11-16): <errno.h> lifted into std. errno is a macro; nothing to lift. */
+#ifndef LITHOROOT_CERRNO
+#define LITHOROOT_CERRNO
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <errno.h>
+
+namespace std {
+
+}  // namespace std
+#endif

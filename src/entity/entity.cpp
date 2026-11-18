@@ -18,6 +18,33 @@ uint64_t cEntityMgr::spawn(uint32_t type, double x, double y, double z) {
   return id;
 }
 
+uint64_t cEntityMgr::restore(const Entity& saved) {
+  uint64_t id = saved.id;
+  if (id == 0 || entities_.count(id)) id = nextId_;
+  if (id >= nextId_) nextId_ = id + 1;
+  Entity e = saved;
+  e.id = id;
+  e.dead = false;
+  entities_[id] = e;
+  sortedIds_.insert(std::lower_bound(sortedIds_.begin(), sortedIds_.end(), id), id);  // keeps the list sorted
+  if (factory_) behaviors_[id] = factory_(e.type);
+  return id;
+}
+
+size_t cEntityMgr::eraseType(uint32_t type) {
+  size_t n = 0;
+  for (uint64_t id : sortedIds_) {
+    auto it = entities_.find(id);
+    if (it == entities_.end() || it->second.type != type) continue;
+    behaviors_.erase(id);
+    entities_.erase(it);
+    ++n;
+  }
+  if (n) sortedIds_.erase(std::remove_if(sortedIds_.begin(), sortedIds_.end(), [this](uint64_t id) { return !entities_.count(id); }),
+                          sortedIds_.end());
+  return n;
+}
+
 void cEntityMgr::despawn(uint64_t id) {
   auto it = entities_.find(id);
   if (it != entities_.end()) it->second.dead = true;

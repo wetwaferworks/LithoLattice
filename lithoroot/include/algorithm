@@ -1,0 +1,450 @@
+/* algorithm ... LithoRoot std L4 (S3, 2026-11-16): the algorithms the engine
+ * and game use (census of 2026-11-16: max/min/clamp, sort, find..., about
+ * 40 names) plus their close relatives.
+ *
+ * sort is introsort (median-of-3 quicksort, heapsort past 2*log2(n) depth,
+ * insertion sort under 16): O(n log n) worst case, not stable. stable_sort
+ * is a merge sort with a nothrow buffer, falling back to an in-place
+ * rotation merge if the buffer cannot be had. For equal keys sort's order
+ * differs from MSVC's; that never reaches native hashes (plan 3.7). */
+#ifndef LITHOROOT_ALGORITHM
+#define LITHOROOT_ALGORITHM
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstddef>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <new>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+/* ---- min / max / clamp ---- */
+template <class T> constexpr const T& min(const T& a, const T& b) { return b < a ? b : a; }
+template <class T, class C> constexpr const T& min(const T& a, const T& b, C c) { return c(b, a) ? b : a; }
+template <class T> constexpr const T& max(const T& a, const T& b) { return a < b ? b : a; }
+template <class T, class C> constexpr const T& max(const T& a, const T& b, C c) { return c(a, b) ? b : a; }
+template <class I, class C> constexpr I min_element(I f, I l, C c) { if (f == l) return l; I m = f; while (++f != l) if (c(*f, *m)) m = f; return m; }
+template <class I> constexpr I min_element(I f, I l) { return std::min_element(f, l, less<>()); }
+template <class I, class C> constexpr I max_element(I f, I l, C c) { if (f == l) return l; I m = f; while (++f != l) if (c(*m, *f)) m = f; return m; }
+template <class I> constexpr I max_element(I f, I l) { return std::max_element(f, l, less<>()); }
+template <class I, class C> constexpr pair<I, I> minmax_element(I f, I l, C c) {
+  pair<I, I> r{f, f};
+  if (f == l) return r;
+  while (++f != l) { if (c(*f, *r.first)) r.first = f; if (!c(*f, *r.second)) r.second = f; }
+  return r;
+}
+template <class I> constexpr pair<I, I> minmax_element(I f, I l) { return std::minmax_element(f, l, less<>()); }
+template <class T> constexpr T min(initializer_list<T> il) { return *std::min_element(il.begin(), il.end()); }
+template <class T, class C> constexpr T min(initializer_list<T> il, C c) { return *std::min_element(il.begin(), il.end(), c); }
+template <class T> constexpr T max(initializer_list<T> il) { return *std::max_element(il.begin(), il.end()); }
+template <class T, class C> constexpr T max(initializer_list<T> il, C c) { return *std::max_element(il.begin(), il.end(), c); }
+template <class T> constexpr pair<const T&, const T&> minmax(const T& a, const T& b) { return b < a ? pair<const T&, const T&>(b, a) : pair<const T&, const T&>(a, b); }
+template <class T> constexpr const T& clamp(const T& v, const T& lo, const T& hi) { return v < lo ? lo : hi < v ? hi : v; }
+template <class T, class C> constexpr const T& clamp(const T& v, const T& lo, const T& hi, C c) { return c(v, lo) ? lo : c(hi, v) ? hi : v; }
+
+/* ---- non-modifying ---- */
+template <class I, class P> constexpr bool all_of(I f, I l, P p) { for (; f != l; ++f) if (!p(*f)) return false; return true; }
+template <class I, class P> constexpr bool any_of(I f, I l, P p) { for (; f != l; ++f) if (p(*f)) return true; return false; }
+template <class I, class P> constexpr bool none_of(I f, I l, P p) { return !std::any_of(f, l, p); }
+template <class I, class F> constexpr F for_each(I f, I l, F fn) { for (; f != l; ++f) fn(*f); return fn; }
+template <class I, class N, class F> constexpr I for_each_n(I f, N n, F fn) { for (; n > 0; ++f, (void)--n) fn(*f); return f; }
+template <class I, class T> constexpr I find(I f, I l, const T& v) { for (; f != l; ++f) if (*f == v) return f; return l; }
+template <class I, class P> constexpr I find_if(I f, I l, P p) { for (; f != l; ++f) if (p(*f)) return f; return l; }
+template <class I, class P> constexpr I find_if_not(I f, I l, P p) { for (; f != l; ++f) if (!p(*f)) return f; return l; }
+template <class I, class J, class P> constexpr I find_first_of(I f, I l, J sf, J sl, P p) {
+  for (; f != l; ++f) for (J it = sf; it != sl; ++it) if (p(*f, *it)) return f;
+  return l;
+}
+template <class I, class J> constexpr I find_first_of(I f, I l, J sf, J sl) { return std::find_first_of(f, l, sf, sl, equal_to<>()); }
+template <class I, class P> constexpr I adjacent_find(I f, I l, P p) {
+  if (f == l) return l;
+  for (I n = f; ++n != l; f = n) if (p(*f, *n)) return f;
+  return l;
+}
+template <class I> constexpr I adjacent_find(I f, I l) { return std::adjacent_find(f, l, equal_to<>()); }
+template <class I, class T> constexpr iter_difference_t<I> count(I f, I l, const T& v) { iter_difference_t<I> n = 0; for (; f != l; ++f) if (*f == v) ++n; return n; }
+template <class I, class P> constexpr iter_difference_t<I> count_if(I f, I l, P p) { iter_difference_t<I> n = 0; for (; f != l; ++f) if (p(*f)) ++n; return n; }
+template <class I, class J, class P> constexpr pair<I, J> mismatch(I f, I l, J f2, P p) { for (; f != l && p(*f, *f2); ++f, (void)++f2) {} return {f, f2}; }
+template <class I, class J> constexpr pair<I, J> mismatch(I f, I l, J f2) { return std::mismatch(f, l, f2, equal_to<>()); }
+template <class I, class J, class P> constexpr pair<I, J> mismatch(I f, I l, J f2, J l2, P p) { for (; f != l && f2 != l2 && p(*f, *f2); ++f, (void)++f2) {} return {f, f2}; }
+template <class I, class J> constexpr pair<I, J> mismatch(I f, I l, J f2, J l2) { return std::mismatch(f, l, f2, l2, equal_to<>()); }
+template <class I, class J, class P> constexpr bool equal(I f, I l, J f2, P p) { for (; f != l; ++f, (void)++f2) if (!p(*f, *f2)) return false; return true; }
+template <class I, class J> constexpr bool equal(I f, I l, J f2) { return std::equal(f, l, f2, equal_to<>()); }
+template <class I, class J, class P> constexpr bool equal(I f, I l, J f2, J l2, P p) {
+  for (; f != l && f2 != l2; ++f, (void)++f2) if (!p(*f, *f2)) return false;
+  return f == l && f2 == l2;
+}
+template <class I, class J> constexpr bool equal(I f, I l, J f2, J l2) { return std::equal(f, l, f2, l2, equal_to<>()); }
+template <class I, class J, class P> constexpr I search(I f, I l, J sf, J sl, P p) {
+  for (;; ++f) {
+    I it = f;
+    for (J s = sf;; ++it, (void)++s) {
+      if (s == sl) return f;
+      if (it == l) return l;
+      if (!p(*it, *s)) break;
+    }
+  }
+}
+template <class I, class J> constexpr I search(I f, I l, J sf, J sl) { return std::search(f, l, sf, sl, equal_to<>()); }
+template <class I, class J, class C> constexpr bool lexicographical_compare(I f, I l, J f2, J l2, C c) {
+  for (; f2 != l2; ++f, (void)++f2) {
+    if (f == l || c(*f, *f2)) return true;
+    if (c(*f2, *f)) return false;
+  }
+  return false;
+}
+template <class I, class J> constexpr bool lexicographical_compare(I f, I l, J f2, J l2) { return std::lexicographical_compare(f, l, f2, l2, less<>()); }
+template <class I, class J, class P> constexpr bool is_permutation(I f, I l, J f2, P p) {
+  auto mm = std::mismatch(f, l, f2, p);
+  f = mm.first; f2 = mm.second;
+  if (f == l) return true;
+  J l2 = std::next(f2, std::distance(f, l));
+  for (I s = f; s != l; ++s) {
+    if (std::find_if(f, s, [&](const auto& x) { return p(x, *s); }) != s) continue;  // counted already
+    auto n2 = std::count_if(f2, l2, [&](const auto& x) { return p(*s, x); });
+    if (n2 == 0 || std::count_if(s, l, [&](const auto& x) { return p(*s, x); }) != n2) return false;
+  }
+  return true;
+}
+template <class I, class J> constexpr bool is_permutation(I f, I l, J f2) { return std::is_permutation(f, l, f2, equal_to<>()); }
+
+/* ---- modifying ---- */
+template <class I, class O> constexpr O copy(I f, I l, O o) { for (; f != l; ++f, (void)++o) *o = *f; return o; }
+template <class I, class N, class O> constexpr O copy_n(I f, N n, O o) { for (; n > 0; ++f, (void)++o, --n) *o = *f; return o; }
+template <class I, class O, class P> constexpr O copy_if(I f, I l, O o, P p) { for (; f != l; ++f) if (p(*f)) { *o = *f; ++o; } return o; }
+template <class I, class O> constexpr O copy_backward(I f, I l, O o) { while (f != l) *--o = *--l; return o; }
+template <class I, class O> constexpr O move(I f, I l, O o) { for (; f != l; ++f, (void)++o) *o = std::move(*f); return o; }
+template <class I, class O> constexpr O move_backward(I f, I l, O o) { while (f != l) *--o = std::move(*--l); return o; }
+template <class O, class T> constexpr void fill(O f, O l, const T& v) { for (; f != l; ++f) *f = v; }
+template <class O, class N, class T> constexpr O fill_n(O f, N n, const T& v) { for (; n > 0; ++f, (void)--n) *f = v; return f; }
+template <class O, class G> constexpr void generate(O f, O l, G g) { for (; f != l; ++f) *f = g(); }
+template <class O, class N, class G> constexpr O generate_n(O f, N n, G g) { for (; n > 0; ++f, (void)--n) *f = g(); return f; }
+template <class I, class O, class F> constexpr O transform(I f, I l, O o, F fn) { for (; f != l; ++f, (void)++o) *o = fn(*f); return o; }
+template <class I, class J, class O, class F> constexpr O transform(I f, I l, J f2, O o, F fn) { for (; f != l; ++f, (void)++f2, ++o) *o = fn(*f, *f2); return o; }
+template <class I, class T> constexpr void replace(I f, I l, const T& old, const T& nv) { for (; f != l; ++f) if (*f == old) *f = nv; }
+template <class I, class P, class T> constexpr void replace_if(I f, I l, P p, const T& nv) { for (; f != l; ++f) if (p(*f)) *f = nv; }
+template <class I, class J> constexpr void iter_swap(I a, J b) { using std::swap; swap(*a, *b); }
+template <class I, class J> constexpr J swap_ranges(I f, I l, J f2) { for (; f != l; ++f, (void)++f2) std::iter_swap(f, f2); return f2; }
+template <class I, class P> constexpr I remove_if(I f, I l, P p) {
+  f = std::find_if(f, l, p);
+  if (f != l) for (I i = f; ++i != l;) if (!p(*i)) *f++ = std::move(*i);
+  return f;
+}
+template <class I, class T> constexpr I remove(I f, I l, const T& v) { return std::remove_if(f, l, [&](const auto& x) { return x == v; }); }
+template <class I, class O, class T> constexpr O remove_copy(I f, I l, O o, const T& v) { for (; f != l; ++f) if (!(*f == v)) { *o = *f; ++o; } return o; }
+template <class I, class P> constexpr I unique(I f, I l, P p) {
+  f = std::adjacent_find(f, l, p);
+  if (f != l) { I d = f; for (++f; ++f != l;) if (!p(*d, *f)) *++d = std::move(*f); return ++d; }
+  return l;
+}
+template <class I> constexpr I unique(I f, I l) { return std::unique(f, l, equal_to<>()); }
+template <class I> constexpr void reverse(I f, I l) {
+  if constexpr (is_base_of_v<random_access_iterator_tag, typename iterator_traits<I>::iterator_category>) {
+    if (f == l) return;
+    for (--l; f < l; ++f, (void)--l) std::iter_swap(f, l);
+  } else {
+    while (f != l && f != --l) { std::iter_swap(f, l); ++f; }
+  }
+}
+template <class I, class O> constexpr O reverse_copy(I f, I l, O o) { while (f != l) { *o = *--l; ++o; } return o; }
+template <class I> constexpr I rotate(I f, I m, I l) {
+  if (f == m) return l;
+  if (m == l) return f;
+  I r = std::next(f, std::distance(m, l));
+  std::reverse(f, m); std::reverse(m, l); std::reverse(f, l);
+  return r;
+}
+template <class I, class O> constexpr O rotate_copy(I f, I m, I l, O o) { return std::copy(f, m, std::copy(m, l, o)); }
+/* Fisher-Yates with rejection sampling for an unbiased index (the standard leaves
+ * the exact sequence unspecified; MSVC's differs). */
+template <class I, class G> void shuffle(I f, I l, G&& g) {
+  using U = conditional_t<(sizeof(decltype(g())) > 4), unsigned long long, unsigned>;
+  const auto n = l - f;
+  for (decltype(l - f) i = n - 1; i > 0; --i) {
+    const U bound = U(i) + 1u, gmin = U(g.min()), span = U(g.max() - g.min());
+    const U lim = span == U(-1) ? U(-1) - (U(-1) % bound + 1u) % bound : span - ((span % bound) + 1u) % bound;
+    U r;
+    do r = U(g()) - gmin; while (r > lim);
+    using std::swap;
+    swap(f[i], f[r % bound]);
+  }
+}
+template <class I, class P> constexpr I partition(I f, I l, P p) {
+  f = std::find_if_not(f, l, p);
+  if (f == l) return f;
+  for (I i = std::next(f); i != l; ++i) if (p(*i)) { std::iter_swap(i, f); ++f; }
+  return f;
+}
+template <class I, class P> constexpr bool is_partitioned(I f, I l, P p) { return std::none_of(std::find_if_not(f, l, p), l, p); }
+
+/* ---- binary search ---- */
+template <class I, class T, class C> constexpr I lower_bound(I f, I l, const T& v, C c) {
+  auto n = std::distance(f, l);
+  while (n > 0) { auto h = n / 2; I m = std::next(f, h); if (c(*m, v)) { f = ++m; n -= h + 1; } else n = h; }
+  return f;
+}
+template <class I, class T> constexpr I lower_bound(I f, I l, const T& v) { return std::lower_bound(f, l, v, less<>()); }
+template <class I, class T, class C> constexpr I upper_bound(I f, I l, const T& v, C c) {
+  auto n = std::distance(f, l);
+  while (n > 0) { auto h = n / 2; I m = std::next(f, h); if (!c(v, *m)) { f = ++m; n -= h + 1; } else n = h; }
+  return f;
+}
+template <class I, class T> constexpr I upper_bound(I f, I l, const T& v) { return std::upper_bound(f, l, v, less<>()); }
+template <class I, class T, class C> constexpr pair<I, I> equal_range(I f, I l, const T& v, C c) { return {std::lower_bound(f, l, v, c), std::upper_bound(f, l, v, c)}; }
+template <class I, class T> constexpr pair<I, I> equal_range(I f, I l, const T& v) { return std::equal_range(f, l, v, less<>()); }
+template <class I, class T, class C> constexpr bool binary_search(I f, I l, const T& v, C c) { f = std::lower_bound(f, l, v, c); return f != l && !c(v, *f); }
+template <class I, class T> constexpr bool binary_search(I f, I l, const T& v) { return std::binary_search(f, l, v, less<>()); }
+
+/* ---- heap ---- */
+namespace __lk {
+template <class I, class D, class T, class C> constexpr void sift_down(I f, D hole, D len, T v, C& c) {
+  const D top = hole;
+  D child = 2 * hole + 2;
+  while (child < len) {
+    if (c(f[child], f[child - 1])) --child;
+    f[hole] = std::move(f[child]); hole = child; child = 2 * child + 2;
+  }
+  if (child == len) { f[hole] = std::move(f[child - 1]); hole = child - 1; }
+  for (D parent = (hole - 1) / 2; hole > top && c(f[parent], v); parent = (hole - 1) / 2) { f[hole] = std::move(f[parent]); hole = parent; }
+  f[hole] = std::move(v);
+}
+}  // namespace __lk
+template <class I, class C> constexpr void push_heap(I f, I l, C c) {
+  auto hole = (l - f) - 1;
+  auto v = std::move(f[hole]);
+  for (auto parent = (hole - 1) / 2; hole > 0 && c(f[parent], v); parent = (hole - 1) / 2) { f[hole] = std::move(f[parent]); hole = parent; }
+  f[hole] = std::move(v);
+}
+template <class I> constexpr void push_heap(I f, I l) { std::push_heap(f, l, less<>()); }
+template <class I, class C> constexpr void pop_heap(I f, I l, C c) {
+  auto len = l - f;
+  if (len < 2) return;
+  --l;
+  auto v = std::move(*l);
+  *l = std::move(*f);
+  __lk::sift_down(f, decltype(len)(0), len - 1, std::move(v), c);
+}
+template <class I> constexpr void pop_heap(I f, I l) { std::pop_heap(f, l, less<>()); }
+template <class I, class C> constexpr void make_heap(I f, I l, C c) {
+  auto len = l - f;
+  if (len < 2) return;
+  for (auto i = (len - 2) / 2;; --i) { __lk::sift_down(f, i, len, std::move(f[i]), c); if (i == 0) break; }
+}
+template <class I> constexpr void make_heap(I f, I l) { std::make_heap(f, l, less<>()); }
+template <class I, class C> constexpr void sort_heap(I f, I l, C c) { for (; l - f > 1; --l) std::pop_heap(f, l, c); }
+template <class I> constexpr void sort_heap(I f, I l) { std::sort_heap(f, l, less<>()); }
+template <class I, class C> constexpr bool is_heap(I f, I l, C c) {
+  auto len = l - f;
+  for (decltype(len) i = 1; i < len; ++i) if (c(f[(i - 1) / 2], f[i])) return false;
+  return true;
+}
+template <class I> constexpr bool is_heap(I f, I l) { return std::is_heap(f, l, less<>()); }
+
+/* ---- sorting ---- */
+template <class I, class C> constexpr I is_sorted_until(I f, I l, C c) {
+  if (f == l) return l;
+  for (I n = f; ++n != l; f = n) if (c(*n, *f)) return n;
+  return l;
+}
+template <class I> constexpr I is_sorted_until(I f, I l) { return std::is_sorted_until(f, l, less<>()); }
+template <class I, class C> constexpr bool is_sorted(I f, I l, C c) { return std::is_sorted_until(f, l, c) == l; }
+template <class I> constexpr bool is_sorted(I f, I l) { return std::is_sorted(f, l, less<>()); }
+
+namespace __lk {
+template <class I, class C> constexpr void insertion_sort(I f, I l, C& c) {
+  if (f == l) return;
+  for (I i = f + 1; i != l; ++i) {
+    auto v = std::move(*i);
+    I j = i;
+    for (; j != f && c(v, *(j - 1)); --j) *j = std::move(*(j - 1));
+    *j = std::move(v);
+  }
+}
+template <class I, class C> constexpr void median3_to_front(I f, I a, I b, I c3, C& c) {
+  if (c(*a, *b)) {
+    if (c(*b, *c3)) std::iter_swap(f, b); else if (c(*a, *c3)) std::iter_swap(f, c3); else std::iter_swap(f, a);
+  } else {
+    if (c(*a, *c3)) std::iter_swap(f, a); else if (c(*b, *c3)) std::iter_swap(f, c3); else std::iter_swap(f, b);
+  }
+}
+/* Hoare partition around *f (the pivot), unguarded: the median-of-3 makes both scans stop. */
+template <class I, class C> constexpr I partition_pivot(I f, I l, C& c) {
+  I lo = f + 1, hi = l;
+  for (;;) {
+    while (lo < hi && c(*lo, *f)) ++lo;
+    --hi;
+    while (lo <= hi && c(*f, *hi)) --hi;
+    if (!(lo < hi)) break;
+    std::iter_swap(lo, hi);
+    ++lo;
+  }
+  std::iter_swap(f, hi);
+  return hi;  // pivot's final place
+}
+template <class I, class C> constexpr void introsort(I f, I l, int depth, C& c) {
+  while (l - f > 16) {
+    if (depth-- == 0) { std::make_heap(f, l, c); std::sort_heap(f, l, c); return; }
+    I m = f + (l - f) / 2;
+    median3_to_front(f, f + 1, m, l - 1, c);
+    I p = partition_pivot(f, l, c);
+    if (p - f < l - p) { introsort(f, p, depth, c); f = p + 1; }  // recurse on the small side
+    else { introsort(p + 1, l, depth, c); l = p; }
+  }
+  insertion_sort(f, l, c);
+}
+}  // namespace __lk
+template <class I, class C> constexpr void sort(I f, I l, C c) {
+  auto n = l - f;
+  if (n < 2) return;
+  int depth = 0;
+  for (auto k = n; k > 1; k >>= 1) depth += 2;
+  __lk::introsort(f, l, depth, c);
+}
+template <class I> constexpr void sort(I f, I l) { std::sort(f, l, less<>()); }
+template <class I, class C> constexpr void partial_sort(I f, I m, I l, C c) {
+  if (f == m) return;
+  std::make_heap(f, m, c);
+  for (I i = m; i != l; ++i)
+    if (c(*i, *f)) {
+      auto v = std::move(*i);
+      *i = std::move(*f);
+      __lk::sift_down(f, decltype(m - f)(0), m - f, std::move(v), c);
+    }
+  std::sort_heap(f, m, c);
+}
+template <class I> constexpr void partial_sort(I f, I m, I l) { std::partial_sort(f, m, l, less<>()); }
+template <class I, class C> constexpr void nth_element(I f, I nth, I l, C c) {
+  if (nth == l) return;
+  int depth = 0;
+  for (auto k = l - f; k > 1; k >>= 1) depth += 2;
+  while (l - f > 16) {
+    if (depth-- == 0) { std::sort(f, l, c); return; }  // bounded worst case
+    I m = f + (l - f) / 2;
+    __lk::median3_to_front(f, f + 1, m, l - 1, c);
+    I p = __lk::partition_pivot(f, l, c);
+    if (p == nth) return;
+    if (nth < p) l = p; else f = p + 1;
+  }
+  __lk::insertion_sort(f, l, c);
+}
+template <class I> constexpr void nth_element(I f, I nth, I l) { std::nth_element(f, nth, l, less<>()); }
+
+namespace __lk {
+/* In-place stable merge of [f,m) and [m,l) by rotations (the no-buffer fallback). */
+template <class I, class C> void merge_inplace(I f, I m, I l, C& c) {
+  if (f == m || m == l) return;
+  if (l - f == 2) { if (c(*m, *f)) std::iter_swap(f, m); return; }
+  I cut1, cut2;
+  if (m - f > l - m) { cut1 = f + (m - f) / 2; cut2 = std::lower_bound(m, l, *cut1, c); }
+  else { cut2 = m + (l - m) / 2; cut1 = std::upper_bound(f, m, *cut2, c); }
+  I nm = std::rotate(cut1, m, cut2);
+  merge_inplace(f, cut1, nm, c);
+  merge_inplace(nm, cut2, l, c);
+}
+template <class I, class T, class C> void merge_sort_buf(I f, I l, T* buf, C& c) {
+  const auto n = l - f;
+  if (n <= 16) { insertion_sort(f, l, c); return; }
+  I m = f + n / 2;
+  merge_sort_buf(f, m, buf, c);
+  merge_sort_buf(m, l, buf, c);
+  if (!c(*m, *(m - 1))) return;  // already in order
+  /* Move the left run into the buffer (constructed there), then merge back. */
+  T* b = buf; T* be = buf;
+  for (I i = f; i != m; ++i, ++be) ::new (static_cast<void*>(be)) T(std::move(*i));
+  I out = f, r = m;
+  while (b != be && r != l) { if (c(*r, *b)) *out++ = std::move(*r++); else *out++ = std::move(*b++); }
+  while (b != be) *out++ = std::move(*b++);
+  for (T* p = buf; p != be; ++p) p->~T();
+}
+template <class I, class C> void merge_sort_inplace(I f, I l, C& c) {
+  if (l - f <= 16) { insertion_sort(f, l, c); return; }
+  I m = f + (l - f) / 2;
+  merge_sort_inplace(f, m, c);
+  merge_sort_inplace(m, l, c);
+  merge_inplace(f, m, l, c);
+}
+}  // namespace __lk
+template <class I, class C> void stable_sort(I f, I l, C c) {
+  using T = typename iterator_traits<I>::value_type;
+  const auto n = l - f;
+  if (n < 2) return;
+  const size_t half = size_t(n - n / 2) + 1;
+  void* raw = (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__) ? ::operator new(half * sizeof(T), align_val_t(alignof(T)), nothrow)
+                                                              : ::operator new(half * sizeof(T), nothrow);
+  if (!raw) { __lk::merge_sort_inplace(f, l, c); return; }
+  struct Free {
+    void* p; size_t bytes;
+    ~Free() {
+      if constexpr (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__) ::operator delete(p, bytes, align_val_t(alignof(T)));
+      else ::operator delete(p, bytes);
+    }
+  } guard{raw, half * sizeof(T)};
+  __lk::merge_sort_buf(f, l, static_cast<T*>(raw), c);
+}
+template <class I> void stable_sort(I f, I l) { std::stable_sort(f, l, less<>()); }
+template <class I, class C> void inplace_merge(I f, I m, I l, C c) { __lk::merge_inplace(f, m, l, c); }
+template <class I> void inplace_merge(I f, I m, I l) { std::inplace_merge(f, m, l, less<>()); }
+
+/* Three-way lexicographic compare for container operator<=> (synthesised from < when needed). */
+namespace __lk {
+template <class T> constexpr auto synth3(const T& a, const T& b) {
+  if constexpr (requires { a <=> b; }) return a <=> b;
+  else return a < b ? weak_ordering::less : b < a ? weak_ordering::greater : weak_ordering::equivalent;
+}
+template <class I, class J> constexpr auto lex3(I f, I l, J f2, J l2) -> decltype(synth3(*f, *f2)) {
+  for (; f != l && f2 != l2; ++f, (void)++f2)
+    if (auto c = synth3(*f, *f2); c != 0) return c;
+  return f != l ? decltype(synth3(*f, *f2))(strong_ordering::greater) : f2 != l2 ? decltype(synth3(*f, *f2))(strong_ordering::less) : decltype(synth3(*f, *f2))(strong_ordering::equal);
+}
+}  // namespace __lk
+
+/* ---- sorted-range set operations and merge ---- */
+template <class I, class J, class O, class C> constexpr O merge(I f, I l, J f2, J l2, O o, C c) {
+  for (; f != l; ++o) {
+    if (f2 == l2) return std::copy(f, l, o);
+    if (c(*f2, *f)) { *o = *f2; ++f2; } else { *o = *f; ++f; }
+  }
+  return std::copy(f2, l2, o);
+}
+template <class I, class J, class O> constexpr O merge(I f, I l, J f2, J l2, O o) { return std::merge(f, l, f2, l2, o, less<>()); }
+template <class I, class J, class O, class C> constexpr O set_union(I f, I l, J f2, J l2, O o, C c) {
+  for (; f != l; ++o) {
+    if (f2 == l2) return std::copy(f, l, o);
+    if (c(*f2, *f)) { *o = *f2; ++f2; }
+    else { *o = *f; if (!c(*f, *f2)) ++f2; ++f; }
+  }
+  return std::copy(f2, l2, o);
+}
+template <class I, class J, class O> constexpr O set_union(I f, I l, J f2, J l2, O o) { return std::set_union(f, l, f2, l2, o, less<>()); }
+template <class I, class J, class O, class C> constexpr O set_intersection(I f, I l, J f2, J l2, O o, C c) {
+  while (f != l && f2 != l2) {
+    if (c(*f, *f2)) ++f;
+    else { if (!c(*f2, *f)) { *o = *f; ++o; ++f; } ++f2; }
+  }
+  return o;
+}
+template <class I, class J, class O> constexpr O set_intersection(I f, I l, J f2, J l2, O o) { return std::set_intersection(f, l, f2, l2, o, less<>()); }
+template <class I, class J, class O, class C> constexpr O set_difference(I f, I l, J f2, J l2, O o, C c) {
+  while (f != l) {
+    if (f2 == l2) return std::copy(f, l, o);
+    if (c(*f, *f2)) { *o = *f; ++o; ++f; }
+    else { if (!c(*f2, *f)) ++f; ++f2; }
+  }
+  return o;
+}
+template <class I, class J, class O> constexpr O set_difference(I f, I l, J f2, J l2, O o) { return std::set_difference(f, l, f2, l2, o, less<>()); }
+template <class I, class J, class C> constexpr bool includes(I f, I l, J f2, J l2, C c) {
+  for (; f2 != l2; ++f) {
+    if (f == l || c(*f2, *f)) return false;
+    if (!c(*f, *f2)) ++f2;
+  }
+  return true;
+}
+template <class I, class J> constexpr bool includes(I f, I l, J f2, J l2) { return std::includes(f, l, f2, l2, less<>()); }
+
+}  // namespace std
+#endif

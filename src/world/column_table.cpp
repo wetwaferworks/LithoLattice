@@ -13,6 +13,7 @@ namespace litholattice {
 namespace {
 std::atomic<int> g_cow{-1};
 std::atomic<uint64_t> g_lfForeign{0};  // 2026-11-01 LL_LF_COWTABLE
+std::atomic<uint64_t> g_lfHandovers{0};  // JD 2026-11-17: explicit owner handovers (sim start / stop)
 std::atomic<uint64_t> g_staleNoted{0}, g_staleFlushed{0}, g_stalePinned{0}, g_maxProbe{0};
 std::atomic<uint64_t> g_pins{0}, g_subs{0}, g_full{0}, g_evict{0}, g_vChecked{0}, g_vMismatch{0}, g_bytes{0}, g_gathers{0};
 size_t budgetBytes() {
@@ -51,7 +52,7 @@ CowStats cowStats() {
   s.pins = g_pins.load(); s.subsPublished = g_subs.load(); s.columnsFullPublished = g_full.load();
   s.evictedColumns = g_evict.load(); s.verifyChecked = g_vChecked.load(); s.verifyMismatches = g_vMismatch.load();
   s.retainedBytes = g_bytes.load(); s.gathers = g_gathers.load();
-  s.lfForeignOwner = g_lfForeign.load(); s.staleNoted = g_staleNoted.load(); s.staleFlushed = g_staleFlushed.load(); s.stalePinned = g_stalePinned.load(); s.maxProbe = g_maxProbe.load();
+  s.lfForeignOwner = g_lfForeign.load(); s.lfHandovers = g_lfHandovers.load(); s.staleNoted = g_staleNoted.load(); s.staleFlushed = g_staleFlushed.load(); s.stalePinned = g_stalePinned.load(); s.maxProbe = g_maxProbe.load();
   return s;
 }
 void noteCowVerify(bool match) {
@@ -138,18 +139,48 @@ void ColumnTable::enforceBudgetLocked() {
   g_bytes.store(bytes_, std::memory_order_relaxed);
 }
 
-void ColumnTable::lfEnter() {
+void ColumnTable::handOver() {
+  // JD 2026-11-17: the old owner lets go. Release pairs with the acquire in lfEnter, so the
+  // next owner sees everything this one wrote to entries_ / stale_ / the counters.
+  lfDepth_ = 0;
+  lfOwner_.store(std::thread::id(), std::memory_order_release);
+  g_lfHandovers.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool ColumnTable::lfEnter() {
   const std::thread::id me = std::this_thread::get_id();
-  std::thread::id o = lfOwner_.load(std::memory_order_relaxed);
-  if (o != me) {
-    if (o != std::thread::id() && g_lfForeign.fetch_add(1, std::memory_order_relaxed) == 0)
-      std::fprintf(stderr, "column table (LL_LF_COWTABLE): owner-only call from a second thread (owner handed over?)\n");
-    lfOwner_.store(me, std::memory_order_relaxed);
+  // lfDepth_ is owner-thread only. A foreign thread must not use it as a nest
+  // shortcut — that would walk into entries_/stale_ while the owner is still in
+  // the section (the overlap the tests hold with testEnterOwner).
+  const std::thread::id o = lfOwner_.load(std::memory_order_acquire);
+  if (o == me) {
+    ++lfDepth_;
+    if (lfDepth_ < 1) lfDepth_ = 1;
+  } else if (o != std::thread::id()) {
+      // Another thread is in an owner-only section. Do not steal (that was the race).
+      // The LL_LF_COWTABLE stderr line is gone: a leftover owner after a legal hold
+      // visit is fixed by lfLeave/handOver, and PlayJ's unlocked flush no longer overlaps.
+      g_lfForeign.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    } else {
+      std::thread::id expected{};
+      if (!lfOwner_.compare_exchange_strong(expected, me, std::memory_order_acquire,
+                                            std::memory_order_acquire)) {
+        g_lfForeign.fetch_add(1, std::memory_order_relaxed);
+        return false;
+      }
+      lfDepth_ = 1;
   }
   lfStale_.takeAll([&](uint64_t k, uint64_t m) { stale_[k] |= m; });
   std::vector<std::pair<uint64_t, uint64_t>> sp;
   lfSpill_.drainInto(sp);
   for (const auto& [k, m] : sp) stale_[k] |= m;
+  return true;
+}
+
+void ColumnTable::lfLeave() {
+  if (lfDepth_ <= 0) return;
+  if (--lfDepth_ == 0) handOver();
 }
 
 void ColumnTable::noteStale(int cx, int sy, int cz) {
@@ -161,27 +192,29 @@ void ColumnTable::noteStale(int cx, int sy, int cz) {
 }
 
 std::vector<std::pair<uint64_t, uint64_t>> ColumnTable::takeStale() {
-  lfEnter();  // PlayI LF-only
+  if (!lfEnter()) return {};
   std::vector<std::pair<uint64_t, uint64_t>> out;
   out.reserve(stale_.size());
   stale_.forEach([&](uint64_t k, uint64_t m) { if (m) out.emplace_back(k, m); });
   stale_.clear();
   std::sort(out.begin(), out.end());
+  lfLeave();
   return out;
 }
 
 void ColumnTable::publish(const ChunkMap& w, const cBlockReg& reg, int cx, int cz, uint64_t mask) {
-  lfEnter();  // PlayI LF-only
+  if (!lfEnter()) return;
   publishLocked(w, reg, cx, cz, mask);
   enforceBudgetLocked();
   lfCount_.store(entries_.size(), std::memory_order_relaxed);
+  lfLeave();
 }
 
 std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockReg& reg, int cx, int sy, int cz,
                                                 BlockId belowWorld, MeshEdge edge) {
   auto p = std::make_shared<MeshPin>();
   p->cx = cx; p->sy = sy; p->cz = cz; p->belowWorld = belowWorld; p->edge = edge;
-  lfEnter();  // PlayI LF-only
+  if (!lfEnter()) return p;
   for (int dz = -1; dz <= 1; ++dz)
     for (int dx = -1; dx <= 1; ++dx) {
       const size_t i = size_t((dz + 1) * 3 + (dx + 1));
@@ -206,11 +239,12 @@ std::shared_ptr<const MeshPin> ColumnTable::pin(const ChunkMap& w, const cBlockR
   enforceBudgetLocked();
   lfCount_.store(entries_.size(), std::memory_order_relaxed);
   g_pins.fetch_add(1, std::memory_order_relaxed);
+  lfLeave();
   return p;
 }
 
 void ColumnTable::drop(int cx, int cz) {
-  lfEnter();  // PlayI LF-only
+  if (!lfEnter()) return;
   const uint64_t key = ChunkKey::make(cx, cz);
   if (Entry* it = entries_.find(key)) {
     bytes_ -= it->bytes;
@@ -218,10 +252,19 @@ void ColumnTable::drop(int cx, int cz) {
   }
   stale_.erase(key);
   lfCount_.store(entries_.size(), std::memory_order_relaxed);
+  lfLeave();
 }
 
 size_t ColumnTable::columns() const {
   return lfCount_.load(std::memory_order_relaxed);  // PlayI LF-only
+}
+
+void ColumnTable::exportSnaps(std::vector<std::pair<uint64_t, std::shared_ptr<const ColumnSnap>>>& out) {
+  out.clear();
+  if (!lfEnter()) return;
+  out.reserve(entries_.size());
+  entries_.forEach([&](uint64_t k, const Entry& e) { if (e.snap) out.emplace_back(k, e.snap); });
+  lfLeave();
 }
 
 // ---- worker side ----

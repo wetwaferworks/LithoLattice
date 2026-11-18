@@ -89,6 +89,10 @@ double round(double x);
 float roundf(float x);
 long lround(double x);
 long lroundf(float x);
+/* 2026-11-16 (S5): llround/llroundf over round (halfway cases away from zero, as C requires;
+ * out-of-range results are unspecified, as in C). */
+static inline long long llround(double x) { return (long long)round(x); }
+static inline long long llroundf(float x) { return (long long)round((double)x); }
 double fmod(double x, double y);
 float fmodf(float x, float y);
 double remainder(double x, double y);
@@ -116,6 +120,11 @@ double log10(double x);
 float log10f(float x);
 double pow(double x, double y);
 float powf(float x, float y);
+/* exp2 / exp2f: clang rewrites pow(2.0, x) into exp2(x) (and powf(2.0f, x) into exp2f), so
+ * these exist for that lowering as much as for direct callers. Defined as pow(2, x) / powf(2, x)
+ * exactly, so the rewrite never changes a result. */
+double exp2(double x);
+float exp2f(float x);
 double sin(double x);
 float sinf(float x);
 double cos(double x);

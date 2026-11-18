@@ -48,6 +48,12 @@ class cEntityMgr {
 
   /// Spawn an entity; returns its id.
   uint64_t spawn(uint32_t type, double x, double y, double z);
+  /// Re-create a saved entity under its saved id (2026-11-17, dropped items saved as entities), so
+  /// id-derived state (draw phase, merge order) is the same after a reload. Returns the id used:
+  /// the saved one, or a fresh one when it is 0 or already taken. Later spawns never reuse it.
+  uint64_t restore(const Entity& saved);
+  /// Remove every entity of `type` now (dimension switch). Returns how many went.
+  size_t eraseType(uint32_t type);
   /// Mark an entity dead (culled at the end of the tick).
   void despawn(uint64_t id);
   /// Mutable access, or nullptr.

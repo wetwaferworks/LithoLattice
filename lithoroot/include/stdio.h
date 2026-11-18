@@ -77,6 +77,15 @@ int puts(const char* s);
 /* ---- positioning --------------------------------------------------- */
 int fseek(FILE* f, long offset, int whence);
 long ftell(FILE* f);
+/* 2026-11-16 (S5): fseeko/ftello over fseek/ftell (long is 32 bits on wasm32, so offsets
+ * past 2 GiB fail with EOVERFLOW-style -1 rather than wrapping); fileno is declared for the
+ * LithoVFS fd layer (S7) and not defined yet. */
+int fileno(FILE* f);
+static inline int fseeko(FILE* f, long long off, int whence) {
+  if (off > 0x7fffffffLL || off < -0x7fffffffLL - 1) return -1;
+  return fseek(f, (long)off, whence);
+}
+static inline long long ftello(FILE* f) { return ftell(f); }
 void rewind(FILE* f);
 int fgetpos(FILE* f, fpos_t* pos);
 int fsetpos(FILE* f, const fpos_t* pos);

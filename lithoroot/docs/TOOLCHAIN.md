@@ -513,3 +513,28 @@ the pre-existing finding below, proven by control run).
   opposed to the probe's) is untested: symbol export lists,
   entry/ctor arrangements, and the .data delivery are relink
   decisions this piece deliberately did not make.
+
+## Link wiring (2026-11-16)
+
+The LK_WEB build links LithoRoot as its whole runtime. `engine/lithoroot/CMakeLists.txt` builds
+`lithoroot_crt1`, `lithoroot_c` (LithoLibC, WaferHeap, LithoWeave, LithoThread, the in-house
+compiler-builtin subset in `src/rt/`) and `lithoroot_cxx` (LithoAbi plus the weak, replaceable
+operator new/delete), and `engine/CMakeLists.txt` links them into every web target. The toolchain
+passes `-nostdlib`, so clang adds no crt1.o, no -lc/-lc++ and no compiler-rt.
+
+- **Compiler builtins:** in-house (`src/rt/int128.c`), only what the link asks for: `__multi3`
+  today (exp2/exp2f live in LithoLibC math as pow(2, x), for clang's pow(2, x) rewrite). No compiler-rt subset exists in the tree, so none is used. Check: `tests/rt_int128_check.c`.
+- **crt1:** `src/crt/crt1.c` runs as the first constructor inside `__wasm_call_ctors`: default
+  heap over `__heap_base`..end of memory (growth through `lithosys_memory_grow`, 16 MiB minimum
+  step), main thread attach, errno arming. Status word `__lithoroot_crt_status` is exported
+  (0 = ready); the export also keeps crt1 live, because wasm-ld drops constructors of an object
+  with no live symbol. The heap has NO lock hooks (JD: no locks of any kind), so it keeps
+  WaferHeap's single-threaded contract until a lock-free shared heap lands.
+- **Entry:** `--no-entry`; exports `__wasm_call_ctors`, `__wasm_init_tls`, `__main_argc_argv`,
+  `malloc`, `lithosys_thread_start`, `__lithoroot_crt_status`.
+- **Undefined symbols:** the link allows only the 14 frozen lithosys calls
+  (`toolchain/lithosys-allowed.txt`) and the named pending stages (`toolchain/web-link-pending.txt`,
+  the S7 file layer); lk_* imports are annotated. Anything else fails the link.
+- **new/delete:** the twenty replaceable forms are weak and forward to the base forms as the
+  standard's default definitions do; `std::set_new_handler`/`get_new_handler` live in LithoAbi
+  (`std_exceptions.cc`), lock-free. Check: `tests/new_handler_check.cpp`.

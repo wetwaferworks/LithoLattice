@@ -108,28 +108,57 @@ struct CowColumn {
 
 /// Lock-free column table (Archie sketch: ColumnTable). Readers pin a column version
 /// with an acquire load; GEN versions publish at once (release), sim edits are staged
-/// and published together at commitEpoch() (the sim-tick barrier, Archie Q2).
+/// and published together at commitEpoch() (the sim-tick barrier, Archie Q2); staging is a
+/// lock-free push list (no gate).
 /// Deviation: lookupPinned checks the coords (a hash collision returns null instead of
 /// the wrong column); a colliding publish overwrites the slot (16384 slots ~ radius 63).
+/// 2026-11-16 (JD: no locks of any kind): slots hold raw Holder pointers, not
+/// std::atomic<shared_ptr> (every mainstream library hides a lock in it). A reader bumps its
+/// pin stripe, loads the holder and copies the shared_ptr out (refcount only), then unpins.
+/// A publish exchanges the holder and retires the old one; retired holders are freed when a
+/// pass (take the stack, then read the pins) sees every stripe at zero, else they wait for
+/// the next publish (same rule as game/cow_publish.h CowPublished).
 class cColumnTable {
  public:
   using Ptr = std::shared_ptr<const CowColumn>;
+  cColumnTable() = default;
+  cColumnTable(const cColumnTable&) = delete;
+  cColumnTable& operator=(const cColumnTable&) = delete;
+  ~cColumnTable() {
+    for (size_t i = 0; i < kTableSlots; ++i) delete slots_[i].load(std::memory_order_relaxed);
+    freeChain(retired_.exchange(nullptr, std::memory_order_relaxed));
+    for (Staged* n = staged_.exchange(nullptr, std::memory_order_relaxed); n;) { Staged* nx = n->next; delete n; n = nx; }
+  }
   Ptr lookupPinned(int32_t cx, int32_t cz) const noexcept {
-    Ptr p = slots_[slotOf(cx, cz)].load(std::memory_order_acquire);
-    return p && p->cx == cx && p->cz == cz ? p : nullptr;
+    std::atomic<size_t>& pin = pins_[pinStripe()].n;
+    pin.fetch_add(1, std::memory_order_seq_cst);
+    const Holder* h = slots_[slotOf(cx, cz)].load(std::memory_order_seq_cst);
+    Ptr p = h && h->col->cx == cx && h->col->cz == cz ? h->col : nullptr;
+    pin.fetch_sub(1, std::memory_order_release);
+    return p;
   }
   void publishGen(Ptr col) noexcept {
     const size_t s = slotOf(col->cx, col->cz);
-    slots_[s].store(std::move(col), std::memory_order_release);
+    Holder* old = slots_[s].exchange(new Holder{std::move(col), nullptr}, std::memory_order_seq_cst);
+    if (old) {
+      Holder* head = retired_.load(std::memory_order_relaxed);
+      do old->next = head;
+      while (!retired_.compare_exchange_weak(head, old, std::memory_order_release, std::memory_order_relaxed));
+    }
+    reclaim();
   }
+  /// 2026-11-16 (JD: no spin gates): staging is a lock-free MPSC list (postToTick style). Any
+  /// thread pushes; commitEpoch takes the whole list with one exchange at the boundary and
+  /// publishes it oldest first, so the last edit staged for a column wins, as before.
   void stageEdit(Ptr col) {
-    litholattice::cGateGuard l(stageMu_);
-    staged_.push_back(std::move(col));
+    Staged* n = new Staged{std::move(col), staged_.load(std::memory_order_relaxed)};
+    while (!staged_.compare_exchange_weak(n->next, n, std::memory_order_release, std::memory_order_relaxed)) {}
   }
   uint64_t commitEpoch() {
-    std::vector<Ptr> batch;
-    { litholattice::cGateGuard l(stageMu_); batch.swap(staged_); }
-    for (auto& c : batch) publishGen(std::move(c));
+    Staged* lifo = staged_.exchange(nullptr, std::memory_order_acquire);
+    Staged* fifo = nullptr;
+    while (lifo) { Staged* nx = lifo->next; lifo->next = fifo; fifo = lifo; lifo = nx; }
+    while (fifo) { Staged* nx = fifo->next; publishGen(std::move(fifo->col)); delete fifo; fifo = nx; }
     return epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
   }
   uint64_t epoch() const { return epoch_.load(std::memory_order_acquire); }
@@ -141,9 +170,34 @@ class cColumnTable {
     return size_t((uint64_t(uint32_t(x)) * 0x9E3779B97F4A7C15ULL) ^ (uint64_t(uint32_t(z)) * 0xBF58476D1CE4E5B9ULL)) &
            (kTableSlots - 1);
   }
-  std::unique_ptr<std::atomic<Ptr>[]> slots_ = std::make_unique<std::atomic<Ptr>[]>(kTableSlots);
-  litholattice::cAtomicGate stageMu_;
-  std::vector<Ptr> staged_;
+  struct Holder { Ptr col; Holder* next; };
+  struct alignas(64) PinStripe { std::atomic<size_t> n{0}; };
+  static constexpr size_t kPinStripes = 8;
+  static size_t pinStripe() noexcept {  // per thread, round robin: readers on different lines
+    static std::atomic<size_t> next{0};
+    thread_local const size_t mine = next.fetch_add(1, std::memory_order_relaxed) % kPinStripes;
+    return mine;
+  }
+  static void freeChain(Holder* h) noexcept { while (h) { Holder* n = h->next; delete h; h = n; } }
+  void reclaim() noexcept {
+    Holder* take = retired_.exchange(nullptr, std::memory_order_acquire);
+    if (!take) return;
+    for (const PinStripe& p : pins_)
+      if (p.n.load(std::memory_order_seq_cst) != 0) {  // a reader may hold one: put the chain back
+        Holder* tail = take;
+        while (tail->next) tail = tail->next;
+        Holder* head = retired_.load(std::memory_order_relaxed);
+        do tail->next = head;
+        while (!retired_.compare_exchange_weak(head, take, std::memory_order_release, std::memory_order_relaxed));
+        return;
+      }
+    freeChain(take);
+  }
+  std::unique_ptr<std::atomic<Holder*>[]> slots_ = std::make_unique<std::atomic<Holder*>[]>(kTableSlots);
+  std::atomic<Holder*> retired_{nullptr};
+  mutable PinStripe pins_[kPinStripes];
+  struct Staged { Ptr col; Staged* next; };
+  std::atomic<Staged*> staged_{nullptr};  ///< MPSC push list (newest first), drained by commitEpoch
   std::atomic<uint64_t> epoch_{0};
 };
 /// FNV-1a 64 over raw bytes (render-only MeshHash input).

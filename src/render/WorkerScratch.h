@@ -26,20 +26,6 @@ class cWorkerScratch {
   uint8_t opaque[kMeshPadVolume];
   std::unique_ptr<GreedyGrid> greedyGrid;
   std::vector<uint32_t> qSlot, fSlot;  // M11: wide palette slots (split input)
-
-  // M6 LOD tables: allocated the first time the LOD path runs on this thread (as before).
-  struct Lod {
-    std::vector<uint32_t> keyGen = std::vector<uint32_t>(size_t(1) << 19, 0u);
-    std::vector<uint16_t> keyLocal = std::vector<uint16_t>(size_t(1) << 19, uint16_t(0));
-    std::vector<UnifiedMaterial> umats;
-    uint16_t umId[kMeshPadVolume];
-    std::unique_ptr<UnifiedMesher> um;
-    CanonicalMesh lodMesh;
-  };
-  Lod& lod() { if (!lod_) lod_ = std::make_unique<Lod>(); return *lod_; }
-
- private:
-  std::unique_ptr<Lod> lod_;
 };
 
 }  // namespace litholattice

@@ -1,12 +1,12 @@
 #pragma once
 // Refactor step 6 (Direction JD, design Archie, implementation Cortana): cVkCanonUploader builds the Vulkan
-// pulled layout (PulledMesh, packed_quad64.h) straight from a mesh's CanonicalMesh L0 instead of re-encoding
+// pulled layout (PulledMesh, packed_quad64.h) straight from a mesh's CanonicalMesh instead of re-encoding
 // every decoded vertex with buildPulled. LL_VK_CANON=1 opts in (needs LL_VK_PULL=1); default off.
 //  - Fallback quads (the per-cell prefix of ChunkMesh::verts) go through encodePulled exactly as buildPulled.
 //  - Canonical quads use a per-thread template cache keyed by the quad's non-position bits and its palette
 //    entry. A miss decodes one quad (decodeCanonicalMesh) and runs encodePulled once; hits only add origin.
 //  - Same first-seen palette order, face buckets, blend split and 15-bit distance rule as buildPulled. Any
-//    case it does not cover (no canonical, split mesh, skirts, size mismatch, maxQuads, distance) declines
+//    case it does not cover (no canonical, split mesh, size mismatch, maxQuads, distance) declines
 //    and the caller uses buildPulled.
 //  - Frame check: with mesh verify on (DebugOpt, or LL_CANON_VERIFY=1) the renderer also runs buildPulled
 //    and compares the two layouts byte for byte (fallback as Packed12, palette, quads, quadMat, buckets).

@@ -1,0 +1,324 @@
+/* vector ... LithoRoot std L6 (S4, 2026-11-16): vector<T, A> with the strong
+ * exception guarantee on growth (moves only if the move cannot throw, as the
+ * standard requires), erase/erase_if. Growth doubles. vector<bool> is not
+ * provided: the census finds no use, so it is declared deleted (plan L6). */
+#ifndef LITHOROOT_VECTOR
+#define LITHOROOT_VECTOR
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <algorithm>
+#include <compare>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template <class T, class A = allocator<T>>
+class vector {
+  using AT = allocator_traits<A>;
+ public:
+  using value_type = T;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = T&;
+  using const_reference = const T&;
+  using pointer = T*;
+  using const_pointer = const T*;
+  using iterator = T*;
+  using const_iterator = const T*;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+  vector() noexcept(noexcept(A())) = default;
+  explicit vector(const A& a) noexcept : a_(a) {}
+  explicit vector(size_type n, const A& a = A()) : a_(a) { reserve(n); uninitialized_value_construct_n(b_, n); e_ = b_ + n; }
+  vector(size_type n, const T& v, const A& a = A()) : a_(a) { reserve(n); uninitialized_fill_n(b_, n, v); e_ = b_ + n; }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  vector(It f, It l, const A& a = A()) : a_(a) { assign(f, l); }
+  vector(initializer_list<T> il, const A& a = A()) : a_(a) { assign(il.begin(), il.end()); }
+  vector(const vector& o) : a_(AT::select_on_container_copy_construction(o.a_)) { reserve(o.size()); e_ = uninitialized_copy(o.b_, o.e_, b_); }
+  vector(const vector& o, const A& a) : a_(a) { reserve(o.size()); e_ = uninitialized_copy(o.b_, o.e_, b_); }
+  vector(vector&& o) noexcept : b_(o.b_), e_(o.e_), c_(o.c_), a_(std::move(o.a_)) { o.b_ = o.e_ = o.c_ = nullptr; }
+  ~vector() { free_all(); }
+
+  vector& operator=(const vector& o) { if (this != &o) assign(o.b_, o.e_); return *this; }
+  vector& operator=(vector&& o) noexcept {
+    if (this != &o) { free_all(); b_ = o.b_; e_ = o.e_; c_ = o.c_; o.b_ = o.e_ = o.c_ = nullptr; }
+    return *this;
+  }
+  vector& operator=(initializer_list<T> il) { assign(il.begin(), il.end()); return *this; }
+
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  void assign(It f, It l) {
+    if constexpr (is_base_of_v<forward_iterator_tag, typename iterator_traits<It>::iterator_category>) {
+      const size_type n = size_type(std::distance(f, l));
+      if (n > capacity()) {
+        vector t; t.reserve(n); t.e_ = uninitialized_copy(f, l, t.b_);
+        swap(t);
+        return;
+      }
+      if (n <= size()) { iterator ne = std::copy(f, l, b_); destroy(ne, e_); e_ = ne; }
+      else { It m = std::next(f, difference_type(size())); std::copy(f, m, b_); e_ = uninitialized_copy(m, l, e_); }
+    } else {
+      clear();
+      for (; f != l; ++f) emplace_back(*f);
+    }
+  }
+  void assign(size_type n, const T& v) { vector t(n, v); swap(t); }
+  void assign(initializer_list<T> il) { assign(il.begin(), il.end()); }
+  allocator_type get_allocator() const noexcept { return a_; }
+
+  /* access */
+  reference at(size_type i) { if (i >= size()) __lk::throw_out_of_range("vector::at"); return b_[i]; }
+  const_reference at(size_type i) const { if (i >= size()) __lk::throw_out_of_range("vector::at"); return b_[i]; }
+  reference operator[](size_type i) noexcept { return b_[i]; }
+  const_reference operator[](size_type i) const noexcept { return b_[i]; }
+  reference front() noexcept { return *b_; }
+  const_reference front() const noexcept { return *b_; }
+  reference back() noexcept { return e_[-1]; }
+  const_reference back() const noexcept { return e_[-1]; }
+  T* data() noexcept { return b_; }
+  const T* data() const noexcept { return b_; }
+  iterator begin() noexcept { return b_; }
+  const_iterator begin() const noexcept { return b_; }
+  iterator end() noexcept { return e_; }
+  const_iterator end() const noexcept { return e_; }
+  const_iterator cbegin() const noexcept { return b_; }
+  const_iterator cend() const noexcept { return e_; }
+  reverse_iterator rbegin() noexcept { return reverse_iterator(e_); }
+  const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(e_); }
+  reverse_iterator rend() noexcept { return reverse_iterator(b_); }
+  const_reverse_iterator rend() const noexcept { return const_reverse_iterator(b_); }
+  const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+  const_reverse_iterator crend() const noexcept { return rend(); }
+
+  /* capacity */
+  [[nodiscard]] bool empty() const noexcept { return b_ == e_; }
+  size_type size() const noexcept { return size_type(e_ - b_); }
+  size_type max_size() const noexcept { return AT::max_size(a_); }
+  size_type capacity() const noexcept { return size_type(c_ - b_); }
+  void reserve(size_type n) { if (n > capacity()) relocate(n); }
+  void shrink_to_fit() { if (capacity() > size()) { if (empty()) { free_all(); b_ = e_ = c_ = nullptr; } else relocate(size()); } }
+
+  /* modifiers */
+  void clear() noexcept { destroy(b_, e_); e_ = b_; }
+  template <class... Args> reference emplace_back(Args&&... args) {
+    if (e_ == c_) {
+      /* Construct the new element first in the new block, so args may alias our elements. */
+      const size_type n = size(), cap = grow_to(n + 1);
+      T* nb = AT::allocate(a_, cap);
+      try { std::construct_at(nb + n, std::forward<Args>(args)...); } catch (...) { AT::deallocate(a_, nb, cap); throw; }
+      try { move_into(nb); } catch (...) { std::destroy_at(nb + n); AT::deallocate(a_, nb, cap); throw; }
+      free_all();
+      b_ = nb; e_ = nb + n + 1; c_ = nb + cap;
+      return e_[-1];
+    }
+    std::construct_at(e_, std::forward<Args>(args)...);
+    return *e_++;
+  }
+  void push_back(const T& v) { emplace_back(v); }
+  void push_back(T&& v) { emplace_back(std::move(v)); }
+  void pop_back() noexcept { std::destroy_at(--e_); }
+  template <class... Args> iterator emplace(const_iterator pos, Args&&... args) {
+    const size_type i = size_type(pos - b_);
+    if (i == size()) { emplace_back(std::forward<Args>(args)...); return b_ + i; }
+    T tmp(std::forward<Args>(args)...);  // args may alias an element that shifts below
+    emplace_back(std::move(back()));
+    std::move_backward(b_ + i, e_ - 2, e_ - 1);
+    b_[i] = std::move(tmp);
+    return b_ + i;
+  }
+  iterator insert(const_iterator pos, const T& v) { return emplace(pos, v); }
+  iterator insert(const_iterator pos, T&& v) { return emplace(pos, std::move(v)); }
+  iterator insert(const_iterator pos, size_type n, const T& v) { vector t(n, v); return insert(pos, make_move_iterator(t.begin()), make_move_iterator(t.end())); }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  iterator insert(const_iterator pos, It f, It l) {
+    const size_type i = size_type(pos - b_), old = size();
+    vector t(f, l);  // copy first: [f, l) may point into *this
+    reserve(old + t.size() > capacity() ? grow_to(old + t.size()) : 0);
+    e_ = uninitialized_move(t.b_, t.e_, e_);  // append, then rotate into place
+    std::rotate(b_ + i, b_ + old, e_);
+    return b_ + i;
+  }
+  iterator insert(const_iterator pos, initializer_list<T> il) { return insert(pos, il.begin(), il.end()); }
+  iterator erase(const_iterator pos) { iterator p = b_ + (pos - b_); std::move(p + 1, e_, p); pop_back(); return p; }
+  iterator erase(const_iterator f, const_iterator l) {
+    iterator p = b_ + (f - b_);
+    if (f != l) { iterator ne = std::move(b_ + (l - b_), e_, p); destroy(ne, e_); e_ = ne; }
+    return p;
+  }
+  void resize(size_type n) {
+    if (n < size()) { destroy(b_ + n, e_); e_ = b_ + n; return; }
+    reserve(n > capacity() ? grow_to(n) : n);
+    uninitialized_value_construct(e_, b_ + n);
+    e_ = b_ + n;
+  }
+  void resize(size_type n, const T& v) {
+    if (n < size()) { destroy(b_ + n, e_); e_ = b_ + n; return; }
+    if (n > capacity()) { T copy(v); reserve(grow_to(n)); uninitialized_fill(e_, b_ + n, copy); }
+    else uninitialized_fill(e_, b_ + n, v);
+    e_ = b_ + n;
+  }
+  void swap(vector& o) noexcept { std::swap(b_, o.b_); std::swap(e_, o.e_); std::swap(c_, o.c_); }
+
+ private:
+  T* b_ = nullptr;
+  T* e_ = nullptr;
+  T* c_ = nullptr;
+  [[no_unique_address]] A a_;
+
+  size_type grow_to(size_type need) const {
+    if (need > max_size()) __lk::throw_length_error("vector: too long");
+    const size_type cap = capacity();
+    if (cap >= max_size() / 2) return max_size();
+    return std::max(need, cap * 2);
+  }
+  void move_into(T* nb) {
+    if constexpr (is_nothrow_move_constructible_v<T> || !is_copy_constructible_v<T>) uninitialized_move(b_, e_, nb);
+    else uninitialized_copy(b_, e_, nb);
+  }
+  void relocate(size_type cap) {
+    if (cap > max_size()) __lk::throw_length_error("vector: too long");
+    T* nb = AT::allocate(a_, cap);
+    const size_type n = size();
+    try { move_into(nb); } catch (...) { AT::deallocate(a_, nb, cap); throw; }
+    free_all();
+    b_ = nb; e_ = nb + n; c_ = nb + cap;
+  }
+  void free_all() noexcept {
+    if (b_) { destroy(b_, e_); AT::deallocate(a_, b_, capacity()); }
+  }
+};
+
+// 2026-11-16 (S5): packed vector<bool> (32-bit words), with the standard proxy reference.
+// Four uses in the tree (sim_thread.h domainInitial_ and three selftests): index, push_back, ==.
+template <class A>
+class vector<bool, A> {
+  using W = unsigned int;
+  static constexpr size_t kB = 32;
+public:
+  using value_type = bool;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using allocator_type = A;
+  class reference {
+    friend class vector;
+    W* w_; W m_;
+    reference(W* w, W m) noexcept : w_(w), m_(m) {}
+  public:
+    reference(const reference&) = default;
+    operator bool() const noexcept { return (*w_ & m_) != 0; }
+    reference& operator=(bool x) noexcept { if (x) *w_ |= m_; else *w_ &= ~m_; return *this; }
+    reference& operator=(const reference& o) noexcept { return *this = bool(o); }
+    bool operator~() const noexcept { return !bool(*this); }
+    void flip() noexcept { *w_ ^= m_; }
+  };
+  using const_reference = bool;
+  template <bool C>
+  class iter {
+    friend class vector;
+    using WP = conditional_t<C, const W*, W*>;
+    WP w_ = nullptr; size_t i_ = 0;
+    iter(WP w, size_t i) noexcept : w_(w), i_(i) {}
+  public:
+    using iterator_category = random_access_iterator_tag;
+    using value_type = bool;
+    using difference_type = ptrdiff_t;
+    using pointer = void;
+    using reference = conditional_t<C, bool, typename vector::reference>;
+    iter() = default;
+    template <bool D> requires (C && !D) iter(const iter<D>& o) noexcept : w_(o.w_), i_(o.i_) {}
+    reference operator*() const noexcept {
+      if constexpr (C) return (w_[i_ / kB] >> (i_ % kB)) & 1u;
+      else return typename vector::reference(w_ + i_ / kB, W(1) << (i_ % kB));
+    }
+    reference operator[](difference_type n) const noexcept { return *(*this + n); }
+    iter& operator++() noexcept { ++i_; return *this; }
+    iter operator++(int) noexcept { iter t = *this; ++i_; return t; }
+    iter& operator--() noexcept { --i_; return *this; }
+    iter operator--(int) noexcept { iter t = *this; --i_; return t; }
+    iter& operator+=(difference_type n) noexcept { i_ += size_t(n); return *this; }
+    iter& operator-=(difference_type n) noexcept { i_ -= size_t(n); return *this; }
+    friend iter operator+(iter a, difference_type n) noexcept { return a += n; }
+    friend iter operator+(difference_type n, iter a) noexcept { return a += n; }
+    friend iter operator-(iter a, difference_type n) noexcept { return a -= n; }
+    friend difference_type operator-(const iter& a, const iter& b) noexcept { return difference_type(a.i_) - difference_type(b.i_); }
+    friend bool operator==(const iter& a, const iter& b) noexcept { return a.i_ == b.i_; }
+    friend auto operator<=>(const iter& a, const iter& b) noexcept { return a.i_ <=> b.i_; }
+  };
+  using iterator = iter<false>;
+  using const_iterator = iter<true>;
+
+  vector() = default;
+  explicit vector(size_type n, bool v = false) { assign(n, v); }
+  vector(initializer_list<bool> il) { reserve(il.size()); for (bool b : il) push_back(b); }
+  vector(const vector&) = default;
+  vector(vector&& o) noexcept : w_(static_cast<vector<W>&&>(o.w_)), n_(o.n_) { o.n_ = 0; }
+  vector& operator=(const vector&) = default;
+  vector& operator=(vector&& o) noexcept { w_ = static_cast<vector<W>&&>(o.w_); n_ = o.n_; o.n_ = 0; return *this; }
+
+  [[nodiscard]] bool empty() const noexcept { return n_ == 0; }
+  size_type size() const noexcept { return n_; }
+  size_type capacity() const noexcept { return w_.capacity() * kB; }
+  void reserve(size_type n) { w_.reserve((n + kB - 1) / kB); }
+  void clear() noexcept { w_.clear(); n_ = 0; }
+  void assign(size_type n, bool v) { w_.assign((n + kB - 1) / kB, v ? ~W(0) : W(0)); n_ = n; trim(); }
+  void resize(size_type n, bool v = false) {
+    if (n <= n_) { n_ = n; w_.resize((n + kB - 1) / kB); trim(); return; }
+    const size_type old = n_;
+    w_.resize((n + kB - 1) / kB, v ? ~W(0) : W(0));
+    n_ = n;
+    for (size_type i = old; i < n && i % kB; ++i) (*this)[i] = v;  // the partly used old word
+    trim();
+  }
+  void push_back(bool v) { if (n_ % kB == 0) w_.push_back(0); ++n_; (*this)[n_ - 1] = v; }
+  void pop_back() { --n_; if (n_ % kB == 0) w_.pop_back(); else trim(); }
+  reference operator[](size_type i) noexcept { return reference(&w_[i / kB], W(1) << (i % kB)); }
+  bool operator[](size_type i) const noexcept { return (w_[i / kB] >> (i % kB)) & 1u; }
+  reference at(size_type i) { if (i >= n_) __lk::throw_out_of_range("vector<bool>::at"); return (*this)[i]; }
+  bool at(size_type i) const { if (i >= n_) __lk::throw_out_of_range("vector<bool>::at"); return (*this)[i]; }
+  reference front() noexcept { return (*this)[0]; }
+  bool front() const noexcept { return (*this)[0]; }
+  reference back() noexcept { return (*this)[n_ - 1]; }
+  bool back() const noexcept { return (*this)[n_ - 1]; }
+  void flip() noexcept { for (W& w : w_) w = ~w; trim(); }
+  void swap(vector& o) noexcept { w_.swap(o.w_); size_type t = n_; n_ = o.n_; o.n_ = t; }
+  iterator begin() noexcept { return iterator(w_.data(), 0); }
+  iterator end() noexcept { return iterator(w_.data(), n_); }
+  const_iterator begin() const noexcept { return const_iterator(w_.data(), 0); }
+  const_iterator end() const noexcept { return const_iterator(w_.data(), n_); }
+  const_iterator cbegin() const noexcept { return begin(); }
+  const_iterator cend() const noexcept { return end(); }
+  // Unused tail bits are kept zero, so == can compare words.
+  friend bool operator==(const vector& a, const vector& b) noexcept {
+    if (a.n_ != b.n_) return false;
+    for (size_type i = 0; i < a.w_.size(); ++i) if (a.w_[i] != b.w_[i]) return false;
+    return true;
+  }
+private:
+  void trim() noexcept { if (n_ % kB) w_.back() &= (W(1) << (n_ % kB)) - 1; }
+  vector<W> w_;
+  size_type n_ = 0;
+};
+template <class It, class = enable_if_t<!is_integral_v<It>>> vector(It, It) -> vector<iter_value_t<It>>;
+
+template <class T, class A> bool operator==(const vector<T, A>& a, const vector<T, A>& b) { return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin()); }
+template <class T, class A> auto operator<=>(const vector<T, A>& a, const vector<T, A>& b) {
+  return std::__lk::lex3(a.begin(), a.end(), b.begin(), b.end());
+}
+template <class T, class A> void swap(vector<T, A>& a, vector<T, A>& b) noexcept { a.swap(b); }
+template <class T, class A, class U> typename vector<T, A>::size_type erase(vector<T, A>& v, const U& x) {
+  auto it = std::remove(v.begin(), v.end(), x); auto n = size_t(v.end() - it); v.erase(it, v.end()); return n;
+}
+template <class T, class A, class P> typename vector<T, A>::size_type erase_if(vector<T, A>& v, P p) {
+  auto it = std::remove_if(v.begin(), v.end(), p); auto n = size_t(v.end() - it); v.erase(it, v.end()); return n;
+}
+
+}  // namespace std
+#endif

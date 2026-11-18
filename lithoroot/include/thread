@@ -1,0 +1,133 @@
+/* thread ... LithoRoot std L8 (S5, 2026-11-16): std::thread over LithoWeave
+ * (lw_spawn / lw_join / lw_detach), thread::id, hardware_concurrency, and
+ * this_thread::{get_id, yield, sleep_for, sleep_until}.
+ *
+ * Lock-free (JD t42u): no mutex, condition_variable or jthread/stop_token
+ * (none in the census). Spawn failure (the host refusing a worker, or
+ * single-thread mode where none can exist) throws system_error with
+ * errc::resource_unavailable_try_again, as the standard specifies; plan S6
+ * makes the engine's startup threads tolerate exactly that.
+ *
+ * sleep_for/sleep_until block in memory.atomic.wait32 with a timeout only on
+ * threads that may block (LithoWeave workers). On the page thread and in
+ * single-thread mode they spin on the monotonic clock instead, so they can
+ * never trap; a long sleep there is a design bug the engine is retiring. */
+#ifndef LITHOROOT_THREAD
+#define LITHOROOT_THREAD
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <atomic>
+#include <chrono>
+#include <compare>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <system_error>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <lithoweave.h>
+
+namespace std {
+
+class thread {
+ public:
+  class id {
+   public:
+    id() noexcept = default;
+    friend bool operator==(id a, id b) noexcept { return a.t_ == b.t_; }
+    friend strong_ordering operator<=>(id a, id b) noexcept { return a.t_ <=> b.t_; }
+    int32_t __tid() const noexcept { return t_; }
+    static id __make(int32_t t) noexcept { id r; r.t_ = t; return r; }
+   private:
+    int32_t t_ = 0;  // 0: "not a thread"; LithoWeave tids are positive and never reused
+  };
+  using native_handle_type = lw_thread_t;
+
+  thread() noexcept = default;
+  template <class F, class... A>
+    requires (!is_same_v<remove_cvref_t<F>, thread>)
+  explicit thread(F&& f, A&&... a) {
+    using T = tuple<decay_t<F>, decay_t<A>...>;
+    unique_ptr<T> p(new T(std::forward<F>(f), std::forward<A>(a)...));
+    lw_descriptor_t d{};
+    d.entry = &entry<T>;
+    d.arg = p.get();
+    lw_thread_t h{};
+    if (lw_spawn(&d, &h) != LITHOSYS_OK)
+      throw system_error(make_error_code(errc::resource_unavailable_try_again), "std::thread");
+    p.release();  // the new thread owns it now
+    h_ = h;
+  }
+  thread(const thread&) = delete;
+  thread(thread&& o) noexcept : h_(o.h_) { o.h_ = lw_thread_t{}; }
+  thread& operator=(const thread&) = delete;
+  thread& operator=(thread&& o) noexcept {
+    if (joinable()) std::terminate();
+    h_ = o.h_; o.h_ = lw_thread_t{};
+    return *this;
+  }
+  ~thread() { if (joinable()) std::terminate(); }
+
+  bool joinable() const noexcept { return h_.tid != 0; }
+  id get_id() const noexcept { return id::__make(h_.tid); }
+  native_handle_type native_handle() noexcept { return h_; }
+  void join() {
+    if (!joinable()) throw system_error(make_error_code(errc::invalid_argument), "thread::join");
+    if (h_.tid == lw_current_tid()) throw system_error(make_error_code(errc::resource_deadlock_would_occur), "thread::join");
+    if (lw_join(h_, nullptr) != LITHOSYS_OK) throw system_error(make_error_code(errc::invalid_argument), "thread::join");
+    h_ = lw_thread_t{};
+  }
+  void detach() {
+    if (!joinable() || lw_detach(h_) != LITHOSYS_OK) throw system_error(make_error_code(errc::invalid_argument), "thread::detach");
+    h_ = lw_thread_t{};
+  }
+  void swap(thread& o) noexcept { lw_thread_t t = h_; h_ = o.h_; o.h_ = t; }
+  static unsigned hardware_concurrency() noexcept { return unsigned(lithosys_cpu_count()); }
+
+ private:
+  /* An exception escaping the thread function calls std::terminate ([thread.thread.constr]). */
+  template <class T> static void* entry(void* arg) noexcept {
+    unique_ptr<T> p(static_cast<T*>(arg));
+    std::apply([](auto& fn, auto&... a) { std::invoke(std::move(fn), std::move(a)...); }, *p);
+    return nullptr;
+  }
+  lw_thread_t h_{};
+};
+
+inline void swap(thread& a, thread& b) noexcept { a.swap(b); }
+
+namespace this_thread {
+inline thread::id get_id() noexcept { return thread::id::__make(lw_current_tid()); }
+inline void yield() noexcept {}  // wasm has no yield; a worker's next wait or return is the yield point
+namespace __lk_sleep {
+inline void until_ns(long long deadline) noexcept {
+  for (;;) {
+    long long now = static_cast<long long>(chrono::steady_clock::now().time_since_epoch().count());
+    if (now >= deadline) return;
+    if (std::__lk::can_block()) {
+      static int32_t never = 0;  // no one notifies it: wait32 returns on the timeout
+      __builtin_wasm_memory_atomic_wait32(&never, 0, deadline - now);
+    }
+  }
+}
+}  // namespace __lk_sleep
+template <class R, class P> void sleep_for(const chrono::duration<R, P>& d) {
+  if (d <= d.zero()) return;
+  auto ns = chrono::ceil<chrono::nanoseconds>(d).count();
+  __lk_sleep::until_ns(static_cast<long long>(chrono::steady_clock::now().time_since_epoch().count()) + static_cast<long long>(ns));
+}
+template <class C, class D> void sleep_until(const chrono::time_point<C, D>& t) {
+  auto now = C::now();
+  if (t <= now) return;
+  sleep_for(t - now);
+}
+}  // namespace this_thread
+
+template <> struct hash<thread::id> {
+  size_t operator()(thread::id i) const noexcept { return size_t(uint32_t(i.__tid())); }
+};
+
+}  // namespace std
+#endif

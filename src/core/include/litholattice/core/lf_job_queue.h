@@ -6,14 +6,15 @@
 // saved world only with the lock-free I/O path LL_LF_SAVE / LL_LF_LOAD), LL_LF_UPLOAD (mesh
 // upload jobs) and LL_LF_INGRESS.
 //
-// Thread count: never more than the hardware threads. shared() reads the census budget
-// (immutable, no census mutex) and claims workers = min(pool budget, hw - (pool + main +
-// sim-clock threads)) from a process-wide atomic counter (CAS), floor 0. With 0 workers
+// Thread count (t46u allocator): shared() takes ThreadBudget::lfWorkers, the core slots the
+// census left free after the permanent three and the render side (floor 0, never more than
+// the census cores). Claimed once from a process-wide atomic counter (CAS). With 0 workers
 // every job runs inline on the submitting thread (still correct, just serial).
 // A full ring never blocks and never drops: the submitter runs the job inline.
 // wait helpers: callers wait on their own atomic counter and help by running queued jobs,
 // so a wait can never deadlock even with 0 workers.
 #pragma once
+#include "litholattice/core/thread_name.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -43,12 +44,12 @@ class cLfJobQueue {
     return on;
   }
 
-  /// `workers` is clamped to hardware_concurrency() (and to >= 0).
+  /// `workers` is clamped to the census core count (t46u; and to >= 0).
   explicit cLfJobQueue(unsigned workers, size_t capacity = 4096) : ring_(capacity) {
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const unsigned hw = std::max(1u, censusCores());
     workers = std::min(workers, hw);
     threads_.reserve(workers);
-    for (unsigned i = 0; i < workers; ++i) threads_.emplace_back([this] { run(); });
+    for (unsigned i = 0; i < workers; ++i) threads_.emplace_back([this] { ::litholattice::setCurrentThreadName("lk-lfjobs"); run(); });
   }
   ~cLfJobQueue() { stop(0); }
 
@@ -94,18 +95,18 @@ class cLfJobQueue {
   static cLfJobQueue*& sharedPtr() { static cLfJobQueue* p = nullptr; return p; }
   static cLfJobQueue* makeShared() {
     {
-      // 2026-11-01: no census mutex on this path. budget() is an immutable read; the room left
-      // after cJobPool's workers and the main + sim-clock threads is claimed from a plain
-      // atomic counter (CAS), so the process never exceeds the hardware threads.
+      // 2026-11-01: no census mutex on this path. budget() is an immutable read.
+      // t46u: the room is the allocator's lfWorkers (free slots after the permanent three and
+      // the render side), claimed from a plain atomic counter (CAS); never the raw hardware.
       const ThreadBudget& bd = cThreadCensus::instance().budget();
-      const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-      const unsigned used = bd.pool + bd.mainThreads + bd.simClock;
-      const unsigned room = used >= hw ? 0u : std::min(hw - used, bd.pool);
+      const unsigned hw = bd.hw;
+      const unsigned used = bd.slotsUsed() - bd.lfWorkers;
+      const unsigned room = bd.lfWorkers;
       unsigned n = 0;
       unsigned cur = lfWorkersClaimed().load(std::memory_order_relaxed);
       do { n = cur >= room ? 0u : room - cur; } while (n && !lfWorkersClaimed().compare_exchange_weak(cur, cur + n, std::memory_order_acq_rel));
       auto* p = new cLfJobQueue(n);  // never destroyed (like cJobPool::shared)
-      logInfo("threads: LL_LF_JOBS queue up: %u workers (hw %u, %u reserved for pool/main/clock); MPMC ring, atomics only", n, hw, used);
+      logInfo("threads: LL_LF_JOBS queue up: %u workers (census %u cores, %u slots held by the permanent 3 + render side); MPMC ring, atomics only", n, hw, used);
       return p;
     }
   }

@@ -8,10 +8,10 @@
 
 const uint kCanonModeCutout = 1u, kCanonModeGlassDither = 2u, kCanonModeAlphaBlend = 4u, kCanonModeOit = 8u;
 const uint kCanonModeAdditive = 16u, kCanonModeAnimated = 32u, kCanonModeLeafWind = 64u, kCanonModeGroundPulse = 128u;
-const uint kCanonScaleCoarse1x = 0u, kCanonScaleMicroQtr = 1u, kCanonScaleLodSkirt = 2u;
+const uint kCanonScaleCoarse1x = 0u, kCanonScaleMicroQtr = 1u;  // 2 was the LOD skirt scale (removed)
 
 struct CanonQuad {
-  uvec3 o;          // 0..63 per axis (LOD-grid units)
+  uvec3 o;          // 0..63 per axis (grid units)
   uint w, h;        // 1..16
   uint face;        // 0..5: +X -X +Y -Y +Z -Z
   uint aoDiagFlip, coordScale;
@@ -74,7 +74,7 @@ uint canonGeomCorner(uint face, uint aoDiagFlip, uint vertexIdx) {
 
 struct CanonCorner { ivec3 pos; uint g; uint ao; uvec2 uv; };
 
-// Integer decode of pulled vertex `vertexIdx` (0..3) in LOD-grid units (== pullCorner).
+// Integer decode of pulled vertex `vertexIdx` (0..3) in grid units (== pullCorner).
 CanonCorner canonPullCorner(uvec2 raw, uint vertexIdx) {
   CanonQuad q = canonUnpackQuad(raw);
   CanonCorner c;
@@ -93,9 +93,9 @@ CanonCorner canonPullCorner(uvec2 raw, uint vertexIdx) {
   return c;
 }
 
-// LOD-grid units -> sub-chunk blocks: cellSize = 1, 2, 4 for L0/L1/L2; micro quads are 1/4.
-float canonUnitScale(uint coordScale, float lodCellSize) {
-  return coordScale == kCanonScaleMicroQtr ? 0.25 : lodCellSize;
+// Grid units -> sub-chunk blocks: cellSize for coarse quads (1 = whole blocks); micro quads are 1/4.
+float canonUnitScale(uint coordScale, float cellSize) {
+  return coordScale == kCanonScaleMicroQtr ? 0.25 : cellSize;
 }
 
 #endif  // LL_CANONICAL_QUAD_DECODE_GLSL

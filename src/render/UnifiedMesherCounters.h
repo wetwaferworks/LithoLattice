@@ -11,7 +11,7 @@ class cUnifiedMesherCounters {
   cUnifiedMesherCounters() = delete;
   static inline std::atomic<uint64_t> meshes{0}, checked{0}, mismatch{0}, unpublished{0}, quads{0}, bytes{0};
   static inline std::atomic<uint64_t> fbVerts{0}, fbChecked{0}, fbMismatch{0};
-  static inline std::atomic<uint64_t> lodQuads{0}, lodFallback{0}, skirtQuads{0}, splits{0};
+  static inline std::atomic<uint64_t> splits{0};
 };
 
 }  // namespace litholattice

@@ -1,0 +1,23 @@
+/* ctime ... LithoRoot std L2 (S2, 2026-11-16): <time.h> lifted into std. */
+#ifndef LITHOROOT_CTIME
+#define LITHOROOT_CTIME
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <time.h>
+
+namespace std {
+using ::time_t;
+using ::clock_t;
+using ::tm;
+using ::time;
+using ::clock;
+using ::difftime;
+using ::gmtime;
+using ::localtime;
+using ::mktime;
+using ::strftime;
+using ::asctime;
+using ::ctime;
+}  // namespace std
+#endif

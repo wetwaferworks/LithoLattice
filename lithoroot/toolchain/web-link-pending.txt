@@ -1,0 +1,24 @@
+# web-link-pending.txt ... undefined symbols the LK_WEB link still lets through, by stage.
+#
+# The web link (game/LithoKraft/src/app/CMakeLists.txt) allows exactly the 14 frozen lithosys
+# calls (lithosys-allowed.txt) plus the names below; lk_* imports are annotated in their headers.
+# Any other undefined symbol is a link error. Each name here is a stage NOT DONE: the module would
+# import it from "env", which no host provides, so instantiation fails until the stage lands and
+# deletes its lines. This file must end up empty. Lines starting with # are comments.
+#
+# S7 file layer: DONE (LithoVFS, src/libc/lithovfs.c + src/lithovfs_fs.cc).
+#
+# lkboot-owned: the S7 host storage calls (include/lk_store.h, module "env"). These are
+# NOT a pending stage: lkboot must provide them (OPFS). They stay listed until lkboot ships
+# them, so the link keeps naming exactly what the host still owes.
+lk_store_open
+lk_store_read
+lk_store_write
+lk_store_truncate
+lk_store_flush
+lk_store_close
+lk_store_stat
+lk_store_mkdir
+lk_store_list
+lk_store_remove
+lk_store_rename

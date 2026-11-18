@@ -5,7 +5,11 @@
 #include <cstdint>
 #if defined(_M_X64) || defined(__x86_64__) || \
     defined(__wasm_simd128__)
+#if defined(__wasm__)
+#include "lk_simd_wasm.h"  // in-house SSE-on-wasm-SIMD (S1, 2026-11-16), bit-exact with SSE
+#else
 #include <emmintrin.h>
+#endif
 #include "litholattice/render/software_simd.h"
 namespace litholattice::swsimd {
 void fill32Sse2(uint32_t* p, size_t n, uint32_t v) {

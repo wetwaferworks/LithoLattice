@@ -14,7 +14,7 @@ namespace litholattice::gl33 {
 bool cGlTboSlabUploader::prepare(const ChunkMesh& m) {
   CanonPullStream& ps = ps_;
   ps = CanonPullStream{};
-  if (!m.canonical || !buildCanonPullStream(*m.canonical, 0, 0x3F, ps)) return false;
+  if (!m.canonical || !buildCanonPullStream(*m.canonical, ps)) return false;
   // Same quad set as the legacy stream or no deal (e.g. a mesh the game re-decoded).
   if (size_t(ps.fbQuads + ps.quads) * 4 != m.verts.size() || ps.texels.empty()) { ++rejects_; return false; }
   static const bool kCanonCheck = [] { const char* e = std::getenv("LL_GL_CANON_CHECK"); return e && e[0] == '1'; }();
@@ -22,7 +22,7 @@ bool cGlTboSlabUploader::prepare(const ChunkMesh& m) {
     using K = std::array<uint32_t, 10>;
     auto kv = [](const PackedVertex& v) { return K{v.x, v.y, v.z, v.u, v.v, v.faceAo, v.layer, v.value, v.mode, uint32_t(v.layerHi)}; };
     std::vector<std::array<K, 4>> a, b;
-    for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q) { std::array<K, 4> e; for (uint32_t c = 0; c < 4; ++c) e[c] = kv(canonPullReference(ps, q, c, 0)); a.push_back(e); }
+    for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q) { std::array<K, 4> e; for (uint32_t c = 0; c < 4; ++c) e[c] = kv(canonPullReference(ps, q, c)); a.push_back(e); }
     for (size_t q = 0; q * 4 < m.verts.size(); ++q) { std::array<K, 4> e; for (int c = 0; c < 4; ++c) e[c] = kv(m.verts[q * 4 + c]); b.push_back(e); }
     static uint64_t ck = 0, bad = 0, ordBad = 0; ++ck;
     if (a != b) ++ordBad;

@@ -1,0 +1,5 @@
+/* cassert ... LithoRoot std L1: <assert.h> (no guard, as the standard says). */
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <assert.h>

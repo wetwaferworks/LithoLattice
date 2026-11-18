@@ -22,12 +22,12 @@ void cmCheck(bool ok, const char* what) {
 
 // M12: the GPU pull stream (canonPullReference, mirrored by canonical_pull_legacy.glsl)
 // expands to the same quads as decodeCanonicalMesh (as sorted 64-byte quad sets).
-bool pullMatches(const CanonicalMesh& m, int lod, uint8_t mask) {
+bool pullMatches(const CanonicalMesh& m) {
   std::vector<PackedVertex> dec, got;
   CanonPullStream ps;
-  if (!decodeCanonicalMesh(m, lod, dec, mask) || !buildCanonPullStream(m, lod, mask, ps)) return false;
+  if (!decodeCanonicalMesh(m, dec) || !buildCanonPullStream(m, ps)) return false;
   for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q)
-    for (uint32_t k = 0; k < 4; ++k) got.push_back(canonPullReference(ps, q, k, lod));
+    for (uint32_t k = 0; k < 4; ++k) got.push_back(canonPullReference(ps, q, k));
   auto quads = [](const std::vector<PackedVertex>& v) {
     std::multiset<std::vector<uint8_t>> out;
     for (size_t i = 0; i + 4 <= v.size(); i += 4) {
@@ -61,13 +61,13 @@ bool occ(const Scene& s, int x, int y, int z) {
   return m && s.mats[m].occludes;
 }
 
-// Scalar reference for L0: every exposed face with its material, AO and light, then
+// Scalar reference: every exposed face with its material, AO and light, then
 // check the decoded quads cover each exactly once with matching attributes.
 bool l0MatchesReference(const Scene& s, const CanonicalMesh& m, const char** why) {
   struct Key { uint32_t face; int x, y, z; bool operator<(const Key& o) const {
     return std::tie(face, x, y, z) < std::tie(o.face, o.x, o.y, o.z); } };
   std::set<Key> seen;
-  const CanonicalLod& L = m.lods[0];
+  const CanonicalRanges& L = m.ranges;
   auto walk = [&](BucketRange r) -> bool {
     for (uint32_t i = r.start; i < r.start + r.count; ++i) {
       const canon::DecodedQuad q = canon::unpackQuad(m.quads[i]);
@@ -99,7 +99,6 @@ bool l0MatchesReference(const Scene& s, const CanonicalMesh& m, const char** why
   };
   for (const BucketRange& r : L.face) if (!walk(r)) return false;
   if (!walk(L.blend)) return false;
-  if (L.skirt.count != 0) { *why = "L0 skirts"; return false; }
   size_t expected = 0;
   for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 16; ++z) for (int x = 1; x <= 16; ++x) {
     const uint16_t mt = s.mat[size_t(UnifiedMeshInput::apronIdx(x, y, z))];
@@ -164,7 +163,7 @@ int testCanonicalMesh() {
     for (auto& l : sc.light) l = uint16_t(5u | (60u << 6));
     CanonicalMesh m; const auto st = mesher.mesh(sc.input(), m);
     uint32_t n0 = 0; bool unit = true;
-    for (auto r : m.lods[0].face) { n0 += r.count; for (uint32_t i = r.start; i < r.start + r.count; ++i) { auto q = canon::unpackQuad(m.quads[i]); unit = unit && q.w == 1 && q.h == 1 && q.cornerAo == 0xFF && q.blockLight == 5 && q.skyLight == 60; } }
+    for (auto r : m.ranges.face) { n0 += r.count; for (uint32_t i = r.start; i < r.start + r.count; ++i) { auto q = canon::unpackQuad(m.quads[i]); unit = unit && q.w == 1 && q.h == 1 && q.cornerAo == 0xFF && q.blockLight == 5 && q.skyLight == 60; } }
     cmCheck(st == UnifiedMesher::Status::Ok && n0 == 6 && unit && m.palette.size() == 1, "single cube: 6 unshaded unit quads, light from the front cell, 1 palette entry");
   }
   {
@@ -189,7 +188,7 @@ int testCanonicalMesh() {
     Scene sc; for (int x = 1; x <= 16; ++x) for (int z = 1; z <= 16; ++z) sc.at(x, 4, z) = 1;
     sc.at(8, 5, 8) = 2;
     CanonicalMesh m; mesher.mesh(sc.input(), m);
-    int dark = 0, flips = 0; const BucketRange r = m.lods[0].face[2];
+    int dark = 0, flips = 0; const BucketRange r = m.ranges.face[2];
     for (uint32_t i = r.start; i < r.start + r.count; ++i) { auto q = canon::unpackQuad(m.quads[i]); if (canon::unpackPalette(m.palette[q.paletteIdx]).layerId == 1 && q.cornerAo != 0xFF) { ++dark; flips += int(q.aoDiagFlip); } }
     cmCheck(dark >= 4 && flips >= 1, "real AO: floor quads around a block carry corner AO, diagonal flip fires");
   }
@@ -199,7 +198,7 @@ int testCanonicalMesh() {
       sc.at(x, y, z) = (x == 1 || x == 16 || y == 1 || y == 16 || z == 1 || z == 16) ? 1 : uint16_t(2 + ((x + y + z) % 5));
     CanonicalMesh m; mesher.mesh(sc.input(), m);
     cmCheck(m.palette.size() == 1 && canon::unpackPalette(m.palette[0]).layerId == 1, "no palette pollution: interior materials take no slots");
-    uint32_t q0 = 0; for (auto r : m.lods[0].face) q0 += r.count;
+    uint32_t q0 = 0; for (auto r : m.ranges.face) q0 += r.count;
     cmCheck(q0 == 6, "greedy: a 16^3 shell meshes to 6 quads at L0");
   }
   {
@@ -213,52 +212,12 @@ int testCanonicalMesh() {
     cmCheck(mesher.mesh(sc.input(), m) == UnifiedMesher::Status::Ok && m.palette.size() == 512, "same mesher recovers: 512 materials fit");
   }
   {
-    // Fix 3: skirts in all six directions at L1/L2 perimeters (floor slab + wall slab +
-    // a hanging ceiling slab), and none at L0.
-    Scene sc;
-    for (int x = 1; x <= 16; ++x) for (int z = 1; z <= 16; ++z) { sc.at(x, 1, z) = 1; sc.at(x, 2, z) = 1; }
-    for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 16; ++z) { sc.at(1, y, z) = 2; sc.at(2, y, z) = 2; }
-    for (int y = 1; y <= 16; ++y) for (int x = 1; x <= 16; ++x) { sc.at(x, y, 16) = 3; sc.at(x, y, 15) = 3; }
-    CanonicalMesh m; mesher.mesh(sc.input(), m);
-    bool dirs[3][6] = {};
-    for (int lod = 1; lod <= 2; ++lod) { const BucketRange r = m.lods[size_t(lod)].skirt;
-      for (uint32_t i = r.start; i < r.start + r.count; ++i) { auto q = canon::unpackQuad(m.quads[i]); dirs[lod][q.face] = q.coordScale == canon::kScaleLodSkirt; } }
-    bool all = m.lods[0].skirt.count == 0;
-    for (int lod = 1; lod <= 2; ++lod) for (int f = 0; f < 6; ++f) all = all && dirs[lod][f];
-    cmCheck(all, "LOD skirts: L1 and L2 emit skirts facing all six directions, L0 none");
-    cmCheck(m.lods[1].face[2].count > 0 && m.lods[2].face[2].count > 0, "hull downsample keeps the 2-block floor at L1 and L2");
-  }
-  {
-    // M10 (Archie ruling 2): hidden seam strips are culled. Same slabs, but the apron
-    // around the sub-chunk is solid rock: every perimeter seam faces an occluder.
+    // M12: the GPU pull stream matches the CPU decode on a slab scene (floor + wall).
     Scene sc;
     for (int x = 1; x <= 16; ++x) for (int z = 1; z <= 16; ++z) { sc.at(x, 1, z) = 1; sc.at(x, 2, z) = 1; }
     for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 16; ++z) { sc.at(1, y, z) = 2; sc.at(2, y, z) = 2; }
     CanonicalMesh open; mesher.mesh(sc.input(), open);
-    for (int y = 0; y < 18; ++y) for (int z = 0; z < 18; ++z) for (int x = 0; x < 18; ++x)
-      if (x == 0 || y == 0 || z == 0 || x == 17 || y == 17 || z == 17) sc.at(x, y, z) = 4;
-    CanonicalMesh shut; mesher.mesh(sc.input(), shut);
-    const uint32_t so = open.lods[1].skirt.count + open.lods[2].skirt.count;
-    const uint32_t ss = shut.lods[1].skirt.count + shut.lods[2].skirt.count;
-    cmCheck(so > 0 && ss == 0, "skirt cull: perimeter skirts against a solid neighbour patch are dropped");
-    // Half the +X apron open (z <= 8): only those skirt cells survive on +X.
-    for (int y = 1; y <= 16; ++y) for (int z = 1; z <= 8; ++z) sc.at(17, y, z) = 0;
-    CanonicalMesh half; mesher.mesh(sc.input(), half);
-    bool onlyPx = true; uint32_t px = 0;
-    for (int lod = 1; lod <= 2; ++lod) { const BucketRange r = half.lods[size_t(lod)].skirt;
-      for (uint32_t k = r.start; k < r.start + r.count; ++k) { auto q = canon::unpackQuad(half.quads[k]);
-        onlyPx = onlyPx && q.face == 0 && q.oz < 8 / (1 << lod) + 0u; ++px; } }
-    cmCheck(onlyPx && px > 0, "skirt cull: partially open seam keeps only the open run");
-    // Draw side: skirts only toward neighbours at another LOD.
-    const int same[6] = {1, 1, 1, 1, 1, 1}, ring[6] = {2, 1, 1, 1, -2, -1};
-    cmCheck(canonSkirtMask(1, same) == 0 && canonSkirtMask(1, ring) == 0x21 && canonSkirtMask(0, ring) == 0,
-            "draw-side skirt mask: exterior LOD boundaries only (legacy = L0, nothing = no seam)");
-    std::vector<PackedVertex> all, none;
-    decodeCanonicalMesh(open, 1, all); decodeCanonicalMesh(open, 1, none, 0);
-    cmCheck(all.size() == none.size() + size_t(open.lods[1].skirt.count) * 4, "decode honours the skirt mask");
-    cmCheck(pullMatches(open, 0, 0x3F) && pullMatches(open, 1, 0x3F) && pullMatches(open, 1, 0x21) && pullMatches(open, 2, 0x3F) &&
-                pullMatches(open, 2, 0),
-            "GPU pull stream == CPU decode at L0/L1/L2 with skirt masks (canonical_pull_legacy.glsl mirror)");
+    cmCheck(pullMatches(open), "GPU pull stream == CPU decode (canonical_pull_legacy.glsl mirror)");
   }
   {
     // M11 (Archie ruling 1): a 1500-entry palette splits in two, stream order preserved.
@@ -271,7 +230,7 @@ int testCanonicalMesh() {
         f.normalId = rng(r) & 15; f.paletteIdx = 0; f.skyLight = 63;
         const uint32_t slot = q * 3;
         CanonicalMesh one; one.palette.push_back(w.palette[slot]); one.fallback.push_back(canon::packPacked12(f));
-        std::vector<PackedVertex> t; decodeCanonicalMesh(one, 0, t); ref.insert(ref.end(), t.begin(), t.end());
+        std::vector<PackedVertex> t; decodeCanonicalMesh(one, t); ref.insert(ref.end(), t.begin(), t.end());
         f.paletteIdx = slot & 0x3FFu; w.fallback.push_back(canon::packPacked12(f)); fs.push_back(slot);
       }
     for (uint32_t f = 0; f < 6; ++f) {
@@ -279,26 +238,26 @@ int testCanonicalMesh() {
       for (uint32_t i = 0; i < 250; ++i) {
         canon::DecodedQuad d; d.face = f; d.ox = rng(r) % 16; d.oy = rng(r) % 16; d.oz = rng(r) % 16; d.w = 1 + rng(r) % 4; d.h = 1 + rng(r) % 4; d.cornerAo = 0xFF; d.skyLight = 63;
         const uint32_t slot = (f * 250 + i) % 1500;
-        CanonicalMesh one; one.palette.push_back(w.palette[slot]); d.paletteIdx = 0; one.quads.push_back(canon::packQuad(d)); one.lods[0].face[f] = BucketRange{0, 1};
-        std::vector<PackedVertex> t; decodeCanonicalMesh(one, 0, t); ref.insert(ref.end(), t.begin(), t.end());
+        CanonicalMesh one; one.palette.push_back(w.palette[slot]); d.paletteIdx = 0; one.quads.push_back(canon::packQuad(d)); one.ranges.face[f] = BucketRange{0, 1};
+        std::vector<PackedVertex> t; decodeCanonicalMesh(one, t); ref.insert(ref.end(), t.begin(), t.end());
         d.paletteIdx = slot & 0x3FFu; w.quads.push_back(canon::packQuad(d)); qs.push_back(slot);
       }
-      w.lods[0].face[f] = BucketRange{st, 250};
+      w.ranges.face[f] = BucketRange{st, 250};
     }
     const bool ok = splitCanonicalTwo(w, qs, fs);
-    std::vector<PackedVertex> got; decodeCanonicalMesh(w, 0, got);
+    std::vector<PackedVertex> got; decodeCanonicalMesh(w, got);
     cmCheck(ok && w.next && w.palette.size() <= canon::kMaxPalette && w.next->palette.size() <= canon::kMaxPalette &&
             got.size() == ref.size() && std::memcmp(got.data(), ref.data(), ref.size() * sizeof(PackedVertex)) == 0,
             "palette overflow split: two halves, each <= 1024 entries, decode == unsplit stream");
-    cmCheck(pullMatches(w, 0, 0x3F), "GPU pull stream == CPU decode on a split mesh (Packed12 fallback + both halves)");
+    cmCheck(pullMatches(w), "GPU pull stream == CPU decode on a split mesh (Packed12 fallback + both halves)");
     CanonicalMesh big; canon::PaletteFields gp; gp.layerId = 300; gp.modeFlags = canon::kModeGroundPulse; gp.pulse = 9;
     canon::PaletteFields em; em.layerId = 7; em.emissive = 15;
     big.palette = {canon::packPalette(gp), canon::packPalette(em)};
     for (uint32_t f = 0; f < 6; ++f) {
       canon::DecodedQuad d; d.face = f; d.ox = f & 1u ? 0 : 1; d.oy = 0; d.oz = 0; d.w = 16; d.h = 16; d.cornerAo = 0x55u * (f % 4); d.paletteIdx = f & 1u;
-      big.lods[0].face[f] = BucketRange{uint32_t(big.quads.size()), 1}; big.quads.push_back(canon::packQuad(d));
+      big.ranges.face[f] = BucketRange{uint32_t(big.quads.size()), 1}; big.quads.push_back(canon::packQuad(d));
     }
-    cmCheck(pullMatches(big, 0, 0x3F), "GPU pull: 16x16 quads (uint8 UV wrap), ground-pulse / emissive keys, layer > 255");
+    cmCheck(pullMatches(big), "GPU pull: 16x16 quads (uint8 UV wrap), ground-pulse / emissive keys, layer > 255");
   }
   {
     // Determinism: the same bytes from 1 and 8 threads, and from a fresh mesher.
@@ -312,29 +271,22 @@ int testCanonicalMesh() {
     bool same = true; for (uint64_t h : got) same = same && h == ref;
     cmCheck(same && ref != 0, "MeshHash identical across 8 threads and fresh meshers");
   }
-  {  // M6: per-face looks (registry feed) and the L1/L2-only mode used by the game path
+  {  // M6: per-face looks (registry feed)
     Scene sc; sc.at(8, 8, 8) = 1;
     sc.mats[1].perFace = true;
     for (int f = 0; f < 6; ++f) sc.mats[1].faces[size_t(f)].layerId = uint16_t(100 + f);
     CanonicalMesh m; const auto st = mesher.mesh(sc.input(), m);
     std::set<uint32_t> pal;
     bool faceOk = st == UnifiedMesher::Status::Ok;
-    for (int lod = 0; lod < 3; ++lod)
-      for (int f = 0; f < 6; ++f) {
-        const auto r = m.lods[size_t(lod)].face[size_t(f)];
-        for (uint32_t i = r.start; i < r.start + r.count; ++i) {
-          const auto q = canon::unpackQuad(m.quads[i]);
-          pal.insert(q.paletteIdx);
-          faceOk = faceOk && canon::unpackPalette(m.palette[q.paletteIdx]).layerId == uint16_t(100 + f);
-        }
+    for (int f = 0; f < 6; ++f) {
+      const auto r = m.ranges.face[size_t(f)];
+      for (uint32_t i = r.start; i < r.start + r.count; ++i) {
+        const auto q = canon::unpackQuad(m.quads[i]);
+        pal.insert(q.paletteIdx);
+        faceOk = faceOk && canon::unpackPalette(m.palette[q.paletteIdx]).layerId == uint16_t(100 + f);
       }
-    cmCheck(faceOk && m.palette.size() == 6 && pal.size() == 6, "per-face looks: each face direction takes its own palette entry, shared across LODs");
-    UnifiedMeshInput in = sc.input(); in.firstLod = 1;
-    CanonicalMesh m1; const auto st1 = mesher.mesh(in, m1);
-    uint32_t n0 = 0, n1 = 0;
-    for (auto r : m1.lods[0].face) n0 += r.count;
-    for (auto r : m1.lods[1].face) n1 += r.count;
-    cmCheck(st1 == UnifiedMesher::Status::Ok && n0 == 0 && n1 == 6, "firstLod 1: no L0 quads, L1 built");
+    }
+    cmCheck(faceOk && m.palette.size() == 6 && pal.size() == 6, "per-face looks: each face direction takes its own palette entry");
   }
   return g_cmFails;
 }

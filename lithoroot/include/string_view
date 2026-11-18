@@ -1,0 +1,245 @@
+/* string_view ... LithoRoot std L5 (S3, 2026-11-16): char_traits (char,
+ * char8_t, char16_t, char32_t, wchar_t) and basic_string_view with the
+ * full find family, comparisons, and hash (FNV-1a 32-bit, plan L5: never
+ * used for persisted or hashed engine state). */
+#ifndef LITHOROOT_STRING_VIEW
+#define LITHOROOT_STRING_VIEW
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <compare>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
+#include <type_traits>
+
+namespace std {
+
+template <class C> struct char_traits;
+namespace __lk {
+template <class C, class I, class U> struct char_traits_base {
+  using char_type = C;
+  using int_type = I;
+  using comparison_category = strong_ordering;
+  static constexpr void assign(C& a, const C& b) noexcept { a = b; }
+  static constexpr bool eq(C a, C b) noexcept { return a == b; }
+  static constexpr bool lt(C a, C b) noexcept { return U(a) < U(b); }
+  static constexpr int compare(const C* a, const C* b, size_t n) noexcept {
+    for (; n; --n, ++a, ++b) { if (lt(*a, *b)) return -1; if (lt(*b, *a)) return 1; }
+    return 0;
+  }
+  static constexpr size_t length(const C* s) noexcept { size_t n = 0; while (!eq(s[n], C())) ++n; return n; }
+  static constexpr const C* find(const C* s, size_t n, const C& c) noexcept { for (; n; --n, ++s) if (eq(*s, c)) return s; return nullptr; }
+  static constexpr C* move(C* d, const C* s, size_t n) noexcept {
+    if (n == 0) return d;
+    if (__builtin_is_constant_evaluated()) {
+      if (d < s) for (size_t i = 0; i < n; ++i) d[i] = s[i];
+      else for (size_t i = n; i-- > 0;) d[i] = s[i];
+      return d;
+    }
+    __builtin_memmove(d, s, n * sizeof(C));
+    return d;
+  }
+  static constexpr C* copy(C* d, const C* s, size_t n) noexcept {
+    if (__builtin_is_constant_evaluated()) { for (size_t i = 0; i < n; ++i) d[i] = s[i]; return d; }
+    if (n) __builtin_memcpy(d, s, n * sizeof(C));
+    return d;
+  }
+  static constexpr C* assign(C* d, size_t n, C c) noexcept { for (size_t i = 0; i < n; ++i) d[i] = c; return d; }
+  static constexpr C to_char_type(I i) noexcept { return C(i); }
+  static constexpr I to_int_type(C c) noexcept { return I(U(c)); }
+  static constexpr bool eq_int_type(I a, I b) noexcept { return a == b; }
+  static constexpr I eof() noexcept { return I(-1); }
+  static constexpr I not_eof(I i) noexcept { return i == eof() ? I(0) : i; }
+};
+}  // namespace __lk
+template <> struct char_traits<char> : __lk::char_traits_base<char, int, unsigned char> {};
+template <> struct char_traits<char8_t> : __lk::char_traits_base<char8_t, unsigned, unsigned char> {};
+template <> struct char_traits<char16_t> : __lk::char_traits_base<char16_t, unsigned, char16_t> {
+  static constexpr int_type eof() noexcept { return 0xffffu; }
+};
+template <> struct char_traits<char32_t> : __lk::char_traits_base<char32_t, unsigned, char32_t> {
+  static constexpr int_type eof() noexcept { return 0xffffffffu; }
+};
+template <> struct char_traits<wchar_t> : __lk::char_traits_base<wchar_t, unsigned, unsigned> {
+  static constexpr int_type eof() noexcept { return 0xffffffffu; }
+};
+
+template <class C, class Tr = char_traits<C>>
+class basic_string_view {
+ public:
+  using traits_type = Tr;
+  using value_type = C;
+  using pointer = C*;
+  using const_pointer = const C*;
+  using reference = C&;
+  using const_reference = const C&;
+  using const_iterator = const C*;
+  using iterator = const_iterator;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+  using reverse_iterator = const_reverse_iterator;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  static constexpr size_type npos = size_type(-1);
+
+  constexpr basic_string_view() noexcept = default;
+  constexpr basic_string_view(const C* s, size_type n) noexcept : d_(s), n_(n) {}
+  constexpr basic_string_view(const C* s) noexcept : d_(s), n_(Tr::length(s)) {}
+  basic_string_view(nullptr_t) = delete;
+  template <class It, class = enable_if_t<is_same_v<iter_value_t<It>, C> && !is_convertible_v<It, size_type>>>
+  constexpr basic_string_view(It f, It l) : d_(std::to_address(f)), n_(size_type(l - f)) {}
+
+  constexpr const_iterator begin() const noexcept { return d_; }
+  constexpr const_iterator end() const noexcept { return d_ + n_; }
+  constexpr const_iterator cbegin() const noexcept { return d_; }
+  constexpr const_iterator cend() const noexcept { return d_ + n_; }
+  constexpr const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+  constexpr const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+  constexpr size_type size() const noexcept { return n_; }
+  constexpr size_type length() const noexcept { return n_; }
+  constexpr size_type max_size() const noexcept { return (npos - sizeof(size_type)) / sizeof(C) / 4; }
+  [[nodiscard]] constexpr bool empty() const noexcept { return n_ == 0; }
+  constexpr const_reference operator[](size_type i) const { return d_[i]; }
+  constexpr const_reference at(size_type i) const { if (i >= n_) __lk::throw_out_of_range("string_view::at"); return d_[i]; }
+  constexpr const_reference front() const { return d_[0]; }
+  constexpr const_reference back() const { return d_[n_ - 1]; }
+  constexpr const_pointer data() const noexcept { return d_; }
+  constexpr void remove_prefix(size_type n) { d_ += n; n_ -= n; }
+  constexpr void remove_suffix(size_type n) { n_ -= n; }
+  constexpr void swap(basic_string_view& o) noexcept { auto t = *this; *this = o; o = t; }
+  constexpr size_type copy(C* s, size_type n, size_type pos = 0) const {
+    if (pos > n_) __lk::throw_out_of_range("string_view::copy");
+    const size_type r = n < n_ - pos ? n : n_ - pos;
+    Tr::copy(s, d_ + pos, r);
+    return r;
+  }
+  constexpr basic_string_view substr(size_type pos = 0, size_type n = npos) const {
+    if (pos > n_) __lk::throw_out_of_range("string_view::substr");
+    return basic_string_view(d_ + pos, n < n_ - pos ? n : n_ - pos);
+  }
+  constexpr int compare(basic_string_view v) const noexcept {
+    const size_type r = n_ < v.n_ ? n_ : v.n_;
+    const int c = Tr::compare(d_, v.d_, r);
+    return c != 0 ? c : (n_ == v.n_ ? 0 : n_ < v.n_ ? -1 : 1);
+  }
+  constexpr int compare(size_type p, size_type n, basic_string_view v) const { return substr(p, n).compare(v); }
+  constexpr int compare(size_type p1, size_type n1, basic_string_view v, size_type p2, size_type n2) const { return substr(p1, n1).compare(v.substr(p2, n2)); }
+  constexpr int compare(const C* s) const { return compare(basic_string_view(s)); }
+  constexpr int compare(size_type p, size_type n, const C* s) const { return substr(p, n).compare(basic_string_view(s)); }
+  constexpr bool starts_with(basic_string_view v) const noexcept { return n_ >= v.n_ && Tr::compare(d_, v.d_, v.n_) == 0; }
+  constexpr bool starts_with(C c) const noexcept { return n_ && Tr::eq(d_[0], c); }
+  constexpr bool starts_with(const C* s) const { return starts_with(basic_string_view(s)); }
+  constexpr bool ends_with(basic_string_view v) const noexcept { return n_ >= v.n_ && Tr::compare(d_ + n_ - v.n_, v.d_, v.n_) == 0; }
+  constexpr bool ends_with(C c) const noexcept { return n_ && Tr::eq(d_[n_ - 1], c); }
+  constexpr bool ends_with(const C* s) const { return ends_with(basic_string_view(s)); }
+  constexpr bool contains(basic_string_view v) const noexcept { return find(v) != npos; }
+  constexpr bool contains(C c) const noexcept { return find(c) != npos; }
+  constexpr bool contains(const C* s) const { return find(s) != npos; }
+
+  constexpr size_type find(basic_string_view v, size_type pos = 0) const noexcept {
+    if (v.n_ == 0) return pos <= n_ ? pos : npos;
+    if (pos >= n_ || v.n_ > n_ - pos) return npos;
+    for (size_type i = pos; i + v.n_ <= n_; ++i)
+      if (Tr::eq(d_[i], v.d_[0]) && Tr::compare(d_ + i, v.d_, v.n_) == 0) return i;
+    return npos;
+  }
+  constexpr size_type find(C c, size_type pos = 0) const noexcept {
+    if (pos >= n_) return npos;
+    const C* p = Tr::find(d_ + pos, n_ - pos, c);
+    return p ? size_type(p - d_) : npos;
+  }
+  constexpr size_type find(const C* s, size_type pos, size_type n) const { return find(basic_string_view(s, n), pos); }
+  constexpr size_type find(const C* s, size_type pos = 0) const { return find(basic_string_view(s), pos); }
+  constexpr size_type rfind(basic_string_view v, size_type pos = npos) const noexcept {
+    if (v.n_ > n_) return npos;
+    size_type i = n_ - v.n_ < pos ? n_ - v.n_ : pos;
+    for (;; --i) {
+      if (Tr::compare(d_ + i, v.d_, v.n_) == 0) return i;
+      if (i == 0) return npos;
+    }
+  }
+  constexpr size_type rfind(C c, size_type pos = npos) const noexcept {
+    if (n_ == 0) return npos;
+    size_type i = n_ - 1 < pos ? n_ - 1 : pos;
+    for (;; --i) { if (Tr::eq(d_[i], c)) return i; if (i == 0) return npos; }
+  }
+  constexpr size_type rfind(const C* s, size_type pos, size_type n) const { return rfind(basic_string_view(s, n), pos); }
+  constexpr size_type rfind(const C* s, size_type pos = npos) const { return rfind(basic_string_view(s), pos); }
+  constexpr size_type find_first_of(basic_string_view v, size_type pos = 0) const noexcept {
+    for (size_type i = pos; i < n_; ++i) if (Tr::find(v.d_, v.n_, d_[i])) return i;
+    return npos;
+  }
+  constexpr size_type find_first_of(C c, size_type pos = 0) const noexcept { return find(c, pos); }
+  constexpr size_type find_first_of(const C* s, size_type pos, size_type n) const { return find_first_of(basic_string_view(s, n), pos); }
+  constexpr size_type find_first_of(const C* s, size_type pos = 0) const { return find_first_of(basic_string_view(s), pos); }
+  constexpr size_type find_last_of(basic_string_view v, size_type pos = npos) const noexcept {
+    if (n_ == 0) return npos;
+    for (size_type i = n_ - 1 < pos ? n_ - 1 : pos;; --i) { if (Tr::find(v.d_, v.n_, d_[i])) return i; if (i == 0) return npos; }
+  }
+  constexpr size_type find_last_of(C c, size_type pos = npos) const noexcept { return rfind(c, pos); }
+  constexpr size_type find_last_of(const C* s, size_type pos, size_type n) const { return find_last_of(basic_string_view(s, n), pos); }
+  constexpr size_type find_last_of(const C* s, size_type pos = npos) const { return find_last_of(basic_string_view(s), pos); }
+  constexpr size_type find_first_not_of(basic_string_view v, size_type pos = 0) const noexcept {
+    for (size_type i = pos; i < n_; ++i) if (!Tr::find(v.d_, v.n_, d_[i])) return i;
+    return npos;
+  }
+  constexpr size_type find_first_not_of(C c, size_type pos = 0) const noexcept {
+    for (size_type i = pos; i < n_; ++i) if (!Tr::eq(d_[i], c)) return i;
+    return npos;
+  }
+  constexpr size_type find_first_not_of(const C* s, size_type pos, size_type n) const { return find_first_not_of(basic_string_view(s, n), pos); }
+  constexpr size_type find_first_not_of(const C* s, size_type pos = 0) const { return find_first_not_of(basic_string_view(s), pos); }
+  constexpr size_type find_last_not_of(basic_string_view v, size_type pos = npos) const noexcept {
+    if (n_ == 0) return npos;
+    for (size_type i = n_ - 1 < pos ? n_ - 1 : pos;; --i) { if (!Tr::find(v.d_, v.n_, d_[i])) return i; if (i == 0) return npos; }
+  }
+  constexpr size_type find_last_not_of(C c, size_type pos = npos) const noexcept {
+    if (n_ == 0) return npos;
+    for (size_type i = n_ - 1 < pos ? n_ - 1 : pos;; --i) { if (!Tr::eq(d_[i], c)) return i; if (i == 0) return npos; }
+  }
+  constexpr size_type find_last_not_of(const C* s, size_type pos, size_type n) const { return find_last_not_of(basic_string_view(s, n), pos); }
+  constexpr size_type find_last_not_of(const C* s, size_type pos = npos) const { return find_last_not_of(basic_string_view(s), pos); }
+
+ private:
+  const C* d_ = nullptr;
+  size_type n_ = 0;
+};
+
+/* Comparisons: the type_identity_t parameter lets one side convert (C++20 [string.view.comparison]). */
+template <class C, class T> constexpr bool operator==(basic_string_view<C, T> a, type_identity_t<basic_string_view<C, T>> b) noexcept { return a.size() == b.size() && a.compare(b) == 0; }
+template <class C, class T> constexpr strong_ordering operator<=>(basic_string_view<C, T> a, type_identity_t<basic_string_view<C, T>> b) noexcept { return a.compare(b) <=> 0; }
+
+using string_view = basic_string_view<char>;
+using u8string_view = basic_string_view<char8_t>;
+using u16string_view = basic_string_view<char16_t>;
+using u32string_view = basic_string_view<char32_t>;
+using wstring_view = basic_string_view<wchar_t>;
+
+namespace __lk {
+constexpr size_t fnv1a32(const void* p, size_t n) noexcept {  // documented in the header comment
+  const unsigned char* b = static_cast<const unsigned char*>(p);
+  unsigned h = 2166136261u;
+  for (size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 16777619u; }
+  return h;
+}
+}  // namespace __lk
+template <> struct hash<string_view> { size_t operator()(string_view s) const noexcept { return __lk::fnv1a32(s.data(), s.size()); } };
+template <> struct hash<u8string_view> { size_t operator()(u8string_view s) const noexcept { return __lk::fnv1a32(s.data(), s.size()); } };
+template <> struct hash<u16string_view> { size_t operator()(u16string_view s) const noexcept { return __lk::fnv1a32(s.data(), s.size() * 2); } };
+template <> struct hash<u32string_view> { size_t operator()(u32string_view s) const noexcept { return __lk::fnv1a32(s.data(), s.size() * 4); } };
+
+inline namespace literals {
+inline namespace string_view_literals {
+constexpr string_view operator""sv(const char* s, size_t n) noexcept { return string_view(s, n); }
+constexpr u8string_view operator""sv(const char8_t* s, size_t n) noexcept { return u8string_view(s, n); }
+constexpr u16string_view operator""sv(const char16_t* s, size_t n) noexcept { return u16string_view(s, n); }
+constexpr u32string_view operator""sv(const char32_t* s, size_t n) noexcept { return u32string_view(s, n); }
+}  // namespace string_view_literals
+}  // namespace literals
+
+}  // namespace std
+#endif

@@ -1,0 +1,3 @@
+/* LithoRoot <streambuf>: see lithoroot_streams.h (char-only, locale-free subset; no cout/cerr/cin). */
+#pragma once
+#include <lithoroot_streams.h>

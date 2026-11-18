@@ -173,12 +173,7 @@ void lt__run_key_destructors(lt_rec_t* rec);
  * Declared in lithothread_errno.c. */
 void __litholibc_errno_arm_tls(void);
 
-/* lithothread_heap_options: the WaferHeap glue. Returns a
- * wh_options_t with the lock hooks wired to a LithoThread mutex,
- * grow fields zeroed for the caller to fill. Declared here
- * because its type comes from waferheap.h; defined in
- * lithothread_heap.c. */
-#include "waferheap.h"
-wh_options_t lithothread_heap_options(void);
+/* The shared heap lives in lithothread_heap.c behind lithoheap.h;
+ * the mutex-hook glue (lithothread_heap_options) is gone. */
 
 #endif /* LITHOTHREAD_INTERNAL_H */

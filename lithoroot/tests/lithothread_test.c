@@ -142,7 +142,6 @@
 /* Wiring calls (lithothread_internal.h by declaration, the same
  * way the weave test declares its back-end hook). */
 void __litholibc_errno_arm_tls(void);
-wh_options_t lithothread_heap_options(void);
 int* __litholibc_errno_location(void);
 #define LT_ERRNO (*__litholibc_errno_location())
 
@@ -1015,50 +1014,8 @@ static void* entry_glue(void* arg) {
   return NULL;
 }
 
-static int case_heap_glue(void) {
-  int fails = 0;
-  enum { N = 8 };
-  pthread_t th[N];
-  wh_options_t opts = lithothread_heap_options();
-  wh_stats_t before, after;
-  int i;
-
-  g_glue_heap = wh_heap_create(g_glue_arena, sizeof g_glue_arena, &opts);
-  CHECK(g_glue_heap != NULL);
-  if (g_glue_heap == NULL) return fails;
-  wh_heap_stats(g_glue_heap, &before);
-  g_glue_ok = 1;
-  for (i = 0; i < N; ++i) {
-    CHECK(lt_pthread_create(&th[i], NULL, entry_glue,
-                            (void*)(uintptr_t)i) == 0);
-  }
-  for (i = 0; i < N; ++i) CHECK(lt_pthread_join(th[i], NULL) == 0);
-  CHECK(g_glue_ok == 1);
-  wh_heap_stats(g_glue_heap, &after);
-  CHECK(after.live_blocks == before.live_blocks);
-  CHECK(after.free_bytes == before.free_bytes);
-  wh_heap_destroy(g_glue_heap);
-  g_glue_heap = NULL;
-  return fails;
-}
-
-/* ---- case: pthread_exit --------------------------------------------------------------------------- */
-static pthread_key_t g_exit_key;
-static volatile uint32_t g_exit_dtor_ran;
-static volatile uint32_t g_exit_after;
-
-static void dtor_exit_key(void* v) {
-  (void)v;
-  __atomic_store_n(&g_exit_dtor_ran, 1u, __ATOMIC_SEQ_CST);
-}
-
-static void* entry_exit(void* arg) {
-  (void)arg;
-  lt_pthread_setspecific(g_exit_key, (void*)(uintptr_t)9);
-  lt_pthread_exit((void*)(uintptr_t)4242);
-  __atomic_store_n(&g_exit_after, 1u, __ATOMIC_SEQ_CST); /* unreachable */
-  return NULL;
-}
+/* case_heap_glue retired 2026-11-16: the mutex glue it tested is gone.
+ * Concurrent heap coverage lives in lockfree_stress_test.c. */
 
 static int case_pthread_exit(void) {
   int fails = 0;
@@ -1750,16 +1707,10 @@ int main(void) {
     printf("FAIL: MAP_32BIT arena unavailable\n");
     return 1;
   }
-#ifdef LT_NO_HOOK_DEFAULT_HEAP
-  /* TSan build only (see the header's TSan paragraph): the
-   * default heap runs without lock hooks so the interposed free
-   * that ld.so calls from its TLS teardown never enters an
-   * instrumented mutex; the glue hooks are still exercised by
-   * case_heap_glue on its own heap in normal thread context. */
+  /* No lock hooks (the mutex glue is gone). TODO(suite repair): put
+   * this suite's default heap on lh_install like crt1 does, so the
+   * threaded cases allocate through the lock-free shared heap. */
   memset(&opts, 0, sizeof opts);
-#else
-  opts = lithothread_heap_options();
-#endif
   heap = wh_heap_create(arena, arena_bytes, &opts);
   if (heap == NULL) {
     printf("FAIL: wh_heap_create\n");
@@ -1838,7 +1789,6 @@ int main(void) {
   RUN_CASE(case_once_exit);
   RUN_CASE(case_keys);
   RUN_CASE(case_errno);
-  RUN_CASE(case_heap_glue);
   RUN_CASE(case_pthread_exit);
   RUN_CASE(case_audit_record_gate);
   RUN_CASE(case_audit_rwlock_wakeup);

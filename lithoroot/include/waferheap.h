@@ -169,6 +169,10 @@ void* wh_aligned_alloc(wh_heap_t* heap, size_t alignment, size_t size);
  * ones). Returns 0 for NULL or a pointer foreign to the heap. */
 size_t wh_malloc_usable_size(wh_heap_t* heap, const void* ptr);
 
+/* Usable size of a LIVE block of any heap, from any thread, without
+ * the heap context (atomic header reads, no validation). */
+size_t wh_usable_size_shared(const void* ptr);
+
 /* ---- introspection ---------------------------------------------------
  * The only statistics WaferHeap keeps: counters maintained
  * incrementally on the allocation paths, plus largest_free_block,

@@ -2,14 +2,16 @@
 // morphological coverage restoration (CMAA lineage), SSAA resolve.
 // Clean-room implementations from the published technique descriptions
 // (see Software-Renderer-AA-2026-10-13.md for the survey + citations);
-// no third-party code. All passes gather from a source copy and are
-// single-threaded like the rasterizer they post-process.
+// no third-party code. FXAA (2026-11-17) is fixed-point, gated on depth
+// and/or primitive-id discontinuities, and is safe to run in row bands
+// over the rasterizer's existing worker split (disjoint writes, no locks).
 #include "litholattice/render/software_aa.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <string_view>
+#include <cstring>
 
 namespace litholattice {
 namespace {
@@ -74,136 +76,276 @@ bool softwareAaModeFromName(const char* name, SoftwareAaMode& out) {
 }
 
 // ---------------------------------------------------------------------------
-// FXAA-class post filter (Lottes lineage, clean-room): local-contrast gate,
-// subpixel term from the cross neighbourhood, edge orientation by gradient,
-// endpoint search along the edge (the pair straddling the edge is followed
-// until its average luma breaks), blend offset from the distance to the
-// nearer end + the subpixel term. Operates on LDR framebuffer values.
+// FXAA-class post filter (2026-11-17): geometry-edge gate + fixed-point math.
+// A pixel is touched only if its 3x3 neighbourhood has a depth step and/or a
+// primitive-id step, so pixel-art texture interiors stay bit-identical.
+// Orientation, the subpixel term and the endpoint search follow the same
+// FXAA-class shape as before, but every term is integer (luma 0-255, offsets
+// in 1/256 px, bilinear with 8-bit weights). Row bands may run in parallel:
+// each worker reads scratch and writes only its own rows.
 // ---------------------------------------------------------------------------
-// Float NDC-z threshold t -> smallest uint16 step that exceeds it: |a-b|/65535 > t
-// <=> |a-b| > t*65535 <=> |a-b| >= floor(t*65535)+1 (t*65535 is non-integral here).
 static constexpr int depthEdgeQ(float t) { return int(double(t) * 65535.0) + 1; }
+static int absI(int v) { return v < 0 ? -v : v; }
 
-void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s, const uint16_t* depth) {
-  const int w = int(fb.width), h = int(fb.height);
-  if (w < 3 || h < 3) return;
-  s.src = fb.pixels;
-  computeLuma(fb, s);
-  const uint32_t* src = s.src.data();
-  const float* L = s.luma.data();
-  auto lum = [&](int x, int y) {
-    x = std::clamp(x, 0, w - 1);
-    y = std::clamp(y, 0, h - 1);
-    return L[size_t(y) * size_t(w) + size_t(x)];
+static uint32_t bilinearQ8(const uint32_t* src, int w, int h, int fx, int fy) {
+  // fx, fy in 1/256 pixel units, origin at the pixel center index.
+  if (fx < 0) fx = 0;
+  if (fy < 0) fy = 0;
+  const int maxx = (w - 1) << 8, maxy = (h - 1) << 8;
+  if (fx > maxx) fx = maxx;
+  if (fy > maxy) fy = maxy;
+  const int x0 = fx >> 8, y0 = fy >> 8;
+  const int x1 = x0 < w - 1 ? x0 + 1 : x0, y1 = y0 < h - 1 ? y0 + 1 : y0;
+  const int tx = fx & 255, ty = fy & 255;
+  const uint32_t p00 = src[size_t(y0) * size_t(w) + size_t(x0)];
+  const uint32_t p10 = src[size_t(y0) * size_t(w) + size_t(x1)];
+  const uint32_t p01 = src[size_t(y1) * size_t(w) + size_t(x0)];
+  const uint32_t p11 = src[size_t(y1) * size_t(w) + size_t(x1)];
+  auto ch = [&](uint32_t p, int shift) {
+    const int a = int((p >> shift) & 0xFF);
+    const int b = int((p10 >> shift) & 0xFF);
+    const int c = int((p01 >> shift) & 0xFF);
+    const int d = int((p11 >> shift) & 0xFF);
+    const int r0 = a * (256 - tx) + b * tx;
+    const int r1 = c * (256 - tx) + d * tx;
+    return (r0 * (256 - ty) + r1 * ty + 32768) >> 16;
   };
-  constexpr float kEdgeRel = 0.125f;   // FXAA quality edge threshold (relative)
-  constexpr float kEdgeAbs = 0.0625f;  // FXAA quality edge threshold (absolute floor)
-  constexpr int kSearch = 12;          // endpoint search radius (steps of 1 px)
-  constexpr int kDepthEdgeQ = depthEdgeQ(0.0025f);  // quantized geometry-edge depth step
+  (void)p00;
+  const int r = ch(p00, 16), g = ch(p00, 8), b = ch(p00, 0);
+  return 0xFF000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+}
 
-  for (int y = 0; y < h; ++y) {
+void prepareFxaaRows(const SoftwareFramebuffer& fb, SoftwareAaScratch& s, int y0, int y1) {
+  const int w = int(fb.width), h = int(fb.height);
+  if (y0 < 0) y0 = 0;
+  if (y1 > h) y1 = h;
+  if (y0 >= y1 || w <= 0) return;
+  const uint32_t* px = fb.pixels.data();
+  uint16_t* L = s.lumaQ.data();
+  uint8_t* E = s.edge.data();
+  for (int y = y0; y < y1; ++y) {
+    const size_t row = size_t(y) * size_t(w);
     for (int x = 0; x < w; ++x) {
-      const float lM = lum(x, y);
-      const float lN = lum(x, y - 1), lS = lum(x, y + 1);
-      const float lW = lum(x - 1, y), lE = lum(x + 1, y);
-      const float lNW = lum(x - 1, y - 1), lNE = lum(x + 1, y - 1);
-      const float lSW = lum(x - 1, y + 1), lSE = lum(x + 1, y + 1);
-      float rMax = lM, rMin = lM;
-      for (float v : {lN, lS, lE, lW, lNW, lNE, lSW, lSE}) {
-        rMax = std::max(rMax, v);
-        rMin = std::min(rMin, v);
+      const uint32_t p = px[row + size_t(x)];
+      // Rec.601 coefficients in Q8: 77/256, 150/256, 29/256 (77+150+29 = 256).
+      L[row + size_t(x)] = uint16_t((77 * ((p >> 16) & 0xFF) + 150 * ((p >> 8) & 0xFF) + 29 * (p & 0xFF)) >> 8);
+      E[row + size_t(x)] = 0;
+    }
+  }
+}
+
+void prepareFxaa(const SoftwareFramebuffer& fb, SoftwareAaScratch& s) {
+  const size_t n = size_t(fb.width) * size_t(fb.height);
+  if (s.src.size() < n) s.src.resize(n);
+  if (s.lumaQ.size() < n) s.lumaQ.resize(n);
+  if (s.edge.size() < n) s.edge.resize(n);
+  if (n == 0) return;
+  prepareFxaaRows(fb, s, 0, int(fb.height));
+}
+
+static bool depthDiscon(int a, int b) {
+  if (a == b) return false;
+  // Clear/sky (0xFFFF) vs any written depth is a silhouette at any distance.
+  if (a == 0xFFFF || b == 0xFFFF) return true;
+  const int dMin = a < b ? a : b;
+  const int dMax = a < b ? b : a;
+  // Relative test in leftover far-code (65535 - dMin). Hyperbolic [0,1] depth
+  // with near 0.05 / far 1000 clusters near 0xFFFF, so a fixed 164 (~0.0025)
+  // missed block-vs-sky past about 20 blocks (z=50 is only ~62 LSBs from sky).
+  // *16 is about a 6% jump — steep close-range face gradients stay under it,
+  // occlusion and sky breaks stay over it.
+  return (dMax - dMin) * 16 >= (0xFFFF - dMin);
+}
+
+void applyFxaaRows(SoftwareFramebuffer& fb, SoftwareAaScratch& s,
+                   const uint16_t* depth, const uint16_t* prim, int y0, int y1) {
+  const int w = int(fb.width), h = int(fb.height);
+  if (w < 3 || h < 3 || !depth && !prim) return;
+  if (y0 < 0) y0 = 0;
+  if (y1 > h) y1 = h;
+  if (y0 >= y1) return;
+  const uint32_t* src = fb.pixels.data();
+  const uint16_t* L = s.lumaQ.data();
+  uint32_t* dest = s.src.data();
+  uint8_t* edge = s.edge.data();
+  auto lum = [&](int x, int y) -> int {
+    if (x < 0) x = 0; else if (x >= w) x = w - 1;
+    if (y < 0) y = 0; else if (y >= h) y = h - 1;
+    return int(L[size_t(y) * size_t(w) + size_t(x)]);
+  };
+  constexpr int kSearch = 12;
+
+  for (int y = y0; y < y1; ++y) {
+    for (int x = 0; x < w; ++x) {
+      // Geometry-edge gate first: depth and/or primitive-id discontinuities.
+      bool geom = false;
+      if (depth) {
+        // Fast reject: 4-connected neighbours usually match on a flat surface
+        // or open sky. Only then walk the 3x3 with the relative/sky test.
+        const uint16_t mid = depth[size_t(y) * size_t(w) + size_t(x)];
+        const int xl = x > 0 ? x - 1 : 0, xr = x + 1 < w ? x + 1 : w - 1;
+        const int yu = y > 0 ? y - 1 : 0, yd = y + 1 < h ? y + 1 : h - 1;
+        const size_t rw = size_t(w);
+        if (depth[size_t(y) * rw + size_t(xl)] != mid ||
+            depth[size_t(y) * rw + size_t(xr)] != mid ||
+            depth[size_t(yu) * rw + size_t(x)] != mid ||
+            depth[size_t(yd) * rw + size_t(x)] != mid ||
+            depth[size_t(yu) * rw + size_t(xl)] != mid ||
+            depth[size_t(yu) * rw + size_t(xr)] != mid ||
+            depth[size_t(yd) * rw + size_t(xl)] != mid ||
+            depth[size_t(yd) * rw + size_t(xr)] != mid) {
+          int dMin = 0xFFFF, dMax = 0;
+          bool sawSky = false, sawSolid = false;
+          for (int dy = -1; dy <= 1; ++dy) {
+            int yy = y + dy; if (yy < 0) yy = 0; else if (yy >= h) yy = h - 1;
+            const uint16_t* row = depth + size_t(yy) * rw;
+            for (int dx = -1; dx <= 1; ++dx) {
+              int xx = x + dx; if (xx < 0) xx = 0; else if (xx >= w) xx = w - 1;
+              const int d = int(row[xx]);
+              if (d == 0xFFFF) sawSky = true;
+              else sawSolid = true;
+              if (d < dMin) dMin = d;
+              if (d > dMax) dMax = d;
+            }
+          }
+          geom = (sawSky && sawSolid) || depthDiscon(dMin, dMax);
+        }
       }
-      const float range = rMax - rMin;
-      if (range < std::max(kEdgeAbs, kEdgeRel * rMax)) continue;  // not an edge
-      if (depth) {  // Cortana 2026-10-16: texture-preserving - geometry (depth) edges only
-        // 2026-10-26 (Archie triage step 2): compare raw uint16 depth against the
-        // threshold pre-quantized once (0.0025 * 65535 = 163.84 -> diff >= 164 is
-        // a geometry edge), instead of dequantizing every tap to float.
-        int dMin = 0xFFFF, dMax = 0;
-        for (int dy = -1; dy <= 1; ++dy) {
-          const uint16_t* row = depth + size_t(std::clamp(y + dy, 0, h - 1)) * size_t(w);
-          for (int dx = -1; dx <= 1; ++dx) {
-            const int d = row[std::clamp(x + dx, 0, w - 1)];
-            dMin = std::min(dMin, d);
-            dMax = std::max(dMax, d);
+      if (!geom && prim) {
+        int yy0 = y > 0 ? y - 1 : 0, yy1 = y + 1 < h ? y + 1 : h - 1;
+        int xx0 = x > 0 ? x - 1 : 0, xx1 = x + 1 < w ? x + 1 : w - 1;
+        const uint16_t mid = prim[size_t(y) * size_t(w) + size_t(x)];
+        for (int yy = yy0; yy <= yy1 && !geom; ++yy) {
+          const uint16_t* row = prim + size_t(yy) * size_t(w);
+          for (int xx = xx0; xx <= xx1; ++xx) {
+            if (row[xx] != mid) { geom = true; break; }
           }
         }
-        if (dMax - dMin <= kDepthEdgeQ - 1) continue;  // same surface: texture detail, keep it sharp
       }
+      if (!geom) continue;
 
-      // Subpixel term: how far the cross average sits from the center,
-      // normalized by the local range, smoothstepped (FXAA's subpix curve).
-      const float crossAvg = (lN + lS + lE + lW) * 0.25f;
-      float sub = std::clamp(std::fabs(crossAvg - lM) / range, 0.f, 1.f);
-      sub = sub * sub * (3.f - 2.f * sub);
-      const float subOff = sub * 0.375f;  // <= 3/8 px from the subpixel term
+      const int lM = lum(x, y);
+      const int lN = lum(x, y - 1), lS = lum(x, y + 1);
+      const int lW = lum(x - 1, y), lE = lum(x + 1, y);
+      const int lNW = lum(x - 1, y - 1), lNE = lum(x + 1, y - 1);
+      const int lSW = lum(x - 1, y + 1), lSE = lum(x + 1, y + 1);
+      int rMax = lM, rMin = lM;
+      for (int v : {lN, lS, lE, lW, lNW, lNE, lSW, lSE}) {
+        if (v > rMax) rMax = v;
+        if (v < rMin) rMin = v;
+      }
+      const int range = rMax - rMin;
+      if (range == 0) continue;  // same colour across the edge: nothing to blend
 
-      // Orientation: gradient magnitude across each axis (Sobel).
-      const float gx = std::fabs((lNE + 2.f * lE + lSE) - (lNW + 2.f * lW + lSW));
-      const float gy = std::fabs((lSW + 2.f * lS + lSE) - (lNW + 2.f * lN + lNE));
-      const bool horzEdge = gy >= gx;  // edge runs horizontally
+      // Subpixel term in Q8: t = |crossAvg - lM| / range, smoothstep, * 3/8 px.
+      const int cross4 = lN + lS + lE + lW;
+      int subNum = cross4 - 4 * lM; if (subNum < 0) subNum = -subNum;  // |cross-lM|*4
+      int tQ8 = (subNum * 64) / range;  // 256 * (subNum/4) / range
+      if (tQ8 > 256) tQ8 = 256;
+      // smoothstep t^2 (3-2t) in Q8: (t*t*(3*256 - 2*t)) / 256 / 256
+      const int subQ8 = (tQ8 * tQ8 * (768 - 2 * tQ8) + 32768) >> 16;
+      const int subOff = (subQ8 * 96) >> 8;  // 96/256 = 3/8 px, result Q8
 
-      // Endpoint search along the edge: follow the average of the pair
-      // straddling the edge; the end is where that average breaks by
-      // >= 1/4 of the across-edge gradient (FXAA's end-of-edge test).
-      float edgeOff = 0.f;
-      bool towardNeg = false;  // blend direction: toward the steeper side
+      const int gx = absI((lNE + 2 * lE + lSE) - (lNW + 2 * lW + lSW));
+      const int gy = absI((lSW + 2 * lS + lSE) - (lNW + 2 * lN + lNE));
+      const bool horzEdge = gy >= gx;
+
+      auto searchH = [&](int dir, int avg0, int grad) {
+        const int thresh = (grad + 3) >> 2;  // 1/4 of the across-edge gradient
+        for (int t = 1; t <= kSearch; ++t) {
+          const int a = (lum(x + dir * t, y - 1) + lum(x + dir * t, y + 1));
+          int d = a - 2 * avg0; if (d < 0) d = -d;
+          if (d >= 2 * thresh) return t;
+        }
+        return kSearch + 1;
+      };
+      auto searchV = [&](int dir, int avg0, int grad) {
+        const int thresh = (grad + 3) >> 2;
+        for (int t = 1; t <= kSearch; ++t) {
+          const int a = (lum(x - 1, y + dir * t) + lum(x + 1, y + dir * t));
+          int d = a - 2 * avg0; if (d < 0) d = -d;
+          if (d >= 2 * thresh) return t;
+        }
+        return kSearch + 1;
+      };
+
+      int offQ8 = subOff;
+      int sign = 1;
+      uint32_t blended = 0;
+      bool write = false;
       if (horzEdge) {
-        const float stepN = std::fabs(lN - lM), stepS = std::fabs(lS - lM);
-        towardNeg = stepN >= stepS;
-        const float grad = std::max(stepN, stepS);
-        const float avg0 = 0.5f * (lN + lS);
-        auto search = [&](int dir) {
-          for (int t = 1; t <= kSearch; ++t) {
-            const float a = 0.5f * (lum(x + dir * t, y - 1) + lum(x + dir * t, y + 1));
-            if (std::fabs(a - avg0) >= 0.25f * grad) return t;
-          }
-          return kSearch + 1;  // no end inside the search radius
-        };
-        const int dPos = search(+1), dNeg = search(-1);
-        const float len = float(dPos + dNeg);
-        edgeOff = std::clamp(0.5f - float(std::min(dPos, dNeg)) / len, 0.f, 0.5f);
-        const float off = std::max(edgeOff, subOff);
-        if (off > 0.f)
-          fb.pixels[size_t(y) * size_t(w) + size_t(x)] =
-              bilinearAt(src, w, h, float(x), float(y) + (towardNeg ? -off : off));
+        const int stepN = absI(lN - lM), stepS = absI(lS - lM);
+        sign = stepN >= stepS ? -1 : 1;
+        const int grad = stepN >= stepS ? stepN : stepS;
+        const int dPos = searchH(+1, (lN + lS) / 2, grad);
+        const int dNeg = searchH(-1, (lN + lS) / 2, grad);
+        const int len = dPos + dNeg;
+        if (len > 0) {
+          int nearer = dPos < dNeg ? dPos : dNeg;
+          int edgeQ8 = 128 - (nearer * 256) / len;  // 0.5 - nearer/len, in Q8
+          if (edgeQ8 < 0) edgeQ8 = 0;
+          if (edgeQ8 > 128) edgeQ8 = 128;
+          if (edgeQ8 > offQ8) offQ8 = edgeQ8;
+        }
+        if (offQ8 > 0) {
+          blended = bilinearQ8(src, w, h, x << 8, (y << 8) + sign * offQ8);
+          write = true;
+        }
       } else {
-        const float stepW = std::fabs(lW - lM), stepE = std::fabs(lE - lM);
-        towardNeg = stepW >= stepE;
-        const float grad = std::max(stepW, stepE);
-        const float avg0 = 0.5f * (lW + lE);
-        auto search = [&](int dir) {
-          for (int t = 1; t <= kSearch; ++t) {
-            const float a = 0.5f * (lum(x - 1, y + dir * t) + lum(x + 1, y + dir * t));
-            if (std::fabs(a - avg0) >= 0.25f * grad) return t;
-          }
-          return kSearch + 1;
-        };
-        const int dPos = search(+1), dNeg = search(-1);
-        const float len = float(dPos + dNeg);
-        edgeOff = std::clamp(0.5f - float(std::min(dPos, dNeg)) / len, 0.f, 0.5f);
-        const float off = std::max(edgeOff, subOff);
-        if (off > 0.f)
-          fb.pixels[size_t(y) * size_t(w) + size_t(x)] =
-              bilinearAt(src, w, h, float(x) + (towardNeg ? -off : off), float(y));
+        const int stepW = absI(lW - lM), stepE = absI(lE - lM);
+        sign = stepW >= stepE ? -1 : 1;
+        const int grad = stepW >= stepE ? stepW : stepE;
+        const int dPos = searchV(+1, (lW + lE) / 2, grad);
+        const int dNeg = searchV(-1, (lW + lE) / 2, grad);
+        const int len = dPos + dNeg;
+        if (len > 0) {
+          int nearer = dPos < dNeg ? dPos : dNeg;
+          int edgeQ8 = 128 - (nearer * 256) / len;
+          if (edgeQ8 < 0) edgeQ8 = 0;
+          if (edgeQ8 > 128) edgeQ8 = 128;
+          if (edgeQ8 > offQ8) offQ8 = edgeQ8;
+        }
+        if (offQ8 > 0) {
+          blended = bilinearQ8(src, w, h, (x << 8) + sign * offQ8, y << 8);
+          write = true;
+        }
+      }
+      if (write) {
+        const size_t idx = size_t(y) * size_t(w) + size_t(x);
+        dest[idx] = blended;
+        edge[idx] = 1;
       }
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Conservative morphological coverage AA (MLAA -> SMAA -> CMAA2 lineage,
-// clean-room variant). Pass 1 marks edges between pixels (luma steps and
-// depth steps; monotone-ramp texture gradients are rejected unless the
-// depth buffer vouches for a geometry step). Pass 2 walks each edge run,
-// reconstructs the edge line's subpixel offset at the run ends from the
-// adjacent-column/row edges (the turn signal), and integrates the line's
-// coverage over each touched pixel analytically — the restored coverage
-// IS the blend weight. Pass 3 composites from the source copy.
-// Deviations from full CMAA2 (documented in the AA report): the shape
-// library is reduced to long-edge runs + end turns (no Z-pattern special
-// cases), and weights are analytic instead of SMAA's area texture.
-// ---------------------------------------------------------------------------
+void commitFxaaRows(SoftwareFramebuffer& fb, SoftwareAaScratch& s, int y0, int y1) {
+  const int w = int(fb.width), h = int(fb.height);
+  if (y0 < 0) y0 = 0;
+  if (y1 > h) y1 = h;
+  if (y0 >= y1 || w <= 0) return;
+  uint32_t* px = fb.pixels.data();
+  const uint32_t* dest = s.src.data();
+  uint8_t* edge = s.edge.data();
+  for (int y = y0; y < y1; ++y) {
+    const size_t row = size_t(y) * size_t(w);
+    for (int x = 0; x < w; ++x) {
+      const size_t i = row + size_t(x);
+      if (edge[i]) {
+        px[i] = dest[i];
+        edge[i] = 0;
+      }
+    }
+  }
+}
+
+void applyFxaaPost(SoftwareFramebuffer& fb, SoftwareAaScratch& s,
+                   const uint16_t* depth, const uint16_t* prim) {
+  prepareFxaa(fb, s);
+  applyFxaaRows(fb, s, depth, prim, 0, int(fb.height));
+  commitFxaaRows(fb, s, 0, int(fb.height));
+}
+
 void applyCmaaPost(SoftwareFramebuffer& fb, const uint16_t* depth, SoftwareAaScratch& s) {
   const int w = int(fb.width), h = int(fb.height);
   if (w < 2 || h < 2) return;
@@ -460,7 +602,10 @@ void resolveSsaa2x(const SoftwareFramebuffer& hi, SoftwareFramebuffer& out) {
           g += (p >> 8) & 0xFF;
           b += p & 0xFF;
         }
-      out.pixels[size_t(y) * w + x] = packPx(r * 0.25f, g * 0.25f, b * 0.25f);
+      // Round-to-nearest integer box filter (same 64 from a single 255 as the
+      // old float path: (255+2)/4 = 64). Deterministic across hosts.
+      out.pixels[size_t(y) * w + x] =
+          0xFF000000u | (((r + 2) >> 2) << 16) | (((g + 2) >> 2) << 8) | ((b + 2) >> 2);
     }
   }
 }

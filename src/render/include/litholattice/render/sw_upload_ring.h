@@ -42,8 +42,10 @@
 //    flight beyond its drain target. Correctness never rests on it — the
 //    cursors above carry that — it is the design's idiom made concrete.
 //
-// Backpressure policy (design §5): the ring budgets 8 MiB of payload
-// (≈6 frames of worst-observed walk churn) across at most 512 slots.
+// Backpressure policy (design §5): the ring budgets 16 MiB of payload
+// across at most 32768 slots (t46u item 4, sized from measured demand:
+// the TheReefs load burst is 20680 entries in one seal, 36 MiB over the run,
+// 3-8 MiB in flight at peak; the old 512 slots refused 47% of attempts).
 // Ordinary replaces that would exceed the byte budget are refused (claim
 // returns null; the caller keeps the mesh and retries later — the game's
 // pending queue/spill is the holding place, so refusal is deferral, never
@@ -54,6 +56,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "litholattice/render/pbr_quad_mesh.h"  // PbrChunkMesh
 #include "litholattice/render/renderer.h"       // ChunkMesh
@@ -62,8 +65,8 @@ namespace litholattice {
 
 class cSwUploadRing {
  public:
-  static constexpr size_t kSlots = 512;                        // hard slot cap (power of two)
-  static constexpr size_t kByteBudget = size_t(8) << 20;       // payload budget (design §5)
+  static constexpr size_t kSlots = 32768;  // t46u item 4: TheReefs peak 20680 entries in one seal (512 refused 47%)
+  static constexpr size_t kByteBudget = size_t(16) << 20;      // payload budget (t46u: 2x the worst measured in flight)
   static constexpr size_t kMask = kSlots - 1;
   static_assert((kSlots & kMask) == 0, "kSlots must be a power of two");
 
@@ -92,21 +95,26 @@ class cSwUploadRing {
     }
     if (t - h >= kSlots) {  // genuinely out of slots
       pushFull_.fetch_add(1, std::memory_order_relaxed);
+      refusedSlots_.fetch_add(1, std::memory_order_relaxed);
       return nullptr;
     }
+    const uint64_t inFlight = pushedBytes_ - consumedBytes_.load(std::memory_order_acquire);
     if (!mustPush) {
-      const uint64_t inFlight = pushedBytes_ - consumedBytes_.load(std::memory_order_acquire);
       if (inFlight + bytes > kByteBudget) {
         pushFull_.fetch_add(1, std::memory_order_relaxed);
+        refusedBytes_.fetch_add(1, std::memory_order_relaxed);
         return nullptr;
       }
     }
+    if (inFlight + bytes > maxBytesInFlight_.load(std::memory_order_relaxed))
+      maxBytesInFlight_.store(inFlight + bytes, std::memory_order_relaxed);
     pending_.fetch_add(1, std::memory_order_acq_rel);  // announce BEFORE the slot write (design §6)
     Slot& s = slots_[t & kMask];
     s = Slot{};  // the consumer moved the previous occupant out at drain; reset the husk
     s.bytes = bytes;
     claimed_ = t;
     pushedBytes_ += bytes;
+    pushedBytesStat_.store(pushedBytes_, std::memory_order_relaxed);
     const uint64_t occ = t + 1 - h;
     if (occ > maxOccupancy_.load(std::memory_order_relaxed))
       maxOccupancy_.store(occ, std::memory_order_relaxed);
@@ -151,6 +159,7 @@ class cSwUploadRing {
       batch.push_back(std::move(s));
     }
     headShadow_ = t;
+    if (t - h > maxDrainPerSeal_.load(std::memory_order_relaxed)) maxDrainPerSeal_.store(t - h, std::memory_order_relaxed);
     consumedBytesTotal_ += bytes;
     consumedBytes_.store(consumedBytesTotal_, std::memory_order_release);
     head_.store(t, std::memory_order_release);
@@ -163,9 +172,17 @@ class cSwUploadRing {
   uint64_t pushedCount() const { return pushed_.load(std::memory_order_relaxed); }
   uint64_t pushFullCount() const { return pushFull_.load(std::memory_order_relaxed); }
   uint64_t maxOccupancy() const { return maxOccupancy_.load(std::memory_order_relaxed); }
+  /// t46u item 4 demand counters: refusals split by cause, peak payload in flight,
+  /// peak entries one seal drained, and total payload bytes pushed.
+  uint64_t refusedSlots() const { return refusedSlots_.load(std::memory_order_relaxed); }
+  uint64_t refusedBytes() const { return refusedBytes_.load(std::memory_order_relaxed); }
+  uint64_t maxBytesInFlight() const { return maxBytesInFlight_.load(std::memory_order_relaxed); }
+  uint64_t maxDrainPerSeal() const { return maxDrainPerSeal_.load(std::memory_order_relaxed); }
+  uint64_t pushedBytesTotal() const { return pushedBytesStat_.load(std::memory_order_relaxed); }
 
  private:
-  Slot slots_[kSlots];
+  // Heap-held: at the t46u size the slot array is too big for a renderer that lives on a stack.
+  std::unique_ptr<Slot[]> slots_ = std::make_unique<Slot[]>(kSlots);
   // Producer-published cursor: written only by the producer, read by the consumer.
   alignas(64) std::atomic<uint64_t> tail_{0};
   // Consumer-published cursors: written only by the consumer, read by the producer.
@@ -177,6 +194,8 @@ class cSwUploadRing {
   alignas(64) std::atomic<uint64_t> pushed_{0};
   std::atomic<uint64_t> pushFull_{0};
   std::atomic<uint64_t> maxOccupancy_{0};
+  std::atomic<uint64_t> refusedSlots_{0}, refusedBytes_{0}, maxBytesInFlight_{0}, pushedBytesStat_{0};
+  alignas(64) std::atomic<uint64_t> maxDrainPerSeal_{0};  // consumer-written stat
   // Producer-only plain state (single-threaded by the SPSC contract).
   uint64_t tailShadow_ = 0;
   uint64_t headCache_ = 0;

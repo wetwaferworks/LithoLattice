@@ -7,7 +7,7 @@
 //   rulings doc, Tables 1-3. The GLSL mirror is canonical_quad_decode.glsl and must
 //   match this file bit-for-bit (the engine render tests pin both against fixed vectors).
 // GEOMETRY CONVENTION (ours, replaces the sketch's sign-anchored math):
-//   (ox,oy,oz) is the MIN corner of the face rectangle in LOD-grid units, with the face
+//   (ox,oy,oz) is the MIN corner of the face rectangle in grid units, with the face
 //   plane coordinate baked in (a +X face of cell x sits at ox = x+1). Face axes:
 //   X faces: U=Z, V=Y; Y faces: U=X, V=Z; Z faces: U=X, V=Y. Geometric corners
 //   g0=(0,0) g1=(1,0) g2=(1,1) g3=(0,1) in (u,v); cornerAo holds 2 bits per geometric
@@ -27,7 +27,7 @@ enum : uint32_t {
   kModeCutout = 1u << 0, kModeGlassDither = 1u << 1, kModeAlphaBlend = 1u << 2, kModeOit = 1u << 3,
   kModeAdditive = 1u << 4, kModeAnimated = 1u << 5, kModeLeafWind = 1u << 6, kModeGroundPulse = 1u << 7,
 };
-enum : uint32_t { kScaleCoarse1x = 0, kScaleMicroQtr = 1, kScaleLodSkirt = 2 };
+enum : uint32_t { kScaleCoarse1x = 0, kScaleMicroQtr = 1 };  // 2 was the LOD skirt scale (removed 2026-11-17); 3 unused
 
 struct DecodedQuad {
   uint32_t ox = 0, oy = 0, oz = 0;  // 0..63
@@ -131,7 +131,7 @@ constexpr uint32_t geomCorner(uint32_t face, uint32_t aoDiagFlip, uint32_t verte
 
 struct PulledCorner { int32_t pos[3]; uint32_t g; uint32_t ao; uint32_t uv[2]; };
 
-/// Integer decode of one pulled vertex in LOD-grid units (multiply by the LOD cell size,
+/// Integer decode of one pulled vertex in grid units (whole blocks for coarse quads,
 /// or 0.25 for micro quads, to get sub-chunk space). This is the reference the GLSL
 /// mirror and the software span decoder are tested against.
 constexpr PulledCorner pullCorner(uint64_t raw, uint32_t vertexIdx) noexcept {

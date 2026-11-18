@@ -123,6 +123,8 @@ class cSoftwareRenderer : public IRenderer {
   struct UploadRingStats {
     uint64_t pushed = 0, pushFull = 0, maxOccupancy = 0;
     uint64_t drained = 0, applied = 0, coalesced = 0, clears = 0;
+    uint64_t refusedSlots = 0, refusedBytes = 0, maxBytesInFlight = 0, maxDrainPerSeal = 0, pushedBytes = 0;  // t46u item 4
+    uint64_t slots = 0, byteBudget = 0;
   };
   UploadRingStats uploadRingStats() const;
   void uploadEntityMesh(const std::vector<PackedVertex>& verts) override;  // dynamic triangle verts, replaced per upload
@@ -214,10 +216,9 @@ class cSoftwareRenderer : public IRenderer {
   /// Three-way software split (Design B, Stage 1): execute renderFrame(fp)
   /// detached on the band pool's executor worker (see setDetachedPoolMode)
   /// and return immediately; onDone(err) runs on that worker when the frame
-  /// is finished (err null on success). The render executes under
-  /// threeway::RendererGuard, exactly as the Vulkan RenderWorker's loop
-  /// does, so the game's remaining guarded renderer calls (grabs, settings,
-  /// entity uploads) stay serialised with it. Stage 2: before the render,
+  /// is finished (err null on success). t46u: no lock around the render; the
+  /// game reaches the renderer only through the command mailbox while the
+  /// split runs (renderer_mailbox.h). Stage 2: before the render,
   /// the executor drains the upload ring up to `drainTarget` (the seal —
   /// see drainUploadRing) with NO guard: the game's mesh uploads no longer
   /// take the guard at all on this path. The caller owns everything fp
@@ -227,6 +228,19 @@ class cSoftwareRenderer : public IRenderer {
   /// either way.
   void renderFrameDetached(const FrameParams& fp, uint64_t drainTarget,
                            const std::function<void(std::exception_ptr)>& onDone);
+  /// t46u item 2 (JD 2026-11-16): the frame body for a pump running ON the executor:
+  /// drain the upload ring up to drainTarget (the seal), renderFrame(fp), retire the drained
+  /// buffers. No guard: on the split path the executor owns the renderer between seals.
+  void renderJobOnExecutor(const FrameParams& fp, uint64_t drainTarget);
+  /// t46u item 2: work the detached executor polls (the app's frame mailbox). pumpOnce()
+  /// runs on the executor and returns false when it had nothing to do (the executor then
+  /// backs off: yield, then a short sleep; no peer wait).
+  struct IDetachedPump {
+    virtual ~IDetachedPump() = default;
+    virtual bool pumpOnce() = 0;
+  };
+  /// Main thread. nullptr uninstalls and returns only once the executor is out of pumpOnce().
+  static void setDetachedPump(IDetachedPump* p);
   /// Pool-wide detached mode (Design B, Stage 1): while on, the shared
   /// cSwBandPool spawns one extra worker — the executor that runs
   /// renderFrameDetached bodies (band count unchanged; synchronous run()
@@ -235,6 +249,9 @@ class cSoftwareRenderer : public IRenderer {
   /// app when the software threeway split is enabled; off (the default) is
   /// the pre-Stage-1 pool exactly.
   static void setDetachedPoolMode(bool on);
+  /// True when the pool really runs detached. setDetachedPoolMode(true) leaves it false
+  /// where no worker thread can be spawned (single-thread WASM).
+  static bool detachedPoolMode();
   RenderStats stats() const override { return stats_; }
   void requestGrab() override { grabArmed_ = true; }
   /// The frame snapshot by the most recent armed renderFrame(), as
@@ -261,6 +278,21 @@ class cSoftwareRenderer : public IRenderer {
   static void setRenderScale(float s);
   /// Effective thread count after rounding/clamping.
   static unsigned renderThreads();
+  /// JD 2026-11-17: idle reserved cores the renderer is using in the current / last render
+  /// phase (0 when off, or when the last frame was light enough that borrow stayed latched off).
+  /// Capacity is 0 for an explicit --render-threads, LK_RENDER_THREADS=1, LL_SW_BORROW=0, or < 3 cores.
+  static unsigned borrowedRenderThreads();
+  /// Selftests only: force n borrowed bands, always used (-1 = the normal adaptive rule).
+  /// Applies at the next run().
+  static void setBorrowedBandsOverride(int n);
+  /// Selftests only: force n available borrow workers, but still arm them by last-frame hysteresis.
+  static void setBorrowedBandsAdaptiveOverride(int n);
+  /// Selftests only: seed the last render-frame wall time used by borrow hysteresis.
+  static void noteRenderTimeNs(uint64_t ns);
+  /// Selftests only: clear the borrow latch and last-frame time (next frame starts unarmed).
+  static void resetBorrowHysteresis();
+  /// Render-phase ticket: odd while a frame is rendering, even once the cores are handed back.
+  static uint64_t renderPhaseTicket();
   /// Cortana 2026-10-26 (item 5): while held, LL_SW_SHOT does not count frames (the game holds
   /// it until its mesh queue has drained, so pinned shots see the same geometry every run).
   static void setShotHold(bool hold);
@@ -290,6 +322,23 @@ class cSoftwareRenderer : public IRenderer {
   /// caller yet (P3-3, Appendix D L2).
   void applyFXAA();
 
+  /// Nemo View object ids (opt-in, off by default). With a table set, the flat path also writes
+  /// one byte per pixel into objectBuffer(): table[texture layer] of the depth-test winner, or the
+  /// override while one is set (sprites, entities). Colour and depth output are unchanged either
+  /// way. Pass nullptr/0 to turn it off. The table is copied.
+  void setObjectCapture(const uint8_t* layerToObject, size_t count);
+  bool objectCaptureOn() const { return objectsOn_; }
+  /// Object id for everything drawn until cleared (-1 = use the layer table).
+  void setObjectOverride(int id) { objectOverride_ = id; }
+  const std::vector<uint8_t>& objectBuffer() const { return objects_; }
+  /// Face id of the depth-test winner (0-5, same numbering as PackedVertex faceAo); empty when
+  /// object capture is off. Colour and depth output are unchanged either way.
+  const std::vector<uint8_t>& faceBuffer() const { return faces_; }
+  /// Texture layer of the depth-test winner (parallel to objectBuffer); empty when capture is off.
+  /// Display only: used to look up a precomputed texture colour. Colour and depth output are unchanged.
+  const std::vector<uint16_t>& layerBuffer() const { return layers_; }
+  const std::vector<uint16_t>& depthBuffer() const { return depth_; }
+
   /// Enable/disable per-pixel shading (default: flat for speed).
   void setPerPixelShading(bool enable) { perPixel_ = enable; }
 
@@ -305,21 +354,15 @@ class cSoftwareRenderer : public IRenderer {
 
  private:
   // Render pipeline M8 (software uploader): LL_SW_CANON=1 ingests ChunkMesh::canonical
-  // (span decode via decodeCanonicalMesh) with draw-side LOD/skirt selection; default off =
-  // the legacy PackedVertex stream. canonSrc_ keeps each canonical mesh + its current lod so
-  // a camera ring crossing re-decodes at the new lod (store-owned: drain/renderFrame only).
-  // M10: skirtMask = the draw-side skirt directions decoded (canonSkirtMask); pend = the
-  // lod being selected this pass (neighbour masks read it).
+  // (span decode via decodeCanonicalMesh); default off = the legacy PackedVertex stream.
+  // canonStore_ keeps each canonical mesh so an evicted decode can be rebuilt in view
+  // (store-owned: drain/renderFrame only). Full geometry only (LOD removed 2026-11-17).
   using SwCanonSrc = cSwCanonStore::Entry;  // refactor step 3b: the store is an IMeshUploader
-  uint8_t canonSkirtMaskFor(int cx, int sy, int cz, int lod) const;
-  bool redecodeCanon(SwCanonSrc& src, int lod);
-  void refreshCanonNeighbours(int cx, int sy, int cz);
+  bool redecodeCanon(SwCanonSrc& src);
   cSwCanonStore canonStore_;  ///< step 3b: was std::map<int64_t, SwCanonSrc> canonSrc_
-  int canonCamCx_ = 1 << 30, canonCamCz_ = 1 << 30;
   bool canonInner_ = false;  ///< storing a decoded stream (keeps canonSrc_)
-  void reselectCanonLods(const Vec3& cam);
   // Fix (e), Archie Q5: LRU cap on the expanded decode of canonical chunks (meshes_ entries
-  // made by redecodeCanon). Evicted chunks keep canonSrc_ (lod = -1) and re-decode in view.
+  // made by redecodeCanon). Evicted chunks keep their store entry (not decoded) and re-decode in view.
   cSwDecodeCache decodeCache_;
   uint64_t decodeFrame_ = 0;
   std::vector<int64_t> decodeEvictScratch_;
@@ -330,12 +373,8 @@ class cSoftwareRenderer : public IRenderer {
   cSwDecodeCache& decodeCacheForTest() { return decodeCache_; }
   static bool canonIngestEnabled();
   static void setCanonIngest(bool on);  ///< overrides LL_SW_CANON (tests)
-  /// Test hook: the lod the canonical path currently draws for a stored chunk (-1 = legacy).
-  int canonLodOf(int cx, int sy, int cz) const;
-  /// Test hook (M10): the draw-side skirt direction mask of a stored canonical chunk.
-  int canonSkirtMaskOf(int cx, int sy, int cz) const;
-  /// Test hook: move the LOD reference point without a frame (renderFrame does this).
-  void setCanonCamera(const Vec3& cam) { reselectCanonLods(cam); }
+  /// Test hook: canonical decode state of a chunk: 1 decoded, 0 stored but evicted, -1 not stored (legacy).
+  int canonDecodedOf(int cx, int sy, int cz) const;
  private:
   SoftwareFramebuffer fb_;
   std::vector<int> meshRowY0_, meshRowY1_;  ///< RND-H3: per drawn mesh screen row span
@@ -381,12 +420,15 @@ class cSoftwareRenderer : public IRenderer {
   std::vector<float> frameEmit_;     ///< this frame's nearest emitters (6 floats each)        ///< Cortana 2026-10-16: render.mipmaps (distance LOD, BUG-0005)
   float shimmerTime_ = 0.f;  ///< render clock (s) for the shimmer wave
   std::unique_ptr<SoftwareAaScratch> aaScratch_;  ///< lazily built post-pass scratch
-  std::vector<uint32_t> layerAvg_;  ///< 2026-10-25: per texture layer average colour (far-LOD flat shading)
-  const uint32_t* layerAvgSrc_ = nullptr; uint32_t layerAvgN_ = 0;
-  void refreshLayerAvg();
   std::vector<uint32_t> swScaleX_;                ///< pass sw3: upscale column map
-  SoftwareFramebuffer aaOut_;                     ///< SSAA resolve target (renderFrame)
+  std::vector<uint16_t> scaleDepth_;               ///< pass sw3: NN-upscaled depth for FXAA/CMAA gates
+  std::vector<uint16_t> scaleAaId_;                ///< pass sw3: NN-upscaled prim-id for FXAA/CMAA gates
+  SoftwareFramebuffer aaOut_;                     ///< SSAA resolve / present-size colour
+  SoftwareFramebuffer ssaaHi_;                    ///< retained 2x colour so SSAA does not realloc each frame
+  std::vector<uint16_t> ssaaHiDepth_;             ///< retained 2x depth, paired with ssaaHi_
+  std::vector<uint16_t> aaId_;                    ///< per-pixel primitive stamp (FXAA/CMAA). 0xFFFF = clear/sky; packed layer|face|object otherwise (0 is a valid drawn id)
   SoftwareAaScratch& ensureAaScratch();
+  void ensureAaId(uint32_t w, uint32_t h);        ///< size aaId_ when FXAA/CMAA is on
   // ASCII state (JD 2026-10-13); see setAsciiMode / setAsciiValueSpan.
   bool asciiEnabled_ = false;
   int asciiCols_ = 160;
@@ -394,6 +436,12 @@ class cSoftwareRenderer : public IRenderer {
   int asciiSpan_ = 255;  ///< value span (JD amendment: full 0-255 default)
   std::string asciiText_;  ///< last ASCII stage's raw text grid
   bool perPixel_ = false;  ///< per-pixel shading (slower, better quality)
+  bool objectsOn_ = false;            ///< Nemo View object ids (setObjectCapture)
+  int objectOverride_ = -1;
+  std::vector<uint8_t> objects_;      ///< per-pixel object id, parallel to depth_ (only when objectsOn_)
+  std::vector<uint8_t> faces_;        ///< per-pixel face id 0-5, parallel to objects_ (only when objectsOn_)
+  std::vector<uint16_t> layers_;      ///< per-pixel texture layer, parallel to objects_ (only when objectsOn_)
+  std::vector<uint8_t> layerObject_;  ///< texture layer -> object id
   SoftwareShadingTier shadingTier_ = SoftwareShadingTier::Basic;  ///< fragment tier (per-pixel path)
   const PbrFragmentContext* pbrContext_ = nullptr;  ///< PBR context (registry/lights/camera); may be null
 
@@ -443,16 +491,7 @@ class cSoftwareRenderer : public IRenderer {
     float pulseP1[4] = {0.f, 0.f, 0.f, 0.f};
     float traceP0[4] = {0.f, 0.f, 0.f, 0.f};
     float traceP1[4] = {0.f, 0.f, 0.f, 0.f};
-    uint8_t lodScale = 1;   // 2026-10-25: ChunkMesh::lodScale (>= 4: flat shade + height cull)
     bool hasBlend = false;  // Cortana 2026-10-15 1755: has kShadeAlphaBlend quads (second, blended pass)
-    // Cortana 2026-10-16 (JD foliage LOD) / Elfie 2026-10-17 (Argon counsel pt 1, phase A):
-    // ONE stored set, reordered at upload: untagged quads first (original relative order),
-    // then kShadeLodNear quads with tag bits masked — as a set, exactly the old near set.
-    // kShadeLodFar quads are never drawn on the software path (both old sets dropped them)
-    // and are not stored. Beyond kLodSwitchBlocks the renderer draws only the prefix
-    // [0, untaggedCount) quads — exactly the old far set (JD: software may skip far foliage).
-    bool hasLod = false;
-    size_t untaggedCount = 0;  // quads in the far-mode prefix of `verts`
     /// Cortana 2026-10-16 (render.emissive_light): this mesh's light emitters, world space,
     /// 6 floats each (x, y, z, r, g, b). Built at upload from emissive / powered-Trace quads.
     std::vector<float> emit;
@@ -460,9 +499,7 @@ class cSoftwareRenderer : public IRenderer {
     /// (+X,-X,+Y,-Y,+Z,-Z: the geometric normal of the quad's own winding, axis-aligned
     /// planar quads only) or 6 (never culled). planeLim[b] = the bucket's limiting plane in
     /// mesh-local blocks (min for + buckets, max for - buckets). Built once over the stored
-    /// vector (Elfie 2026-10-17): exact for the near set; in far mode the limits span the
-    /// untagged prefix plus the (undrawn) near quads, which only widens them — the bucket
-    /// test stays conservative and the draw prefix remains the authority on what is drawn.
+    /// vector (Elfie 2026-10-17), exact for the drawn set.
     std::vector<uint8_t> quadFace;
     float planeLim[6] = {0, 0, 0, 0, 0, 0};
   };
@@ -474,7 +511,6 @@ class cSoftwareRenderer : public IRenderer {
   /// discipline drawOrder_/frameEmit_ already rely on.
   std::vector<std::pair<float, size_t>> emitCandScratch_;  ///< renderFrame emitter candidates
   std::vector<const float*> emitSrcScratch_;               ///< renderFrame emitter sources
-  std::vector<PackedVertex> uploadOrderedScratch_;         ///< uploadChunkMesh LOD reorder set
   std::map<int64_t, PbrChunkMesh> pbrMeshes_;  ///< BinaryQuad uploads, same keying
   uint64_t storeGen_ = 0;  ///< mesh-store seal generation: bumped by every store mutation
 

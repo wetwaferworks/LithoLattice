@@ -1,0 +1,178 @@
+/* charconv ... LithoRoot std L5 (S3, 2026-11-16): to_chars / from_chars for
+ * the integer types (bases 2..36). S5 (2026-11-16): from_chars for float and
+ * double, chars_format general/fixed/scientific (not hex), over LithoLibC's
+ * strtof/strtod (C locale always). Floating to_chars is still not provided;
+ * a TU that needs it fails to compile, loudly. */
+#ifndef LITHOROOT_CHARCONV
+#define LITHOROOT_CHARCONV
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cerrno>
+#include <lithoroot_errc.h>
+#include <cstddef>
+#include <cstdlib>
+#include <type_traits>
+
+namespace std {
+
+enum class chars_format { scientific = 1, fixed = 2, hex = 4, general = fixed | scientific };
+struct to_chars_result {
+  char* ptr;
+  errc ec;
+  friend bool operator==(const to_chars_result&, const to_chars_result&) = default;
+  constexpr explicit operator bool() const noexcept { return ec == errc{}; }
+};
+struct from_chars_result {
+  const char* ptr;
+  errc ec;
+  friend bool operator==(const from_chars_result&, const from_chars_result&) = default;
+  constexpr explicit operator bool() const noexcept { return ec == errc{}; }
+};
+
+namespace __lk {
+template <class I> inline constexpr bool cc_int = is_integral_v<I> && !is_same_v<remove_cv_t<I>, bool>;
+}  // namespace __lk
+
+template <class I, enable_if_t<__lk::cc_int<I>, int> = 0>
+constexpr to_chars_result to_chars(char* first, char* last, I value, int base = 10) {
+  using U = make_unsigned_t<I>;
+  U u = static_cast<U>(value);
+  if constexpr (is_signed_v<I>) {
+    if (value < 0) {
+      if (first == last) return {last, errc::value_too_large};
+      *first++ = '-';
+      u = U(0) - u;
+    }
+  }
+  char tmp[sizeof(U) * 8];
+  int n = 0;
+  do { const unsigned d = unsigned(u % U(base)); tmp[n++] = char(d < 10 ? '0' + d : 'a' + d - 10); u /= U(base); } while (u);
+  if (last - first < n) return {last, errc::value_too_large};
+  while (n) *first++ = tmp[--n];
+  return {first, errc{}};
+}
+to_chars_result to_chars(char*, char*, bool, int = 10) = delete;
+
+template <class I, enable_if_t<__lk::cc_int<I>, int> = 0>
+constexpr from_chars_result from_chars(const char* first, const char* last, I& value, int base = 10) {
+  using U = make_unsigned_t<I>;
+  const char* p = first;
+  bool neg = false;
+  if constexpr (is_signed_v<I>) {
+    if (p != last && *p == '-') { neg = true; ++p; }
+  }
+  const char* digits = p;
+  U acc = 0;
+  bool overflow = false;
+  for (; p != last; ++p) {
+    const char c = *p;
+    unsigned d = c >= '0' && c <= '9' ? unsigned(c - '0') : c >= 'a' && c <= 'z' ? unsigned(c - 'a' + 10) : c >= 'A' && c <= 'Z' ? unsigned(c - 'A' + 10) : 99u;
+    if (d >= unsigned(base)) break;
+    if (!overflow) {
+      U next;
+      if (__builtin_mul_overflow(acc, U(base), &next) || __builtin_add_overflow(next, U(d), &next)) overflow = true;
+      else acc = next;
+    }
+  }
+  if (p == digits) return {first, errc::invalid_argument};
+  if (overflow) return {p, errc::result_out_of_range};
+  if constexpr (is_signed_v<I>) {
+    const U lim = neg ? U(U(1) << (sizeof(U) * 8 - 1)) : U((U(1) << (sizeof(U) * 8 - 1)) - 1);
+    if (acc > lim) return {p, errc::result_out_of_range};
+    value = neg ? I(U(0) - acc) : I(acc);
+  } else {
+    value = acc;
+  }
+  return {p, errc{}};
+}
+
+namespace __lk {
+// Length of the longest prefix of [first,last) that std::from_chars accepts as a floating value:
+// [-] then inf / infinity / nan / nan(chars) (any case), or digits[.digits] with at least one digit
+// and an optional exponent e[+-]digits (only for general/scientific; scientific requires it).
+// No leading whitespace and no '+' sign, unlike strtod. 0 = no match.
+inline size_t cc_float_span(const char* first, const char* last, chars_format fmt) {
+  const char* p = first;
+  auto lower = [](char c) { return char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c); };
+  auto word = [&](const char* q, const char* w) -> const char* {
+    for (; *w; ++w, ++q) if (q == last || lower(*q) != *w) return nullptr;
+    return q;
+  };
+  if (p != last && *p == '-') ++p;
+  if (const char* q = word(p, "inf")) { const char* r = word(q, "inity"); return size_t((r ? r : q) - first); }
+  if (const char* q = word(p, "nan")) {
+    if (q != last && *q == '(') {
+      const char* r = q + 1;
+      while (r != last && ((*r >= '0' && *r <= '9') || (lower(*r) >= 'a' && lower(*r) <= 'z') || *r == '_')) ++r;
+      if (r != last && *r == ')') return size_t(r + 1 - first);
+    }
+    return size_t(q - first);
+  }
+  size_t digits = 0;
+  while (p != last && *p >= '0' && *p <= '9') { ++p; ++digits; }
+  if (p != last && *p == '.') {
+    ++p;
+    while (p != last && *p >= '0' && *p <= '9') { ++p; ++digits; }
+  }
+  if (digits == 0) return 0;
+  const bool expOk = (int(fmt) & int(chars_format::scientific)) != 0;
+  if (expOk && p != last && (*p == 'e' || *p == 'E')) {
+    const char* q = p + 1;
+    if (q != last && (*q == '+' || *q == '-')) ++q;
+    const char* d0 = q;
+    while (q != last && *q >= '0' && *q <= '9') ++q;
+    if (q != d0) p = q;
+    else if (fmt == chars_format::scientific) return 0;
+  } else if (fmt == chars_format::scientific) {
+    return 0;
+  }
+  return size_t(p - first);
+}
+template <class F>
+from_chars_result cc_float(const char* first, const char* last, F& value, chars_format fmt) {
+  if (fmt == chars_format::hex || (int(fmt) & int(chars_format::general)) == 0) return {first, errc::invalid_argument};
+  const size_t n = first && last > first ? cc_float_span(first, last, fmt) : 0;
+  if (n == 0) return {first, errc::invalid_argument};
+  char small[128];
+  char* buf = n < sizeof small ? small : static_cast<char*>(std::malloc(n + 1));
+  if (!buf) return {first, errc::not_enough_memory};
+  __builtin_memcpy(buf, first, n);
+  buf[n] = '\0';
+  const int savedErrno = errno;
+  errno = 0;
+  char* end = nullptr;
+  F v;
+  if constexpr (is_same_v<F, float>) v = std::strtof(buf, &end);
+  else v = std::strtod(buf, &end);
+  bool range = errno == ERANGE;
+  // Normalise LithoLibC's ERANGE to the from_chars contract: inf/nan spellings are never out of
+  // range, a subnormal result is in range (strtod reports ERANGE for it), and a nonzero decimal
+  // that rounds to zero always is out of range (strtod leaves errno alone there).
+  const char* m = buf + (buf[0] == '-' ? 1 : 0);
+  const bool special = *m == 'i' || *m == 'I' || *m == 'n' || *m == 'N';
+  if (special) range = false;
+  else if (range && v != F(0) && __builtin_isfinite(v)) range = false;  // a subnormal result is representable
+  else if (!range && v == F(0)) {
+    for (const char* q = m; *q && *q != 'e' && *q != 'E'; ++q)
+      if (*q >= '1' && *q <= '9') { range = true; break; }
+  }
+  const size_t used = size_t(end - buf);
+  errno = savedErrno;
+  if (buf != small) std::free(buf);
+  if (used != n) return {first, errc::invalid_argument};  // the scanner and strtod disagree: refuse
+  if (range) return {first + n, errc::result_out_of_range};  // value left unchanged, as the standard says
+  value = v;
+  return {first + n, errc{}};
+}
+}  // namespace __lk
+
+inline from_chars_result from_chars(const char* first, const char* last, double& value, chars_format fmt = chars_format::general) {
+  return __lk::cc_float(first, last, value, fmt);
+}
+inline from_chars_result from_chars(const char* first, const char* last, float& value, chars_format fmt = chars_format::general) {
+  return __lk::cc_float(first, last, value, fmt);
+}
+
+}  // namespace std
+#endif

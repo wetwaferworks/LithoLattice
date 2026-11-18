@@ -104,6 +104,8 @@ struct ShadeSpanBasic {
   const uint32_t* tex;                  ///< 16x16 texel layer (texData + layer*256)
   uint16_t* depth;                         ///< depth row at x0
   uint32_t* pixels;                     ///< colour row at x0
+  uint16_t* aaId = nullptr;             ///< primitive-stamp row at x0 (FXAA/CMAA); null = do not write
+  uint16_t aaStamp = 0;                 ///< packed layer/face/object written on a depth pass
   int n;                                ///< pixels in the span (x1 - x0 + 1)
   bool morton;                          ///< Pass 2 step 4: tex layer is Morton-swizzled (16x16 only)
   int texShift = 4;                     ///< Cortana 2026-10-16: log2 tile size (4/5/6)

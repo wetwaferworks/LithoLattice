@@ -42,7 +42,14 @@ static __inline uint32_t lw_at_fetch_add32(volatile uint32_t* p, uint32_t v) {
 static __inline uint32_t lw_at_exchange32(volatile uint32_t* p, uint32_t v) {
   return (uint32_t)_InterlockedExchange((volatile long*)p, (long)v);
 }
-static __inline void lw_at_spin_pause(void) { _mm_pause(); }
+/* CAS: 1 and the word replaced when *expected matched, else 0 with
+ * *expected refreshed. The registry claims slots with this. */
+static __inline int lw_at_cas32(volatile uint32_t* p, uint32_t* expected, uint32_t desired) {
+  uint32_t seen = (uint32_t)_InterlockedCompareExchange((volatile long*)p, (long)desired, (long)*expected);
+  if (seen == *expected) return 1;
+  *expected = seen;
+  return 0;
+}
 
 #elif defined(__GNUC__) || defined(__clang__)
 
@@ -58,12 +65,8 @@ static inline uint32_t lw_at_fetch_add32(volatile uint32_t* p, uint32_t v) {
 static inline uint32_t lw_at_exchange32(volatile uint32_t* p, uint32_t v) {
   return __atomic_exchange_n((uint32_t*)p, v, __ATOMIC_SEQ_CST);
 }
-static inline void lw_at_spin_pause(void) {
-#if defined(__i386__) || defined(__x86_64__)
-  __builtin_ia32_pause();
-#else
-  __asm__ __volatile__("" ::: "memory");
-#endif
+static inline int lw_at_cas32(volatile uint32_t* p, uint32_t* expected, uint32_t desired) {
+  return __atomic_compare_exchange_n((uint32_t*)p, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
 
 #else /* fallback: C11 atomics */
@@ -82,7 +85,9 @@ static inline uint32_t lw_at_fetch_add32(volatile uint32_t* p, uint32_t v) {
 static inline uint32_t lw_at_exchange32(volatile uint32_t* p, uint32_t v) {
   return atomic_exchange_explicit((_Atomic(uint32_t)*)p, v, memory_order_seq_cst);
 }
-static inline void lw_at_spin_pause(void) {}
+static inline int lw_at_cas32(volatile uint32_t* p, uint32_t* expected, uint32_t desired) {
+  return atomic_compare_exchange_strong_explicit((_Atomic(uint32_t)*)p, expected, desired, memory_order_seq_cst, memory_order_seq_cst);
+}
 
 #endif
 

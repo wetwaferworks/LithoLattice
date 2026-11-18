@@ -1,0 +1,8 @@
+/* cfloat ... LithoRoot std L0: clang's own <float.h>. */
+#ifndef LITHOROOT_CFLOAT
+#define LITHOROOT_CFLOAT
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <float.h>
+#endif

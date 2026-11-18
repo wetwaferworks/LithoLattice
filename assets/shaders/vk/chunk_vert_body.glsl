@@ -128,13 +128,5 @@ void main() {
   // if ((vMode == 15 || vMode == 19 || vMode == 20 || vMode == 21) && vNormal.y > 0.5) vWorld.y -= 3.0 / 64.0;
   vec4 p = uVP * vec4(vWorld, 1.0);
   gl_Position = vec4(p.x, -p.y, (p.z + p.w) * 0.5, p.w);
-  // Cortana 2026-10-16 (JD foliage LOD, renderer.h kShadeLod*): LOD-tagged quads draw by the
-  // sub-chunk's horizontal centre distance; the other set collapses outside the clip volume.
-  uint lod = aShade.y & 192u;
-  if (lod != 0u) {
-    vec2 c = uOffset.xz + vec2(8.0) - uCam.xz;
-    bool far = dot(c, c) > 32.0 * 32.0;
-    if ((lod == 64u && far) || (lod == 128u && !far)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-  }
   if (revealHide) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);  // P7: not yet etched (whole triangle clipped)
 }

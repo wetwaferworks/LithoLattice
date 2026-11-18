@@ -17,12 +17,11 @@ class cMesherKernels {
   cMesherKernels() = delete;
   /// Legacy greedy flush: merge the parked slices into the vertex stream.
   static void flushGreedy(GreedyGrid& g, std::vector<PackedVertex>& out);
-  /// M2 canonical flush: L0 face buckets plus the decoded vertex stream.
+  /// M2 canonical flush: face buckets plus the decoded vertex stream.
   static void flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& out, CanonicalMesh& cm, bool merged);
   /// M7: the per-cell stream as Packed12 fallback vertices.
   static bool packFallback(const std::vector<PackedVertex>& v, size_t n, CanonicalMesh& cm);
-  /// M6: merge UnifiedMesher L1/L2 into the L0 mesh (palette dedup + re-index).
-  static bool mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst);
+
   static constexpr int kFaceDir[6] = {1, 3, -1, -1, 2, 0};  ///< world face -> horizontal dir (N0 E1 S2 W3)
 };
 

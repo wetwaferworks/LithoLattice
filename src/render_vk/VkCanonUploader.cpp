@@ -80,10 +80,10 @@ const cVkCanonUploader::Tmpl& cVkCanonUploader::lookup(uint64_t raw, uint64_t pa
   one.palette.assign(1, palEntry);
   d.paletteIdx = 0;
   one.quads.assign(1, canon::packQuad(d));
-  one.lods[0].face[size_t(d.face)] = BucketRange{0, 1};
+  one.ranges.face[size_t(d.face)] = BucketRange{0, 1};
   one_.clear();
   Tmpl t;
-  if (decodeCanonicalMesh(one, 0, one_) && one_.size() == 4) {
+  if (decodeCanonicalMesh(one, one_) && one_.size() == 4) {
     t.ok = true;
     uint64_t q = 0, e = 0;
     if (encodePulled(one_.data(), q, e)) {
@@ -107,8 +107,7 @@ const cVkCanonUploader::Tmpl& cVkCanonUploader::lookup(uint64_t raw, uint64_t pa
 bool cVkCanonUploader::build(const ChunkMesh& m, uint32_t maxQuads, int blendMode, PulledMesh& out) {
   const CanonicalMesh* cm = m.canonical.get();
   if (!cm || cm->magic != canon::kMeshMagic || cm->next) return decline();
-  const CanonicalLod& L = cm->lods[0];
-  if (L.skirt.count) return decline();
+  const CanonicalRanges& L = cm->ranges;
   idx_.clear();
   auto range = [&](const BucketRange& r) {
     for (uint32_t i = r.start; i < r.start + r.count && i < cm->quads.size(); ++i) idx_.push_back(i);

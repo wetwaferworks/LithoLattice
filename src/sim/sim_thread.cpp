@@ -1,5 +1,6 @@
 // Cortana 2026-10-15 0825: CHUNK-STALL postLock (SIM-H1 tried 1010, reverted 1035)
 #include <unordered_map>
+#include "litholattice/core/thread_name.h"
 #include "litholattice/core/gate_lock.h"
 #include "litholattice/sim/sim_thread.h"
 #include "litholattice/sim/control_stream.h"
@@ -18,6 +19,8 @@
 #include "litholattice/core/log.h"
 #include "litholattice/core/tick_profile.h"  // LL_TICK_PROFILE (measure only; Proposed by JD; co-implemented by JD and Cortana)
 #include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/idle_backoff.h"  // t46u item 6a
+#include <system_error>
 
 namespace litholattice {
 using Ns = std::chrono::nanoseconds;
@@ -225,56 +228,161 @@ bool cSimThread::cancelBoundaryJob() {
 }
 
 void cSimThread::runBetweenTicks(std::function<void()> fn) {
-  const bool wasPaused = paused();
-  setPaused(true);
-  // RAII pause guard: if fn() throws, the sim must not stay paused forever.
-  struct PauseGuard {
-    cSimThread* self;
-    bool wasPaused;
-    ~PauseGuard() { if (!wasPaused) self->setPaused(false); }
-  } guard{this, wasPaused};
-  // blockMutex_ is held across the sim's whole mutation window (edit drain +
-  // every tick of the iteration), so taking it here waits out any in-flight tick.
-  { locktiming::TimedGuard l(blockMutex_, locktiming::kBlock); fn(); }  // 0.0.1.60 timing (diagnostic)
+  // t46u item 6a (JD 2026-11-16): the tick thread runs fn itself at its next phase boundary (the start
+  // of its mutation window, or its pacing tail), so no other thread takes the world to do it and the
+  // sim no longer has to be paused around it. The caller polls its job's done flag with backoff.
+  // Inline when the sim is not running (the caller owns the world) or on the tick thread itself (a
+  // hook: already inside its own window), or when the caller already holds the world through
+  // holdBetweenTicks (frameHold, the save tick pause): the tick thread cannot reach a boundary until
+  // that hold is released, so queuing would deadlock. The gate stays in this step for the point readers.
+  if (!running_.load(std::memory_order_acquire) || simTid_.load(std::memory_order_acquire) == std::this_thread::get_id() ||
+      blockMutex_.heldByMe()) {
+    fn();
+    return;
+  }
+  OwnerJob j;
+  j.fn = &fn;
+  OwnerJob* head = ownerJobs_.load(std::memory_order_relaxed);
+  do { j.next = head; } while (!ownerJobs_.compare_exchange_weak(head, &j, std::memory_order_acq_rel, std::memory_order_relaxed));
+  notifyWake();  // a parked (paused) loop runs one pass and picks it up
+  lkIdleWaitUntil([&] {
+    if (j.done.load(std::memory_order_acquire)) return true;
+    // stop() raced the push: no tick thread will take it, and stop() may already have drained.
+    // Once the thread is joined the world is ours again: run what is queued here (gated).
+    if (!tickLive_.load(std::memory_order_acquire)) serveOwnerJobsGated();
+    return j.done.load(std::memory_order_acquire);
+  });
+  if (j.err) std::rethrow_exception(j.err);
+}
+
+bool cSimThread::waitTickBoundary(std::chrono::milliseconds timeout) {
+  if (!running_.load(std::memory_order_acquire) || simTid_.load(std::memory_order_acquire) == std::this_thread::get_id() ||
+      blockMutex_.heldByMe())
+    return true;
+  // Wanted first, then the reading: a park that starts after this sees the want and does not park; one
+  // already parked is woken by the epoch bump below.
+  boundaryWanted_.fetch_add(1, std::memory_order_acq_rel);
+  const uint64_t s = boundarySeq_.load(std::memory_order_acquire);
+  notifyWake();
+  const auto until = std::chrono::steady_clock::now() + timeout;
+  bool ok = false;
+  lkIdleWaitUntil([&] {
+    if (boundarySeq_.load(std::memory_order_acquire) != s || !running_.load(std::memory_order_acquire)) { ok = true; return true; }
+    return std::chrono::steady_clock::now() >= until;
+  });
+  boundaryWanted_.fetch_sub(1, std::memory_order_acq_rel);
+  return ok;
+}
+
+void cSimThread::runOwnerJobs() {
+  OwnerJob* list = ownerJobs_.exchange(nullptr, std::memory_order_acq_rel);
+  OwnerJob* fifo = nullptr;  // the stack is newest first; run oldest first
+  while (list) { OwnerJob* n = list->next; list->next = fifo; fifo = list; list = n; }
+  while (fifo) {
+    OwnerJob* j = fifo;
+    fifo = fifo->next;  // read before done: the caller's frame may end as soon as done is set
+    try { (*j->fn)(); } catch (...) { j->err = std::current_exception(); }
+    j->done.store(true, std::memory_order_release);
+  }
+}
+
+void cSimThread::serveOwnerJobsGated() {
+  const bool onTick = simTid_.load(std::memory_order_acquire) == std::this_thread::get_id();
+  if (!ownerJobs_.load(std::memory_order_acquire) && !(onTick && tickPosts_.load(std::memory_order_acquire))) return;
+  if (onTick) adoptBoundary();  // t46u 6b-2b/6b-3 (posts are the tick side's: never run here off the tick thread)
+  runOwnerJobs();
+}
+
+uint64_t cSimThread::postToTick(std::function<void()> fn) {
+  if (!fn) return tickPostsQueued_;
+  const uint64_t ticket = ++tickPostsQueued_;
+  if (!tickLive_.load(std::memory_order_acquire)) {
+    // No tick thread: the world is ours (owner thread). Older posts first, then this one. Gated like the
+    // inline runBetweenTicks path (the gate is reentrant, so a caller already holding it is fine).
+    if (tickPosts_.load(std::memory_order_acquire)) runTickPosts();
+    fn();
+    tickPostsRun_.fetch_add(1, std::memory_order_release);
+    return ticket;
+  }
+  TickPost* p = new TickPost{std::move(fn), nullptr};
+  TickPost* head = tickPosts_.load(std::memory_order_relaxed);
+  do { p->next = head; } while (!tickPosts_.compare_exchange_weak(head, p, std::memory_order_acq_rel, std::memory_order_relaxed));
+  notifyWake();  // a parked (paused) loop runs one pass and adopts
+  return ticket;
+}
+
+void cSimThread::runTickPosts() {
+  TickPost* list = tickPosts_.exchange(nullptr, std::memory_order_acq_rel);
+  TickPost* fifo = nullptr;  // the stack is newest first; run oldest first
+  while (list) { TickPost* n = list->next; list->next = fifo; fifo = list; list = n; }
+  while (fifo) {
+    std::unique_ptr<TickPost> p(fifo);
+    fifo = fifo->next;
+    try { p->fn(); } catch (const std::exception& e) {
+      logError("sim: a posted tick-side job threw (%s); skipped", e.what());
+    } catch (...) {
+      logError("sim: a posted tick-side job threw; skipped");
+    }
+    tickPostsRun_.fetch_add(1, std::memory_order_release);  // after the post's effects (tickPostDone acquires)
+  }
 }
 
 bool cSimThread::tryHoldBetweenTicks(::litholattice::cGateLock<cBlockGate>& hold, bool* busy) {
   if (busy) *busy = false;
-  ::litholattice::cGateLock<cBlockGate> l(blockMutex_, ::litholattice::kTryToLock);
-  if (!l.owns_lock()) { if (busy) *busy = true; return false; }
   if (handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())) return false;
-  hold = std::move(l);
+  // JD 2026-11-17 r6: no gate. Structure changes use the published directory; block
+  // reads use the front snapshot. The returned hold is empty (unlock is a no-op).
+  hold = ::litholattice::cGateLock<cBlockGate>();
   return true;
 }
 
 bool cSimThread::holdBetweenTicks(::litholattice::cGateLock<cBlockGate>& hold) {
-  // Waits out any in-flight iteration (ticks + post-tick flush both hold
-  // blockMutex_). The sim thread keeps running; it simply cannot start its
-  // next iteration until hold is released. A frozen or poisoned handshake
-  // may still have a worker inside a component, so refuse and let the caller
-  // use the fail-closed stop() path. Checked under the lock: freezes are only
-  // raised on the sim thread inside a tick, so this check cannot race one.
-  // LL_THREEWAY (Proposed by JD; co-implemented by JD and Cortana): a streaming insert announces itself like a point read, so the sim
-  // hands blockMutex_ over between whole ticks of a catch-up burst instead of making the insert wait out the burst.
-  PointRead pr(threewayYield_ ? &pointReaders_ : nullptr, threewayYield_ ? &insertWaiting_ : nullptr);
-  locktiming::lockTimed(blockMutex_, locktiming::kBlock);  // 0.0.1.60 timing (diagnostic); same lock, adopted below
-  pr.done();
-  ::litholattice::cGateLock<cBlockGate> l(blockMutex_, ::litholattice::kAdoptLock);
+  // JD 2026-11-17 r6: no spin, no wait on the sim thread. A frozen or poisoned
+  // handshake may still have a worker inside a component, so refuse and let the
+  // caller use the fail-closed stop() path.
   if (handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())) return false;
   if (stallLogWindow())  // LL_SIM_STALL_MS (measure only; Proposed by Herominde; implemented by Cortana)
     logInfo("sim-stall: insert landed at world tick %llu (%s)", (unsigned long long)worldTickN_, inBurst_ ? "mid-burst handoff" : "between sim iterations");
-  hold = std::move(l);
+  hold = ::litholattice::cGateLock<cBlockGate>();
   return true;
 }
 
+void cSimThread::noteDirtyColumn(int cx, int cz) {
+  for (int sy = 0; sy < kSubChunks; ++sy) dirtyIngress_.push(packPos(cx, sy, cz));
+  notifyWake();
+}
+
+void cSimThread::noteDirtySub(int cx, int sy, int cz) {
+  dirtyIngress_.push(packPos(cx, sy, cz));
+  notifyWake();
+}
+
+void cSimThread::seedPublishedFront() {
+  if (!cowColumnsEnabled()) return;
+  if (!flushPub_.tryBeginWrite()) return;
+  for (const auto& [key, col] : chunks_.columns()) {
+    if (!col) continue;
+    chunks_.cowTable().publish(chunks_, blocks_, col->cx, col->cz, ~uint64_t(0));
+  }
+  chunks_.cowTable().exportSnaps(flushPub_.back().cols);
+  flushPub_.publish();
+}
+
 void cSimThread::start() {
+  cooperative_ = false;
+  paceLast_ = {};
+  lastFlush_ = {};
+  lastFlushTick_ = 0;
   if (handshakeWorkersOutstanding()) {
     // C2 poison: a pull worker from a failed stop() is still running
     // against the world; starting again would run two pools against it.
     logError("sim_thread: start() refused — a handshake worker is still outstanding from a failed stop()");
     return;
   }
+  seedPublishedFront();  // owner thread: first front so getBlock is not air after running_ flips
   if (running_.exchange(true)) return;  // already running: a second std::thread assignment would terminate
+  tickLive_.store(true, std::memory_order_release);  // t46u 6a: owner jobs go to the tick thread from here on
+  chunks_.tickSideStarting();  // t46u 6b-2b: the caller (structure owner) publishes the column directory first
   if (handshake_) handshake_->start();  // pull workers first: phases may be published immediately
   // A-M5: a routine stop/start cleared the authority's freeze latch (see
   // cTimingHandshakeAuthority::start()); if no freeze is in effect now,
@@ -284,14 +392,29 @@ void cSimThread::start() {
     stepRefusalLogged_.store(false);
   }
   logInfo("threads: sim thread starting");  // Q5b census naming (2026-10-28)
-  thread_ = std::thread([this] { raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
-  threadRecord_.add(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
+  try {
+    thread_ = std::thread([this] { ::litholattice::setCurrentThreadName("lk-tick-sim"); raiseCurrentThreadForSim(); run(); });  // 0.0.1.57 F57-1 (R21)
+    threadRecord_.add(ThreadClass::Dedicated, ThreadRole::SimClock, 0, "sim-clock");
+  } catch (const std::system_error& e) {
+    cooperative_ = true;
+    logInfo("threads: sim thread spawn failed (%s); running cooperatively on the caller thread", e.what());
+  }
 }
 
 bool cSimThread::stop() {
   const bool wasRunning = running_.exchange(false);
   if (wasRunning) notifyWake();  // A-M7: a parked paused loop must wake to see the stop
   if (wasRunning && thread_.joinable()) thread_.join();
+  tickLive_.store(false, std::memory_order_release);  // t46u 6a: joined; the world is the caller's again
+  if (wasRunning) {  // t46u 6b-2b: no tick side left: drop its view, free every retired column
+    logInfo("column directory at sim stop: stale adoptions %llu, retired held %zu (freed now)",
+            (unsigned long long)chunks_.directoryStaleAdoptions(), chunks_.directoryRetired());
+    chunks_.tickSideStopped();
+  }
+  if (tickPosts_.load(std::memory_order_acquire)) {  // t46u 6b-3: joined; the owner runs what the tick thread did not reach
+    runTickPosts();
+  }
+  serveOwnerJobsGated();  // t46u 6a: jobs that missed the tick thread's last pass run here
   if (!thread_.joinable()) threadRecord_.retireAll();  // P2: joined -> RETURNED
   if (handshake_) return handshake_->stop();  // no-detach bounded join (P0a/C2); false = worker outstanding, poisoned
   return true;
@@ -339,7 +462,8 @@ void cSimThread::markDirty(int x, int y, int z, bool activeSignal) {
       }
 }
 
-void cSimThread::flushDirty(bool forceInView) {
+bool cSimThread::flushDirty(bool forceInView) {
+  dirtyIngress_.drain([&](int64_t k) { dirtySubs_.insert(k); });
   // PlayJ fix 1: skip pin/submit for dirty subs outside vertical + frustum (cheb) of the eye;
   // keep their dirty flags so they remesh when they come into view. LL_MESH_VERT_SUBS (default 4),
   // LL_MESH_CHEB (default 6). LL_PROF_CULL=1 logs the census (I2 baseline shape).
@@ -397,6 +521,12 @@ void cSimThread::flushDirty(bool forceInView) {
     }
   }
 
+  // JD 2026-11-17 r6: claim the retired publish slot first. If a reader still holds it,
+  // skip this pass and leave dirtySubs_ intact (no spin).
+  if (!flushPub_.tryBeginWrite()) return false;
+  flushPub_.back().dirtyWork = flushWork_;
+  flushPub_.back().dirtyHold = flushHold_;
+
   // PlayJ fix 3: no mesh consumer (null renderer / LL_NO_MESH=1) - drop in-view work without pin/submit;
   // still keep held out-of-view flags so a later consumer (or view move) can catch up.
   signalDirtySubs_.clear();  // all signal-priority keys entered flushWork_ (or lost their column)
@@ -421,7 +551,9 @@ void cSimThread::flushDirty(bool forceInView) {
     for (const auto& [key, mask] : ordered)
       chunks_.cowTable().publish(chunks_, blocks_, int(int32_t(key >> 32)), int(int32_t(key & 0xffffffffu)), mask);
   }
-  if (!meshConsumes_ || flushWork_.empty()) return;
+  chunks_.cowTable().exportSnaps(flushPub_.back().cols);
+  const bool doMesh = meshConsumes_ && !flushWork_.empty();
+  if (doMesh) {
   for (int64_t k : flushWork_) {
     int cx, sy, cz; unpackPos(k, cx, sy, cz);
     if (!chunks_.column(cx, cz)) continue;
@@ -441,6 +573,9 @@ void cSimThread::flushDirty(bool forceInView) {
       pool->give(std::move(u));  // PlayI: lock-free; pool full drops it (bounds retained memory)
     }));
   }
+  }
+  flushPub_.publish();  // JD 2026-11-17 r6: atomic index swap publishes the new front
+  return true;
 }
 
 void cSimThread::castRay(const RayInput& ray) {
@@ -604,7 +739,7 @@ void cSimThread::publishEvents() {
 }
 
 // Sleep most of the way, then yield-spin: sleep_until alone is too coarse for 512 Hz.
-static void waitUntil(Clock::time_point t) {
+[[maybe_unused]] static void waitUntil(Clock::time_point t) {  // t46u 6a: the tick tail now paces inline
   for (;;) {
     const auto left = t - Clock::now();
     if (left <= Ns(0)) return;
@@ -613,16 +748,25 @@ static void waitUntil(Clock::time_point t) {
   }
 }
 
-void cSimThread::run() {
+void cSimThread::run(bool cooperativePass) {
   const HighResTimerScope timerResolution;  // 1 ms sleeps for the high-rate domains
+  simTid_.store(std::this_thread::get_id(), std::memory_order_release);  // t46u 6a: runBetweenTicks from a hook runs inline
+  tl_lkTickSide = true;  // t46u 6b-2b: this thread's column lookups read the adopted directory
+  struct TidClear {
+    std::atomic<std::thread::id>& t;
+    ~TidClear() {
+      t.store(std::thread::id{}, std::memory_order_release);
+      tl_lkTickSide = false;
+    }
+  } tidClear{simTid_};
   // CH-H8: masterStep_/worldTickN_/dropped_/acc_/window state are MEMBERS,
   // initialised once at construction — this function deliberately does NOT
   // reset them. Every stop()/start() (every save, every stream pump)
   // resumes the tick exactly where it stopped: keyed random streams never
   // replay, edit stamps never regress, SimStats.worldTick never goes
   // backwards. Only the wall-clock pacing timestamp is re-based per run.
-  auto last = Clock::now();
-  if (windowStart_.time_since_epoch().count() == 0) windowStart_ = last;
+  if (paceLast_.time_since_epoch().count() == 0) paceLast_ = Clock::now();
+  if (windowStart_.time_since_epoch().count() == 0) windowStart_ = paceLast_;
   // Fail-fast boundary (fail_fast.h, contract section 2; review CH-H6): the
   // WHOLE loop body runs under this guard — not just the per-step pipeline.
   // applyControlEvents (paused branch), publishEvents/takeEvents, the stats calls
@@ -642,7 +786,7 @@ void cSimThread::run() {
   };
   const auto dirtyFn = [this](int x, int y, int z) { simChanged(x, y, z); };
   constexpr auto kRemeshInterval = std::chrono::microseconds(8333);
-  auto lastFlush = Clock::now();
+  if (lastFlush_.time_since_epoch().count() == 0) lastFlush_ = paceLast_.time_since_epoch().count() ? paceLast_ : Clock::now();
   // PlayI/PlayJ (JD render divider): signal-driven remesh flushes wait for LL_RENDER_DIV world ticks
   // (default 32; JD preferred) or LL_RENDER_MAX_WAIT_US (default 62500), whichever comes first.
   // Player edits / remesh-all still flush at once. Off-screen dirty subs are held by view cull (fix 1).
@@ -652,7 +796,7 @@ void cSimThread::run() {
     const long v = e ? std::atol(e) : 62500;
     return std::chrono::microseconds(v > 0 ? v : 62500);
   }();
-  uint64_t lastFlushTick = 0;
+  // lastFlushTick_ persists across cooperative pumps
 
   auto reconfigure = [&] {
     cfgWorldTps_ = requestedTps_.load();
@@ -757,17 +901,15 @@ void cSimThread::run() {
       reconfigure();
     }
 
-    // ---- sim-thread mutation window: the edit drain plus every tick of this
-    // iteration run under blockMutex_. getBlock() (game/MCP thread) takes the same
-    // mutex, so cross-thread block reads are race-free (the old lock was theater:
-    // no writer ever took it). Uncontended for the sim thread.
+    // ---- sim-thread mutation window (JD 2026-11-17 r6): no blockMutex_.
+    // Main reads the published front; this thread mutates the live map and publishes at flush.
     bool editsApplied = false;
     bool raycastDone = false;
     bool passCut = false;
     {
       const bool rdOn = cThreadReadout::enabled();  // LL_THREAD_READOUT (read-only; tick thread is this slot's only writer)
       const uint64_t rdT0 = rdOn ? cThreadReadout::nowNs() : 0;
-      litholattice::cGateGuard l(blockMutex_);
+      adoptBoundary();  // t46u 6b-2b/6b-3: phase boundary: adopt the owner's newest column directory, run its posts
       const uint64_t rdT1 = rdOn ? cThreadReadout::nowNs() : 0;
       struct RdPass { bool on; uint64_t t0, t1; ~RdPass() { if (on) cNamedThreadLoad::instance().pass(cNamedThreadLoad::kTick, t1 - t0, cThreadReadout::nowNs() - t1); } } rdPass{rdOn, rdT0, rdT1};
       struct HolderMark { HolderMark() { locktiming::setBlockHolder(locktiming::kHolderSimTick); } ~HolderMark() { locktiming::setBlockHolder(locktiming::kHolderNone); } } holderMark;  // 0.0.1.60 diagnostic
@@ -775,6 +917,10 @@ void cSimThread::run() {
       // acquire load per pass when idle; never runs while handshake work is in flight.
       if (boundaryJob_.load(std::memory_order_acquire) && !(handshake_ && (handshake_->frozen() || handshake_->workersOutstanding())))
         if (BoundaryJob* j = boundaryJob_.exchange(nullptr, std::memory_order_acq_rel)) { j->fn(); delete j; }
+      // t46u item 6a: runBetweenTicks jobs (hot swap, camera raycast, surface probes) run here, between
+      // ticks, by the thread that owns the world. Not deferred by a freeze: the old gate path was not either.
+      runOwnerJobs();
+      boundarySeq_.fetch_add(1, std::memory_order_acq_rel);  // t46u 6b: a new window has started (waitTickBoundary)
 
       // ---- control PRE phase (control serialization): drain every control
       // source's submissions once per iteration and stamp each event with
@@ -804,14 +950,14 @@ void cSimThread::run() {
         // load/menu wall time can neither burst nor book drops here. The
         // clamp below is skipped for this delta only; tick math is
         // otherwise untouched, and dropped_ keeps its history.
-        const auto pending = acc_ + (now - last);
+        const auto pending = acc_ + (now - paceLast_);
         logInfo("timing: play transition — time debt zeroed (pre-reset debt %lld ticks / %.1f ms pending; ticks executed last pass %u)",
                 (long long)(stepDur_.count() > 0 ? pending / stepDur_ : 0),
                 double(pending.count()) / 1e6, lastPassTicks_);
         acc_ = Ns(0);
-        last = now;
+        paceLast_ = now;
       } else {
-        acc_ += now - last; last = now;
+        acc_ += now - paceLast_; paceLast_ = now;
       }
       const Ns maxLag = std::chrono::milliseconds(100);
       if (acc_ > maxLag) {
@@ -894,13 +1040,11 @@ void cSimThread::run() {
         raycastDone |= stepRaycastDone_;
       }
       if (!raycastDone) castRay(ray);  // no tick ran: keep the HUD highlight live
-    }  // release blockMutex_ before the sleep below
-    // 2026-10-15 (stream hand-off): the post-tick section below reads chunks_
-    // (flushDirty snapshots, HUD inspect) and also runs under blockMutex_, so
-    // holdBetweenTicks() callers may insert/erase columns without stop()/start().
-    ::litholattice::cGateLock<cBlockGate> postLock(blockMutex_);
-    locktiming::setBlockHolder(locktiming::kHolderSimPost);  // 0.0.1.60 diagnostic (cleared before postLock.unlock())
+    }  // end mutation window
+    // Post-tick section (JD 2026-11-17 r6): no postLock. Directory adopt is the phase boundary.
+    adoptBoundary();  // t46u 6b-2b/6b-3: the owner may have changed the column set between window and post
 
+    dirtyIngress_.drain([&](int64_t k) { dirtySubs_.insert(k); });
     bool flushNow = editsApplied;  // player edits remesh at once (no added latency)
     if (remeshAll_.exchange(false)) {
       for (const auto& [key, col] : chunks_.columns())
@@ -911,23 +1055,14 @@ void cSimThread::run() {
     // Signal-driven changes are coalesced to at most ~120 remesh passes per second: at 512 Hz a
     // busy circuit would otherwise snapshot and mesh the same sub-chunks hundreds of times a second.
     const auto tFlush = Clock::now();
-    if (!dirtySubs_.empty() && (flushNow || (tFlush - lastFlush >= kRemeshInterval && (worldTickN_ - lastFlushTick >= kRenderDiv || tFlush - lastFlush >= kRenderMaxWait)))) {
+    if (!dirtySubs_.empty() && (flushNow || (tFlush - lastFlush_ >= kRemeshInterval && (worldTickN_ - lastFlushTick_ >= kRenderDiv || tFlush - lastFlush_ >= kRenderMaxWait)))) {
       const int64_t tpF = ::litholattice::tickprof::enabled() ? ::litholattice::tickprof::nowNs() : 0;  // LL_TICK_PROFILE (measure only)
-      // PlayJ fix 7: with CoW columns, publish+pin read pinned snapshots - release blockMutex_
-      // before pin/submit so streaming holdBetweenTicks is not stalled for remesh duration.
-      // Without CoW, pin still reads live columns; keep the gate (SIM-H1 2026-10-15 reverted unlock).
-      const bool unlockForFlush = cowColumnsEnabled() && postLock.owns_lock();
-      if (unlockForFlush) {
-        locktiming::setBlockHolder(locktiming::kHolderNone);
-        postLock.unlock();
+      // JD 2026-11-17 r6: copy snaps into the back buffer, flush the original dirty set,
+      // then atomically swap the front. Skip (and keep dirty) if a reader still holds the retired slot.
+      if (flushDirty(editsApplied)) {  // Cortana 2026-11-06: player edits bypass view cull
+        lastFlush_ = tFlush; lastFlushTick_ = worldTickN_;
       }
-      flushDirty(editsApplied);  // Cortana 2026-11-06: player edits bypass view cull
       if (tpF) ::litholattice::tickprof::ticks().noteFlush(::litholattice::tickprof::nowNs() - tpF);
-      lastFlush = tFlush; lastFlushTick = worldTickN_;
-      if (unlockForFlush && !postLock.owns_lock()) {
-        postLock = ::litholattice::cGateLock<cBlockGate>(blockMutex_);
-        locktiming::setBlockHolder(locktiming::kHolderSimPost);
-      }
     }
     publishEvents();
 
@@ -987,10 +1122,8 @@ void cSimThread::run() {
     }
     stats_.publish();
 
-    locktiming::setBlockHolder(locktiming::kHolderNone);  // 0.0.1.60 diagnostic
-    postLock.unlock();  // tail wait runs unlocked (stream hand-off can take the mutex here)
     // mutexfree 2a: PARK phase. Requested by a hook at the end of a world tick; runs here, after the post
-    // section and with blockMutex_ released, so main/MCP readers and stream inserts are never blocked by it.
+    // section. JD r6: no gate was held.
     if (parkReq_) { parkReq_ = false; if (parkHook_) parkHook_(); }
     // ---- tail wait (review A-M7) ----
     // Live: pace to the next master step as before. Paused with nothing
@@ -1003,12 +1136,18 @@ void cSimThread::run() {
     // predicate below sees it — the park can never swallow a step or an
     // edit. Promptness: the wake is a CV notify, so edit application and
     // step response are faster than the old one-master-step poll.
-    if (paused_.load(std::memory_order_relaxed) && stepRequested_.load(std::memory_order_relaxed) == 0) {
+    // Cooperative (no dedicated tick thread): skip park/pace sleeps and
+    // return to the host frame; pumpCooperative() comes back next frame.
+    if (cooperativePass) {
+      serveOwnerJobsGated();
+    } else if (paused_.load(std::memory_order_relaxed) && stepRequested_.load(std::memory_order_relaxed) == 0) {
       // PlayL JD: cruise — spin/poll wakeEpoch_ (short yield); never CV-wait on another thread.
       const uint64_t e = wakeEpoch_.load(std::memory_order_relaxed);
       while (running_.load(std::memory_order_relaxed) && paused_.load(std::memory_order_relaxed) &&
              stepRequested_.load(std::memory_order_relaxed) == 0 &&
-             wakeEpoch_.load(std::memory_order_relaxed) == e) {
+             wakeEpoch_.load(std::memory_order_relaxed) == e &&
+             !ownerJobs_.load(std::memory_order_acquire) && !tickPosts_.load(std::memory_order_acquire) &&
+             boundaryWanted_.load(std::memory_order_acquire) == 0) {  // t46u 6a: a job pushed before `e` was read must not wait out the park
         std::this_thread::sleep_for(std::chrono::microseconds(200));
       }
     } else if (passCut) {
@@ -1016,14 +1155,46 @@ void cSimThread::run() {
       // so a too-slow (Debug) sim runs slow; give lock waiters a turn instead of re-locking at once
       std::this_thread::yield();  // PlayI (JD): yield, not a 200 us sleep
     } else {
-      waitUntil(last + (stepDur_ - acc_));
+      // t46u item 6a: pace as waitUntil does, but serve runBetweenTicks jobs while waiting (main used
+      // to take the gate during this sleep; a once-per-frame camera raycast must not wait it out).
+      const auto until = paceLast_ + (stepDur_ - acc_);
+      for (;;) {
+        serveOwnerJobsGated();
+        const auto left = until - Clock::now();
+        if (left <= Ns(0)) break;
+        if (left > std::chrono::microseconds(1500)) std::this_thread::sleep_for(std::min<Ns>(left - std::chrono::milliseconds(1), std::chrono::microseconds(250)));
+        else std::this_thread::yield();
+      }
     }
   };
 
-  while (running_.load(std::memory_order_relaxed)) {
+  auto onePass = [&] {
     loops_.fetch_add(1, std::memory_order_acq_rel);
     tickGuard("sim_thread", [&] { loopBody(); });
+  };
+  if (cooperativePass) {
+    // Drain due ticks this frame. One loopBody pass already spends up to kPassBudget
+    // (~6 ms) of backlog; keep going while debt remains and a short frame budget is left
+    // so 512 TPS can still catch up when ticks are cheap. Never sleep here.
+    const auto pumpStart = Clock::now();
+    const auto kPumpBudget = std::chrono::milliseconds(8);
+    onePass();
+    while (running_.load(std::memory_order_relaxed) &&
+           !paused_.load(std::memory_order_relaxed) &&
+           acc_ >= stepDur_ &&
+           Clock::now() - pumpStart < kPumpBudget) {
+      onePass();
+    }
+    return;
   }
+  while (running_.load(std::memory_order_relaxed)) {
+    onePass();
+  }
+}
+
+void cSimThread::pumpCooperative() {
+  if (!cooperative_ || !running_.load(std::memory_order_acquire)) return;
+  run(true);
 }
 
 }  // namespace litholattice

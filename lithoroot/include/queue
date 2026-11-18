@@ -1,0 +1,56 @@
+/* queue ... LithoRoot std L6 (S4, 2026-11-16): queue and priority_queue adaptors. */
+#ifndef LITHOROOT_QUEUE
+#define LITHOROOT_QUEUE
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <algorithm>
+#include <deque>
+#include <functional>
+#include <vector>
+
+namespace std {
+template <class T, class C = deque<T>>
+class queue {
+ protected:
+  C c;
+ public:
+  using container_type = C; using value_type = T; using size_type = size_t;
+  using reference = T&; using const_reference = const T&;
+  queue() = default;
+  explicit queue(const C& x) : c(x) {}
+  [[nodiscard]] bool empty() const { return c.empty(); }
+  size_type size() const { return c.size(); }
+  reference front() { return c.front(); }
+  const_reference front() const { return c.front(); }
+  reference back() { return c.back(); }
+  const_reference back() const { return c.back(); }
+  void push(const T& v) { c.push_back(v); }
+  void push(T&& v) { c.push_back(std::move(v)); }
+  template <class... A> decltype(auto) emplace(A&&... a) { return c.emplace_back(std::forward<A>(a)...); }
+  void pop() { c.pop_front(); }
+  void swap(queue& o) noexcept { using std::swap; swap(c, o.c); }
+};
+template <class T, class C = vector<T>, class Cmp = less<typename C::value_type>>
+class priority_queue {
+ protected:
+  C c;
+  Cmp comp;
+ public:
+  using container_type = C; using value_type = T; using size_type = size_t; using value_compare = Cmp;
+  using reference = T&; using const_reference = const T&;
+  priority_queue() = default;
+  explicit priority_queue(const Cmp& x) : comp(x) {}
+  priority_queue(const Cmp& x, const C& cont) : c(cont), comp(x) { std::make_heap(c.begin(), c.end(), comp); }
+  template <class It> priority_queue(It f, It l, const Cmp& x = Cmp()) : c(f, l), comp(x) { std::make_heap(c.begin(), c.end(), comp); }
+  [[nodiscard]] bool empty() const { return c.empty(); }
+  size_type size() const { return c.size(); }
+  const_reference top() const { return c.front(); }
+  void push(const T& v) { c.push_back(v); std::push_heap(c.begin(), c.end(), comp); }
+  void push(T&& v) { c.push_back(std::move(v)); std::push_heap(c.begin(), c.end(), comp); }
+  template <class... A> void emplace(A&&... a) { c.emplace_back(std::forward<A>(a)...); std::push_heap(c.begin(), c.end(), comp); }
+  void pop() { std::pop_heap(c.begin(), c.end(), comp); c.pop_back(); }
+  void swap(priority_queue& o) noexcept { using std::swap; swap(c, o.c); swap(comp, o.comp); }
+};
+}  // namespace std
+#endif

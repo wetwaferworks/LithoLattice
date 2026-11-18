@@ -4,6 +4,7 @@
 #include "litholattice/mods/mods_selftest.h"
 
 #include <cstddef>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>

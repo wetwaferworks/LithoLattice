@@ -54,7 +54,8 @@ unsigned remainingAfterPermanentThree(unsigned hw) {
   return hw > 3u ? hw - 3u : 1u;
 }
 
-unsigned renderSideBudget(unsigned hw) { return remainingAfterPermanentThree(hw) + 2u; }
+// t46u (JD 2026-11-16): the render side gets exactly the cores left after the permanent three.
+unsigned renderSideBudget(unsigned hw) { return remainingAfterPermanentThree(hw); }
 
 // JD 2026-11-14: LK_RENDER_THREADS=1 opts into a four-thread-total shape:
 // the permanent three + exactly one render-side thread (1 software raster
@@ -72,7 +73,7 @@ RenderSidePlan planRenderSide(unsigned hw, bool wasm) {
   RenderSidePlan p;
   p.hw = std::max(1u, hw);
   p.remaining = remainingAfterPermanentThree(p.hw);
-  p.budget = p.remaining + 2u;
+  p.budget = p.remaining;  // t46u: no +2 oversubscription
   if (compactFourThreadTotal()) {
     p.swBands = 1u;
     p.meshDedicated = 0u;
@@ -83,8 +84,8 @@ RenderSidePlan planRenderSide(unsigned hw, bool wasm) {
   }
   const unsigned rasterCap = wasm ? 4u : 16u;
   // Split the render-side budget: about half raster, the rest mesh + a small reserve.
-  // Prefer at least 2 software bands when budget >= 3 (TheReefs 4 hw: budget 3 →
-  // 2 bands + 1 mesh + reserve 0). 12 hw: budget 11 → 5 bands + 4 mesh + reserve 2.
+  // t46u: budget == remaining. TheReefs 4 hw: budget 1 -> 1 band, mesh caller-runs,
+  // reserve 0 (the 4-thread-total plan). 12 hw: budget 9 -> 4 bands + 4 mesh + reserve 1.
   unsigned raster = p.budget / 2u;
   if (p.budget >= 3u && raster < 2u) raster = 2u;
   if (raster < 1u) raster = 1u;
@@ -160,7 +161,26 @@ ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm) {
     b.pool = std::clamp(p.reservePool + p.meshDedicated, 1u, kMaxPoolWorkers);
   }
   b.activeCap = b.pool;
+  // t46u: the LF job queue gets only the core slots nobody else holds (never oversubscribes).
+  const unsigned held = 3u + b.renderSideUsed();
+  b.lfWorkers = b.hw > held ? std::min(b.hw - held, kMaxPoolWorkers) : 0u;
   return b;
+}
+
+unsigned censusCores() { return cThreadCensus::instance().budget().hw; }
+
+std::string slotPlan(const ThreadBudget& b) {
+  std::string s = "threads: slot plan on " + std::to_string(b.hw) + " cores: 0 main, 1 timing-handshake+control, 2 tick/sim";
+  unsigned slot = 3;
+  auto add = [&](const char* role, unsigned n) {
+    for (unsigned i = 0; i < n; ++i) s += ", " + std::to_string(slot++) + " " + role + std::to_string(i);
+  };
+  add("render", b.renderSpawned);
+  add("mesh", b.meshDedicated);
+  add("reserve", b.pool);
+  add("lfjobs", b.lfWorkers);
+  s += slot > b.hw ? " (OVER by " + std::to_string(slot - b.hw) + ")" : " (in budget)";
+  return s;
 }
 
 unsigned computeWorkers(const ThreadBudget& b, unsigned renderSpawned) {
@@ -176,7 +196,7 @@ std::string threadTally(const ThreadBudget& b) {
   std::snprintf(buf, sizeof buf,
                 "threads: census %u cores (%s; hardware reports %u): permanent 3 reserved "
                 "(main, timing-handshake+control, tick/sim); remaining %u; render-side budget %u "
-                "(remaining+2) used %u = mesh %u + reserve pool %u + render bands %u spawned; "
+                "(== remaining) used %u = mesh %u + reserve pool %u + render bands %u spawned; "
                 "system/I-O threads not budgeted",
                 b.hw, sourceName(b.source), b.hwRaw, b.remaining, b.renderSideBudget,
                 computeWorkers(b, b.renderSpawned), b.meshDedicated, b.pool, b.renderSpawned);
@@ -242,10 +262,11 @@ cThreadCensus& cThreadCensus::instance() {
     cc->budget_.hwRaw = hw;  // telemetry: what the hardware reported
     g_booted.store(true);
     logInfo("%s", threadTally(cc->budget_).c_str());  // t3353u: the tally is a summary, not a warning
+    logInfo("%s", slotPlan(cc->budget_).c_str());     // t46u allocator: one line, every slot
     if (cc->budget_.capped) {
       const ThreadBudget& b = cc->budget_;
       logInfo("threads: permanent 3 (main, timing-handshake+control, tick/sim) reserved; remaining %u of %u cores (%s); "
-              "render-side budget %u (remaining+2) used %u = mesh %u + reserve pool %u + render bands %u spawned",
+              "render-side budget %u (== remaining) used %u = mesh %u + reserve pool %u + render bands %u spawned",
               b.remaining, b.hw, sourceName(b.source), b.renderSideBudget, b.renderSideUsed(),
               b.meshDedicated, b.pool, b.renderSpawned);
       if (b.renderSideUsed() > b.renderSideBudget)

@@ -19,7 +19,7 @@
 // Cross-module header the server reads (header-only kPerm* bits).
 #include "litholattice/mods/mod_interface.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasm__)  // no raw sockets on web (2026-11-16)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -86,7 +86,7 @@ bool bodyIsJsonRpcResult(const HttpResponse& r, std::string* protocolOut = nullp
   return true;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasm__)  // no raw sockets on web (2026-11-16)
 // Minimal raw HTTP client for the live-loopback tests (POSIX only).
 std::string httpRaw(const std::string& request, std::uint16_t port) {
   int s = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -399,7 +399,7 @@ int runMcpHttpSelfTest() {
           "http: loopback bind detection");
   }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasm__)  // no raw sockets on web (2026-11-16)
   // ---- 7. live loopback: socket layer + accept thread ----
   {
     cMcpHttpServer server(McpBackends{}, "live-agent");
@@ -475,6 +475,12 @@ int runMcpHttpSelfTest() {
               logs.find("non-loopback") != std::string::npos,
           "http: non-loopback bind logs a loud warning");
     server.stop();
+  }
+#elif defined(__wasm__)
+  // ---- 7w. web build: no sockets, so the live server must refuse to start (fail safe) ----
+  {
+    cMcpHttpServer server(McpBackends{}, "web-agent");
+    check(!server.start(0), "http: web build refuses to start the live server (no sockets)");
   }
 #endif
 

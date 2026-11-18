@@ -32,6 +32,7 @@
 #endif
 #include "litholattice/core/tick_arena.h"
 #include "litholattice/core/slice_free_list.h"
+#include "litholattice/world/column_directory.h"  // t46u item 6b-2
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/counter_hash.h"
 #if !defined(_WIN32)
@@ -57,6 +58,7 @@
 #include "litholattice/render/mesher.h"
 #include "litholattice/render/binary_greedy_mesher.h"
 int testCanonicalMeshEntry();  // canonical_mesh_test.cpp (render pipeline step 2-3)
+int testGlslAttrParseEntry();  // glsl_attr_parse_test.cpp (gl33 chunk.vert parser vs the old regexes)
 #include "litholattice/render/micro_mesher.h"
 #include "litholattice/subdiv/octree.h"
 #include "litholattice/subdiv/subdiv_store.h"
@@ -202,6 +204,7 @@ uint64_t fnv(const void* p, size_t n, uint64_t h = 1469598103934665603ULL) {
 
 void testTickArena();  // defined below testCore
 void testSliceFreeList();  // Voxy #5
+void testColumnDirectory();  // t46u item 6b-2
 void testDetSched();   // defined below testRandomTicks
 void testTraceJitCompose();  // defined below testDetSched
 void testSignalPropagate();  // defined below testTraceJitCompose
@@ -377,6 +380,7 @@ void testCore() {
   testJobSystem();
   testTickArena();
   testSliceFreeList();
+  testColumnDirectory();
   testArchieHandshakeH1H3();
 }
 
@@ -725,6 +729,79 @@ void testJobSystem() {
     js.waitIdle();
     check(n == 100 && js.workerCount() == cThreadCensus::instance().budget().pool,
           "jobsystem: default config takes the census pool ceiling clamp(cores-2, 1, 64), unpinned");
+  }
+}
+
+void testColumnDirectory() {  // t46u item 6b-2: published column directory (adopt + ack + deferred free)
+  using litholattice::cColumnDirectory;
+  auto mk = [](int cx, int cz) { auto c = std::make_unique<ChunkColumn>(); c->cx = cx; c->cz = cz; return c; };
+  {
+    cColumnDirectory d;
+    check(d.adopt() == nullptr && d.ackedSeq() == 0, "column directory: nothing to adopt before the first publish");
+    auto a = mk(1, 2);
+    const uint64_t ka = ChunkKey::make(1, 2);
+    check(d.publish({{ka, a.get()}}) == 1, "column directory: first publish is sequence 1");
+    const cColumnDirectory::Dir* cur = d.adopt();
+    check(cur && cur->seq == 1 && cur->find(ka) == a.get() && d.ackedSeq() == 1, "column directory: adopt sees the published column and acknowledges it");
+    check(d.adopt() == cur, "column directory: adopt with nothing new keeps the current directory");
+    auto b = mk(3, 4);
+    d.publish({{ka, a.get()}});
+    d.publish({{ka, a.get()}, {ChunkKey::make(3, 4), b.get()}});
+    cur = d.adopt();
+    check(cur && cur->seq == 3 && cur->cols.size() == 2 && d.ackedSeq() == 3, "column directory: two publishes before an adopt coalesce to the newest");
+    // Remove `a`: retired until a directory without it is acknowledged.
+    ChunkColumn* aRaw = a.get();
+    d.retire(std::move(a));
+    check(d.retired() == 1 && d.reclaim() == 0, "column directory: a retired column is not freed while the tick thread can still reach it");
+    d.publish({{ChunkKey::make(3, 4), b.get()}});
+    check(d.reclaim() == 0 && d.retired() == 1, "column directory: publishing alone does not free it (not yet adopted)");
+    cur = d.adopt();
+    check(cur && cur->find(ka) == nullptr && cur->find(ChunkKey::make(3, 4)) == b.get(), "column directory: the adopted directory no longer has the removed column");
+    check(d.reclaim() == 1 && d.retired() == 0, "column directory: acknowledged -> the retired column is freed");
+    (void)aRaw;
+    d.retire(mk(5, 6));
+    check(d.reclaimAllStopped() == 1, "column directory: with no tick thread, everything retired can be freed");
+  }
+  {  // two threads: the owner churns columns, the tick thread adopts and reads every entry each round
+    cColumnDirectory d;
+    std::atomic<bool> done{false};
+    std::atomic<uint64_t> bad{0}, reads{0}, adopts{0};
+    std::thread tick([&] {
+      uint64_t last = 0;
+      while (!done.load(std::memory_order_acquire)) {
+        if (const cColumnDirectory::Dir* cur = d.adopt()) {
+          if (cur->seq != last) { last = cur->seq; adopts.fetch_add(1, std::memory_order_relaxed); }
+          for (const auto& [k, c] : cur->cols) {
+            if (ChunkKey::make(c->cx, c->cz) != k) bad.fetch_add(1, std::memory_order_relaxed);
+            reads.fetch_add(1, std::memory_order_relaxed);
+          }
+        }
+        std::this_thread::yield();
+      }
+      d.adopt();
+    });
+    std::unordered_map<uint64_t, std::unique_ptr<ChunkColumn>> live;
+    size_t freed = 0;
+    for (int i = 0; i < 4000; ++i) {
+      auto c = mk(i, -i);
+      live[ChunkKey::make(i, -i)] = std::move(c);
+      if (i >= 8) {  // keep 8 resident: remove the oldest
+        auto it = live.find(ChunkKey::make(i - 8, -(i - 8)));
+        d.retire(std::move(it->second));
+        live.erase(it);
+      }
+      std::unordered_map<uint64_t, ChunkColumn*> dir;
+      for (auto& [k, c2] : live) dir.emplace(k, c2.get());
+      d.publish(std::move(dir));
+      freed += d.reclaim();
+      if ((i & 63) == 0) std::this_thread::yield();
+    }
+    done.store(true, std::memory_order_release);
+    tick.join();
+    freed += d.reclaim();
+    check(bad.load() == 0 && reads.load() > 0, "column directory: concurrent adopt never sees a freed or mismatched column");
+    check(freed == 4000 - 8 && d.retired() == 0, "column directory: every removed column is freed once acknowledged");
+    std::printf("  column directory stress: %llu adopts, %llu entry reads, %zu freed\n", (unsigned long long)adopts.load(), (unsigned long long)reads.load(), freed);
   }
 }
 
@@ -4191,17 +4268,13 @@ void testRender() {
     check(sq(u) == sq(scene) && u.canonical != nullptr, "mesher (unified): golden scene decodes to the legacy quads and publishes a canonical mesh");
     // Render pipeline M8: the uploader reference decode (L0) is the published stream exactly.
     std::vector<PackedVertex> dv;
-    bool same = u.canonical && decodeCanonicalMesh(*u.canonical, 0, dv) && dv.size() == u.verts.size();
+    bool same = u.canonical && decodeCanonicalMesh(*u.canonical, dv) && dv.size() == u.verts.size();
     for (size_t i = 0; same && i < dv.size(); ++i) {
       PackedVertex a = dv[i], b = u.verts[i];
       a.slot = b.slot = 0;
       same = std::memcmp(&a, &b, sizeof a) == 0;
     }
-    check(same, "mesher (M8): decodeCanonicalMesh(L0) reproduces ChunkMesh::verts in order");
-    check(selectCanonLod(3, -1, 12, 24) == 0 && selectCanonLod(12, 0, 12, 24) == 0 && selectCanonLod(13, 0, 12, 24) == 0 &&
-              selectCanonLod(14, 0, 12, 24) == 1 && selectCanonLod(11, 1, 12, 24) == 1 && selectCanonLod(9, 1, 12, 24) == 0 &&
-              selectCanonLod(40, 0, 12, 24) == 2 && selectCanonLod(23, 2, 12, 24) == 2 && selectCanonLod(21, 2, 12, 24) == 1,
-          "mesher (M8): LOD ring selection with +-1.5 chunk hysteresis");
+    check(same, "mesher (M8): decodeCanonicalMesh reproduces ChunkMesh::verts in order");
     {  // M9 (ruling 6): open-addressing ColumnTable map agrees with std::unordered_map under churn.
       OaTable<uint64_t> oa;
       std::unordered_map<uint64_t, uint64_t> ref;
@@ -4217,6 +4290,27 @@ void testRender() {
       ok = ok && oa.size() == ref.size() && oa.maxProbe() < 64;
       check(ok, "column table (M9): open-addressing map matches unordered_map under insert/erase churn");
     }
+    {  // JD 2026-11-17: explicit handOver main -> tick -> main is not a foreign owner.
+       // Owner-only calls also hand the table back on return, so a later call from another
+       // thread on a vacant table is a legal claim, not a trip. An overlapping call against
+       // a still-live owner is counted (lfForeignOwner) and does not steal.
+      ColumnTable t;
+      const uint64_t f0 = cowStats().lfForeignOwner, h0 = cowStats().lfHandovers;
+      (void)t.takeStale();                          // main claims it, then hands it back
+      t.handOver();                                 // main -> "tick" (ChunkMap::tickSideStarting)
+      std::thread tick([&] { (void)t.takeStale(); t.noteStale(1, 2, 3); (void)t.takeStale(); });
+      tick.join();
+      t.handOver();                                 // joined: back to main (ChunkMap::tickSideStopped)
+      (void)t.takeStale();
+      const uint64_t f1 = cowStats().lfForeignOwner;
+      check(f1 == f0 && cowStats().lfHandovers >= h0 + 2,
+            "column table (LL_LF_COWTABLE): handed over main -> tick -> main is not a foreign owner");
+      check(t.testEnterOwner(), "column table (LL_LF_COWTABLE): test hook claimed a live owner");
+      std::thread rogue([&] { (void)t.takeStale(); });  // overlaps the live owner: must not steal
+      rogue.join();
+      check(cowStats().lfForeignOwner == f1 + 1, "column table (LL_LF_COWTABLE): an overlapping call is counted and does not steal");
+      t.testLeaveOwner();
+    }
     {  // M8 software uploader: canonical ingest renders the same framebuffer as the legacy stream.
       FrameParams fp;
       fp.width = 96; fp.height = 96;
@@ -4225,7 +4319,7 @@ void testRender() {
       fp.viewProj.m[12] = -1.f; fp.viewProj.m[13] = -1.f; fp.viewProj.m[14] = 0.f; fp.viewProj.m[15] = 1.f;
       fp.camPos = {8.f, 8.f, 8.f};
       fp.crosshair = false;
-      auto shot = [&](bool canonOn, int* lodOut) {
+      auto shot = [&](bool canonOn, int* stateOut) {
         cSoftwareRenderer::setCanonIngest(canonOn);
         cSoftwareRenderer sr;
         sr.resize(96, 96);
@@ -4233,18 +4327,18 @@ void testRender() {
         sr.setModelDither(false);
         sr.uploadChunkMesh(u);
         sr.renderFrame(fp);
-        if (lodOut) *lodOut = sr.canonLodOf(0, 0, 0);
+        if (stateOut) *stateOut = sr.canonDecodedOf(0, 0, 0);
         return sr.framebuffer().pixels;
       };
-      int lodLegacy = 0, lodCanon = -1;
-      const std::vector<uint32_t> a = shot(false, &lodLegacy), b = shot(true, &lodCanon);
+      int stLegacy = 0, stCanon = -1;
+      const std::vector<uint32_t> a = shot(false, &stLegacy), b = shot(true, &stCanon);
       cSoftwareRenderer::setCanonIngest(false);
       size_t lit = 0;
       for (uint32_t px : a) lit += px != a[0];
       size_t ndiff = 0;
       for (size_t i = 0; i < a.size() && i < b.size(); ++i) ndiff += a[i] != b[i];
-      std::printf("  M8 sw: lodLegacy %d lodCanon %d lit %zu diff %zu (%zu/%zu px)\n", lodLegacy, lodCanon, lit, ndiff, a.size(), b.size());
-      check(lodLegacy == -1 && lodCanon == 0 && a == b && lit > 0,
+      std::printf("  M8 sw: stLegacy %d stCanon %d lit %zu diff %zu (%zu/%zu px)\n", stLegacy, stCanon, lit, ndiff, a.size(), b.size());
+      check(stLegacy == -1 && stCanon == 1 && a == b && lit > 0,
             "software (M8): LL_SW_CANON ingest of the canonical mesh is pixel-identical to the legacy stream");
       {  // Fix (e), Archie Q5: an LRU-capped decode cache evicts out-of-view decodes, re-decodes in view, same pixels.
         cSoftwareRenderer::setCanonIngest(true);
@@ -4259,18 +4353,18 @@ void testRender() {
         sr.uploadChunkMesh(far);
         sr.renderFrame(fp);
         const std::vector<uint32_t> c1 = sr.framebuffer().pixels;
-        const bool farEvicted = sr.canonLodOf(100, 0, 0) == -1 && sr.canonLodOf(0, 0, 0) == 0;
+        const bool farEvicted = sr.canonDecodedOf(100, 0, 0) == 0 && sr.canonDecodedOf(0, 0, 0) == 1;
         FrameParams away = fp;
         away.viewProj.m[12] = 50.f;  // nothing in view: (0,0,0) goes cold and is evicted
         sr.renderFrame(away);
-        const bool nearEvicted = sr.canonLodOf(0, 0, 0) == -1;
+        const bool nearEvicted = sr.canonDecodedOf(0, 0, 0) == 0;
         sr.renderFrame(fp);
         const std::vector<uint32_t> c2 = sr.framebuffer().pixels;
         const auto& dc = sr.decodeCacheForTest();
         std::printf("  fix e sw cache: evictions %llu redecodes %llu resident %zu B\n", (unsigned long long)dc.evictions(),
                     (unsigned long long)dc.redecodes(), dc.residentBytes());
         cSoftwareRenderer::setCanonIngest(false);
-        check(farEvicted && nearEvicted && c1 == a && c2 == a && dc.evictions() >= 2 && dc.redecodes() >= 1 && sr.canonLodOf(0, 0, 0) == 0,
+        check(farEvicted && nearEvicted && c1 == a && c2 == a && dc.evictions() >= 2 && dc.redecodes() >= 1 && sr.canonDecodedOf(0, 0, 0) == 1,
               "software (fix e): capped canonical decode cache evicts cold chunks and re-decodes in view, pixel-identical");
       }
     }
@@ -4353,6 +4447,47 @@ void testChangedColumns() {
   st.waitLoops(4);
   st.stop();
   check(st.takeChangedColumns().empty(), "cSimThread: ticks that change nothing mark nothing");
+}
+
+// t46u item 6b-3: postToTick runs owner posts on the tick thread at its next boundary, oldest first,
+// exactly once; inline when no tick thread is live; a paused (parked) tick thread wakes for them; stop()
+// runs what the tick thread did not reach.
+void testTickPosts() {
+  std::printf("sim: postToTick (owner posts run on the tick thread at the next boundary)\n");
+  ChunkMap w = worldWithColumns(3, &fixtureBlocks());
+  SimConfig cfg;
+  cfg.tickRate = 64; cfg.radiusChunks = 4;
+  cSimThread st(w, fixtureBlocks(), std::make_unique<ChangingSim>(), std::move(cfg), [](std::shared_ptr<MeshInput>) {});
+  const std::thread::id me = std::this_thread::get_id();
+  bool ranHere = false;
+  st.postToTick([&] { ranHere = std::this_thread::get_id() == me; });
+  check(ranHere && st.tickPostsRun() == 1, "postToTick: with no tick thread it runs at once on the caller");
+  std::vector<int> order;  // touched only by whoever runs the posts; read after stop()
+  std::atomic<int> offCaller{0}, ran{0};
+  st.start();
+  st.waitLoops(2);
+  for (int i = 0; i < 200; ++i)
+    st.postToTick([&, i] { order.push_back(i); if (std::this_thread::get_id() != me) ++offCaller; ++ran; });
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (ran.load() < 200 && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  check(ran.load() == 200 && offCaller.load() == 200, "postToTick: a running tick thread runs every post itself");
+  st.setPaused(true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let it reach the paused park
+  std::atomic<bool> pausedRan{false};
+  st.postToTick([&] { pausedRan = std::this_thread::get_id() != me; });
+  const auto until2 = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!pausedRan.load() && std::chrono::steady_clock::now() < until2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  check(pausedRan.load(), "postToTick: a paused tick thread wakes and runs the post");
+  st.setPaused(false);
+  for (int i = 200; i < 300; ++i) st.postToTick([&, i] { order.push_back(i); });
+  st.stop();
+  bool inOrder = order.size() == 300;
+  for (size_t i = 0; inOrder && i < order.size(); ++i) inOrder = order[i] == int(i);
+  check(inOrder, "postToTick: every post runs exactly once, oldest first, and stop() runs the leftovers");
+  check(st.tickPostsRun() == 302, "postToTick: the run counter matches the posts");
+  bool afterStop = false;
+  st.postToTick([&] { afterStop = std::this_thread::get_id() == me; });
+  check(afterStop, "postToTick: after stop() it runs at once on the caller again");
 }
 
 // Random ticks: a full section of an opted-in block; every pick reaches onRandomTick.
@@ -8703,10 +8838,10 @@ void testThreadCensus() {
   std::printf("core: thread census (Thread Handshake P1, record-only)\n");
   struct Want { unsigned hw, shards, bands, pool, cap; bool small; };
   // JD 2026-11-14: no LL_DED_LAYOUT in this process, so mesh is folded into the shared pool.
-  // remaining+2 budget: 4 hw -> 3 render-side, 12 hw -> 11. Auto bands share that budget.
+  // t46u: budget == remaining (no +2): 4 hw -> 1 render-side, 12 hw -> 9. Auto bands share it.
   const Want wants[] = {
-      {1, 1, 2, 1, 1, true},   {2, 1, 2, 1, 1, true},     {4, 3, 2, 1, 1, true},
-      {8, 4, 3, 4, 4, false},  {16, 4, 7, 8, 8, false}, {32, 4, 15, 16, 16, false},
+      {1, 1, 1, 1, 1, true},   {2, 1, 1, 1, 1, true},     {4, 3, 1, 1, 1, true},
+      {8, 4, 2, 3, 3, false},  {16, 4, 6, 7, 7, false}, {32, 4, 14, 15, 15, false},
   };
   bool mathOk = true;
   for (const Want& w : wants) {
@@ -8725,12 +8860,19 @@ void testThreadCensus() {
                 b.spawnedTotal());
     mathOk = mathOk && ok;
   }
-  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the render-side remaining+2 rule");
+  check(mathOk, "thread census: budgets for 1/2/4/8/16/32 cores match the render-side == remaining rule (t46u)");
   check(computeThreadBudget(0).hw == 1 && computeThreadBudget(0).pool == computeThreadBudget(1).pool,
         "thread census: unknown core count (0) treated as 1");
-  check(renderSideBudget(4) == 3 && renderSideBudget(12) == 11 && remainingAfterPermanentThree(4) == 1 &&
+  check(renderSideBudget(4) == 1 && renderSideBudget(12) == 9 && remainingAfterPermanentThree(4) == 1 &&
             remainingAfterPermanentThree(12) == 9,
-        "thread census: TheReefs 4 hw -> remaining 1 budget 3; 12-hw workstation -> remaining 9 budget 11");
+        "thread census: TheReefs 4 hw -> remaining 1 budget 1; 12-hw workstation -> remaining 9 budget 9 (t46u)");
+  bool slotsOk = true;
+  for (unsigned hw : {4u, 5u, 8u, 12u, 16u, 32u, 64u}) {
+    const ThreadBudget b = computeThreadBudget(hw);
+    slotsOk = slotsOk && b.slotsUsed() <= b.hw && slotPlan(b).find("(in budget)") != std::string::npos;
+  }
+  check(slotsOk && computeThreadBudget(4).slotsUsed() == 4 && computeThreadBudget(4).lfWorkers == 0,
+        "thread allocator (t46u): 4..64 cores never hand out more slots than cores; 4 cores = exactly 4 threads");
   bool same = true;
   for (unsigned hw : {1u, 2u, 3u, 4u, 5u, 8u, 12u, 16u, 32u, 64u}) {
     const ThreadBudget b = computeThreadBudget(hw);
@@ -8742,9 +8884,9 @@ void testThreadCensus() {
   bool small = true;
   for (unsigned hw = 1; hw <= 4; ++hw) {
     const ThreadBudget b = computeThreadBudget(hw);
-    small = small && b.renderSideBudget == 3 && b.pool == 1 && b.renderBands == 2 && b.renderSideUsed() <= 3;
+    small = small && b.renderSideBudget == 1 && b.pool == 1 && b.renderBands == 1 && b.renderSideUsed() <= 1;
   }
-  check(small, "thread census: on <= 4 cores the render-side budget is 3 and stays filled in-budget");
+  check(small, "thread census: on <= 4 cores the render-side budget is 1 (4 threads total, t46u)");
   // hardware_concurrency is read once.
   const ThreadBudget& b1 = cThreadCensus::instance().budget();
   const ThreadBudget& b2 = cThreadCensus::instance().budget();
@@ -8815,11 +8957,11 @@ void testThreadCensusRulings() {
              c.pool == folded && c.meshDedicated == 0 && c.renderSideUsed() <= c.renderSideBudget &&
              (p.reservePool + p.meshDedicated <= kMaxPoolWorkers ? p.usedDetached() == p.budget : true);
   }
-  check(planOk && renderSideBudget(4) == 3 && renderSideBudget(12) == 11 && computeThreadBudget(4).pool == 1 &&
-            computeThreadBudget(12).pool == 6 && planRenderSide(4).swBands == 2 && planRenderSide(4).meshDedicated == 1 &&
-            planRenderSide(4).reservePool == 0 && planRenderSide(12).swBands == 5 && planRenderSide(12).meshDedicated == 4 &&
-            planRenderSide(12).reservePool == 2,
-        "census pool/bands: planRenderSide remaining+2 (4 hw -> budget 3, 12 hw -> 11); mesh folded into pool here");
+  check(planOk && renderSideBudget(4) == 1 && renderSideBudget(12) == 9 && computeThreadBudget(4).pool == 1 &&
+            computeThreadBudget(12).pool == 5 && planRenderSide(4).swBands == 1 && planRenderSide(4).meshDedicated == 0 &&
+            planRenderSide(4).reservePool == 0 && planRenderSide(12).swBands == 4 && planRenderSide(12).meshDedicated == 4 &&
+            planRenderSide(12).reservePool == 1,
+        "census pool/bands: planRenderSide == remaining (4 hw -> budget 1, 12 hw -> 9, t46u); mesh folded into pool here");
 #ifdef _WIN32
   _putenv_s("LK_RENDER_THREADS", "1");
 #else
@@ -8834,7 +8976,7 @@ void testThreadCensusRulings() {
 #else
   unsetenv("LK_RENDER_THREADS");
 #endif
-  check(compactOk && planRenderSide(4).swBands == 2 && planRenderSide(4).meshDedicated == 1,
+  check(compactOk && planRenderSide(12).swBands == 4 && planRenderSide(12).meshDedicated == 4,
         "census: LK_RENDER_THREADS=1 is 1 band + mesh caller-runs + reserve 0; unset restores the default plan");
   check(resolveRenderBands(0, 12, false) == planRenderSide(12, false).swBands &&
             resolveRenderBands(0, 2, false) == planRenderSide(2, false).swBands &&
@@ -8868,9 +9010,9 @@ void testThreadCensusRulings() {
     const unsigned cw = a.pool + a.meshDedicated + a.renderSpawned;
     check(threadTally(a).find("render-side budget " + std::to_string(a.renderSideBudget)) != std::string::npos &&
               threadTally(a).find("used " + std::to_string(cw)) != std::string::npos &&
-              computeWorkers(a, a.renderSpawned) == cw && a.renderSideBudget == 11 &&
+              computeWorkers(a, a.renderSpawned) == cw && a.renderSideBudget == 9 &&
               poolInvariantViolation(a.pool, a).empty() && !poolInvariantViolation(a.pool + 1, a).empty(),
-          "census: the tally counts render-side workers (mesh + pool + bands) against remaining+2; pool invariant check");
+          "census: the tally counts render-side workers (mesh + pool + bands) against remaining (t46u); pool invariant check");
   }
   {
     const uint64_t prev = cThreadCensus::lastCommittedTick();
@@ -9652,8 +9794,8 @@ int runModule(const std::string& m) {
   const int before = g_fails;
   if (m == "core") { testCore(); testFailFast(); testCounterHash(); testSeqLockStress(); testJobInjectionStress(); testThreadCensus(); testThreadCensusRulings(); }
   else if (m == "world") { testWorld(); testMarchRay(); testChunkIngress(); }
-  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); g_fails += testCanonicalMeshEntry(); }
-  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
+  else if (m == "render") { testRender(); g_fails += testSoftwareRenderer(); g_fails += testVkSpriteConversion(); testVkPacked12(); g_fails += testCanonicalMeshEntry(); g_fails += testGlslAttrParseEntry(); }
+  else if (m == "sim") { testSim(); testAreaShape(); testChangedColumns(); testTickPosts(); testRandomTicks(); testStepTicks(); testHandshakeGroups(); testDetSched(); testTraceJitCompose(); testSignalPropagate(); testBlockNames(); testAttachables(); testThreadLifecycle(); testLendReclaim(); testTickLedger(); }
   else if (m == "ai") testAi();
   else if (m == "anim") g_fails += anim::runAnimSelfTest();
   else if (m == "storage") testStorage();

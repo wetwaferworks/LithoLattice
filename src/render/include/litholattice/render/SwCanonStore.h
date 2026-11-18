@@ -1,7 +1,7 @@
 // IUnifiedMesher refactor step 3b (UML_UNIFIED_MESHER_2026-10-30.md): the software backend's
 // canonical ingest store (M8, LL_SW_CANON) behind IMeshUploader. Wrapping only: the
-// validation and staging moved verbatim out of cSoftwareRenderer::uploadChunkMesh. Decoding,
-// LOD selection and seams stay in the renderer. A placement's `first` carries the store key.
+// validation and staging moved verbatim out of cSoftwareRenderer::uploadChunkMesh. Decoding
+// stays in the renderer. A placement's `first` carries the store key.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -14,9 +14,9 @@ namespace litholattice {
 
 class cSwCanonStore final : public IMeshUploader {
  public:
-  /// One stored canonical mesh: per-chunk params (no legacy stream), the drawn lod
-  /// (-1 = none), the lod being selected this pass, and the decoded skirt mask (M10).
-  struct Entry { ChunkMesh meta; int lod = -1; int pend = 0; uint8_t skirtMask = 0xFF; };
+  /// One stored canonical mesh: per-chunk params (no legacy stream) and whether its
+  /// decode is currently in the renderer's mesh store.
+  struct Entry { ChunkMesh meta; bool decoded = false; };
 
   /// Same key as the software renderer's mesh store.
   static int64_t keyOf(int cx, int sy, int cz) {

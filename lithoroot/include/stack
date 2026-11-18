@@ -1,0 +1,30 @@
+/* stack ... LithoRoot std L6 (S4, 2026-11-16): the stack adaptor. */
+#ifndef LITHOROOT_STACK
+#define LITHOROOT_STACK
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <deque>
+
+namespace std {
+template <class T, class C = deque<T>>
+class stack {
+ protected:
+  C c;
+ public:
+  using container_type = C; using value_type = T; using size_type = size_t;
+  using reference = T&; using const_reference = const T&;
+  stack() = default;
+  explicit stack(const C& x) : c(x) {}
+  [[nodiscard]] bool empty() const { return c.empty(); }
+  size_type size() const { return c.size(); }
+  reference top() { return c.back(); }
+  const_reference top() const { return c.back(); }
+  void push(const T& v) { c.push_back(v); }
+  void push(T&& v) { c.push_back(std::move(v)); }
+  template <class... A> decltype(auto) emplace(A&&... a) { return c.emplace_back(std::forward<A>(a)...); }
+  void pop() { c.pop_back(); }
+  void swap(stack& o) noexcept { using std::swap; swap(c, o.c); }
+};
+}  // namespace std
+#endif

@@ -13,13 +13,10 @@
 
 namespace litholattice {
 
-class cBlockReg;
-class cFarLodSection;
 
 class cColumnEdgeShell {
  public:
   cColumnEdgeShell() = default;
-  ~cColumnEdgeShell();  // defined where cFarLodSection is complete
   static constexpr int kRingPerLayer = 60;
   static constexpr int kRingCells = kRingPerLayer * kChunkSize;  // per sub-chunk
 
@@ -27,9 +24,8 @@ class cColumnEdgeShell {
   static int ringIndex(int lx, int lz);
   static bool onRing(int lx, int lz) { return ringIndex(lx, lz) >= 0; }
 
-  /// One pass over the column's sub-chunks. `reg` may be null (LOD then ranks non-air
-  /// as opaque). `withLod` also builds the Voxy-#1 far LOD (LL_FAR_LOD).
-  static std::shared_ptr<const cColumnEdgeShell> build(const ChunkColumn& c, const cBlockReg* reg, bool withLod);
+  /// One pass over the column's sub-chunks.
+  static std::shared_ptr<const cColumnEdgeShell> build(const ChunkColumn& c);
 
   bool hasSub(int sy) const { return sy >= 0 && sy < kSubChunks && subs_[size_t(sy)] != nullptr; }
   /// Cell reads in column-local coords; interior and absent sub-chunks read air / 0.
@@ -38,7 +34,6 @@ class cColumnEdgeShell {
   /// Rebuilds sub-chunk sy as a SubChunk: ring cells restored, interior air (CoW publish).
   void expand(int sy, SubChunk& out) const;
   size_t bytes() const { return bytes_; }
-  const cFarLodSection* lod() const { return lod_.get(); }
 
   // Process-wide counters (relaxed atomics).
   static void noteRefusedWrite() { refused_.fetch_add(1, std::memory_order_relaxed); }
@@ -53,7 +48,6 @@ class cColumnEdgeShell {
   };
   static int slot(int lx, int y, int lz) { return (y & 15) * kRingPerLayer + ringIndex(lx, lz); }
   std::array<std::unique_ptr<Layer>, kSubChunks> subs_{};
-  std::unique_ptr<cFarLodSection> lod_;
   size_t bytes_ = 0;
   static inline std::atomic<uint64_t> refused_{0};
 };

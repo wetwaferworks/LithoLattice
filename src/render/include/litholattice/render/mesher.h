@@ -98,36 +98,25 @@ void setMeshVerify(bool on);
 /// compare quad sets (decode equivalence).
 void setUnifiedMesher(bool on);
 bool unifiedMesherEnabled();
-struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, lodQuads = 0, lodFallback = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0, skirtQuads = 0, splits = 0; };
-/// M6: L1/L2 from the registry feed on the game path (LL_CANON_LODS=0 turns it off).
-bool canonLodsEnabled();
-/// Render pipeline M8 (uploaders): decode one LOD of a canonical mesh to the legacy
-/// PackedVertex stream (the CPU reference every uploader is checked against).
-/// lod 0 = Packed12 fallback then L0 quads: byte-identical to ChunkMesh::verts in unified
-/// mode (slot field 0). lod 1/2 = face buckets, skirts, blend; positions x2/x4, one texture
-/// tile per coarse cell (sub-block fallback geometry is not drawn at L1/L2).
-/// Returns false (out empty) for an unpublishable mesh or a bad lod.
-/// M10 (Archie ruling 2): skirtMask bit f keeps the skirts facing direction f (+X -X +Y -Y
-/// +Z -Z); the default keeps all (the mesh-time set). See canonSkirtMask.
-bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask = 0x3F);
-/// M10: draw-side skirt directions for a sub-chunk drawn at `lod`: bit f set iff the
-/// neighbour across face f is drawn at another LOD (true exterior LOD boundary).
-/// nbrLod[f]: 0..2 = canonical lod, -1 = legacy stream (full detail, = L0), -2 = nothing
-/// drawn there (no seam to crack against).
-uint8_t canonSkirtMask(int lod, const int nbrLod[6]);
+struct UnifiedMesherStats { uint64_t meshes = 0, checked = 0, mismatches = 0, unpublished = 0, quads = 0, residentBytes = 0, fbVerts = 0, fbChecked = 0, fbMismatches = 0, splits = 0; };
+/// Render pipeline M8 (uploaders): decode a canonical mesh to the legacy PackedVertex
+/// stream (the CPU reference every uploader is checked against): Packed12 fallback then
+/// the face and blend quads, byte-identical to ChunkMesh::verts in unified mode (slot
+/// field 0). Returns false (out empty) for an unpublishable mesh.
+bool decodeCanonicalMesh(const CanonicalMesh& cm, std::vector<PackedVertex>& out);
 /// Render pipeline M12 (GPU uploaders, Archie ruling 5): the pull stream a GPU backend
 /// uploads instead of PackedVertex quads. 4 x uint32 per texel (GL RGBA32UI TBO / Vulkan
-/// SSBO uvec4). First fbQuads * 4 texels = Packed12 fallback vertices (L0 only, one per
+/// SSBO uvec4). First fbQuads * 4 texels = Packed12 fallback vertices (one per
 /// vertex: w0, w1, w2, layerId | rgb565Tint << 16); then one texel per canonical quad
 /// (lo, hi, layer | value << 16 | mode << 24, 0) with the palette already resolved
 /// (canonKeyOf), so split halves (M11) need no palette indirection. Same quad set as
-/// decodeCanonicalMesh(cm, lod, ., skirtMask); fallback quads are moved to the front.
+/// decodeCanonicalMesh(cm, .); fallback quads are moved to the front.
 struct CanonPullStream { std::vector<uint32_t> texels; uint32_t fbQuads = 0, quads = 0; };
-bool buildCanonPullStream(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out);
+bool buildCanonPullStream(const CanonicalMesh& cm, CanonPullStream& out);
 /// CPU mirror of assets/shaders/canonical_pull_legacy.glsl: legacy vertex `corner` (0..3)
 /// of pull quad q (0 .. fbQuads + quads - 1). The shaders are line-for-line copies.
-PackedVertex canonPullReference(const CanonPullStream& s, uint32_t q, uint32_t corner, int lod);
-/// M12 verify counters (LL_CANON_VERIFY=1): pulled stream vs decodeCanonicalMesh, L0..L2.
+PackedVertex canonPullReference(const CanonPullStream& s, uint32_t q, uint32_t corner);
+/// M12 verify counters (LL_CANON_VERIFY=1): pulled stream vs decodeCanonicalMesh.
 struct CanonPullVerifyStats { uint64_t checked = 0, mismatches = 0; };
 CanonPullVerifyStats canonPullVerifyStats();
 /// M11 (Archie ruling 1): split a mesh whose palette grew past kMaxPalette (up to 2x) in
@@ -135,12 +124,6 @@ CanonPullVerifyStats canonPullVerifyStats();
 /// fallback vertex (the packed 10-bit fields are rewritten). Returns false if the second
 /// half overflows too (the mesh is then not publishable).
 bool splitCanonicalTwo(CanonicalMesh& cm, const std::vector<uint32_t>& qSlot, const std::vector<uint32_t>& fSlot);
-/// Draw-side LOD selection (Archie Q38/Q40): Chebyshev chunk distance d against rings
-/// ring1 (L0 -> L1) and ring2 (L1 -> L2), +-1.5 chunk hysteresis (2 in integer chunks)
-/// around the current lod (-1 = no current, pick directly).
-int selectCanonLod(int d, int current, int ring1, int ring2);
-/// LL_CANON_LOD_RINGS="r1,r2" (default 12,24 chunks).
-void canonLodRings(int& ring1, int& ring2);
 UnifiedMesherStats unifiedMesherStats();
 bool meshVerifyEnabled();
 struct MeshVerifyStats { uint64_t checked = 0, mismatches = 0, skipped = 0; };

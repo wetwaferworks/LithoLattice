@@ -1,0 +1,247 @@
+/* variant ... LithoRoot std L7 (S4 tail, 2026-11-16): variant<T...> as a tagged
+ * union with index(), get/get_if (by index and by type), holds_alternative,
+ * emplace, monostate, comparisons, single-variant visit, and hash. The census
+ * has one user (mcp/json.h: seven alternatives, get/holds_alternative/
+ * monostate). Not provided: multi-variant visit and converting assignment
+ * from a different alternative's type list (variant<A>=variant<B>).
+ * If an alternative's constructor throws during emplace/assignment, the
+ * variant is left valueless_by_exception(), as the standard specifies. */
+#ifndef LITHOROOT_VARIANT
+#define LITHOROOT_VARIANT
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <compare>
+#include <exception>
+#include <functional>
+#include <new>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+struct monostate {};
+constexpr bool operator==(monostate, monostate) noexcept { return true; }
+constexpr strong_ordering operator<=>(monostate, monostate) noexcept { return strong_ordering::equal; }
+template <> struct hash<monostate> { size_t operator()(monostate) const noexcept { return 0x6d6f6e6fu; } };
+
+class bad_variant_access : public exception {
+ public:
+  const char* what() const noexcept override { return "bad_variant_access"; }
+};
+
+inline constexpr size_t variant_npos = size_t(-1);
+template <class... T> class variant;
+template <class V> struct variant_size;
+template <class... T> struct variant_size<variant<T...>> : integral_constant<size_t, sizeof...(T)> {};
+template <class V> struct variant_size<const V> : variant_size<V> {};
+template <class V> inline constexpr size_t variant_size_v = variant_size<V>::value;
+template <size_t I, class V> struct variant_alternative;
+template <size_t I, class H, class... T> struct variant_alternative<I, variant<H, T...>> : variant_alternative<I - 1, variant<T...>> {};
+template <class H, class... T> struct variant_alternative<0, variant<H, T...>> { using type = H; };
+template <size_t I, class V> struct variant_alternative<I, const V> { using type = const typename variant_alternative<I, V>::type; };
+template <size_t I, class V> using variant_alternative_t = typename variant_alternative<I, V>::type;
+
+namespace __lk {
+[[noreturn]] inline void throw_bad_variant() { throw bad_variant_access(); }
+
+template <class U, class... T> struct vindex;  // index of U in T..., or npos; dup gives npos
+template <class U> struct vindex<U> { static constexpr size_t value = variant_npos; static constexpr size_t count = 0; };
+template <class U, class H, class... T> struct vindex<U, H, T...> {
+  static constexpr size_t count = (is_same_v<U, H> ? 1 : 0) + vindex<U, T...>::count;
+  static constexpr size_t rest = vindex<U, T...>::value;
+  static constexpr size_t value = count != 1 ? variant_npos : is_same_v<U, H> ? 0 : rest + 1;
+};
+
+/* Converting-constructor selection: overload resolution over F(Ti) for each
+ * alternative, keeping only those Ti{arg} accepts without narrowing (P0608). */
+template <class T> struct arr1 { T v[1]; };
+template <class A, size_t I, class Ti, bool = requires { arr1<Ti>{{declval<A>()}}; }>
+struct vf { static void f(); };
+template <class A, size_t I, class Ti> struct vf<A, I, Ti, true> { static integral_constant<size_t, I> f(Ti); };
+template <class A, class Seq, class... T> struct vover;
+template <class A, size_t... I, class... T>
+struct vover<A, index_sequence<I...>, T...> : vf<A, I, T>... { using vf<A, I, T>::f...; };
+template <class A, class... T>
+using vpick_t = decltype(vover<A, index_sequence_for<T...>, T...>::f(declval<A>()));
+
+template <class... T> union vstore;
+template <> union vstore<> {};
+template <class H, class... T> union vstore<H, T...> {
+  constexpr vstore() : rest() {}
+  ~vstore() {}
+  H head;
+  vstore<T...> rest;
+};
+template <size_t I, class S> constexpr auto& vget(S& s) noexcept {
+  if constexpr (I == 0) return s.head; else return vget<I - 1>(s.rest);
+}
+template <class R, class F, class V, size_t I>
+constexpr R vcall(F&& f, V&& v) { return std::invoke(std::forward<F>(f), std::forward<V>(v).template __alt<I>()); }
+template <class R, class F, class V, size_t... I>
+constexpr R vdispatch(size_t i, F&& f, V&& v, index_sequence<I...>) {
+  using fp = R (*)(F&&, V&&);
+  static constexpr fp table[] = {&vcall<R, F, V, I>...};
+  return table[i](std::forward<F>(f), std::forward<V>(v));
+}
+}  // namespace __lk
+
+template <class... T>
+class variant {
+  static_assert(sizeof...(T) > 0, "variant needs at least one alternative");
+  static_assert(sizeof...(T) < 255, "variant index is one byte");
+  static_assert((!is_reference_v<T> && ...) && (!is_array_v<T> && ...) && (!is_void_v<T> && ...));
+  template <size_t I> using alt = variant_alternative_t<I, variant>;
+  using F0 = alt<0>;
+  static constexpr unsigned char npos8 = 0xff;
+
+ public:
+  constexpr variant() noexcept(is_nothrow_default_constructible_v<F0>) requires is_default_constructible_v<F0> { make<0>(); }
+  variant(const variant& o) requires (is_copy_constructible_v<T> && ...) {
+    if (!o.valueless_by_exception()) o.vis([&]<size_t I>(const auto& x) { make<I>(x); });
+  }
+  variant(variant&& o) noexcept((is_nothrow_move_constructible_v<T> && ...)) requires (is_move_constructible_v<T> && ...) {
+    if (!o.valueless_by_exception()) o.vis([&]<size_t I>(auto& x) { make<I>(std::move(x)); });
+  }
+  template <class A, size_t I = __lk::vpick_t<A, T...>::value>
+    requires (!is_same_v<remove_cvref_t<A>, variant>)
+  constexpr variant(A&& a) noexcept(is_nothrow_constructible_v<alt<I>, A>) { make<I>(std::forward<A>(a)); }
+  template <class U, class... Args, size_t I = __lk::vindex<U, T...>::value>
+    requires (I != variant_npos)
+  constexpr explicit variant(in_place_type_t<U>, Args&&... args) { make<I>(std::forward<Args>(args)...); }
+  template <size_t I, class... Args>
+  constexpr explicit variant(in_place_index_t<I>, Args&&... args) { make<I>(std::forward<Args>(args)...); }
+  ~variant() { reset(); }
+
+  variant& operator=(const variant& o) requires (is_copy_constructible_v<T> && ...) {
+    if (this == &o) return *this;
+    if (o.valueless_by_exception()) { reset(); return *this; }
+    o.vis([&]<size_t I>(const auto& x) {
+      if (idx_ == I) __alt<I>() = x;
+      else { alt<I> tmp(x); reset(); make<I>(std::move(tmp)); }
+    });
+    return *this;
+  }
+  variant& operator=(variant&& o) noexcept((is_nothrow_move_constructible_v<T> && ...)) requires (is_move_constructible_v<T> && ...) {
+    if (this == &o) return *this;
+    if (o.valueless_by_exception()) { reset(); return *this; }
+    o.vis([&]<size_t I>(auto& x) {
+      if (idx_ == I) __alt<I>() = std::move(x);
+      else { reset(); make<I>(std::move(x)); }
+    });
+    return *this;
+  }
+  template <class A, size_t I = __lk::vpick_t<A, T...>::value>
+    requires (!is_same_v<remove_cvref_t<A>, variant>)
+  variant& operator=(A&& a) {
+    if (idx_ == I) __alt<I>() = std::forward<A>(a);
+    else { alt<I> tmp(std::forward<A>(a)); reset(); make<I>(std::move(tmp)); }
+    return *this;
+  }
+
+  constexpr size_t index() const noexcept { return idx_ == npos8 ? variant_npos : idx_; }
+  constexpr bool valueless_by_exception() const noexcept { return idx_ == npos8; }
+
+  template <size_t I, class... Args> alt<I>& emplace(Args&&... args) {
+    reset();
+    make<I>(std::forward<Args>(args)...);
+    return __alt<I>();
+  }
+  template <class U, class... Args, size_t I = __lk::vindex<U, T...>::value>
+    requires (I != variant_npos)
+  U& emplace(Args&&... args) { return emplace<I>(std::forward<Args>(args)...); }
+
+  void swap(variant& o) { variant t(std::move(o)); o = std::move(*this); *this = std::move(t); }
+
+  /* Internal: unchecked alternative access (public for the free functions). */
+  template <size_t I> constexpr alt<I>& __alt() & noexcept { return __lk::vget<I>(s_); }
+  template <size_t I> constexpr const alt<I>& __alt() const& noexcept { return __lk::vget<I>(s_); }
+  template <size_t I> constexpr alt<I>&& __alt() && noexcept { return std::move(__lk::vget<I>(s_)); }
+  template <size_t I> constexpr const alt<I>&& __alt() const&& noexcept { return std::move(__lk::vget<I>(s_)); }
+
+ private:
+  template <size_t I, class... Args> void make(Args&&... args) {
+    ::new (static_cast<void*>(&__lk::vget<I>(s_))) alt<I>(std::forward<Args>(args)...);
+    idx_ = static_cast<unsigned char>(I);
+  }
+  void reset() noexcept {
+    if (idx_ == npos8) return;
+    vis([]<size_t I>(auto& x) { using X = remove_reference_t<decltype(x)>; x.~X(); });
+    idx_ = npos8;
+  }
+  /* Calls g.template operator()<I>(alternative) for the active index. */
+  template <class G, size_t I = 0> void vis(G&& g) {
+    if constexpr (I < sizeof...(T)) { if (idx_ == I) g.template operator()<I>(__alt<I>()); else vis<G, I + 1>(std::forward<G>(g)); }
+  }
+  template <class G, size_t I = 0> void vis(G&& g) const {
+    if constexpr (I < sizeof...(T)) { if (idx_ == I) g.template operator()<I>(__alt<I>()); else vis<G, I + 1>(std::forward<G>(g)); }
+  }
+  __lk::vstore<T...> s_;
+  unsigned char idx_ = npos8;
+};
+
+template <class U, class... T> constexpr bool holds_alternative(const variant<T...>& v) noexcept {
+  constexpr size_t I = __lk::vindex<U, T...>::value;
+  static_assert(I != variant_npos, "holds_alternative: type must appear exactly once");
+  return v.index() == I;
+}
+template <size_t I, class... T> constexpr variant_alternative_t<I, variant<T...>>& get(variant<T...>& v) {
+  if (v.index() != I) __lk::throw_bad_variant();
+  return v.template __alt<I>();
+}
+template <size_t I, class... T> constexpr const variant_alternative_t<I, variant<T...>>& get(const variant<T...>& v) {
+  if (v.index() != I) __lk::throw_bad_variant();
+  return v.template __alt<I>();
+}
+template <size_t I, class... T> constexpr variant_alternative_t<I, variant<T...>>&& get(variant<T...>&& v) {
+  if (v.index() != I) __lk::throw_bad_variant();
+  return std::move(v).template __alt<I>();
+}
+template <class U, class... T> constexpr U& get(variant<T...>& v) { return get<__lk::vindex<U, T...>::value>(v); }
+template <class U, class... T> constexpr const U& get(const variant<T...>& v) { return get<__lk::vindex<U, T...>::value>(v); }
+template <class U, class... T> constexpr U&& get(variant<T...>&& v) { return get<__lk::vindex<U, T...>::value>(std::move(v)); }
+template <size_t I, class... T> constexpr add_pointer_t<variant_alternative_t<I, variant<T...>>> get_if(variant<T...>* v) noexcept {
+  return v && v->index() == I ? &v->template __alt<I>() : nullptr;
+}
+template <size_t I, class... T> constexpr add_pointer_t<const variant_alternative_t<I, variant<T...>>> get_if(const variant<T...>* v) noexcept {
+  return v && v->index() == I ? &v->template __alt<I>() : nullptr;
+}
+template <class U, class... T> constexpr U* get_if(variant<T...>* v) noexcept { return get_if<__lk::vindex<U, T...>::value>(v); }
+template <class U, class... T> constexpr const U* get_if(const variant<T...>* v) noexcept { return get_if<__lk::vindex<U, T...>::value>(v); }
+
+/* Single-variant visit. The result type is the visitor's on alternative 0. */
+template <class F, class V>
+constexpr decltype(auto) visit(F&& f, V&& v) {
+  using VV = remove_cvref_t<V>;
+  using R = decltype(std::invoke(std::forward<F>(f), std::forward<V>(v).template __alt<0>()));
+  if (v.valueless_by_exception()) __lk::throw_bad_variant();
+  return __lk::vdispatch<R>(v.index(), std::forward<F>(f), std::forward<V>(v), make_index_sequence<variant_size_v<VV>>());
+}
+
+template <class... T> constexpr bool operator==(const variant<T...>& a, const variant<T...>& b) {
+  if (a.index() != b.index()) return false;
+  if (a.valueless_by_exception()) return true;
+  return __lk::vdispatch<bool>(a.index(), [&](const auto& x) {
+    using X = remove_cvref_t<decltype(x)>;
+    return x == get<X>(b);
+  }, a, make_index_sequence<sizeof...(T)>());
+}
+template <class... T> constexpr bool operator<(const variant<T...>& a, const variant<T...>& b) {
+  if (b.valueless_by_exception()) return false;
+  if (a.valueless_by_exception()) return true;
+  if (a.index() != b.index()) return a.index() < b.index();
+  return __lk::vdispatch<bool>(a.index(), [&](const auto& x) {
+    using X = remove_cvref_t<decltype(x)>;
+    return x < get<X>(b);
+  }, a, make_index_sequence<sizeof...(T)>());
+}
+template <class... T> void swap(variant<T...>& a, variant<T...>& b) { a.swap(b); }
+template <class... T> struct hash<variant<T...>> {
+  size_t operator()(const variant<T...>& v) const {
+    if (v.valueless_by_exception()) return 0;
+    return v.index() * 0x9e3779b9u ^ visit([](const auto& x) { return hash<remove_cvref_t<decltype(x)>>()(x); }, v);
+  }
+};
+
+}  // namespace std
+#endif

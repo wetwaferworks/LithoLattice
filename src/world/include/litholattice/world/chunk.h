@@ -223,7 +223,7 @@ struct SubChunk {
 // an empty palette costs nothing, and installing a palette replaces the
 // handle instead of mutating storage other columns may share. Reads touch
 // only the column's own handle (no locking); interning is a cold path
-// (load/setup) and is mutex-guarded. The intern table holds weak references,
+// (load/setup) and uses a per-thread table (t46u 5d, no lock). The intern table holds weak references,
 // so a palette allocation lives exactly as long as some column uses it.
 class MaterialPalette {
  public:
@@ -275,12 +275,16 @@ class MaterialPalette {
       h *= 1099511628211ull;
     }
     h ^= uint64_t(n) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    // t46u item 5d (JD 2026-11-16): one dedupe table PER THREAD, no lock. Interning
+    // only shares storage: operator== compares contents when two handles point at
+    // different allocations, so a palette interned on another thread is still equal,
+    // and nothing that is hashed or saved depends on which allocation a palette uses.
+    // The cost is that identical palettes built on different threads no longer share
+    // one allocation.
     struct Table {
-      litholattice::cAtomicGate mu;
       std::unordered_map<uint64_t, std::vector<std::weak_ptr<const Entries>>> byHash;
     };
-    static Table table;
-    litholattice::cGateGuard<litholattice::cAtomicGate> lock(table.mu);
+    static thread_local Table table;
     auto& bucket = table.byHash[h];
     for (auto it = bucket.begin(); it != bucket.end();) {
       if (auto live = it->lock()) {

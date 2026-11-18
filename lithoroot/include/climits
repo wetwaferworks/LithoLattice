@@ -1,0 +1,8 @@
+/* climits ... LithoRoot std L0: clang's own <limits.h>. */
+#ifndef LITHOROOT_CLIMITS
+#define LITHOROOT_CLIMITS
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <limits.h>
+#endif

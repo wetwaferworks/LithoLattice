@@ -67,6 +67,7 @@ struct CowStats {
   uint64_t verifyChecked = 0, verifyMismatches = 0, retainedBytes = 0, gathers = 0;
   uint64_t staleNoted = 0, staleFlushed = 0, stalePinned = 0, maxProbe = 0;
   uint64_t lfForeignOwner = 0;  ///< LL_LF_COWTABLE: owner-only calls seen from a second thread
+  uint64_t lfHandovers = 0;     ///< explicit owner handovers (ChunkMap tickSideStarting / tickSideStopped)
 };
 
 class ColumnTable {
@@ -84,16 +85,31 @@ class ColumnTable {
   void noteStale(int cx, int sy, int cz);
   /// M9 (ruling 6): take the stale masks (column key -> sub mask) for the per-tick batch.
   std::vector<std::pair<uint64_t, uint64_t>> takeStale();
+  /// Owner thread: copy every retained snap pointer into `out` for a published front buffer.
+  void exportSnaps(std::vector<std::pair<uint64_t, std::shared_ptr<const ColumnSnap>>>& out);
   /// 2026-11-01 (JD LL_LF_COWTABLE=1, default off): no mutex. noteStale (any thread) goes to a
   /// lock-free key table (spill: lock-free handoff); publish / pin / drop / takeStale run on the
   /// owner thread only (the thread that may mutate the map: sim thread, or main before the sim
   /// starts) and drain the stale marks first. columns() reads an atomic. Set before first use.
   void setLockFree(bool) { lf_ = true; }  // Archie PlayI: LF-only; mutex path removed
+  /// JD 2026-11-17: the current owner hands the table over (no lock: one atomic store with
+  /// release). The next owner-only call claims it from any thread without tripping the
+  /// second-thread warning. ChunkMap calls it when the tick thread starts (main -> sim) and
+  /// after it is joined (sim -> main). Owner-only publish/pin/drop/takeStale also hand the
+  /// table back on their outermost return, so a between-ticks hold visit cannot leave main
+  /// as a sticky owner for the next tick.
+  void handOver();
   bool lockFree() const { return true; }
+  /// Test hook: claim or release ownership without a publish/takeStale, so a test can
+  /// hold a live owner across a concurrent call and check that it does not steal.
+  bool testEnterOwner() { return lfEnter(); }
+  void testLeaveOwner() { lfLeave(); }
 
  private:
-  void lfEnter();  // owner-thread entry on the lock-free path: tripwire + drain stale marks
+  bool lfEnter();  // claim owner (CAS from empty) + drain stale marks; false if another thread holds it
+  void lfLeave();  // nested; the outermost leave is a handOver
   bool lf_ = true;  // Archie PlayI: always lock-free
+  int lfDepth_ = 0;  // owner-thread only: nest depth of lfEnter/lfLeave
   cLfKeyTable lfStale_{size_t(1) << 15};
   cLfHandoff<std::pair<uint64_t, uint64_t>> lfSpill_;
   std::atomic<size_t> lfCount_{0};

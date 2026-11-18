@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include "litholattice/core/cache_padded.h"  // t46u item 5
 #include <functional>
 #include <string>
 #include <string_view>
@@ -438,21 +439,21 @@ class cTimingHandshakeAuthority {
   // Published phase tuple. publishSeq_ is an internal monotonic publication
   // counter (phase numbers supplied by different callers may repeat or go
   // backwards across groups; the sequence is what workers track).
-  std::atomic<uint64_t> publishSeq_{0};
+  alignas(64) std::atomic<uint64_t> publishSeq_{0};  // t46u item 5: own cache line (workers poll it)
   // Publication generation: bumped by start() and resetAfterFreeze().
   // Workers capture it with the snapshot and revalidate it before every
   // item and at the barrier arrival (under m_); a mismatch means the
   // publication they were executing is stale and must neither finish its
   // item list nor count toward any barrier.
-  std::atomic<uint64_t> generation_{0};
+  alignas(64) std::atomic<uint64_t> generation_{0};
   // Publication tuple behind a real seqlock (P0.5 review fix 1, external review by
   // Cryosis (sirlinhart)): words = {phase, cycle, group, openStampNs, seq}. Written
   // only under m_ (single writer); read lock-free by readPublished().
   enum : size_t { kPubPhase = 0, kPubCycle, kPubGroup, kPubStamp, kPubSeq, kPubWords };
   cSeqLockTuple<kPubWords> pub_;
-  std::atomic<uint64_t> committedPhase_{0};
-  std::atomic<uint32_t> arrivals_{0};
-  std::deque<std::atomic<uint64_t>> shardDoneSeq_;
+  alignas(64) std::atomic<uint64_t> committedPhase_{0};
+  alignas(64) std::atomic<uint32_t> arrivals_{0};
+  std::deque<cPaddedAtomic<uint64_t>> shardDoneSeq_;  // t46u item 5: one line per shard's done slot
   std::atomic<uint64_t> qpcViolations_{0};
   std::atomic<bool> workersOutstanding_{false};  // C2 poison flag (see stop())
 
@@ -470,8 +471,8 @@ class cTimingHandshakeAuthority {
 
   bool lockfree_ = false;             // LL_HS_LOCKFREE=1 (or LL_HS_LAYOUT=original)
   bool inlineLayout_ = false;         // LL_HS_LAYOUT=original: shard work inline on the tick thread
-  std::atomic<uint64_t> arrivalWord_{0};  // lock-free barrier: key(gen, seq) << 16 | arrivals
-  std::atomic<uint64_t> statsSeq_{0};     // lock-free stats: odd while the fold writes
+  alignas(64) std::atomic<uint64_t> arrivalWord_{0};  // t46u item 5: own line. lock-free barrier: key(gen, seq) << 16 | arrivals
+  alignas(64) std::atomic<uint64_t> statsSeq_{0};     // lock-free stats: odd while the fold writes
   std::vector<std::thread> lfThreads_;
   mutable ::litholattice::cAtomicGate m_;
   ::litholattice::cAtomicCondition publishCv_;  // workers block here (hybrid poll)

@@ -1,0 +1,35 @@
+/* ratio ... LithoRoot std (S4, 2026-11-16): compile-time rationals for chrono. */
+#ifndef LITHOROOT_RATIO
+#define LITHOROOT_RATIO
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstdint>
+#include <type_traits>
+
+namespace std {
+namespace __lk {
+constexpr intmax_t r_abs(intmax_t x) { return x < 0 ? -x : x; }
+constexpr intmax_t r_gcd(intmax_t a, intmax_t b) { a = r_abs(a); b = r_abs(b); while (b) { intmax_t t = a % b; a = b; b = t; } return a ? a : 1; }
+}  // namespace __lk
+template <intmax_t N, intmax_t D = 1> struct ratio {
+  static_assert(D != 0, "ratio: zero denominator");
+  static constexpr intmax_t num = (D < 0 ? -N : N) / __lk::r_gcd(N, D);
+  static constexpr intmax_t den = __lk::r_abs(D) / __lk::r_gcd(N, D);
+  using type = ratio<num, den>;
+};
+template <class A, class B> using ratio_multiply = typename ratio<(A::num / __lk::r_gcd(A::num, B::den)) * (B::num / __lk::r_gcd(B::num, A::den)),
+                                                                  (A::den / __lk::r_gcd(A::den, B::num)) * (B::den / __lk::r_gcd(B::den, A::num))>::type;
+template <class A, class B> using ratio_divide = ratio_multiply<A, ratio<B::den, B::num>>;
+template <class A, class B> using ratio_add = typename ratio<A::num * (B::den / __lk::r_gcd(A::den, B::den)) + B::num * (A::den / __lk::r_gcd(A::den, B::den)),
+                                                             A::den / __lk::r_gcd(A::den, B::den) * B::den>::type;
+template <class A, class B> using ratio_subtract = ratio_add<A, ratio<-B::num, B::den>>;
+template <class A, class B> struct ratio_equal : bool_constant<A::num == B::num && A::den == B::den> {};
+template <class A, class B> inline constexpr bool ratio_equal_v = ratio_equal<A, B>::value;
+template <class A, class B> struct ratio_less : bool_constant<(__int128)A::num * B::den < (__int128)B::num * A::den> {};
+using atto = ratio<1, 1000000000000000000>; using femto = ratio<1, 1000000000000000>; using pico = ratio<1, 1000000000000>;
+using nano = ratio<1, 1000000000>; using micro = ratio<1, 1000000>; using milli = ratio<1, 1000>; using centi = ratio<1, 100>; using deci = ratio<1, 10>;
+using deca = ratio<10>; using hecto = ratio<100>; using kilo = ratio<1000>; using mega = ratio<1000000>; using giga = ratio<1000000000>;
+using tera = ratio<1000000000000>; using peta = ratio<1000000000000000>; using exa = ratio<1000000000000000000>;
+}  // namespace std
+#endif

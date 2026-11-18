@@ -124,4 +124,34 @@ void framebufferToAsciiImage(SoftwareFramebuffer& fb, int cols, AsciiGlyphSet se
 void framebufferToAsciiImage(SoftwareFramebuffer& fb, int cols, AsciiGlyphSet set,
                              std::string* textOut, AsciiGridInfo* info, int span);
 
+/// Geometry of the ASCII glyph grid that framebufferToAsciiImage uses.
+/// cellW/cellH tile the framebuffer exactly. Shared by the ASCII GUI and
+/// the mouse-to-cell mapping so paint and hits agree.
+struct AsciiGridGeom {
+  int cols = 0;
+  int rows = 0;
+  float cellW = 0;
+  float cellH = 0;
+};
+
+/// Same math as the world ASCII pass. False if the framebuffer is too small.
+bool asciiGridGeometry(int fbW, int fbH, int cols, AsciiGridGeom& out);
+
+/// Cell containing pixel (px, py), clamped to the grid.
+void asciiPointerToCell(const AsciiGridGeom& g, float px, float py, int& cx, int& cy);
+
+/// Centre of cell (cx, cy) in pixels — what hover/click should use so a
+/// cell-quantized widget and the pointer agree.
+void asciiCellCenter(const AsciiGridGeom& g, int cx, int cy, float& px, float& py);
+
+/// Snap a pointer in framebuffer pixels onto the centre of its cell.
+void asciiSnapPointer(const AsciiGridGeom& g, float& px, float& py);
+
+/// Paint the HUD/menus into the same glyph grid as the world ASCII pass:
+/// solid cell fills, box-drawing frames, and the baked 8x16 font for labels.
+/// Display only; does not change the world text grid or any hashed record.
+/// `p` is the same FrameParams drawHud would have used (static + dynamic
+/// layers, or the legacy composed hud).
+void paintAsciiHud(SoftwareFramebuffer& fb, const FrameParams& p, int cols);
+
 }  // namespace litholattice

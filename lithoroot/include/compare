@@ -1,0 +1,94 @@
+/* compare ... LithoRoot std L0 (S2, 2026-11-16). The three ordering
+ * categories clang requires for operator<=>, with the members it looks
+ * up (less/equivalent/equal/greater/unordered) and comparison against a
+ * literal 0. */
+#ifndef LITHOROOT_COMPARE
+#define LITHOROOT_COMPARE
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <type_traits>
+
+namespace std {
+namespace __lk {
+struct zero_t { consteval zero_t(int) {} };  // only a literal 0 converts (via the int overload)
+enum class ord : signed char { less = -1, equal = 0, greater = 1, unordered = 2 };
+}  // namespace __lk
+
+#define LR_ORD_CMP(C)                                                                     \
+  friend constexpr bool operator==(C v, __lk::zero_t) noexcept { return v.v_ == 0; }      \
+  friend constexpr bool operator==(C, C) noexcept = default;                              \
+  friend constexpr bool operator<(C v, __lk::zero_t) noexcept { return v.v_ == -1; }      \
+  friend constexpr bool operator>(C v, __lk::zero_t) noexcept { return v.v_ == 1; }       \
+  friend constexpr bool operator<=(C v, __lk::zero_t) noexcept { return v.v_ == -1 || v.v_ == 0; } \
+  friend constexpr bool operator>=(C v, __lk::zero_t) noexcept { return v.v_ == 1 || v.v_ == 0; }  \
+  friend constexpr bool operator<(__lk::zero_t, C v) noexcept { return v.v_ == 1; }       \
+  friend constexpr bool operator>(__lk::zero_t, C v) noexcept { return v.v_ == -1; }      \
+  friend constexpr bool operator<=(__lk::zero_t, C v) noexcept { return v.v_ == 1 || v.v_ == 0; } \
+  friend constexpr bool operator>=(__lk::zero_t, C v) noexcept { return v.v_ == -1 || v.v_ == 0; }
+
+class partial_ordering {
+  signed char v_;
+  constexpr explicit partial_ordering(__lk::ord o) noexcept : v_((signed char)o) {}
+  friend class weak_ordering;
+  friend class strong_ordering;
+ public:
+  static const partial_ordering less, equivalent, greater, unordered;
+  LR_ORD_CMP(partial_ordering)
+  friend constexpr partial_ordering operator<=>(partial_ordering v, __lk::zero_t) noexcept { return v; }
+  friend constexpr partial_ordering operator<=>(__lk::zero_t, partial_ordering v) noexcept {
+    return v.v_ == 2 ? v : partial_ordering(__lk::ord(-v.v_));
+  }
+};
+inline constexpr partial_ordering partial_ordering::less(__lk::ord::less);
+inline constexpr partial_ordering partial_ordering::equivalent(__lk::ord::equal);
+inline constexpr partial_ordering partial_ordering::greater(__lk::ord::greater);
+inline constexpr partial_ordering partial_ordering::unordered(__lk::ord::unordered);
+
+class weak_ordering {
+  signed char v_;
+  constexpr explicit weak_ordering(__lk::ord o) noexcept : v_((signed char)o) {}
+  friend class strong_ordering;
+ public:
+  static const weak_ordering less, equivalent, greater;
+  constexpr operator partial_ordering() const noexcept { return partial_ordering(__lk::ord(v_)); }
+  LR_ORD_CMP(weak_ordering)
+  friend constexpr weak_ordering operator<=>(weak_ordering v, __lk::zero_t) noexcept { return v; }
+  friend constexpr weak_ordering operator<=>(__lk::zero_t, weak_ordering v) noexcept { return weak_ordering(__lk::ord(-v.v_)); }
+};
+inline constexpr weak_ordering weak_ordering::less(__lk::ord::less);
+inline constexpr weak_ordering weak_ordering::equivalent(__lk::ord::equal);
+inline constexpr weak_ordering weak_ordering::greater(__lk::ord::greater);
+
+class strong_ordering {
+  signed char v_;
+  constexpr explicit strong_ordering(__lk::ord o) noexcept : v_((signed char)o) {}
+ public:
+  static const strong_ordering less, equivalent, equal, greater;
+  constexpr operator partial_ordering() const noexcept { return partial_ordering(__lk::ord(v_)); }
+  constexpr operator weak_ordering() const noexcept { return weak_ordering(__lk::ord(v_)); }
+  LR_ORD_CMP(strong_ordering)
+  friend constexpr strong_ordering operator<=>(strong_ordering v, __lk::zero_t) noexcept { return v; }
+  friend constexpr strong_ordering operator<=>(__lk::zero_t, strong_ordering v) noexcept { return strong_ordering(__lk::ord(-v.v_)); }
+};
+inline constexpr strong_ordering strong_ordering::less(__lk::ord::less);
+inline constexpr strong_ordering strong_ordering::equivalent(__lk::ord::equal);
+inline constexpr strong_ordering strong_ordering::equal(__lk::ord::equal);
+inline constexpr strong_ordering strong_ordering::greater(__lk::ord::greater);
+#undef LR_ORD_CMP
+
+constexpr bool is_eq(partial_ordering c) noexcept { return c == 0; }
+constexpr bool is_neq(partial_ordering c) noexcept { return c != 0; }
+constexpr bool is_lt(partial_ordering c) noexcept { return c < 0; }
+constexpr bool is_lteq(partial_ordering c) noexcept { return c <= 0; }
+constexpr bool is_gt(partial_ordering c) noexcept { return c > 0; }
+constexpr bool is_gteq(partial_ordering c) noexcept { return c >= 0; }
+
+struct compare_three_way {
+  template <class T, class U>
+  constexpr auto operator()(T&& t, U&& u) const { return static_cast<T&&>(t) <=> static_cast<U&&>(u); }
+  using is_transparent = void;
+};
+
+}  // namespace std
+#endif

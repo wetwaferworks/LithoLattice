@@ -161,6 +161,10 @@ LL_TARGET_AVX2 void shadeSpanBasicAvx2(ShadeSpanBasic& s) {
       drow[tail] = dq[tail];
     }
     _mm256_maskstore_epi32(reinterpret_cast<int*>(s.pixels + base), pm, color);
+    if (s.aaId) {
+      for (int j = 0; j < 8; ++j)
+        if ((passBits >> j) & 1) s.aaId[base + j] = s.aaStamp;
+    }
     int lo = 0; while (!((passBits >> lo) & 1)) ++lo;
     int hi = 7; while (!((passBits >> hi) & 1)) --hi;
     if (base + lo < wxLo) wxLo = base + lo;

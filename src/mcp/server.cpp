@@ -1669,6 +1669,110 @@ void cMcpServer::registerPilotSensesTools() {
     tools_.push_back(std::move(t));
   }
 
+  // -- vision.capture_ascii (Nemo View, opt-in) --------------------------------
+  // Registered ONLY when LL_MCP_NEMO_VIEW=1 (tools/list is unchanged otherwise). The pilot's own
+  // software view as an integer ASCII picture (glyph, colour, depth band and object channels) with
+  // the SHA-256 of the canonical record. Heading only: no position is returned.
+  if (const char* e = std::getenv("LL_MCP_NEMO_VIEW"); e && std::string(e) == "1") {
+    ToolDescriptor t;
+    t.name = "vision.capture_ascii";
+    t.description =
+        "Nemo View (opt-in): the pilot's own view as an ASCII picture built with integer math from "
+        "the software renderer (colour, depth and per-pixel object ids, depth-tested winners only). "
+        "cols 40, 80 (hashing default), 96, 160, 180 or 240 (full view) or region fovea (32x12 centre). view objects (wall #, door |, "
+        "key k, light *, pit o) or pixels_depth. Default channel is glyph only (what Nemo reads). "
+        "Opt-in channels: depth, class, fg, tex8, tex16, qword (the full 64-bit cell as hex), or all. "
+        "Returns the requested rows plus the record SHA-256 and the heading (no position). Shares "
+        "the vision rate limit and the pilot_senses grant.";
+    t.params = {p("pilot", "string", "pilot id (v1: \"player\")", true),
+                p("cols", "integer", "40, 80 (hashing default), 96, 160, 180 or 240; ignored for the fovea"),
+                p("region", "string", "full (default) or fovea"),
+                p("view", "string", "objects (default) or pixels_depth"),
+                p("channels", "string", "comma-separated; default glyph. Also depth,class,fg,tex8,tex16,qword,all"),
+                p("rle", "boolean", "run-length code the glyph rows (default true)")};
+    t.params[1].hasMinimum = t.params[1].hasMaximum = true;
+    t.params[1].minimum = 40; t.params[1].maximum = 240;
+    t.requiredPerms = kPermPilotSenses;
+    t.annotations.readOnlyHint = true;
+    t.handler = [&b, this, reqPilot, needSensePilot](const cJsonValue& args,
+                                                    const McpAgent& agent) {
+      ArgReader r(args);
+      const std::string pilot = reqPilot(r);
+      if (!visionBucket(pilot).take(1))
+        return ToolResult::error("vision rate limit exceeded");
+      if (!b.vision) return ToolResult::error(kNotWired);
+      if (!needSensePilot(b.vision->pilotIds(), pilot, agent, "vision.capture_ascii"))
+        return ToolResult::error("unknown pilot '" + pilot + "'");
+      auto optText = [&args](const char* name, const char* def) -> std::string {
+        const cJsonValue* v = args.find(name);
+        if (!v || v->isNull()) return def;
+        if (!v->isString())
+          throw cRpcError(kRpcInvalidParams, std::string("invalid argument '") + name + "': expected string");
+        return v->asString();
+      };
+      litholattice::mcp::AsciiRequest req;
+      req.cols = static_cast<int>(r.optInt("cols", 80, 40, 240));
+      if (req.cols != 40 && req.cols != 80 && req.cols != 96 && req.cols != 160 && req.cols != 180 && req.cols != 240)
+        throw cRpcError(kRpcInvalidParams, "invalid argument 'cols': expected 40, 80, 96, 160, 180 or 240 (default 80, the hashing format)");
+      const std::string region = optText("region", "full");
+      if (region != "full" && region != "fovea")
+        throw cRpcError(kRpcInvalidParams, "invalid argument 'region': expected full or fovea");
+      req.fovea = region == "fovea";
+      const std::string view = optText("view", "objects");
+      if (view != "objects" && view != "pixels_depth")
+        throw cRpcError(kRpcInvalidParams, "invalid argument 'view': expected objects or pixels_depth");
+      req.objects = view == "objects";
+      req.channels = optText("channels", "glyph");
+      const bool rle = r.optBool("rle", true);
+      litholattice::mcp::AsciiCapture f;
+      if (!b.vision->captureAsciiFrame(pilot, req, f))
+        return ToolResult::error("nemo view capture failed for pilot '" + pilot + "'");
+      std::string glyph = f.glyph;
+      if (rle) {  // runs of 4+ become <char><count>; glyph rows never contain digits
+        std::string o;
+        for (size_t i = 0; i < glyph.size();) {
+          size_t j = i + 1;
+          if (glyph[i] != '\n')
+            while (j < glyph.size() && glyph[j] == glyph[i]) ++j;
+          if (j - i >= 4) { o += glyph[i]; o += std::to_string(j - i); }
+          else o.append(j - i, glyph[i]);
+          i = j;
+        }
+        glyph = std::move(o);
+      }
+      cJsonValue::Object o;
+      o.emplace_back("format", cJsonValue::string("nemo_ascii.v2"));
+      o.emplace_back("cols", cJsonValue::integer(f.cols));
+      o.emplace_back("rows", cJsonValue::integer(f.rows));
+      o.emplace_back("tick", cJsonValue::integer(int64_t(f.tick)));
+      o.emplace_back("source", cJsonValue::string("software"));
+      o.emplace_back("view", cJsonValue::string(f.mode));
+      o.emplace_back("ramp", cJsonValue::string("ramp.v1"));
+      o.emplace_back("palette", cJsonValue::string("pal16.v1"));
+      o.emplace_back("lut_sha", cJsonValue::string(f.lutSha));
+      o.emplace_back("rle", cJsonValue::boolean(rle));
+      o.emplace_back("channels", cJsonValue::string(req.channels.empty() ? "glyph" : req.channels));
+      if (!glyph.empty() || req.channels.empty() || req.channels == "glyph" ||
+          req.channels.find("glyph") != std::string::npos || req.channels == "all")
+        o.emplace_back("glyph", cJsonValue::string(glyph));
+      if (!f.fg.empty()) o.emplace_back("fg", cJsonValue::string(f.fg));
+      if (!f.depth.empty()) o.emplace_back("depth", cJsonValue::string(f.depth));
+      if (!f.cls.empty()) o.emplace_back("cls", cJsonValue::string(f.cls));
+      if (!f.tex8.empty()) o.emplace_back("tex8", cJsonValue::string(f.tex8));
+      if (!f.tex16.empty()) o.emplace_back("tex16", cJsonValue::string(f.tex16));
+      if (!f.qword.empty()) o.emplace_back("qword", cJsonValue::string(f.qword));
+      o.emplace_back("sha256", cJsonValue::string(f.sha256));
+      cJsonValue::Object cam;
+      cam.emplace_back("yaw", cJsonValue::number(f.yaw));
+      cam.emplace_back("pitch", cJsonValue::number(f.pitch));
+      o.emplace_back("camera", cJsonValue::object(std::move(cam)));
+      log("mcp: senses vision.capture_ascii agent=" + agent.name + " pilot=" + pilot + " -> ok " +
+          std::to_string(f.cols) + "x" + std::to_string(f.rows) + " " + f.mode + " " + f.sha256.substr(0, 16));
+      return ToolResult::ok(cJsonValue::object(std::move(o)).serialize());
+    };
+    tools_.push_back(std::move(t));
+  }
+
   // -- audio.capture_chunk ---------------------------------------------------
   {
     ToolDescriptor t;

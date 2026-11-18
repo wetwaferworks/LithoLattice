@@ -5,7 +5,7 @@
 //   quad texel     = (quad lo, quad hi, layer | value << 16 | mode << 24, 0)
 //   fallback texel = (Packed12 w0, w1, w2, layerId | rgb565Tint << 16)   (one texel per vertex)
 // corner = output vertex 0..3 of the quad (uniform AO: emitFace's diagonal start is 0).
-// All math is integer; positions stay in 1/16 block units (x lodScale), so neighbouring
+// All math is integer; positions stay in 1/16 block units, so neighbouring
 // quads share bit-identical corners (no cracks).
 struct CanonLegacyVertex { uvec3 pos; uvec4 info; uvec2 shade; uint layerHi; };
 
@@ -39,7 +39,7 @@ CanonLegacyVertex canonPullFallback(uvec4 t) {
   return o;
 }
 
-CanonLegacyVertex canonPullQuadLegacy(uvec4 t, uint corner, uint lod) {
+CanonLegacyVertex canonPullQuadLegacy(uvec4 t, uint corner) {
   CanonLegacyVertex o;
   uint lo = t.x, hi = t.y;
   ivec3 c = ivec3(int(lo & 0x3Fu), int((lo >> 6u) & 0x3Fu), int((lo >> 12u) & 0x3Fu));
@@ -65,8 +65,7 @@ CanonLegacyVertex canonPullQuadLegacy(uvec4 t, uint corner, uint lod) {
   for (int a = 0; a < 3; ++a) local[a] = pos[a] > mn[a] ? 16 : 0;
   pos = max(pos, ivec3(0));
   uvec2 uv = canonFaceUV(f, local);
-  uint s = 1u << lod;
-  o.pos = (uvec3(pos) * s) & 0xFFFFu;
+  o.pos = uvec3(pos) & 0xFFFFu;
   uint layer = t.z & 0xFFFFu;
   o.info = uvec4((uv.x * uint(w)) & 0xFFu, (uv.y * uint(h)) & 0xFFu, (f | (ao << 3u)) & 0xFFu, layer & 0xFFu);
   o.shade = uvec2((t.z >> 16u) & 0xFFu, (t.z >> 24u) & 0xFFu);

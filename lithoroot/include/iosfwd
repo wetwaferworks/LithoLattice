@@ -1,0 +1,8 @@
+/* LithoRoot <iosfwd>: char-only stream names. */
+#pragma once
+namespace std {
+class ios_base; class ios; class streambuf; class istream; class ostream; class iostream;
+class stringbuf; class istringstream; class ostringstream; class stringstream;
+class filebuf; class ifstream; class ofstream; class fstream;
+template <class CharT> class istreambuf_iterator;
+}

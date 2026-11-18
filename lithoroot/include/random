@@ -1,0 +1,188 @@
+/* LithoRoot <random> subset (plan L9): mersenne_twister_engine (mt19937, mt19937_64),
+ * linear_congruential_engine (minstd_rand0 / minstd_rand; default_random_engine is
+ * minstd_rand0, as in libstdc++), random_device over lithosys_random_fill,
+ * uniform_int_distribution and uniform_real_distribution, generate_canonical.
+ * Engines are exactly the standard's (same sequences on every platform). The
+ * distributions are correct and unbiased but their mapping is our own, so their
+ * outputs differ from libstdc++/MSVC: never let a distribution feed a hash path. */
+#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <lithosys.h>
+
+namespace std {
+
+template <class U, size_t w, size_t n, size_t m, size_t r, U a, size_t u, U d, size_t s, U b, size_t t, U c, size_t l, U f>
+class mersenne_twister_engine {
+  static_assert(w <= numeric_limits<U>::digits && m <= n && r <= w);
+  static constexpr U mask(size_t k) { return k >= numeric_limits<U>::digits ? ~U(0) : (U(1) << k) - 1; }
+public:
+  using result_type = U;
+  static constexpr size_t word_size = w, state_size = n;
+  static constexpr U default_seed = 5489u;
+  static constexpr U min() { return 0; }
+  static constexpr U max() { return mask(w); }
+  mersenne_twister_engine() : mersenne_twister_engine(default_seed) {}
+  explicit mersenne_twister_engine(U sd) { seed(sd); }
+  void seed(U sd = default_seed) {
+    x_[0] = sd & mask(w);
+    for (size_t i = 1; i < n; ++i) x_[i] = (f * (x_[i - 1] ^ (x_[i - 1] >> (w - 2))) + U(i)) & mask(w);
+    i_ = n;
+  }
+  U operator()() {
+    if (i_ >= n) twist();
+    U y = x_[i_++];
+    y ^= (y >> u) & d;
+    y ^= (y << s) & b;
+    y ^= (y << t) & c;
+    y ^= y >> l;
+    return y & mask(w);
+  }
+  void discard(unsigned long long z) { while (z--) (*this)(); }
+  friend bool operator==(const mersenne_twister_engine& p, const mersenne_twister_engine& q) {
+    if (p.i_ != q.i_) return false;
+    for (size_t i = 0; i < n; ++i) if (p.x_[i] != q.x_[i]) return false;
+    return true;
+  }
+private:
+  void twist() {
+    const U lo = mask(r), hi = mask(w) & ~lo;
+    for (size_t i = 0; i < n; ++i) {
+      const U y = (x_[i] & hi) | (x_[(i + 1) % n] & lo);
+      x_[i] = x_[(i + m) % n] ^ (y >> 1) ^ ((y & 1) ? a : U(0));
+    }
+    i_ = 0;
+  }
+  U x_[n];
+  size_t i_;
+};
+using mt19937 = mersenne_twister_engine<uint_fast32_t, 32, 624, 397, 31, 0x9908b0dfu, 11, 0xffffffffu, 7, 0x9d2c5680u, 15,
+                                        0xefc60000u, 18, 1812433253u>;
+using mt19937_64 = mersenne_twister_engine<uint_fast64_t, 64, 312, 156, 31, 0xb5026f5aa96619e9ull, 29, 0x5555555555555555ull, 17,
+                                           0x71d67fffeda60000ull, 37, 0xfff7eee000000000ull, 43, 6364136223846793005ull>;
+
+template <class U, U a, U c, U m>
+class linear_congruential_engine {
+public:
+  using result_type = U;
+  static constexpr U multiplier = a, increment = c, modulus = m, default_seed = 1u;
+  static constexpr U min() { return c == 0u ? 1u : 0u; }
+  static constexpr U max() { return m - 1u; }
+  linear_congruential_engine() : linear_congruential_engine(default_seed) {}
+  explicit linear_congruential_engine(U s) { seed(s); }
+  void seed(U s = default_seed) { x_ = (c % m == 0 && s % m == 0) ? 1 : s % m; }
+  // 64-bit arithmetic only (wasm32 has no __int128 libcalls): enough for every 32-bit modulus.
+  static_assert(m != 0 && uint64_t(m) <= (1ull << 32) && uint64_t(a) < (1ull << 32) && uint64_t(c) < (1ull << 32), "LCG subset: 32-bit parameters only");
+  U operator()() { x_ = U((uint64_t(a) * uint64_t(x_) + uint64_t(c)) % uint64_t(m)); return x_; }
+  void discard(unsigned long long z) { while (z--) (*this)(); }
+  friend bool operator==(const linear_congruential_engine& p, const linear_congruential_engine& q) { return p.x_ == q.x_; }
+private:
+  U x_;
+};
+using minstd_rand0 = linear_congruential_engine<uint_fast32_t, 16807, 0, 2147483647>;
+using minstd_rand = linear_congruential_engine<uint_fast32_t, 48271, 0, 2147483647>;
+using default_random_engine = minstd_rand0;
+
+class random_device {
+public:
+  using result_type = unsigned int;
+  random_device() = default;
+  explicit random_device(const string&) {}
+  random_device(const random_device&) = delete;
+  random_device& operator=(const random_device&) = delete;
+  static constexpr result_type min() { return 0; }
+  static constexpr result_type max() { return ~0u; }
+  result_type operator()() {
+    result_type v = 0;
+    if (lithosys_random_fill(&v, sizeof v) != LITHOSYS_OK) throw runtime_error("random_device: no host randomness");
+    return v;
+  }
+  double entropy() const noexcept { return 32.0; }
+};
+
+
+template <class I = int>
+class uniform_int_distribution {
+  static_assert(is_integral_v<I>);
+public:
+  using result_type = I;
+  struct param_type { I a, b; };
+  explicit uniform_int_distribution(I a = 0, I b = numeric_limits<I>::max()) : a_(a), b_(b) {}
+  I a() const { return a_; }
+  I b() const { return b_; }
+  I min() const { return a_; }
+  I max() const { return b_; }
+  void reset() {}
+  template <class G> I operator()(G& g) {
+    const uint64_t range = uint64_t(make_unsigned_t<I>(b_) - make_unsigned_t<I>(a_));
+    const uint64_t span = uint64_t(G::max()) - uint64_t(G::min());
+    uint64_t r;
+    if (span == range) r = uint64_t(g()) - uint64_t(G::min());
+    else if (span > range) {  // one draw per try; reject the uneven tail so every value is equally likely
+      const uint64_t buckets = range + 1;
+      uint64_t scale, top;  // scale = floor((span + 1) / buckets), without forming span + 1 = 2^64
+      if (span == ~uint64_t(0)) scale = ~uint64_t(0) / buckets + (~uint64_t(0) % buckets == buckets - 1 ? 1 : 0);
+      else scale = (span + 1) / buckets;
+      top = scale * buckets;  // 0 here means exactly 2^64: nothing to reject
+      do r = uint64_t(g()) - uint64_t(G::min()); while (top != 0 && r >= top);
+      r /= scale;
+    } else {  // engine narrower than the range: assemble uniform bits, reject above range
+      const int need = 64 - __builtin_clzll(range);
+      do r = __lk_bits(g, need); while (r > range);
+    }
+    return I(make_unsigned_t<I>(a_) + make_unsigned_t<I>(r));
+  }
+  friend bool operator==(const uniform_int_distribution& x, const uniform_int_distribution& y) { return x.a_ == y.a_ && x.b_ == y.b_; }
+private:
+  // k uniform bits from any engine: each draw is cut to the largest power of two its span covers.
+  template <class G> static uint64_t __lk_bits(G& g, int k) {
+    const uint64_t span = uint64_t(G::max()) - uint64_t(G::min());
+    const int per = span == ~uint64_t(0) ? 64 : 63 - __builtin_clzll(span + 1);
+    uint64_t v = 0; int have = 0;
+    while (have < k) {
+      uint64_t d;
+      do d = uint64_t(g()) - uint64_t(G::min()); while (per < 64 && (d >> per) != 0);
+      const int take = k - have < per ? k - have : per;
+      v |= (take == 64 ? d : (d & ((1ull << take) - 1))) << have;
+      have += take;
+    }
+    return v;
+  }
+  I a_, b_;
+};
+
+template <class R, size_t bits, class G> R generate_canonical(G& g) {
+  constexpr size_t b = bits < size_t(numeric_limits<R>::digits) ? bits : size_t(numeric_limits<R>::digits);
+  // double, not long double: wasm32 long double is binary128 (softfloat libcalls we do not ship).
+  const double span = double(G::max() - G::min()) + 1.0;
+  double sum = 0, mult = 1;
+  for (double need = 1; need < double(1ULL << (b > 63 ? 63 : b)); need *= span) {
+    sum += double(g() - G::min()) * mult; mult *= span;
+  }
+  R x = R(sum / mult);
+  if (x >= R(1)) x = R(1) - numeric_limits<R>::epsilon() / R(2);  // [0, 1), as LWG 2524
+  return x;
+}
+
+template <class R = double>
+class uniform_real_distribution {
+  static_assert(is_floating_point_v<R>);
+public:
+  using result_type = R;
+  explicit uniform_real_distribution(R a = 0, R b = 1) : a_(a), b_(b) {}
+  R a() const { return a_; }
+  R b() const { return b_; }
+  R min() const { return a_; }
+  R max() const { return b_; }
+  void reset() {}
+  template <class G> R operator()(G& g) { return a_ + (b_ - a_) * generate_canonical<R, numeric_limits<R>::digits>(g); }
+  friend bool operator==(const uniform_real_distribution& x, const uniform_real_distribution& y) { return x.a_ == y.a_ && x.b_ == y.b_; }
+private:
+  R a_, b_;
+};
+
+}  // namespace std

@@ -1,0 +1,106 @@
+/* span ... LithoRoot std L6 (S4, 2026-11-16): span<T, Extent> (static and
+ * dynamic extent), first/last/subspan, as_bytes/as_writable_bytes. */
+#ifndef LITHOROOT_SPAN
+#define LITHOROOT_SPAN
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <array>
+#include <cstddef>
+#include <iterator>
+#include <memory>
+#include <type_traits>
+
+namespace std {
+
+inline constexpr size_t dynamic_extent = size_t(-1);
+template <class T, size_t E = dynamic_extent> class span;
+
+namespace __lk {
+template <class T> inline constexpr bool is_span = false;
+template <class T, size_t E> inline constexpr bool is_span<span<T, E>> = true;
+template <class T> inline constexpr bool is_std_array = false;
+template <class T, size_t N> inline constexpr bool is_std_array<array<T, N>> = true;
+template <class R, class T, class = void> struct span_range : false_type {};
+template <class R, class T>
+struct span_range<R, T, void_t<decltype(std::data(declval<R&>())), decltype(std::size(declval<R&>()))>>
+    : bool_constant<!is_span<remove_cvref_t<R>> && !is_std_array<remove_cvref_t<R>> && !is_array_v<remove_cvref_t<R>> &&
+                    is_convertible_v<remove_pointer_t<decltype(std::data(declval<R&>()))> (*)[], T (*)[]>> {};
+template <size_t E> struct span_size { static constexpr size_t value = E; constexpr span_size(size_t) noexcept {} };
+template <> struct span_size<dynamic_extent> { size_t value; constexpr span_size(size_t n) noexcept : value(n) {} };
+}  // namespace __lk
+
+template <class T, size_t E>
+class span {
+ public:
+  using element_type = T;
+  using value_type = remove_cv_t<T>;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using pointer = T*;
+  using const_pointer = const T*;
+  using reference = T&;
+  using const_reference = const T&;
+  using iterator = T*;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  static constexpr size_t extent = E;
+
+  template <size_t X = E, enable_if_t<X == 0 || X == dynamic_extent, int> = 0> constexpr span() noexcept : p_(nullptr), n_(0) {}
+  template <class It, class = enable_if_t<is_convertible_v<remove_reference_t<iter_reference_t<It>> (*)[], T (*)[]>>>
+  constexpr explicit(E != dynamic_extent) span(It first, size_type count) : p_(std::to_address(first)), n_(count) {}
+  template <class It, class End, class = enable_if_t<!is_convertible_v<End, size_t> && is_convertible_v<remove_reference_t<iter_reference_t<It>> (*)[], T (*)[]>>>
+  constexpr explicit(E != dynamic_extent) span(It first, End last) : p_(std::to_address(first)), n_(size_type(last - first)) {}
+  template <size_t N, enable_if_t<E == dynamic_extent || E == N, int> = 0> constexpr span(type_identity_t<element_type> (&a)[N]) noexcept : p_(a), n_(N) {}
+  template <class U, size_t N, enable_if_t<(E == dynamic_extent || E == N) && is_convertible_v<U (*)[], T (*)[]>, int> = 0>
+  constexpr span(array<U, N>& a) noexcept : p_(a.data()), n_(N) {}
+  template <class U, size_t N, enable_if_t<(E == dynamic_extent || E == N) && is_convertible_v<const U (*)[], T (*)[]>, int> = 0>
+  constexpr span(const array<U, N>& a) noexcept : p_(a.data()), n_(N) {}
+  template <class R, enable_if_t<__lk::span_range<R, T>::value && (is_const_v<T> || is_lvalue_reference_v<R>), int> = 0>
+  constexpr explicit(E != dynamic_extent) span(R&& r) : p_(std::data(r)), n_(std::size(r)) {}
+  template <class U, size_t N, enable_if_t<(E == dynamic_extent || N == dynamic_extent || E == N) && is_convertible_v<U (*)[], T (*)[]>, int> = 0>
+  constexpr explicit(E != dynamic_extent && N == dynamic_extent) span(const span<U, N>& s) noexcept : p_(s.data()), n_(s.size()) {}
+  constexpr span(const span&) noexcept = default;
+  constexpr span& operator=(const span&) noexcept = default;
+
+  template <size_t C> constexpr span<T, C> first() const { return span<T, C>(p_, C); }
+  template <size_t C> constexpr span<T, C> last() const { return span<T, C>(p_ + size() - C, C); }
+  template <size_t O, size_t C = dynamic_extent>
+  constexpr span<T, C != dynamic_extent ? C : (E != dynamic_extent ? E - O : dynamic_extent)> subspan() const {
+    return span<T, C != dynamic_extent ? C : (E != dynamic_extent ? E - O : dynamic_extent)>(p_ + O, C == dynamic_extent ? size() - O : C);
+  }
+  constexpr span<T> first(size_type c) const { return span<T>(p_, c); }
+  constexpr span<T> last(size_type c) const { return span<T>(p_ + size() - c, c); }
+  constexpr span<T> subspan(size_type o, size_type c = dynamic_extent) const { return span<T>(p_ + o, c == dynamic_extent ? size() - o : c); }
+
+  constexpr size_type size() const noexcept { return n_.value; }
+  constexpr size_type size_bytes() const noexcept { return size() * sizeof(T); }
+  [[nodiscard]] constexpr bool empty() const noexcept { return size() == 0; }
+  constexpr reference operator[](size_type i) const { return p_[i]; }
+  constexpr reference front() const { return p_[0]; }
+  constexpr reference back() const { return p_[size() - 1]; }
+  constexpr pointer data() const noexcept { return p_; }
+  constexpr iterator begin() const noexcept { return p_; }
+  constexpr iterator end() const noexcept { return p_ + size(); }
+  constexpr reverse_iterator rbegin() const noexcept { return reverse_iterator(end()); }
+  constexpr reverse_iterator rend() const noexcept { return reverse_iterator(begin()); }
+
+ private:
+  T* p_;
+  [[no_unique_address]] __lk::span_size<E> n_;
+};
+
+template <class It, class EndOrSize> span(It, EndOrSize) -> span<remove_reference_t<iter_reference_t<It>>>;
+template <class T, size_t N> span(T (&)[N]) -> span<T, N>;
+template <class T, size_t N> span(array<T, N>&) -> span<T, N>;
+template <class T, size_t N> span(const array<T, N>&) -> span<const T, N>;
+template <class R> span(R&&) -> span<remove_reference_t<decltype(*std::data(declval<R&>()))>>;
+
+template <class T, size_t E> span<const byte, E == dynamic_extent ? dynamic_extent : sizeof(T) * E> as_bytes(span<T, E> s) noexcept {
+  return span<const byte, E == dynamic_extent ? dynamic_extent : sizeof(T) * E>(reinterpret_cast<const byte*>(s.data()), s.size_bytes());
+}
+template <class T, size_t E, class = enable_if_t<!is_const_v<T>>> span<byte, E == dynamic_extent ? dynamic_extent : sizeof(T) * E> as_writable_bytes(span<T, E> s) noexcept {
+  return span<byte, E == dynamic_extent ? dynamic_extent : sizeof(T) * E>(reinterpret_cast<byte*>(s.data()), s.size_bytes());
+}
+
+}  // namespace std
+#endif

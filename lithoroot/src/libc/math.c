@@ -1118,6 +1118,12 @@ double pow(double x, double y) {
   }
 }
 
+/* exp2 is pow(2, x), bit for bit: clang turns pow(2.0, x) in engine code into a call to exp2
+ * (this TU is -fno-builtin, so the body below is not itself rewritten), and the source asked
+ * for pow's result. pow's double-double exp2 path is already the accurate one. */
+double exp2(double x) { return pow(2.0, x); }
+float exp2f(float x) { return powf(2.0f, x); }
+
 float expf(float x) {
   double d = exp((double)x);
   float f = (float)d;

@@ -58,6 +58,8 @@ src/lithoweave.c
 src/lithothread.c
 src/lithothread_errno.c
 src/lithothread_heap.c
+src/rt/int128.c
+src/crt/crt1.c
 "
 
 # Per-TU extra flags (see docs/TOOLCHAIN.md, first-check (c)):

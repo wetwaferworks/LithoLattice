@@ -53,4 +53,10 @@ int uncaught_exceptions() noexcept;
 
 } /* namespace std */
 
+/* The stdlib half (exception_ptr and nested_exception), wasm LithoRoot builds
+ * only: LithoAbi's own native test build keeps this header ABI-only. */
+#if defined(__wasm__) && defined(__cplusplus)
+#include "lithoroot_exception_ptr.h"
+#endif
+
 #endif /* LITHOABI_EXCEPTION_H */

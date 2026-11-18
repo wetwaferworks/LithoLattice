@@ -49,9 +49,16 @@ struct atexit_node {
   atexit_node* next;
 };
 
-pthread_mutex_t atexit_mutex = PTHREAD_MUTEX_INITIALIZER;
-atexit_node* atexit_list = nullptr;
-uint32_t atexit_registrations = 0; /* under atexit_mutex */
+/* Lock-free: registration is a CAS push onto a LIFO list, finalize takes
+ * the whole list with one exchange. No mutex, no spin gate. */
+atexit_node* atexit_list = nullptr;   /* only touched through __atomic_* */
+uint32_t atexit_registrations = 0;    /* atomic counter */
+
+void atexit_push(atexit_node* node) {
+  atexit_node* head = __atomic_load_n(&atexit_list, __ATOMIC_ACQUIRE);
+  do { node->next = head; } while (!__atomic_compare_exchange_n(
+      &atexit_list, &head, node, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+}
 
 constexpr int ATEXIT_PASS_LIMIT = 8;
 
@@ -64,11 +71,8 @@ int __cxa_atexit(void (*fn)(void*), void* arg, void* dso_handle) {
   node->fn = fn;
   node->arg = arg;
   node->dso = dso_handle;
-  (void)pthread_mutex_lock(&atexit_mutex);
-  node->next = atexit_list;
-  atexit_list = node;
-  atexit_registrations += 1;
-  (void)pthread_mutex_unlock(&atexit_mutex);
+  atexit_push(node);
+  (void)__atomic_fetch_add(&atexit_registrations, 1u, __ATOMIC_ACQ_REL);
   return 0;
 }
 
@@ -76,11 +80,8 @@ void __cxa_finalize(void* dso_handle) {
   for (int pass = 0; pass < ATEXIT_PASS_LIMIT; ++pass) {
     uint32_t registrations_before;
     atexit_node* batch;
-    (void)pthread_mutex_lock(&atexit_mutex);
-    registrations_before = atexit_registrations;
-    batch = atexit_list;
-    atexit_list = nullptr;
-    (void)pthread_mutex_unlock(&atexit_mutex);
+    registrations_before = __atomic_load_n(&atexit_registrations, __ATOMIC_ACQUIRE);
+    batch = __atomic_exchange_n(&atexit_list, (atexit_node*)nullptr, __ATOMIC_ACQ_REL);
     if (!batch) return;
 
     atexit_node* deferred = nullptr;
@@ -98,18 +99,26 @@ void __cxa_finalize(void* dso_handle) {
       node = next;
     }
 
-    (void)pthread_mutex_lock(&atexit_mutex);
     if (deferred) {
-      if (!atexit_list) {
-        atexit_list = deferred;
-      } else {
-        atexit_node* tail = atexit_list;
-        while (tail->next) tail = tail->next;
-        tail->next = deferred;
+      /* Deferred entries are older than anything registered meanwhile, so
+       * they go behind the newer ones: put the chain back with one CAS onto
+       * an empty list; if newer ones arrived, take them, put them in front,
+       * and try again. */
+      atexit_node* chain = deferred;
+      for (;;) {
+        atexit_node* expected = nullptr;
+        if (__atomic_compare_exchange_n(&atexit_list, &expected, chain, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
+        atexit_node* newer = __atomic_exchange_n(&atexit_list, (atexit_node*)nullptr, __ATOMIC_ACQ_REL);
+        if (newer) {
+          atexit_node* t = newer;
+          while (t->next) t = t->next;
+          t->next = chain;
+          chain = newer;
+        }
       }
     }
-    const bool arrived = atexit_registrations != registrations_before;
-    (void)pthread_mutex_unlock(&atexit_mutex);
+    const bool arrived = __atomic_load_n(&atexit_registrations, __ATOMIC_ACQUIRE) != registrations_before;
     /* Settle when a whole pass produced no new registrations: any
      * entries left are for other DSO handles (already deferred) or
      * there are none. */

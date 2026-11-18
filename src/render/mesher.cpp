@@ -7,7 +7,6 @@
 #include <vector>
 #include "litholattice/core/log.h"  // Cortana 2026-10-16 2335 F55-2
 #include "litholattice/render/mesher.h"
-#include "litholattice/render/sw_lod_rings.h"  // Archie Phase 1: canonical rings bounded to the view
 #include "litholattice/render/unified_mesher.h"  // render pipeline M2
 #include "litholattice/render/FallbackReasonStats.h"  // fix (a): per-reason fallback counters
 #include "WorkerScratch.h"  // refactor step 2: per-worker scratch (owns GreedyGrid)
@@ -320,9 +319,9 @@ void cMesherKernels::flushCanonical(GreedyGrid& g, std::vector<PackedVertex>& ou
           emitGreedyQuad(out, int(d.face), c[na], c[ua], c[va], int(d.w), int(d.h), dk);
         }
     }
-    cm.lods[0].face[size_t(f)] = BucketRange{start, uint32_t(cm.quads.size()) - start};
+    cm.ranges.face[size_t(f)] = BucketRange{start, uint32_t(cm.quads.size()) - start};
   }
-  cm.lods[0].skirt.start = cm.lods[0].blend.start = uint32_t(cm.quads.size());
+  cm.ranges.blend.start = uint32_t(cm.quads.size());
   if (!ok) cm = CanonicalMesh{}, cm.magic = 0;  // magic 0 = not publishable
 }
 namespace {
@@ -421,15 +420,15 @@ bool splitCanonicalTwo(CanonicalMesh& cm, const std::vector<uint32_t>& qSlot, co
     d.paletteIdx = uint32_t(remap[p][qSlot[i]]);
     part[p].quads.push_back(canon::packQuad(d));
   }
-  for (CanonicalMesh& m : part) {  // L0 face buckets (quads stay face-ordered)
+  for (CanonicalMesh& m : part) {  // face buckets (quads stay face-ordered)
     uint32_t at = 0;
     for (int f = 0; f < 6; ++f) {
       uint32_t c = 0;
       while (at + c < m.quads.size() && canon::unpackQuad(m.quads[at + c]).face == uint32_t(f)) ++c;
-      m.lods[0].face[size_t(f)] = BucketRange{at, c};
+      m.ranges.face[size_t(f)] = BucketRange{at, c};
       at += c;
     }
-    m.lods[0].skirt.start = m.lods[0].blend.start = uint32_t(m.quads.size());
+    m.ranges.blend.start = uint32_t(m.quads.size());
   }
   cm = std::move(part[0]);
   if (!part[1].quads.empty() || !part[1].fallback.empty()) cm.next = std::make_shared<CanonicalMesh>(std::move(part[1]));
@@ -450,42 +449,7 @@ PackedVertex decodeFallbackVertex(const canon::Packed12& raw, const CanonicalMes
 }
 // (refactor step 4: counters now cUnifiedMesherCounters, UnifiedMesherCounters.h)
 
-// Render pipeline M6 (step 3 on the game path: registry feed into UnifiedMesher). L1/L2
-// come from UnifiedMesher over a per-job material table built from the registry: one
-// local material per (block, active, facing), per-face looks from BlockMaterials (the
-// same FaceSlot mapping as the L0 pass). Plain full cubes only; custom / cross / slab /
-// attachable / shaped cells read as air at L1/L2 (sub-block detail, Q26). Light: no
-// light engine feeds the mesh path yet (lightApron 0), so L1/L2 carry full sky like L0.
-// The UnifiedMesher palette is merged into the L0 palette (dedup by packed entry) and
-// its quads re-indexed; on palette overflow the mesh keeps L0 only (counted).
 }  // namespace (refactor step 4: cMesherKernels member, see MesherKernels.h)
-bool cMesherKernels::mergeCanonLods(const CanonicalMesh& src, CanonicalMesh& dst) {
-  const size_t palBefore = dst.palette.size();
-  std::vector<uint32_t> remap(src.palette.size());
-  for (size_t i = 0; i < src.palette.size(); ++i) {
-    size_t j = 0;
-    while (j < dst.palette.size() && dst.palette[j] != src.palette[i]) ++j;
-    if (j == dst.palette.size()) {
-      if (j >= canon::kMaxPalette) { dst.palette.resize(palBefore); return false; }
-      dst.palette.push_back(src.palette[i]);
-    }
-    remap[i] = uint32_t(j);
-  }
-  const uint32_t base = uint32_t(dst.quads.size());
-  for (int lod = 1; lod <= 2; ++lod) {
-    CanonicalLod l = src.lods[size_t(lod)];
-    for (auto& r : l.face) r.start += base;
-    l.skirt.start += base; l.blend.start += base;
-    dst.lods[size_t(lod)] = l;
-  }
-  dst.quads.reserve(dst.quads.size() + src.quads.size());
-  for (uint64_t q : src.quads) {
-    canon::DecodedQuad d = canon::unpackQuad(q);
-    d.paletteIdx = remap[d.paletteIdx];
-    dst.quads.push_back(canon::packQuad(d));
-  }
-  return true;
-}
 namespace {
 // (refactor step 4: counters now cUnifiedMesherCounters, UnifiedMesherCounters.h)
 
@@ -793,7 +757,6 @@ ChunkMesh meshSubChunkPass(const MeshInput& in, const MeshContext& ctx, Canonica
   const size_t legacyVerts = out.verts.size();  // render pipeline M7: per-cell stream before the canonical flush
   pipe.flush(greedyGrid, greedy);
   pipe.packedFallback(legacyVerts, fbr, ws);
-  pipe.canonLods(ws, look, fancyLeaves);  // render pipeline M6 (refactor step 4c)
   pipe.capGuard();
   pipe.perMeshParams();
   return out;
@@ -882,82 +845,67 @@ bool unifiedMesherEnabled() {
 // (refactor step 4: meshes/checked/mismatch/unpublished/quads/bytes are cUnifiedMesherCounters members)
 UnifiedMesherStats unifiedMesherStats() {
   return {cUnifiedMesherCounters::meshes.load(), cUnifiedMesherCounters::checked.load(), cUnifiedMesherCounters::mismatch.load(), cUnifiedMesherCounters::unpublished.load(), cUnifiedMesherCounters::quads.load(), cUnifiedMesherCounters::bytes.load(),
-          cUnifiedMesherCounters::lodQuads.load(), cUnifiedMesherCounters::lodFallback.load(), cUnifiedMesherCounters::fbVerts.load(), cUnifiedMesherCounters::fbChecked.load(), cUnifiedMesherCounters::fbMismatch.load(), cUnifiedMesherCounters::skirtQuads.load(), cUnifiedMesherCounters::splits.load()};
+          cUnifiedMesherCounters::fbVerts.load(), cUnifiedMesherCounters::fbChecked.load(), cUnifiedMesherCounters::fbMismatch.load(), cUnifiedMesherCounters::splits.load()};
 }
-bool decodeCanonicalMesh(const CanonicalMesh& cm, int lod, std::vector<PackedVertex>& out, uint8_t skirtMask) {
+bool decodeCanonicalMesh(const CanonicalMesh& cm, std::vector<PackedVertex>& out) {
   out.clear();
-  if (cm.magic != canon::kMeshMagic || lod < 0 || lod > 2) return false;
-  if (lod == 0) {
-    out.reserve(cm.fallback.size());
-    for (const canon::Packed12& f : cm.fallback) out.push_back(decodeFallbackVertex(f, cm));
-  }
-  const CanonicalLod& L = cm.lods[size_t(lod)];
-  const int s = 1 << lod;
-  auto range = [&](BucketRange r, bool skirt) {
+  if (cm.magic != canon::kMeshMagic) return false;
+  out.reserve(cm.fallback.size());
+  for (const canon::Packed12& f : cm.fallback) out.push_back(decodeFallbackVertex(f, cm));
+  auto range = [&](BucketRange r) {
     for (uint32_t i = r.start; i < r.start + r.count && i < cm.quads.size(); ++i) {
       const canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
       if (d.paletteIdx >= cm.palette.size() || d.face > 5 || d.w == 0 || d.h == 0) continue;
-      if (skirt && !((skirtMask >> d.face) & 1u)) continue;  // M10: interior seam, no skirt
       const int f = int(d.face), ua = kTexUAxis[f], va = kTexVAxis[f], na = 3 - ua - va;
       int c[3] = {int(d.ox), int(d.oy), int(d.oz)};
       if (!(d.face & 1u)) c[na] -= 1;
-      const size_t first = out.size();
       emitGreedyQuad(out, f, c[na], c[ua], c[va], int(d.w), int(d.h), canonKeyOf(d, cm.palette[d.paletteIdx]));
-      if (s > 1)
-        for (size_t k = first; k < out.size(); ++k) {
-          out[k].x = uint16_t(out[k].x * s); out[k].y = uint16_t(out[k].y * s); out[k].z = uint16_t(out[k].z * s);
-        }
     }
   };
-  for (int f = 0; f < 6; ++f) range(L.face[size_t(f)], false);
-  range(L.skirt, true);
-  range(L.blend, false);
+  for (int f = 0; f < 6; ++f) range(cm.ranges.face[size_t(f)]);
+  range(cm.ranges.blend);
   if (cm.next) {  // M11: second half of a split mesh, appended in stream order
     std::vector<PackedVertex> tail;
-    if (decodeCanonicalMesh(*cm.next, lod, tail, skirtMask)) out.insert(out.end(), tail.begin(), tail.end());
+    if (decodeCanonicalMesh(*cm.next, tail)) out.insert(out.end(), tail.begin(), tail.end());
   }
   return true;
 }
 namespace {
-void pullCollect(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out, bool fbPass) {
+void pullCollect(const CanonicalMesh& cm, CanonPullStream& out, bool fbPass) {
   if (fbPass) {
-    if (lod == 0)
-      for (const canon::Packed12& f : cm.fallback) {
-        const uint32_t pi = canon::unpackPacked12(f).paletteIdx;
-        const canon::PaletteFields pf = canon::unpackPalette(pi < cm.palette.size() ? cm.palette[pi] : 0);
-        out.texels.insert(out.texels.end(), {f.w[0], f.w[1], f.w[2], uint32_t(pf.layerId) | (uint32_t(pf.rgb565Tint) << 16)});
-      }
+    for (const canon::Packed12& f : cm.fallback) {
+      const uint32_t pi = canon::unpackPacked12(f).paletteIdx;
+      const canon::PaletteFields pf = canon::unpackPalette(pi < cm.palette.size() ? cm.palette[pi] : 0);
+      out.texels.insert(out.texels.end(), {f.w[0], f.w[1], f.w[2], uint32_t(pf.layerId) | (uint32_t(pf.rgb565Tint) << 16)});
+    }
   } else {
-    const CanonicalLod& L = cm.lods[size_t(lod)];
-    auto range = [&](BucketRange r, bool skirt) {
+    auto range = [&](BucketRange r) {
       for (uint32_t i = r.start; i < r.start + r.count && i < cm.quads.size(); ++i) {
         const canon::DecodedQuad d = canon::unpackQuad(cm.quads[i]);
         if (d.paletteIdx >= cm.palette.size() || d.face > 5 || d.w == 0 || d.h == 0) continue;
-        if (skirt && !((skirtMask >> d.face) & 1u)) continue;
         const uint64_t key = canonKeyOf(d, cm.palette[d.paletteIdx]);
         const uint32_t layer = uint32_t((key >> 24) & 0xFFFFu), value = uint32_t((key >> 16) & 0xFFu), mode = uint32_t((key >> 8) & 0xFFu);
         out.texels.insert(out.texels.end(), {uint32_t(cm.quads[i]), uint32_t(cm.quads[i] >> 32), layer | (value << 16) | (mode << 24), 0u});
         ++out.quads;
       }
     };
-    for (int f = 0; f < 6; ++f) range(L.face[size_t(f)], false);
-    range(L.skirt, true);
-    range(L.blend, false);
+    for (int f = 0; f < 6; ++f) range(cm.ranges.face[size_t(f)]);
+    range(cm.ranges.blend);
   }
-  if (cm.next) pullCollect(*cm.next, lod, skirtMask, out, fbPass);
+  if (cm.next) pullCollect(*cm.next, out, fbPass);
 }
 std::atomic<uint64_t> g_pullChecked{0}, g_pullMismatch{0};
 }  // namespace
-bool buildCanonPullStream(const CanonicalMesh& cm, int lod, uint8_t skirtMask, CanonPullStream& out) {
+bool buildCanonPullStream(const CanonicalMesh& cm, CanonPullStream& out) {
   out = CanonPullStream{};
-  if (cm.magic != canon::kMeshMagic || lod < 0 || lod > 2) return false;
-  pullCollect(cm, lod, skirtMask, out, true);
+  if (cm.magic != canon::kMeshMagic) return false;
+  pullCollect(cm, out, true);
   out.fbQuads = uint32_t(out.texels.size() / 16);
   out.texels.resize(size_t(out.fbQuads) * 16);  // whole quads only (decode emits 4 per quad)
-  pullCollect(cm, lod, skirtMask, out, false);
+  pullCollect(cm, out, false);
   return true;
 }
-PackedVertex canonPullReference(const CanonPullStream& st, uint32_t q, uint32_t corner, int lod) {
+PackedVertex canonPullReference(const CanonPullStream& st, uint32_t q, uint32_t corner) {
   PackedVertex o{};
   if (q < st.fbQuads) {  // canonPullFallback
     const uint32_t* t = &st.texels[(size_t(q) * 4 + corner) * 4];
@@ -996,9 +944,8 @@ PackedVertex canonPullReference(const CanonPullStream& st, uint32_t q, uint32_t 
   for (int a = 0; a < 3; ++a) pos[a] = std::max(pos[a], 0);
   int u, v;
   faceUV(int(f), local, 0, u, v);
-  const uint32_t s = 1u << lod;
-  o.x = uint16_t((uint32_t(pos[0]) * s) & 0xFFFFu); o.y = uint16_t((uint32_t(pos[1]) * s) & 0xFFFFu);
-  o.z = uint16_t((uint32_t(pos[2]) * s) & 0xFFFFu);
+  o.x = uint16_t(uint32_t(pos[0]) & 0xFFFFu); o.y = uint16_t(uint32_t(pos[1]) & 0xFFFFu);
+  o.z = uint16_t(uint32_t(pos[2]) & 0xFFFFu);
   const uint32_t layer = t[2] & 0xFFFFu;
   o.u = uint8_t((uint32_t(u) * uint32_t(w)) & 0xFFu); o.v = uint8_t((uint32_t(v) * uint32_t(h)) & 0xFFu);
   o.faceAo = uint8_t((f | (ao << 3)) & 0xFFu);
@@ -1007,37 +954,6 @@ PackedVertex canonPullReference(const CanonPullStream& st, uint32_t q, uint32_t 
   return o;
 }
 CanonPullVerifyStats canonPullVerifyStats() { return {g_pullChecked.load(), g_pullMismatch.load()}; }
-uint8_t canonSkirtMask(int lod, const int nbrLod[6]) {
-  uint8_t m = 0;
-  for (int f = 0; f < 6; ++f) {
-    if (nbrLod[f] == -2) continue;
-    if ((nbrLod[f] < 0 ? 0 : nbrLod[f]) != lod) m = uint8_t(m | (1u << f));
-  }
-  return lod > 0 ? m : uint8_t(0);
-}
-int selectCanonLod(int d, int current, int ring1, int ring2) {
-  auto base = [&](int dd) { return dd < ring1 ? 0 : dd < ring2 ? 1 : 2; };
-  if (current < 0 || current > 2) return base(d);
-  const int b = base(d);
-  if (b > current) return std::max(current, base(d - 2));
-  if (b < current) return std::min(current, base(d + 2));
-  return current;
-}
-void canonLodRings(int& ring1, int& ring2) {
-  static const std::pair<int, int> r = cMesherSelector::envCanonLodRings();
-  ring1 = r.first; ring2 = r.second;
-  // Archie Phase 1 (JD 2026-11-04): no canonical LOD ring lies beyond the view radius. Inside the
-  // outer ring the ladder scales with the view ({12,24} at view 6 -> {3,6}); else it is clamped.
-  const int view = cSwLodRings::shared().view();
-  if (view > 0 && view < ring2) {
-    if (view <= ring1) { ring1 = std::max(1, ring1 * view / std::max(1, ring2)); ring2 = view; }
-    else ring2 = view;
-  }
-}
-bool canonLodsEnabled() {
-  static const bool v = cMesherSelector::envCanonLods();
-  return v;
-}
 static bool canonVerifyOn() {
 #if defined(LL_DEBUGOPT_BUILD) || !defined(NDEBUG)
   static const bool off = verifyForcedOff();  // first call is after argv parsing (first mesh)
@@ -1070,11 +986,12 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
   // the between-ticks contract — so log loudly and keep the second pass
   // rather than loop forever.
   const uint64_t epoch0 = ctx.blocks.content().definitionEpoch();
+  const uint64_t gen0 = ctx.blocks.content().definitionWriteGen();  // t46u 5c: moves before any def swap
   const bool unified = unifiedMesherEnabled();  // render pipeline M2 (--unified-mesher)
   auto canon = unified ? std::make_shared<CanonicalMesh>() : nullptr;
   ChunkMesh out = meshSubChunkStable(in, ctx, canon.get());
   const uint64_t epoch1 = ctx.blocks.content().definitionEpoch();
-  if (epoch1 != epoch0) {
+  if (epoch1 != epoch0 || ctx.blocks.content().definitionWriteGen() != gen0) {
     out = meshSubChunkStable(in, ctx, canon.get());
     const uint64_t epoch2 = ctx.blocks.content().definitionEpoch();
     if (epoch2 != epoch1)
@@ -1114,18 +1031,17 @@ ChunkMesh meshSubChunk(const MeshInput& in, const MeshContext& ctx) {
                  canon->fallback.size());
       }
     }
-    if (canon->magic == canon::kMeshMagic && canonVerifyOn()) {  // M12: GPU pull stream == CPU decode (quad sets), L0..L2
-      for (int lod = 0; lod < 3; ++lod) {
-        std::vector<PackedVertex> dec, pulled;
-        CanonPullStream ps;
-        if (!decodeCanonicalMesh(*canon, lod, dec) || !buildCanonPullStream(*canon, lod, 0x3F, ps)) continue;
+    if (canon->magic == canon::kMeshMagic && canonVerifyOn()) {  // M12: GPU pull stream == CPU decode (quad sets)
+      std::vector<PackedVertex> dec, pulled;
+      CanonPullStream ps;
+      if (decodeCanonicalMesh(*canon, dec) && buildCanonPullStream(*canon, ps)) {
         for (uint32_t q = 0; q < ps.fbQuads + ps.quads; ++q)
-          for (uint32_t k = 0; k < 4; ++k) pulled.push_back(canonPullReference(ps, q, k, lod));
+          for (uint32_t k = 0; k < 4; ++k) pulled.push_back(canonPullReference(ps, q, k));
         g_pullChecked.fetch_add(1, std::memory_order_relaxed);
         if (sortedQuads(dec) != sortedQuads(pulled)) {
           g_pullMismatch.fetch_add(1, std::memory_order_relaxed);
-          logError("unified-mesher: GPU pull MISMATCH sub-chunk (%d,%d,%d) lod %d: decode %zu verts vs pull %zu", in.cx, in.sy,
-                   in.cz, lod, dec.size(), pulled.size());
+          logError("unified-mesher: GPU pull MISMATCH sub-chunk (%d,%d,%d): decode %zu verts vs pull %zu", in.cx, in.sy,
+                   in.cz, dec.size(), pulled.size());
         }
       }
     }

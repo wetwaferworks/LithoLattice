@@ -63,9 +63,10 @@ constexpr bool kCensusWasm = true;
 constexpr bool kCensusWasm = false;
 #endif
 
-/// JD 2026-11-14: after the permanent three (main, timing-handshake+control, tick/sim),
-/// remaining = max(hw-3, 1). All render / vertex / mesh OS threads share at most
-/// remaining+2 (TheReefs 4 hw -> 3; 12-hw workstation -> 11).
+/// JD 2026-11-14 / t46u 2026-11-16: after the permanent three (main, timing-handshake+control,
+/// tick/sim), remaining = max(hw-3, 1). All render / vertex / mesh OS threads share exactly
+/// that remainder, no +2 oversubscription any more (TheReefs 4 hw -> 1, so the software
+/// renderer runs in 4 threads total; 12-hw workstation -> 9).
 unsigned remainingAfterPermanentThree(unsigned hw);
 unsigned renderSideBudget(unsigned hw);
 
@@ -74,7 +75,7 @@ unsigned renderSideBudget(unsigned hw);
 struct RenderSidePlan {
   unsigned hw = 1;
   unsigned remaining = 1;          ///< max(hw-3, 1)
-  unsigned budget = 3;             ///< remaining+2
+  unsigned budget = 1;             ///< == remaining (t46u: no oversubscription)
   unsigned meshDedicated = 0;      ///< dedicated mesh/vertex workers
   unsigned reservePool = 0;        ///< shared job-pool workers (render-side reserve)
   unsigned swBands = 1;            ///< software bands, caller included
@@ -106,7 +107,8 @@ struct ThreadBudget {
   unsigned dedicatedExtra = 0;   ///< dedicated threads beyond main + sim clock (control/event)
   bool layoutOriginal = false;
   unsigned remaining = 1;        ///< max(hw-3, 1) after the permanent three
-  unsigned renderSideBudget = 3; ///< remaining+2
+  unsigned renderSideBudget = 1; ///< == remaining (t46u: no oversubscription)
+  unsigned lfWorkers = 0;        ///< cLfJobQueue workers: whatever core slots are still free (t46u)
   unsigned meshDedicated = 0;    ///< dedicated mesh/vertex workers (0 if folded into pool)
   /// Cores the always-running dedicated threads hold (main + sim clock).
   unsigned dedicatedCores() const { return mainThreads + simClock; }
@@ -116,7 +118,18 @@ struct ThreadBudget {
   unsigned spawnedTotal() const { return simClock + renderSpawned + pool + meshDedicated; }
   /// Render/vertex/mesh OS threads (must be <= renderSideBudget).
   unsigned renderSideUsed() const { return meshDedicated + pool + renderSpawned; }
+  /// t46u: every compute thread the allocator hands a core slot to (permanent 3 included).
+  unsigned slotsUsed() const { return 3u + renderSideUsed() + lfWorkers; }
 };
+
+/// t46u (JD 2026-11-16) thread allocator: the census is the one place that decides thread
+/// counts. Callers ask it for the core count instead of std::thread::hardware_concurrency(),
+/// so --cores / LITHO_CORES is honoured everywhere (software renderer, LF queue, pools, the
+/// small-machine quality defaults). Boots the census on first use.
+unsigned censusCores();
+/// Human-readable slot plan: slot 0 main, 1 control/handshake, 2 tick/sim, then the
+/// render-side roles in order. Logged once at census boot.
+std::string slotPlan(const ThreadBudget& b);
 
 ThreadBudget computeThreadBudget(unsigned hwRaw, bool wasm = kCensusWasm);
 

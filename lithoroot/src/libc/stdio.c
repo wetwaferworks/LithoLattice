@@ -40,6 +40,8 @@
 
 #include "litholibc_internal.h"
 #include "lithosys.h"
+#include "lithovfs.h"
+#include <fcntl.h>
 
 struct litholibc_file {
   struct litholibc_file* next; /* open-stream registry */
@@ -120,6 +122,12 @@ static void registry_init_locked(void) {
 static lithosys_err_t fd_write_1(int fd, const lithosys_iov_t* iov,
                                  uint32_t* out_written) {
   lithosys_err_t err;
+  if (fd >= LV_FD_BASE) { /* S7: a LithoVFS fd */
+    long long r = lv_write(fd, iov->buf, iov->len);
+    if (r < 0) return (lithosys_err_t)(-r);
+    *out_written = (uint32_t)r;
+    return LITHOSYS_OK;
+  }
   do {
     err = lithosys_fd_write((uint32_t)fd, iov, 1, out_written);
   } while (err == LITHOSYS_EINTR);
@@ -129,6 +137,12 @@ static lithosys_err_t fd_write_1(int fd, const lithosys_iov_t* iov,
 static lithosys_err_t fd_read_1(int fd, lithosys_iov_t* iov,
                                 uint32_t* out_read) {
   lithosys_err_t err;
+  if (fd >= LV_FD_BASE) {
+    long long r = lv_read(fd, iov->buf, iov->len);
+    if (r < 0) return (lithosys_err_t)(-r);
+    *out_read = (uint32_t)r;
+    return LITHOSYS_OK;
+  }
   do {
     err = lithosys_fd_read((uint32_t)fd, iov, 1, out_read);
   } while (err == LITHOSYS_EINTR);
@@ -326,6 +340,45 @@ FILE* fopen(const char* path, const char* mode) {
   (void)readable; /* routing keys on writable alone: a hit with
                      any write intent is EROFS, a plain read opens */
 
+  /* S7 routing: any write intent, or a path the writable store
+   * holds (the store shadows the pack), opens through LithoVFS. */
+  {
+    lv_stat_t st;
+    int have = lv_stat(path, &st) == 0 && st.type == LV_FILE && !st.in_pack;
+    if (writable || have) {
+      int of = (readable && writable) ? O_RDWR : writable ? O_WRONLY : O_RDONLY;
+      int lfd;
+      if (*mode == 'w') of |= O_CREAT | O_TRUNC;
+      if (*mode == 'a') of |= O_CREAT | O_APPEND;
+      lfd = lv_open(path, of);
+      if (lfd < 0) {
+        errno = -lfd;
+        return NULL;
+      }
+      f = (FILE*)malloc(sizeof *f);
+      if (f != NULL) {
+        memset(f, 0, sizeof *f);
+        f->buf = (unsigned char*)malloc(BUFSIZ);
+      }
+      if (f == NULL || f->buf == NULL) {
+        if (f) free(f);
+        (void)lv_close(lfd);
+        errno = ENOMEM;
+        return NULL;
+      }
+      f->fd = lfd;
+      f->readable = readable;
+      f->writable = writable;
+      f->bufmode = _IOFBF;
+      f->buf_size = BUFSIZ;
+      f->buf_owned = 1;
+      LOCK();
+      registry_init_locked();
+      registry_add(f);
+      UNLOCK();
+      return f;
+    }
+  }
   /* Routing: volume first, always. */
   verr = lithosys_volume_open(path, &vfd);
   if (verr == LITHOSYS_OK) {
@@ -388,7 +441,11 @@ int fclose(FILE* f) {
     if (flush_locked(f) != 0) rc = EOF;
   }
   if (f->fd >= 0) {
-    if (lithosys_fd_close((uint32_t)f->fd) != LITHOSYS_OK) rc = EOF;
+    if (f->fd >= LV_FD_BASE) {
+      if (lv_close(f->fd) < 0) rc = EOF;
+    } else if (lithosys_fd_close((uint32_t)f->fd) != LITHOSYS_OK) {
+      rc = EOF;
+    }
     f->fd = -1;
   }
   registry_remove(f);
@@ -676,8 +733,14 @@ int fseek(FILE* f, long offset, int whence) {
     long unread = (long)(f->buf_len - f->buf_pos) + f->ungot_count;
     offset -= unread;
   }
-  err = lithosys_fd_seek((uint32_t)f->fd, (int64_t)offset, (uint32_t)whence,
-                         &pos);
+  if (f->fd >= LV_FD_BASE) {
+    long long r = lv_seek(f->fd, (long long)offset, whence);
+    err = r < 0 ? (lithosys_err_t)(-r) : LITHOSYS_OK;
+    pos = r < 0 ? 0 : (uint64_t)r;
+  } else {
+    err = lithosys_fd_seek((uint32_t)f->fd, (int64_t)offset, (uint32_t)whence,
+                           &pos);
+  }
   if (err != LITHOSYS_OK) {
     errno = (int)err;
     UNLOCK();
@@ -813,4 +876,14 @@ int rename(const char* oldpath, const char* newpath) {
   (void)newpath;
   errno = ENOSYS;
   return -1;
+}
+
+/* S7: the fd behind a stream (0, 1, 2 for the standard streams,
+ * a LithoVFS fd for store files, a lithosys fd for pack files). */
+int fileno(FILE* f) {
+  if (f == NULL || f->fd < 0) {
+    errno = EBADF;
+    return -1;
+  }
+  return f->fd;
 }

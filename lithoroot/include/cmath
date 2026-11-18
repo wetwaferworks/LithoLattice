@@ -1,0 +1,140 @@
+/* cmath ... LithoRoot std L2 (S2, 2026-11-16). <math.h> lifted into std
+ * with the float overloads the standard requires: std::sqrt(float) calls
+ * sqrtf and so on, so float code stays float on web instead of silently
+ * promoting to double. Only functions LithoLibC implements are lifted;
+ * a missing one fails at compile time (census), never at run time.
+ * long double overloads are not provided (wasm32 long double is soft
+ * binary128; the tree does not use it). */
+#ifndef LITHOROOT_CMATH
+#define LITHOROOT_CMATH
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstdlib>  /* std::abs(int/long/long long), as the standard has <cmath> declare them too */
+#include <math.h>
+#include <type_traits>
+#undef fpclassify
+#undef isnan
+#undef isinf
+#undef isfinite
+#undef isnormal
+#undef signbit
+
+namespace std {
+using float_t = float;
+using double_t = double;
+using ::sqrt;
+using ::fabs;
+using ::floor;
+using ::ceil;
+using ::trunc;
+using ::round;
+using ::exp;
+using ::log;
+using ::log2;
+using ::log10;
+using ::sin;
+using ::cos;
+using ::tan;
+using ::asin;
+using ::acos;
+using ::atan;
+using ::fmod;
+using ::copysign;
+using ::fmin;
+using ::fmax;
+using ::pow;
+using ::exp2;
+using ::exp2f;
+using ::atan2;
+using ::hypot;
+using ::lround;
+using ::llround;
+using ::llroundf;
+using ::ldexp;
+using ::frexp;
+using ::modf;
+using ::remainder;
+inline float sqrt(float x) noexcept { return ::sqrtf(x); }
+inline float fabs(float x) noexcept { return ::fabsf(x); }
+inline float floor(float x) noexcept { return ::floorf(x); }
+inline float ceil(float x) noexcept { return ::ceilf(x); }
+inline float trunc(float x) noexcept { return ::truncf(x); }
+inline float round(float x) noexcept { return ::roundf(x); }
+inline float exp(float x) noexcept { return ::expf(x); }
+inline float log(float x) noexcept { return ::logf(x); }
+inline float log2(float x) noexcept { return ::log2f(x); }
+inline float log10(float x) noexcept { return ::log10f(x); }
+inline float sin(float x) noexcept { return ::sinf(x); }
+inline float cos(float x) noexcept { return ::cosf(x); }
+inline float tan(float x) noexcept { return ::tanf(x); }
+inline float asin(float x) noexcept { return ::asinf(x); }
+inline float acos(float x) noexcept { return ::acosf(x); }
+inline float atan(float x) noexcept { return ::atanf(x); }
+inline float fmod(float x, float y) noexcept { return ::fmodf(x, y); }
+inline float copysign(float x, float y) noexcept { return ::copysignf(x, y); }
+inline float fmin(float x, float y) noexcept { return ::fminf(x, y); }
+inline float fmax(float x, float y) noexcept { return ::fmaxf(x, y); }
+inline float pow(float x, float y) noexcept { return ::powf(x, y); }
+inline float atan2(float x, float y) noexcept { return ::atan2f(x, y); }
+inline float hypot(float x, float y) noexcept { return ::hypotf(x, y); }
+inline long lround(float x) noexcept { return ::lroundf(x); }
+inline long long llround(float x) noexcept { return ::llroundf(x); }
+inline float ldexp(float x, int e) noexcept { return ::ldexpf(x, e); }
+inline float frexp(float x, int* e) noexcept { return ::frexpf(x, e); }
+inline float modf(float x, float* ip) noexcept { return ::modff(x, ip); }
+inline float abs(float x) noexcept { return ::fabsf(x); }
+inline double abs(double x) noexcept { return ::fabs(x); }
+using ::sqrtf; using ::fabsf; using ::floorf; using ::ceilf; using ::truncf; using ::roundf; using ::expf; using ::logf;
+using ::log2f; using ::log10f; using ::sinf; using ::cosf; using ::tanf; using ::asinf; using ::acosf; using ::atanf;
+using ::fmodf; using ::copysignf; using ::fminf; using ::fmaxf; using ::powf; using ::atan2f; using ::hypotf; using ::lroundf;
+using ::ldexpf; using ::frexpf; using ::modff;
+/* Native wasm instructions (f32/f64.nearest), exact: round half to even, the default FP mode. */
+inline double rint(double x) noexcept { return __builtin_rint(x); }
+inline float rint(float x) noexcept { return __builtin_rintf(x); }
+inline float rintf(float x) noexcept { return __builtin_rintf(x); }
+inline double nearbyint(double x) noexcept { return __builtin_rint(x); }
+inline float nearbyint(float x) noexcept { return __builtin_rintf(x); }
+inline float nearbyintf(float x) noexcept { return __builtin_rintf(x); }
+/* The classification macros become functions, as <cmath> requires. */
+inline int fpclassify(float x) noexcept { return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x); }
+inline int fpclassify(double x) noexcept { return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x); }
+inline bool isnan(float x) noexcept { return __builtin_isnan(x); }
+inline bool isnan(double x) noexcept { return __builtin_isnan(x); }
+inline bool isinf(float x) noexcept { return __builtin_isinf(x); }
+inline bool isinf(double x) noexcept { return __builtin_isinf(x); }
+inline bool isfinite(float x) noexcept { return __builtin_isfinite(x); }
+inline bool isfinite(double x) noexcept { return __builtin_isfinite(x); }
+inline bool isnormal(float x) noexcept { return __builtin_isnormal(x); }
+inline bool isnormal(double x) noexcept { return __builtin_isnormal(x); }
+inline bool signbit(float x) noexcept { return __builtin_signbit(x); }
+inline bool signbit(double x) noexcept { return __builtin_signbit(x); }
+template <class I, enable_if_t<is_integral_v<I>, int> = 0> inline bool isnan(I) noexcept { return false; }
+template <class I, enable_if_t<is_integral_v<I>, int> = 0> inline bool isinf(I) noexcept { return false; }
+template <class I, enable_if_t<is_integral_v<I>, int> = 0> inline bool isfinite(I) noexcept { return true; }
+
+/* Integer arguments take the double overloads, as the standard says. */
+#define LR_INT_TO_DOUBLE(n) template <class I, enable_if_t<is_integral_v<I>, int> = 0> inline double n(I x) noexcept { return ::n(double(x)); }
+LR_INT_TO_DOUBLE(sqrt) LR_INT_TO_DOUBLE(floor) LR_INT_TO_DOUBLE(ceil) LR_INT_TO_DOUBLE(exp) LR_INT_TO_DOUBLE(log)
+LR_INT_TO_DOUBLE(log2) LR_INT_TO_DOUBLE(log10) LR_INT_TO_DOUBLE(sin) LR_INT_TO_DOUBLE(cos) LR_INT_TO_DOUBLE(fabs)
+#undef LR_INT_TO_DOUBLE
+template <class A, class B, enable_if_t<is_arithmetic_v<A> && is_arithmetic_v<B> && !(is_same_v<A, B> && is_floating_point_v<A>), int> = 0>
+inline auto pow(A a, B b) noexcept {
+  using R = conditional_t<is_same_v<A, float> && is_same_v<B, float>, float, double>;
+  if constexpr (is_same_v<R, float>) return ::powf(a, b); else return ::pow(double(a), double(b));
+}
+template <class A, class B, enable_if_t<is_arithmetic_v<A> && is_arithmetic_v<B> && !(is_same_v<A, B> && is_floating_point_v<A>), int> = 0>
+inline double atan2(A a, B b) noexcept { return ::atan2(double(a), double(b)); }
+template <class A, class B, enable_if_t<is_arithmetic_v<A> && is_arithmetic_v<B> && !(is_same_v<A, B> && is_floating_point_v<A>), int> = 0>
+inline double fmod(A a, B b) noexcept { return ::fmod(double(a), double(b)); }
+
+/* C++20 lerp, exact at the ends and monotonic (the standard's contract). */
+template <class T, enable_if_t<is_floating_point_v<T>, int> = 0>
+constexpr T lerp(T a, T b, T t) noexcept {
+  if ((a <= 0 && b >= 0) || (a >= 0 && b <= 0)) return t * b + (1 - t) * a;
+  if (t == 1) return b;
+  const T x = a + t * (b - a);
+  return (t > 1) == (b > a) ? (b < x ? x : b) : (b > x ? x : b);
+}
+}  // namespace std
+#endif

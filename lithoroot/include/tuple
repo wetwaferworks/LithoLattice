@@ -1,0 +1,139 @@
+/* tuple ... LithoRoot std L1 (S2, 2026-11-16): tuple over indexed
+ * leaves, get by index/type, make_tuple, tie, forward_as_tuple, ignore,
+ * apply, comparisons, and the structured-binding protocol. */
+#ifndef LITHOROOT_TUPLE
+#define LITHOROOT_TUPLE
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <utility>
+
+namespace std {
+
+template <class... T> class tuple;
+template <class... T> struct tuple_size<tuple<T...>> : integral_constant<size_t, sizeof...(T)> {};
+template <size_t I, class... T> struct tuple_element<I, tuple<T...>> { using type = __type_pack_element<I, T...>; };
+template <size_t I, class... T> constexpr tuple_element_t<I, tuple<T...>>& get(tuple<T...>& t) noexcept;
+template <size_t I, class... T> constexpr const tuple_element_t<I, tuple<T...>>& get(const tuple<T...>& t) noexcept;
+template <size_t I, class... T> constexpr tuple_element_t<I, tuple<T...>>&& get(tuple<T...>&& t) noexcept;
+
+namespace __lk {
+template <size_t I, class T> struct tuple_leaf {
+  T value;
+  constexpr tuple_leaf() : value() {}
+  template <class U> constexpr explicit tuple_leaf(in_place_t, U&& u) : value(std::forward<U>(u)) {}
+};
+template <class Seq, class... T> struct tuple_base;
+template <size_t... I, class... T> struct tuple_base<index_sequence<I...>, T...> : tuple_leaf<I, T>... {
+  constexpr tuple_base() = default;
+  template <class... U> constexpr explicit tuple_base(in_place_t, U&&... u) : tuple_leaf<I, T>(in_place, std::forward<U>(u))... {}
+};
+template <size_t I, class T> constexpr T& leaf(tuple_leaf<I, T>& l) noexcept { return l.value; }
+template <size_t I, class T> constexpr const T& leaf(const tuple_leaf<I, T>& l) noexcept { return l.value; }
+template <class T, class... L> constexpr size_t type_index() {
+  constexpr bool hit[] = {is_same_v<T, L>..., false};
+  size_t n = 0, at = 0;
+  for (size_t i = 0; i < sizeof...(L); ++i) if (hit[i]) { ++n; at = i; }
+  return n == 1 ? at : size_t(-1);
+}
+}  // namespace __lk
+
+template <class... T>
+class tuple : public __lk::tuple_base<index_sequence_for<T...>, T...> {
+  using base = __lk::tuple_base<index_sequence_for<T...>, T...>;
+  template <size_t... I, class U> constexpr void assign(index_sequence<I...>, U&& o) {
+    ((__lk::leaf<I>(static_cast<base&>(*this)) = std::get<I>(std::forward<U>(o))), ...);
+  }
+ public:
+  template <bool D = true, enable_if_t<D && (is_default_constructible_v<T> && ...), int> = 0>
+  constexpr tuple() : base() {}
+  template <bool D = true, enable_if_t<D && sizeof...(T) >= 1 && (is_copy_constructible_v<T> && ...), int> = 0>
+  constexpr tuple(const T&... a) : base(in_place, a...) {}
+  template <class... U, enable_if_t<sizeof...(U) == sizeof...(T) && sizeof...(T) >= 1 &&
+                                        !(sizeof...(T) == 1 && (is_same_v<remove_cvref_t<U>, tuple> || ...)) &&
+                                        (is_constructible_v<T, U> && ...), int> = 0>
+  constexpr tuple(U&&... u) : base(in_place, std::forward<U>(u)...) {}
+  template <class U1, class U2, size_t N = sizeof...(T), enable_if_t<N == 2, int> = 0>
+  constexpr tuple(const pair<U1, U2>& p) : base(in_place, p.first, p.second) {}
+  template <class U1, class U2, size_t N = sizeof...(T), enable_if_t<N == 2, int> = 0>
+  constexpr tuple(pair<U1, U2>&& p) : base(in_place, std::forward<U1>(p.first), std::forward<U2>(p.second)) {}
+  tuple(const tuple&) = default;
+  tuple(tuple&&) = default;
+  constexpr tuple& operator=(const tuple& o) { assign(index_sequence_for<T...>{}, o); return *this; }
+  constexpr tuple& operator=(tuple&& o) noexcept((is_nothrow_move_assignable_v<T> && ...)) {
+    assign(index_sequence_for<T...>{}, std::move(o)); return *this;
+  }
+  template <class... U, enable_if_t<sizeof...(U) == sizeof...(T), int> = 0>
+  constexpr tuple& operator=(const tuple<U...>& o) { assign(index_sequence_for<T...>{}, o); return *this; }
+  template <class U1, class U2, size_t N = sizeof...(T), enable_if_t<N == 2, int> = 0>
+  constexpr tuple& operator=(const pair<U1, U2>& p) {
+    __lk::leaf<0>(static_cast<base&>(*this)) = p.first; __lk::leaf<1>(static_cast<base&>(*this)) = p.second; return *this;
+  }
+  constexpr void swap(tuple& o) noexcept((is_nothrow_swappable_v<T> && ...)) {
+    [&]<size_t... I>(index_sequence<I...>) {
+      using std::swap;
+      (swap(__lk::leaf<I>(static_cast<base&>(*this)), __lk::leaf<I>(static_cast<base&>(o))), ...);
+    }(index_sequence_for<T...>{});
+  }
+};
+template <> class tuple<> {
+ public:
+  constexpr void swap(tuple&) noexcept {}
+};
+template <class... T> tuple(T...) -> tuple<T...>;
+template <class U1, class U2> tuple(pair<U1, U2>) -> tuple<U1, U2>;
+
+template <size_t I, class... T> constexpr tuple_element_t<I, tuple<T...>>& get(tuple<T...>& t) noexcept { return __lk::leaf<I>(t); }
+template <size_t I, class... T> constexpr const tuple_element_t<I, tuple<T...>>& get(const tuple<T...>& t) noexcept { return __lk::leaf<I>(t); }
+template <size_t I, class... T> constexpr tuple_element_t<I, tuple<T...>>&& get(tuple<T...>&& t) noexcept {
+  return static_cast<tuple_element_t<I, tuple<T...>>&&>(__lk::leaf<I>(t));
+}
+template <class U, class... T> constexpr U& get(tuple<T...>& t) noexcept {
+  constexpr size_t i = __lk::type_index<U, T...>();
+  static_assert(i != size_t(-1), "std::get<T>: T must occur exactly once in the tuple");
+  return std::get<i>(t);
+}
+template <class U, class... T> constexpr const U& get(const tuple<T...>& t) noexcept {
+  constexpr size_t i = __lk::type_index<U, T...>();
+  static_assert(i != size_t(-1), "std::get<T>: T must occur exactly once in the tuple");
+  return std::get<i>(t);
+}
+
+namespace __lk {
+struct ignore_t { template <class U> constexpr const ignore_t& operator=(U&&) const noexcept { return *this; } };
+}
+inline constexpr __lk::ignore_t ignore{};
+
+template <class... T> constexpr tuple<__lk::unwrap_decay_t<T>...> make_tuple(T&&... t) {
+  return tuple<__lk::unwrap_decay_t<T>...>(std::forward<T>(t)...);
+}
+template <class... T> constexpr tuple<T&...> tie(T&... t) noexcept { return tuple<T&...>(t...); }
+template <class... T> constexpr tuple<T&&...> forward_as_tuple(T&&... t) noexcept { return tuple<T&&...>(std::forward<T>(t)...); }
+
+template <class F, class Tu> constexpr decltype(auto) apply(F&& f, Tu&& t) {
+  return [&]<size_t... I>(index_sequence<I...>) -> decltype(auto) {
+    return std::forward<F>(f)(std::get<I>(std::forward<Tu>(t))...);
+  }(make_index_sequence<tuple_size_v<remove_reference_t<Tu>>>{});
+}
+
+template <class... T, class... U>
+constexpr bool operator==(const tuple<T...>& a, const tuple<U...>& b) {
+  static_assert(sizeof...(T) == sizeof...(U));
+  return [&]<size_t... I>(index_sequence<I...>) { return ((std::get<I>(a) == std::get<I>(b)) && ...); }(index_sequence_for<T...>{});
+}
+template <class... T, class... U>
+constexpr bool operator<(const tuple<T...>& a, const tuple<U...>& b) {
+  static_assert(sizeof...(T) == sizeof...(U));
+  bool r = false;
+  [&]<size_t... I>(index_sequence<I...>) {
+    (void)((std::get<I>(a) < std::get<I>(b) ? (r = true, true) : std::get<I>(b) < std::get<I>(a) ? true : false) || ...);
+  }(index_sequence_for<T...>{});
+  return r;
+}
+template <class... T, class... U> constexpr bool operator>(const tuple<T...>& a, const tuple<U...>& b) { return b < a; }
+template <class... T, class... U> constexpr bool operator<=(const tuple<T...>& a, const tuple<U...>& b) { return !(b < a); }
+template <class... T, class... U> constexpr bool operator>=(const tuple<T...>& a, const tuple<U...>& b) { return !(a < b); }
+template <class... T> constexpr void swap(tuple<T...>& a, tuple<T...>& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
+
+}  // namespace std
+#endif

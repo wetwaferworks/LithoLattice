@@ -10,6 +10,7 @@
 // no third-party reference values are used.
 #include "litholattice/procgen/litho_formula.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>

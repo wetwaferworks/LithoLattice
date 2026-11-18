@@ -1,0 +1,130 @@
+/* limits ... LithoRoot std L0 (S2, 2026-11-16): numeric_limits from
+ * clang's predefined macros. wasm32: IEEE-754 float/double, long double
+ * is binary128 (soft), int is 32-bit, long is 32-bit. */
+#ifndef LITHOROOT_LIMITS
+#define LITHOROOT_LIMITS
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <type_traits>
+
+namespace std {
+
+enum float_round_style { round_indeterminate = -1, round_toward_zero = 0, round_to_nearest = 1,
+                         round_toward_infinity = 2, round_toward_neg_infinity = 3 };
+enum float_denorm_style { denorm_indeterminate = -1, denorm_absent = 0, denorm_present = 1 };
+
+template <class T> class numeric_limits {
+ public:
+  static constexpr bool is_specialized = false;
+  static constexpr T min() noexcept { return T(); }
+  static constexpr T max() noexcept { return T(); }
+  static constexpr T lowest() noexcept { return T(); }
+};
+template <class T> class numeric_limits<const T> : public numeric_limits<T> {};
+template <class T> class numeric_limits<volatile T> : public numeric_limits<T> {};
+template <class T> class numeric_limits<const volatile T> : public numeric_limits<T> {};
+
+namespace __lk {
+template <class T, T Min, T Max, int Bits, bool Signed> struct int_limits {
+  static constexpr bool is_specialized = true;
+  static constexpr bool is_signed = Signed;
+  static constexpr bool is_integer = true;
+  static constexpr bool is_exact = true;
+  static constexpr bool has_infinity = false;
+  static constexpr bool has_quiet_NaN = false;
+  static constexpr bool has_signaling_NaN = false;
+  static constexpr float_denorm_style has_denorm = denorm_absent;
+  static constexpr bool has_denorm_loss = false;
+  static constexpr float_round_style round_style = round_toward_zero;
+  static constexpr bool is_iec559 = false;
+  static constexpr bool is_bounded = true;
+  static constexpr bool is_modulo = !Signed;
+  static constexpr int digits = Bits - (Signed ? 1 : 0);
+  static constexpr int digits10 = digits * 643 / 2136;  // floor(digits * log10(2))
+  static constexpr int max_digits10 = 0;
+  static constexpr int radix = 2;
+  static constexpr int min_exponent = 0, min_exponent10 = 0, max_exponent = 0, max_exponent10 = 0;
+  static constexpr bool traps = false;
+  static constexpr bool tinyness_before = false;
+  static constexpr T min() noexcept { return Min; }
+  static constexpr T max() noexcept { return Max; }
+  static constexpr T lowest() noexcept { return Min; }
+  static constexpr T epsilon() noexcept { return 0; }
+  static constexpr T round_error() noexcept { return 0; }
+  static constexpr T infinity() noexcept { return 0; }
+  static constexpr T quiet_NaN() noexcept { return 0; }
+  static constexpr T signaling_NaN() noexcept { return 0; }
+  static constexpr T denorm_min() noexcept { return 0; }
+};
+}  // namespace __lk
+
+#define LR_INT_LIMITS(T, MIN, MAX, SIGNED) \
+  template <> class numeric_limits<T> : public __lk::int_limits<T, MIN, MAX, int(sizeof(T) * 8), SIGNED> {};
+#if defined(__CHAR_UNSIGNED__)
+LR_INT_LIMITS(char, (char)0, (char)255, false)
+#else
+LR_INT_LIMITS(char, (char)(-__SCHAR_MAX__ - 1), (char)__SCHAR_MAX__, true)
+#endif
+LR_INT_LIMITS(signed char, -__SCHAR_MAX__ - 1, __SCHAR_MAX__, true)
+LR_INT_LIMITS(unsigned char, 0, (unsigned char)(__SCHAR_MAX__ * 2 + 1), false)
+LR_INT_LIMITS(char8_t, 0, (char8_t)255, false)
+LR_INT_LIMITS(char16_t, 0, (char16_t)0xFFFF, false)
+LR_INT_LIMITS(char32_t, 0, (char32_t)0xFFFFFFFFu, false)
+LR_INT_LIMITS(wchar_t, (wchar_t)(-__WCHAR_MAX__ - 1), (wchar_t)__WCHAR_MAX__, true)
+LR_INT_LIMITS(short, -__SHRT_MAX__ - 1, __SHRT_MAX__, true)
+LR_INT_LIMITS(unsigned short, 0, (unsigned short)(__SHRT_MAX__ * 2 + 1), false)
+LR_INT_LIMITS(int, -__INT_MAX__ - 1, __INT_MAX__, true)
+LR_INT_LIMITS(unsigned int, 0u, __INT_MAX__ * 2u + 1u, false)
+LR_INT_LIMITS(long, -__LONG_MAX__ - 1L, __LONG_MAX__, true)
+LR_INT_LIMITS(unsigned long, 0ul, __LONG_MAX__ * 2ul + 1ul, false)
+LR_INT_LIMITS(long long, -__LONG_LONG_MAX__ - 1LL, __LONG_LONG_MAX__, true)
+LR_INT_LIMITS(unsigned long long, 0ull, __LONG_LONG_MAX__ * 2ull + 1ull, false)
+#undef LR_INT_LIMITS
+template <> class numeric_limits<bool> : public __lk::int_limits<bool, false, true, 1, false> {};
+
+namespace __lk {
+template <class T> struct flt_common {
+  static constexpr bool is_specialized = true;
+  static constexpr bool is_signed = true;
+  static constexpr bool is_integer = false;
+  static constexpr bool is_exact = false;
+  static constexpr bool has_infinity = true;
+  static constexpr bool has_quiet_NaN = true;
+  static constexpr bool has_signaling_NaN = true;
+  static constexpr float_denorm_style has_denorm = denorm_present;
+  static constexpr bool has_denorm_loss = false;
+  static constexpr float_round_style round_style = round_to_nearest;
+  static constexpr bool is_iec559 = true;
+  static constexpr bool is_bounded = true;
+  static constexpr bool is_modulo = false;
+  static constexpr int radix = __FLT_RADIX__;
+  static constexpr bool traps = false;
+  static constexpr bool tinyness_before = false;
+};
+}  // namespace __lk
+#define LR_FLT_LIMITS(T, P, SUF)                                                                  \
+  template <> class numeric_limits<T> : public __lk::flt_common<T> {                             \
+   public:                                                                                        \
+    static constexpr int digits = P##_MANT_DIG__;                                                 \
+    static constexpr int digits10 = P##_DIG__;                                                    \
+    static constexpr int max_digits10 = 2 + P##_MANT_DIG__ * 643 / 2136;                          \
+    static constexpr int min_exponent = P##_MIN_EXP__, min_exponent10 = P##_MIN_10_EXP__;         \
+    static constexpr int max_exponent = P##_MAX_EXP__, max_exponent10 = P##_MAX_10_EXP__;         \
+    static constexpr T min() noexcept { return P##_MIN__; }                                       \
+    static constexpr T max() noexcept { return P##_MAX__; }                                       \
+    static constexpr T lowest() noexcept { return -P##_MAX__; }                                   \
+    static constexpr T epsilon() noexcept { return P##_EPSILON__; }                               \
+    static constexpr T round_error() noexcept { return static_cast<T>(0.5); }                                  \
+    static constexpr T infinity() noexcept { return __builtin_huge_val##SUF(); }                  \
+    static constexpr T quiet_NaN() noexcept { return __builtin_nan##SUF(""); }                    \
+    static constexpr T signaling_NaN() noexcept { return __builtin_nans##SUF(""); }               \
+    static constexpr T denorm_min() noexcept { return P##_DENORM_MIN__; }                         \
+  };
+LR_FLT_LIMITS(float, __FLT, f)
+LR_FLT_LIMITS(double, __DBL, )
+LR_FLT_LIMITS(long double, __LDBL, l)
+#undef LR_FLT_LIMITS
+
+}  // namespace std
+#endif

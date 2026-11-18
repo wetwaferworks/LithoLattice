@@ -21,7 +21,7 @@ flat out vec4 vPulseP0; flat out vec4 vPulseP1; flat out vec4 vTraceP0; flat out
 #endif
 uniform mat4 uVP;
 uniform vec3 uOffset;
-uniform vec3 uCam;  // Cortana 2026-10-16: shared with chunk.frag (foliage LOD)
+uniform vec3 uCam;  // shared with chunk.frag (declared in both stages)
 out vec3 vWorld; out vec3 vNormal; out float vAO; out vec2 vUV;
 flat out int vLayer; flat out int vVal; flat out int vMode; flat out int vRot;
 const vec3 N[6] = vec3[6](vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1));
@@ -41,12 +41,4 @@ void main() {
   // s2-PlayD: build 9 (PlayB, JD t4332u) readout drop restored: readouts sit 1/64 above the model top. Render only.
   if (vMode == 15 && vNormal.y > 0.5) vWorld.y -= 3.0 / 64.0;
   gl_Position = uVP * vec4(vWorld, 1.0);
-  // Cortana 2026-10-16 (JD foliage LOD, renderer.h kShadeLod*): LOD-tagged quads draw by the
-  // sub-chunk's horizontal centre distance; the other set collapses outside the clip volume.
-  uint lod = aShade.y & 192u;
-  if (lod != 0u) {
-    vec2 c = meshOff.xz + vec2(8.0) - uCam.xz;
-    bool far = dot(c, c) > 32.0 * 32.0;
-    if ((lod == 64u && far) || (lod == 128u && !far)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-  }
 }

@@ -1,10 +1,9 @@
 # WASM checkpoint (2026-10-18): for the web build the platform target is the
 # browser window (window_web.cpp: canvas sizing + HTML5 input backend
 # since 2026-10-19, no GLFW); native builds keep the GLFW window + input
-# backend exactly as before. (The if(EMSCRIPTEN) condition itself is the
-# current toolchain's build switch; it retires with the toolchain
-# replacement, not with the source purge.)
-if(EMSCRIPTEN)
+# backend exactly as before. The switch is LK_WEB (engine/CMakeLists.txt:
+# the LithoRoot wasm32 toolchain), not the retired EMSCRIPTEN variable.
+if(LK_WEB)
   add_library(litholattice_platform STATIC window_web.cpp)
   target_include_directories(litholattice_platform PUBLIC include)
   # window_web.cpp builds its GL address table from the loader's X-macro

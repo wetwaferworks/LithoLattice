@@ -5,6 +5,7 @@
 // on a peer. Same contract as std::condition_variable: spurious returns are
 // allowed, so callers re-check their predicate under the gate.
 #pragma once
+#include "litholattice/core/spin_stats.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -64,13 +65,20 @@ class cAtomicCondition {
 
  private:
   bool pollUntil(uint32_t g, std::chrono::steady_clock::time_point deadline) {
+    // Same pause -> yield -> sleep schedule as before; LL_SPIN_STATS counts it (JD t40u, instrumentation).
+    const bool st = spinstats::enabled();
+    const uint64_t t0 = st ? spinstats::nowNs() : 0;
+    uint64_t p = 0, y = 0, s = 0;
+    bool notified;
     for (unsigned i = 0;; ++i) {
-      if (gen_.load(std::memory_order_acquire) != g) return true;
-      if ((i & 63u) == 63u && std::chrono::steady_clock::now() >= deadline) return false;
-      if (i < 256) LL_ATOMIC_COND_PAUSE();
-      else if (i < 1024) std::this_thread::yield();
-      else std::this_thread::sleep_for(std::chrono::microseconds(200));
+      if (gen_.load(std::memory_order_acquire) != g) { notified = true; break; }
+      if ((i & 63u) == 63u && std::chrono::steady_clock::now() >= deadline) { notified = false; break; }
+      if (i < 256) { LL_ATOMIC_COND_PAUSE(); ++p; }
+      else if (i < 1024) { std::this_thread::yield(); ++y; }
+      else { std::this_thread::sleep_for(std::chrono::microseconds(200)); ++s; }
     }
+    if (st) spinstats::record(spinstats::kCondWait, spinstats::nowNs() - t0, p, y, s);
+    return notified;
   }
   std::atomic<uint32_t> gen_{0};
 };

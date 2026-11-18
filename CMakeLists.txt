@@ -45,9 +45,17 @@ if(UNIX AND NOT APPLE)
   # X11 only keeps the Linux dependency list short; Wayland can be enabled later.
   set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
+# LK_WEB: the browser build, i.e. the LithoRoot wasm32 toolchain (cmake/lk-wasm32-toolchain.cmake,
+# stock clang). Keyed off the target processor, never the EMSCRIPTEN variable, as render/CMakeLists.txt
+# already does (JD's strict rule, 2026-10-28: no Emscripten, ever). Native builds: OFF, nothing changes.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(wasm32|wasm64)$")
+  set(LK_WEB ON)
+else()
+  set(LK_WEB OFF)
+endif()
 # WASM checkpoint (2026-10-18): no GLFW in the browser build — the platform
 # module swaps in window_web.cpp (see src/platform/CMakeLists.txt).
-if(NOT EMSCRIPTEN)
+if(NOT LK_WEB)
 FetchContent_Declare(glfw
   GIT_REPOSITORY https://github.com/glfw/glfw.git
   GIT_TAG 7b6aead9fb88b3623e3b3725ebb42670cbe4c579  # Cortana 2026-10-15 1500 (TOOLS, MC-06): GLFW 3.4, pinned by commit
@@ -55,7 +63,18 @@ FetchContent_Declare(glfw
 FetchContent_MakeAvailable(glfw)
 endif()
 
+# LK_WEB (link wiring, 2026-11-16): LithoRoot is the whole runtime of the web module. Its crt1,
+# LithoLibC and C++ runtime are built here and linked into every target defined after this
+# point; the toolchain's -nostdlib keeps clang from adding any libc, libc++ or compiler-rt of
+# its own. Native builds never enter lithoroot/.
+if(LK_WEB)
+  add_subdirectory(lithoroot)
+  link_libraries(lithoroot_runtime)
+endif()
+
 # AngelScript 2.38.0, official SDK zip from angelcode.com, pinned by SHA256.
+# LK_WEB: AngelScript is the ONE sanctioned third-party library in the web build (JD 2026-11-16
+# 12:41 ET, "grant an exception"); everything else third-party stays off LK_WEB.
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)   # honour the static MSVC runtime in the SDK's older CMake project
 set(AS_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -63,11 +82,23 @@ FetchContent_Declare(angelscript
   URL https://www.angelcode.com/angelscript/sdk/files/angelscript_2.38.0.zip
   URL_HASH SHA256=b33b5dbcda10317ef67d628353d83246984ce6fcac102d4dc2aed121eba52e6f
   SOURCE_SUBDIR angelscript/projects/cmake)  # the zip's top folder sdk/ is stripped
+# LK_WEB (2026-11-16): the SDK's CMake project links Threads::Threads. On LithoRoot that would end
+# up as -lpthreads at the final link (FindThreads only try-compiles static libraries here), and the
+# web AngelScript runs without threads anyway, so the target is an empty stand-in.
+if(LK_WEB AND NOT TARGET Threads::Threads)
+  add_library(Threads::Threads INTERFACE IMPORTED GLOBAL)
+endif()
 FetchContent_MakeAvailable(angelscript)
+# LK_WEB: generic calling convention only, no AngelScript threads (as_config.h picks both for an
+# unknown platform; spelled out so every TU that includes angelscript.h agrees). PUBLIC on purpose.
+if(LK_WEB)
+  target_compile_definitions(angelscript PUBLIC AS_MAX_PORTABILITY AS_NO_THREADS=)
+endif()
 
 # stb_image v2.30 (single header), official github.com/nothings/stb, pinned commit + SHA256.
+# Not on LK_WEB (JD 12:41 ET: in-house PNG/SVG decoder; until then image.cpp fails safe there).
 set(LITHOLATTICE_STB_DIR ${CMAKE_BINARY_DIR}/_deps/stb)
-if(NOT EXISTS ${LITHOLATTICE_STB_DIR}/stb_image.h)
+if(NOT LK_WEB AND NOT EXISTS ${LITHOLATTICE_STB_DIR}/stb_image.h)
   file(DOWNLOAD
     https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image.h
     ${LITHOLATTICE_STB_DIR}/stb_image.h
@@ -76,8 +107,9 @@ if(NOT EXISTS ${LITHOLATTICE_STB_DIR}/stb_image.h)
 endif()
 
 # miniaudio 0.11.25 (single header), official github.com/mackron/miniaudio release tag + SHA256.
+# Not on LK_WEB (JD 12:41 ET: our own AudioWorklet output; until then the web build runs muted).
 set(LITHOLATTICE_MINIAUDIO_DIR ${CMAKE_BINARY_DIR}/_deps/miniaudio)
-if(NOT EXISTS ${LITHOLATTICE_MINIAUDIO_DIR}/miniaudio.h)
+if(NOT LK_WEB AND NOT EXISTS ${LITHOLATTICE_MINIAUDIO_DIR}/miniaudio.h)
   file(DOWNLOAD
     https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
     ${LITHOLATTICE_MINIAUDIO_DIR}/miniaudio.h
@@ -88,10 +120,12 @@ endif()
 # Vulkan backend dependencies (official KhronosGroup release archives, pinned by SHA256).
 # Headers only: the backend loads the system Vulkan loader (vulkan-1.dll / libvulkan.so.1, shipped
 # with the GPU driver) at run time, so nothing Vulkan is linked and the game still starts without it.
+if(NOT LK_WEB)  # no Vulkan backend in the browser build (render_vk is off LK_WEB too)
 FetchContent_Declare(vulkan_headers
   URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
   URL_HASH SHA256=4a078be12bef21cfebc09d878b77a63cff9d68f899254a0b00d0e37ef73e7f7e)
 FetchContent_MakeAvailable(vulkan_headers)
+endif()
 
 # glslang 16.6.0: the reference GLSL -> SPIR-V compiler, built as a host tool so the Vulkan
 # shaders (assets/shaders/vk) compile at build time. No optimizer / HLSL / tests / install.
@@ -104,7 +138,7 @@ set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
 set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # WASM checkpoint (2026-10-18): glslang is a host tool for the Vulkan backend's
 # SPIR-V step; neither is built for the browser (render_vk is skipped below).
-if(NOT EMSCRIPTEN)
+if(NOT LK_WEB)
 FetchContent_Declare(glslang
   URL https://github.com/KhronosGroup/glslang/archive/refs/tags/16.6.0.tar.gz
   URL_HASH SHA256=9c09b901149c729df745057dafa815278aaa101b84d2b6e14f16a42de52f97f2)
@@ -126,8 +160,8 @@ endif()
 #   audio_device (miniaudio backend) -> audio; render_vk (Vulkan backend) -> render
 # The game (LithoKraft/): lithokraft (exe) -> lithokraft_game -> engine modules.
 # Optimisation comes from CMake's per-config flags (Release: /O2 or -O3 and NDEBUG; Debug: /Od /RTC1
-# or -O0 -g), never forced here: /O2 next to Debug's /RTC1 is MSVC error D8016. GCC/Clang non-Debug
-# builds keep -O2 as before. LITHOLATTICE_WERROR (off by default, on in CI) turns warnings into errors.
+# or -O0 -g), never forced here: /O2 next to Debug's /RTC1 is MSVC error D8016. GCC/Clang DebugOpt
+# and RelWithDebInfo keep -O2 as before; Release uses CMake's -O3 (a trailing -O2 was clobbering it). LITHOLATTICE_WERROR (off by default, on in CI) turns warnings into errors.
 option(LITHOLATTICE_WERROR "Treat warnings in LithoLattice / LithoKraft code as errors" OFF)
 # Verbose thread/job-system debug logging (job lifecycle, steals, lock order, wake/sleep,
 # queue depths, affinity). Compile-time gated: zero overhead when off. The self-tests
@@ -163,9 +197,9 @@ function(litholattice_module_options target)
     target_compile_options(${target} PRIVATE /W4 /permissive- /w14265 /we4293 /we4715 /we4716 /we4700
                            $<$<BOOL:${LITHOLATTICE_WERROR}>:/WX>)
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra $<$<NOT:$<CONFIG:Debug>>:-O2>
+    target_compile_options(${target} PRIVATE -Wall -Wextra $<$<OR:$<CONFIG:DebugOpt>,$<CONFIG:RelWithDebInfo>>:-O2>
                            $<$<BOOL:${LITHOLATTICE_WERROR}>:-Werror>)
-    if(NOT EMSCRIPTEN)
+    if(NOT LK_WEB)
       target_compile_options(${target} PRIVATE -Wshadow -Wnon-virtual-dtor
                              -Werror=shift-count-overflow -Werror=return-type)
     endif()
@@ -211,7 +245,7 @@ add_subdirectory(src/subdiv)  # sparse-octree sub-block subdivision (render/deta
 add_subdirectory(src/texture)  # clean-room procedural texture generation (recipes, tileable noise/voronoi)
 add_subdirectory(src/render)
 # WASM checkpoint (2026-10-18): no Vulkan backend in the browser build.
-if(NOT EMSCRIPTEN)
+if(NOT LK_WEB)
 add_subdirectory(src/render_vk)
 endif()
 # The game (LithoKraft/) builds on the engine modules above; nothing in src/ depends on it.
@@ -302,7 +336,7 @@ endif()
 # targets, no code, and no behavior. The stub backend proves the ILithoCEF
 # contract standalone; it never links into the engine or the game.
 option(LL_WITH_LITHOCEF "Build the LithoCEF host-shell stub backend (host/lithocef)" OFF)
-if(LL_WITH_LITHOCEF AND NOT EMSCRIPTEN)
+if(LL_WITH_LITHOCEF AND NOT LK_WEB)
   get_filename_component(LITHOCEF_TREE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" DIRECTORY)
   add_subdirectory("${LITHOCEF_TREE_ROOT}/host/lithocef" "${CMAKE_BINARY_DIR}/host/lithocef")
 endif()

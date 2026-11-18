@@ -1,0 +1,11 @@
+/* version ... LithoRoot std L0. LithoRoot advertises no __cpp_lib_*
+ * feature macros: it implements "what this tree uses", so code that
+ * probes a feature macro takes its fallback path on web, which is the
+ * honest answer. _LITHOROOT_STD names the library. */
+#ifndef LITHOROOT_VERSION
+#define LITHOROOT_VERSION
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#define _LITHOROOT_STD 20261116L
+#endif

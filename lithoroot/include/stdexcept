@@ -1,0 +1,91 @@
+/* stdexcept ... LithoRoot std (pulled ahead from S4 for string_view/string,
+ * 2026-11-16): logic_error / runtime_error and their standard children.
+ *
+ * The message lives in one heap block shared by every copy (exception
+ * copies must not throw), counted with __atomic builtins, lock-free.
+ * Constructors take a C string, or anything with c_str() (std::string),
+ * so this header does not need <string>. If the block cannot be had the
+ * message becomes a fixed literal: the exception still throws. */
+#ifndef LITHOROOT_STDEXCEPT
+#define LITHOROOT_STDEXCEPT
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <exception>
+#include <new>
+
+namespace std {
+namespace __lk {
+class msg_ref {
+  struct block { long refs; char text[1]; };
+  block* b_ = nullptr;
+  const char* lit_ = "";
+ public:
+  explicit msg_ref(const char* s) noexcept {
+    size_t n = 0;
+    while (s[n]) ++n;
+    void* raw = ::operator new(sizeof(block) + n, nothrow);
+    if (!raw) { lit_ = "(exception message lost: out of memory)"; return; }
+    b_ = static_cast<block*>(raw);
+    b_->refs = 1;
+    for (size_t i = 0; i <= n; ++i) b_->text[i] = s[i];
+  }
+  msg_ref(const msg_ref& o) noexcept : b_(o.b_), lit_(o.lit_) { if (b_) __atomic_fetch_add(&b_->refs, 1, __ATOMIC_RELAXED); }
+  msg_ref& operator=(const msg_ref& o) noexcept {
+    if (o.b_) __atomic_fetch_add(&o.b_->refs, 1, __ATOMIC_RELAXED);
+    release();
+    b_ = o.b_; lit_ = o.lit_;
+    return *this;
+  }
+  ~msg_ref() { release(); }
+  const char* c_str() const noexcept { return b_ ? b_->text : lit_; }
+ private:
+  void release() noexcept {
+    if (b_ && __atomic_fetch_sub(&b_->refs, 1, __ATOMIC_ACQ_REL) == 1) ::operator delete(b_);
+    b_ = nullptr;
+  }
+};
+}  // namespace __lk
+
+#define LR_EXC(name, base)                                                         \
+  class name : public base {                                                       \
+   public:                                                                         \
+    explicit name(const char* w) : base(w) {}                                      \
+    template <class S, class = decltype(static_cast<const char*>(((const S*)0)->c_str()))> \
+    explicit name(const S& w) : base(w.c_str()) {}                                 \
+  };
+
+class logic_error : public exception {
+ public:
+  explicit logic_error(const char* w) : m_(w) {}
+  template <class S, class = decltype(static_cast<const char*>(((const S*)0)->c_str()))>
+  explicit logic_error(const S& w) : m_(w.c_str()) {}
+  const char* what() const noexcept override { return m_.c_str(); }
+ private:
+  __lk::msg_ref m_;
+};
+class runtime_error : public exception {
+ public:
+  explicit runtime_error(const char* w) : m_(w) {}
+  template <class S, class = decltype(static_cast<const char*>(((const S*)0)->c_str()))>
+  explicit runtime_error(const S& w) : m_(w.c_str()) {}
+  const char* what() const noexcept override { return m_.c_str(); }
+ private:
+  __lk::msg_ref m_;
+};
+LR_EXC(domain_error, logic_error)
+LR_EXC(invalid_argument, logic_error)
+LR_EXC(length_error, logic_error)
+LR_EXC(out_of_range, logic_error)
+LR_EXC(range_error, runtime_error)
+LR_EXC(overflow_error, runtime_error)
+LR_EXC(underflow_error, runtime_error)
+#undef LR_EXC
+
+namespace __lk {
+[[noreturn]] inline void throw_out_of_range(const char* w) { throw out_of_range(w); }
+[[noreturn]] inline void throw_length_error(const char* w) { throw length_error(w); }
+[[noreturn]] inline void throw_invalid_argument(const char* w) { throw invalid_argument(w); }
+}  // namespace __lk
+}  // namespace std
+#endif

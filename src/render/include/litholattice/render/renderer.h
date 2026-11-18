@@ -74,27 +74,9 @@ enum ShadeMode : uint8_t {
   kShadeDigitsRep,    // 2026-10-31 (JD): same, Repeator readout box (delay 4/8/16/32)
   kShadeDigitsRnd,    // 2026-10-31 (JD): same, Randor readout box (range N, 128-space x53 y57)
 };
-// Cortana 2026-10-16 [ENGINE] (JD foliage LOD): the top two bits of PackedVertex::mode tag LOD
-// geometry; the low 6 bits are the ShadeMode. Untagged quads always draw. A sub-chunk whose
-// centre is more than kLodSwitchBlocks (horizontal) from the camera draws its kShadeLodFar quads
-// instead of its kShadeLodNear ones. GPU backends decide per draw in chunk.vert; the software
-// backend keeps two pre-split vertex sets per mesh (selectLod). Render-only.
-inline constexpr uint8_t kShadeModeMask = 0x3F, kShadeLodNear = 0x40, kShadeLodFar = 0x80;
-inline constexpr float kLodSwitchBlocks = 32.f;
-inline bool hasLodTags(const std::vector<PackedVertex>& v) {
-  for (size_t q = 0; q < v.size(); q += 4) if (v[q].mode & (kShadeLodNear | kShadeLodFar)) return true;
-  return false;
-}
-/// Quads of `in` drawn at the given LOD (untagged + the matching tag), mode bits masked.
-inline void selectLod(const std::vector<PackedVertex>& in, bool far, std::vector<PackedVertex>& out) {
-  out.clear();
-  out.reserve(in.size());
-  const uint8_t drop = far ? kShadeLodNear : kShadeLodFar;
-  for (size_t q = 0; q + 3 < in.size(); q += 4) {
-    if (in[q].mode & drop) continue;
-    for (size_t k = 0; k < 4; ++k) { PackedVertex v = in[q + k]; v.mode = uint8_t(v.mode & kShadeModeMask); out.push_back(v); }
-  }
-}
+// The low 6 bits of PackedVertex::mode are the ShadeMode; the top two bits are unused since
+// the foliage near/far LOD tags were removed (2026-11-17).
+inline constexpr uint8_t kShadeModeMask = 0x3F;
 }  // namespace litholattice
 
 #include "litholattice/render/pbr_lights.h"  // AnalyticLight for FrameParams::pbrLights
@@ -146,11 +128,8 @@ struct ChunkMesh {
   /// into GPU memory off the main thread (LL_ASYNC_CHUNK_UPLOAD). Null = upload on the main thread.
   /// Dropping the last owner without publishing hands the slice back (see the handle's destructor).
   std::shared_ptr<PreparedChunkMeshHandle> prepared;
-  /// 2026-10-25 (box): far-LOD scale this mesh was built at (1, 2 or 4); the software renderer
-  /// flat-shades / height-culls >= 4x meshes. Other backends ignore it.
-  uint8_t lodScale = 1;
   /// Render pipeline M2 (2026-10-29): the canonical packed mesh (unified-mesher mode only;
-  /// null otherwise). Today it holds the L0 merged faces; uploaders read it from step 4 on.
+  /// null otherwise). It holds the merged faces; uploaders read it from step 4 on.
   std::shared_ptr<const CanonicalMesh> canonical;
 };
 
@@ -370,8 +349,8 @@ class IRenderer {
   /// game's update order: materials first, then uploads).
   virtual void enqueuePbrMaterials(const cMaterialReg& reg) { setPbrMaterials(reg); }
   /// True when this backend stages mesh uploads for the render side to
-  /// drain (Stage 2 ring): the game's upload phase then takes no
-  /// RendererGuard — nothing waits in line behind the in-flight render.
+  /// drain (Stage 2 ring). t46u: the command mailbox (renderer_mailbox.h)
+  /// reports true while the split runs; nothing waits behind the in-flight render.
   virtual bool meshUploadsQueued() const { return false; }
   /// 2026-10-25 stutter pass: mesh pool fill in [0, 1] (live mesh bytes / device-local budget), or -1
   /// when the backend has no bounded pool. The game stops admitting far columns above 0.9.

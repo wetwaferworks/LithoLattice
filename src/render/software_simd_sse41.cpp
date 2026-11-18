@@ -6,12 +6,16 @@
 #include <cstdint>
 #if defined(_M_X64) || defined(__x86_64__) || \
     defined(__wasm_simd128__)
+#if defined(__wasm__)
+#include "lk_simd_wasm.h"  // in-house SSE-on-wasm-SIMD (S1, 2026-11-16), bit-exact with SSE
+#else
 #include <smmintrin.h>
+#endif
 #include "litholattice/render/software_simd.h"
 #if defined(__wasm__)
-// The TU is compiled with -msse4.1 (render CMakeLists), so no
-// per-function target attribute is needed — and clang's wasm target
-// does not accept the x86 "sse4.1" target string anyway.
+// On wasm the intrinsics are lk_simd_wasm.h's plain inline functions, so no
+// per-function target attribute is needed (clang's wasm target does not
+// accept the x86 "sse4.1" target string anyway).
 #define LL_TARGET_SSE41
 #elif defined(__GNUC__) || defined(__clang__)
 #define LL_TARGET_SSE41 __attribute__((target("sse4.1")))

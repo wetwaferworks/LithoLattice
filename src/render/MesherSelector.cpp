@@ -1,6 +1,5 @@
 #include "MesherSelector.h"
 
-#include <cstdio>
 #include <cstdlib>
 #include <string_view>
 
@@ -12,10 +11,8 @@ cMesherSelector::Config cMesherSelector::config() {
   Config c;
   c.unifiedMesher = unifiedMesherEnabled();
   c.meshVerify = meshVerifyEnabled();
-  c.canonLods = canonLodsEnabled();
   c.leavesFancy = leavesFancy();
   c.foliageDensity = foliageDensity();
-  canonLodRings(c.lodRing1, c.lodRing2);
   return c;
 }
 
@@ -47,20 +44,6 @@ bool cMesherSelector::envVerifyOff() {
 int cMesherSelector::envUnifiedMesher() {
   const char* e = std::getenv("LL_UNIFIED_MESHER");
   return (e && e[0] == '1') ? 1 : 0;
-}
-
-std::pair<int, int> cMesherSelector::envCanonLodRings() {
-  int a = 12, b = 24;
-  if (const char* e = std::getenv("LL_CANON_LOD_RINGS")) {
-    int x = 0, y = 0;
-    if (std::sscanf(e, "%d,%d", &x, &y) == 2 && x > 0 && y > x) a = x, b = y;
-  }
-  return std::pair<int, int>{a, b};
-}
-
-bool cMesherSelector::envCanonLods() {
-  const char* e = std::getenv("LL_CANON_LODS");
-  return !(e && e[0] == '0');
 }
 
 bool cMesherSelector::envCanonVerify() {

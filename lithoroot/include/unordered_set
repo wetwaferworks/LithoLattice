@@ -1,0 +1,91 @@
+/* unordered_set ... LithoRoot std L6 (S4, 2026-11-16): unordered_set over the
+ * shared node-based hash table (lithoroot_hashtable.h). No multiset form.
+ * DETERMINISM RULE: never iterate one where the order can reach a
+ * determinism hash (see lithoroot_hashtable.h). */
+#ifndef LITHOROOT_UNORDERED_SET
+#define LITHOROOT_UNORDERED_SET
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <functional>
+#include <initializer_list>
+#include <lithoroot_hashtable.h>
+#include <utility>
+
+namespace std {
+
+template <class K, class H = hash<K>, class Eq = equal_to<K>, class A = allocator<K>>
+class unordered_set {
+  struct key_of { const K& operator()(const K& v) const noexcept { return v; } };
+  using table = __lk::hashtable<K, K, key_of, H, Eq>;
+  using node = typename table::node;
+  table t_;
+  static constexpr bool transparent = requires { typename H::is_transparent; typename Eq::is_transparent; };
+ public:
+  using key_type = K;
+  using value_type = K;
+  using hasher = H;
+  using key_equal = Eq;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = K&;
+  using const_reference = const K&;
+  using iterator = typename table::const_iterator;  // elements are immutable
+  using const_iterator = typename table::const_iterator;
+
+  unordered_set() = default;
+  explicit unordered_set(size_type n, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) {}
+  template <class It> unordered_set(It f, It l, size_type n = 0, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) { insert(f, l); }
+  unordered_set(initializer_list<K> il, size_type n = 0, const H& h = H(), const Eq& e = Eq()) : t_(n, h, e) { insert(il.begin(), il.end()); }
+  unordered_set& operator=(initializer_list<K> il) { clear(); insert(il.begin(), il.end()); return *this; }
+
+  iterator begin() const noexcept { return t_.begin(); }
+  iterator end() const noexcept { return t_.end(); }
+  iterator cbegin() const noexcept { return t_.begin(); }
+  iterator cend() const noexcept { return t_.end(); }
+  [[nodiscard]] bool empty() const noexcept { return t_.empty(); }
+  size_type size() const noexcept { return t_.size(); }
+
+  template <class... Args> pair<iterator, bool> emplace(Args&&... a) { auto r = t_.insert_unique(new node(std::forward<Args>(a)...)); return {r.first, r.second}; }
+  pair<iterator, bool> insert(const K& v) { auto r = t_.find_or_make(v, [&] { return new node(v); }); return {r.first, r.second}; }
+  pair<iterator, bool> insert(K&& v) { auto r = t_.find_or_make(v, [&] { return new node(std::move(v)); }); return {r.first, r.second}; }
+  iterator insert(const_iterator, const K& v) { return insert(v).first; }
+  template <class It> void insert(It f, It l) { for (; f != l; ++f) emplace(*f); }
+  void insert(initializer_list<K> il) { insert(il.begin(), il.end()); }
+  iterator erase(const_iterator it) { return t_.erase(it); }
+  iterator erase(const_iterator f, const_iterator l) { while (f != l) f = t_.erase(f); return l; }
+  size_type erase(const K& k) { return t_.erase_key(k); }
+  void clear() noexcept { t_.clear(); }
+  void swap(unordered_set& o) noexcept { t_.swap(o.t_); }
+
+  iterator find(const K& k) const { return t_.find(k); }
+  template <class Q, class = enable_if_t<transparent && sizeof(Q)>> iterator find(const Q& k) const { return t_.find(k); }
+  size_type count(const K& k) const { return find(k) != end() ? 1 : 0; }
+  bool contains(const K& k) const { return find(k) != end(); }
+  template <class Q, class = enable_if_t<transparent && sizeof(Q)>> bool contains(const Q& k) const { return find(k) != end(); }
+
+  size_type bucket_count() const noexcept { return t_.bucket_count(); }
+  float load_factor() const noexcept { return t_.load_factor(); }
+  float max_load_factor() const noexcept { return t_.max_load_factor(); }
+  void max_load_factor(float f) noexcept { t_.max_load_factor(f); }
+  void rehash(size_type n) { t_.rehash(n); }
+  void reserve(size_type n) { t_.reserve(n); }
+  hasher hash_function() const { return t_.hasher_ref(); }
+  key_equal key_eq() const { return t_.eq_ref(); }
+};
+
+template <class K, class H, class E, class A> bool operator==(const unordered_set<K, H, E, A>& a, const unordered_set<K, H, E, A>& b) {
+  if (a.size() != b.size()) return false;
+  for (const auto& k : a) if (!b.contains(k)) return false;
+  return true;
+}
+template <class K, class H, class E, class A> void swap(unordered_set<K, H, E, A>& a, unordered_set<K, H, E, A>& b) noexcept { a.swap(b); }
+template <class K, class H, class E, class A, class P> size_t erase_if(unordered_set<K, H, E, A>& s, P p) {
+  size_t n = 0;
+  for (auto it = s.begin(); it != s.end();) { if (p(*it)) { it = s.erase(it); ++n; } else ++it; }
+  return n;
+}
+
+}  // namespace std
+#endif

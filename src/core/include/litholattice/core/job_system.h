@@ -51,8 +51,10 @@
 // the -OR suffix is for game-style components, not engine infrastructure, and is
 // deliberately not used).
 #pragma once
+#include "litholattice/core/thread_name.h"
 
 #include <atomic>
+#include "litholattice/core/idle_backoff.h"  // t46u item 5b
 #include <cstdlib>
 #include <cassert>
 #include <chrono>
@@ -71,6 +73,7 @@
 #include "litholattice/core/thread_census.h"  // Thread Handshake P3
 #include "litholattice/core/threading.h"
 #include "litholattice/core/atomic_gate.h"      // P4: cJobPool::shared() backs every cJobSystem
+#include <system_error>
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -108,25 +111,17 @@ inline constexpr bool kThreadDebug = false;
 #endif
 
 // ---- thread utilities -----------------------------------------------------------
-/// Platform-guarded thread naming. Linux: pthread_setname_np; elsewhere a no-op.
+/// Platform-guarded thread naming: SetThreadDescription on Windows, pthread_setname_np on Linux (thread_name.h).
 /// Names are truncated to 15 chars (Linux limit). JD t3349u item 9 / Archie ruling 6:
 /// the engine never pins, so the affinity helpers are gone.
 struct ThreadUtil {
   static void setName(const char* name) {
-#if defined(__linux__)
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "%s", name);
-    pthread_setname_np(pthread_self(), buf);
-#else
-    (void)name;
-#endif
+    ::litholattice::setCurrentThreadName(name);  // JD t40u 2026-11-16: Windows names too (instrumentation only)
     LITHO_THREAD_LOG("thread", "named '%s'", name);
   }
 
-  static unsigned coreCount() {
-    const unsigned n = std::thread::hardware_concurrency();
-    return n == 0 ? 1 : n;
-  }
+  /// t46u: the census core count (--cores > LITHO_CORES > hardware), never the raw hardware.
+  static unsigned coreCount() { return ::litholattice::censusCores(); }
 };
 
 /// RAII named thread: names itself, joins on destruction (never detached). Never
@@ -191,19 +186,22 @@ class cJobSystem {
   void submitIo(Job job) {
     assert(!stop_.load(std::memory_order_relaxed) && "submitIo during/after shutdown");
     ioInFlight_.fetch_add(1, std::memory_order_relaxed);
+    if (ioThreads_.empty()) {
+      executeJob(std::move(job), ioInFlight_, "io", 0);  // no I/O thread: caller-runs (single-thread WASM)
+      return;
+    }
     {
       cGateGuard<cAtomicGate> l(ioGate_);
       ioQueue_.push_back(std::move(job));
     }
-    ioWake_.fetch_add(1, std::memory_order_release);
-    ioWake_.notify_one();
+    ioWake_.fetch_add(1, std::memory_order_release);  // the I/O thread re-reads it (t46u 5b: no notify)
   }
 
   /// Block until every submitted job (workers + I/O) has finished. Must NOT be
   /// called from a worker/I/O job (thread-local assert: that would deadlock).
   void waitIdle() {
     assert(!t_onJobThread && "waitIdle() from a job thread would deadlock the pool");
-    // Archie PlayJ: no mutex/cv — wait on the in-flight atomics themselves.
+    // Archie PlayJ: no mutex/cv. t46u 5b: re-read the in-flight atomics with a backoff (no atomic::wait).
     auto idle = [this] {
       return inFlight_.load(std::memory_order_acquire) == 0 &&
              ioInFlight_.load(std::memory_order_acquire) == 0;
@@ -215,16 +213,14 @@ class cJobSystem {
         int a = inFlight_.load(std::memory_order_acquire);
         int b = ioInFlight_.load(std::memory_order_acquire);
         if (a == 0 && b == 0) break;
-        if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
-        else ioInFlight_.wait(b, std::memory_order_acquire);
+        lkIdleWaitUntil([&] { return inFlight_.load(std::memory_order_acquire) != a || ioInFlight_.load(std::memory_order_acquire) != b; });  // t46u 5b
       }
     }
     while (!idle()) {
       int a = inFlight_.load(std::memory_order_acquire);
       int b = ioInFlight_.load(std::memory_order_acquire);
       if (a == 0 && b == 0) break;
-      if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
-      else ioInFlight_.wait(b, std::memory_order_acquire);
+      lkIdleWaitUntil([&] { return inFlight_.load(std::memory_order_acquire) != a || ioInFlight_.load(std::memory_order_acquire) != b; });  // t46u 5b
     }
   }
 
@@ -262,19 +258,23 @@ class cJobSystem {
     unsigned ios = cfg.ioThreads < 1 ? 1 : cfg.ioThreads;
     if (ios > kMaxJobThreads) ios = kMaxJobThreads;
     ioThreads_.reserve(ios);
-    for (unsigned i = 0; i < ios; ++i) {
-      std::string name = std::string(cfg.namePrefix) + "-io" + std::to_string(i);
-      ioThreads_.emplace_back([this, i, name] {
-        t_onJobThread = true;
-        ThreadUtil::setName(name.c_str());
-        LITHO_THREAD_LOG("thread", "io thread %u online", i);
-        ioLoop(i);
-        LITHO_THREAD_LOG("thread", "io thread %u offline", i);
-      });
+    try {
+      for (unsigned i = 0; i < ios; ++i) {
+        std::string name = std::string(cfg.namePrefix) + "-io" + std::to_string(i);
+        ioThreads_.emplace_back([this, i, name] {
+          t_onJobThread = true;
+          ThreadUtil::setName(name.c_str());
+          LITHO_THREAD_LOG("thread", "io thread %u online", i);
+          ioLoop(i);
+          LITHO_THREAD_LOG("thread", "io thread %u offline", i);
+        });
+      }
+    } catch (const std::system_error& e) {
+      logInfo("job system: io thread spawn failed (%s); I/O jobs run on the caller", e.what());
     }
-    for (unsigned i = 0; i < ios; ++i) records_.add(ThreadClass::System, ThreadRole::Storage, uint16_t(i), "jobsys-io");
+    for (unsigned i = 0; i < unsigned(ioThreads_.size()); ++i) records_.add(ThreadClass::System, ThreadRole::Storage, uint16_t(i), "jobsys-io");
     LITHO_THREAD_LOG("thread", "cJobSystem up: facade cap %u on the %u-worker shared pool + %u io threads", cap_,
-                     pool_->size(), ios);
+                     pool_->size(), unsigned(ioThreads_.size()));
   }
 
   void shutdown() {
@@ -296,8 +296,7 @@ class cJobSystem {
           int a = inFlight_.load(std::memory_order_acquire);
           int b = ioInFlight_.load(std::memory_order_acquire);
           if (a == 0 && b == 0) break;
-          if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
-          else ioInFlight_.wait(b, std::memory_order_acquire);
+          lkIdleWaitUntil([&] { return inFlight_.load(std::memory_order_acquire) != a || ioInFlight_.load(std::memory_order_acquire) != b; });  // t46u 5b
         }
         if (!idle()) {
           cancel_.store(true, std::memory_order_release);
@@ -309,17 +308,15 @@ class cJobSystem {
         int a = inFlight_.load(std::memory_order_acquire);
         int b = ioInFlight_.load(std::memory_order_acquire);
         if (a == 0 && b == 0) break;
-        if (a != 0) inFlight_.wait(a, std::memory_order_acquire);
-        else ioInFlight_.wait(b, std::memory_order_acquire);
+        lkIdleWaitUntil([&] { return inFlight_.load(std::memory_order_acquire) != a || ioInFlight_.load(std::memory_order_acquire) != b; });  // t46u 5b
       }
     }
     {  // wait for pumps to exit
       for (unsigned v; (v = pumps_.load(std::memory_order_acquire)) != 0;)
-        pumps_.wait(v, std::memory_order_acquire);
+        lkIdleWaitUntil([&] { return pumps_.load(std::memory_order_acquire) != v; });  // t46u 5b
     }
     stop_.store(true, std::memory_order_release);
     ioWake_.fetch_add(1, std::memory_order_release);
-    ioWake_.notify_all();
     for (auto& t : ioThreads_) t.join();
     records_.retireAll();  // joined -> RETURNED
     LITHO_THREAD_LOG("thread", "shutdown: io threads joined, failed=%llu",
@@ -336,8 +333,8 @@ class cJobSystem {
     { cGateGuard<cAtomicGate> l(qGate_); for (auto& q : queue_) { for (auto& j : q) w.push_back(std::move(j)); q.clear(); } }
     { cGateGuard<cAtomicGate> l(ioGate_); io.swap(ioQueue_); }
     const int n = int(w.size() + io.size());
-    if (!w.empty() && inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel) == int(w.size())) inFlight_.notify_all();
-    if (!io.empty() && ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel) == int(io.size())) ioInFlight_.notify_all();
+    if (!w.empty()) inFlight_.fetch_sub(int(w.size()), std::memory_order_acq_rel);
+    if (!io.empty()) ioInFlight_.fetch_sub(int(io.size()), std::memory_order_acq_rel);
     dropped_.fetch_add(uint64_t(n), std::memory_order_relaxed);
     return n;
   }
@@ -357,7 +354,6 @@ class cJobSystem {
         while (p >= int(JobPriority::Low) && queue_[p].empty()) --p;
         if (p < int(JobPriority::Low)) {
           pumps_.fetch_sub(1, std::memory_order_acq_rel);
-          pumps_.notify_all();
           break;
         }
         job = std::move(queue_[p].front());
@@ -396,7 +392,7 @@ class cJobSystem {
           }
           if (stop_.load(std::memory_order_acquire)) return;
         }
-        ioWake_.wait(w, std::memory_order_acquire);
+        lkIdleWaitUntil([&] { return ioWake_.load(std::memory_order_acquire) != w || stop_.load(std::memory_order_acquire); });  // t46u 5b
       }
       executeJob(std::move(job), ioInFlight_, "io", self);
     }
@@ -431,24 +427,23 @@ class cJobSystem {
         LITHO_THREAD_LOG("job", "SLOW JOB id=%llu ran %llu us: worker jobs must never block",
                          (unsigned long long)id, (unsigned long long)dt);
     }
-    if (counter.fetch_sub(1, std::memory_order_acq_rel) == 1)
-      counter.notify_all();
+    counter.fetch_sub(1, std::memory_order_acq_rel);  // waiters re-read it (t46u 5b)
   }
 
   cJobPool* pool_ = nullptr;   // cJobPool::shared(), never destroyed
   unsigned cap_ = 1;
   std::deque<Job> queue_[kJobPriorityCount];  // guarded by qGate_
-  std::atomic<unsigned> pumps_{0};             // Archie PlayJ: atomic + wait (was mutex+cv)
+  alignas(64) std::atomic<unsigned> pumps_{0}; // t46u item 5: padded. Archie PlayJ: atomic + wait (was mutex+cv)
   cAtomicGate qGate_;                          // Archie PlayJ: replaces qM_
   std::vector<std::thread> ioThreads_;
   cThreadRecordSet records_;  // io threads, class System
 
   std::deque<Job> ioQueue_;
   cAtomicGate ioGate_;                 // Archie PlayJ: replaces ioM_
-  std::atomic<uint64_t> ioWake_{0};    // Archie PlayJ: replaces ioCv_
+  alignas(64) std::atomic<uint64_t> ioWake_{0}; // t46u item 5: padded. Archie PlayJ: replaces ioCv_
   std::atomic<bool> stop_{false};
-  std::atomic<int> inFlight_{0};
-  std::atomic<int> ioInFlight_{0};
+  alignas(64) std::atomic<int> inFlight_{0};  // t46u item 5: padded
+  alignas(64) std::atomic<int> ioInFlight_{0};
   std::atomic<uint64_t> failed_{0};
   std::atomic<bool> cancel_{false};    // PlayM: set when the timed shutdown drain expires
   std::atomic<uint64_t> dropped_{0};   // PlayM: queued jobs dropped by the timed drain
@@ -483,8 +478,7 @@ class JobFence {
             logError("job fence: job threw a non-std exception");
           }
           if (!ok) failed_.fetch_add(1, std::memory_order_relaxed);
-          if (pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            pending_.notify_all();
+          pending_.fetch_sub(1, std::memory_order_acq_rel);  // wait() re-reads it (t46u 5b)
         },
         prio);
   }
@@ -503,11 +497,11 @@ class JobFence {
         }
         int p = pending_.load(std::memory_order_acquire);
         if (p == 0) break;
-        pending_.wait(p, std::memory_order_acquire);
+        lkIdleWaitUntil([&] { return pending_.load(std::memory_order_acquire) != p; });  // t46u 5b
       }
     }
     for (int p; (p = pending_.load(std::memory_order_acquire)) != 0;)
-      pending_.wait(p, std::memory_order_acquire);
+      lkIdleWaitUntil([&] { return pending_.load(std::memory_order_acquire) != p; });  // t46u 5b
     return int(failed_.load(std::memory_order_relaxed));
   }
 

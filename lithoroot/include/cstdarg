@@ -1,0 +1,12 @@
+/* cstdarg ... LithoRoot std L2 (S2, 2026-11-16): <stdarg.h> lifted into std. clang's own <stdarg.h>. */
+#ifndef LITHOROOT_CSTDARG
+#define LITHOROOT_CSTDARG
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <stdarg.h>
+
+namespace std {
+using ::va_list;
+}  // namespace std
+#endif

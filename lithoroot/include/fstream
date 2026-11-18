@@ -1,0 +1,150 @@
+/* LithoRoot <fstream>: filebuf and the three file streams, char only, over LithoLibC
+ * stdio (fopen/fread/fwrite/fseek). On web, writes ride the LithoVFS stdio seam (S7);
+ * until it lands, fopen for writing fails with ENOSYS and the stream is simply !good().
+ * Text and binary modes are the same (POSIX). Paths: const char*, std::string, or any
+ * path type with c_str() (std::filesystem::path), without pulling in <filesystem>. */
+#pragma once
+#include <lithoroot_streams.h>
+
+namespace std {
+
+template <class P>
+concept __lk_pathlike = requires(const P& p) { p.c_str(); } && is_convertible_v<decltype(declval<const P&>().c_str()), const char*>;
+
+class filebuf : public streambuf {
+public:
+  filebuf() = default;
+  filebuf(const filebuf&) = delete;
+  filebuf& operator=(const filebuf&) = delete;
+  ~filebuf() override { close(); }
+  bool is_open() const noexcept { return f_ != nullptr; }
+  filebuf* open(const char* path, ios_base::openmode m) {
+    if (f_ || !path) return nullptr;
+    const char* md = mode(m);
+    if (!md) return nullptr;
+    f_ = fopen(path, md);
+    if (!f_) return nullptr;
+    if ((m & ios_base::ate) && fseek(f_, 0, SEEK_END) != 0) { close(); return nullptr; }
+    m_ = m;
+    return this;
+  }
+  filebuf* close() {
+    if (!f_) return nullptr;
+    sync();
+    const int r = fclose(f_);
+    f_ = nullptr; n_ = i_ = 0;
+    return r == 0 ? this : nullptr;
+  }
+protected:
+  int peekc() override {
+    if (i_ < n_) return static_cast<unsigned char>(buf_[i_]);
+    if (!f_ || !(m_ & ios_base::in)) return eof;
+    n_ = fread(buf_, 1, sizeof buf_, f_); i_ = 0;
+    return n_ ? static_cast<unsigned char>(buf_[0]) : eof;
+  }
+  void advance() override { ++i_; }
+  streamsize xsgetn(char* d, streamsize n) override {
+    streamsize k = 0;
+    if (n <= 0) return 0;
+    if (i_ < n_) {
+      size_t c = n_ - i_; if (size_t(n) < c) c = size_t(n);
+      __builtin_memcpy(d, buf_ + i_, c); i_ += c; k = streamsize(c);
+    }
+    if (k < n && f_ && (m_ & ios_base::in)) k += streamsize(fread(d + k, 1, size_t(n - k), f_));
+    return k;
+  }
+  streamsize xsputn(const char* d, streamsize n) override {
+    if (!f_ || !(m_ & (ios_base::out | ios_base::app)) || n <= 0) return 0;
+    if (!drop_read()) return 0;
+    return streamsize(fwrite(d, 1, size_t(n), f_));
+  }
+  streampos seekoff(streamoff off, ios_base::seekdir d, ios_base::openmode) override {
+    if (!f_) return -1;
+    if (d == ios_base::cur && off == 0) {  // tell: account for read-ahead
+      const long p = ftell(f_);
+      return p < 0 ? -1 : streampos(p) - streampos(n_ - i_);
+    }
+    if (!drop_read()) return -1;
+    const int w = d == ios_base::beg ? SEEK_SET : d == ios_base::end ? SEEK_END : SEEK_CUR;
+    if (fseek(f_, long(off), w) != 0) return -1;
+    const long p = ftell(f_);
+    return p < 0 ? -1 : streampos(p);
+  }
+  int sync() override {
+    if (!f_) return 0;
+    if (!drop_read()) return -1;
+    return fflush(f_) == 0 ? 0 : -1;
+  }
+private:
+  // Give back unread read-ahead so the FILE position is the logical one.
+  bool drop_read() {
+    if (i_ < n_ && fseek(f_, -long(n_ - i_), SEEK_CUR) != 0) return false;
+    n_ = i_ = 0;
+    return true;
+  }
+  static const char* mode(ios_base::openmode m) {
+    using I = ios_base;
+    switch (m & ~(I::ate | I::binary)) {
+      case I::out: case I::out | I::trunc: return "wb";
+      case I::out | I::app: case I::app: return "ab";
+      case I::in: return "rb";
+      case I::in | I::out: return "r+b";
+      case I::in | I::out | I::trunc: return "w+b";
+      case I::in | I::out | I::app: case I::in | I::app: return "a+b";
+      default: return nullptr;
+    }
+  }
+  FILE* f_ = nullptr;
+  ios_base::openmode m_ = 0;
+  char buf_[4096];
+  size_t n_ = 0, i_ = 0;
+};
+
+#define __LK_FILESTREAM(NAME, BASE, DEF)                                                          \
+  class NAME : public BASE {                                                                      \
+  public:                                                                                         \
+    NAME() { init(&fb_); }                                                                        \
+    explicit NAME(const char* p, ios_base::openmode m = DEF) { init(&fb_); open(p, m); }          \
+    explicit NAME(const string& p, ios_base::openmode m = DEF) { init(&fb_); open(p, m); }        \
+    template <__lk_pathlike P>                                                                    \
+    explicit NAME(const P& p, ios_base::openmode m = DEF) { init(&fb_); open(p.c_str(), m); }     \
+    NAME(const NAME&) = delete;                                                                   \
+    NAME& operator=(const NAME&) = delete;                                                        \
+    filebuf* rdbuf() const noexcept { return const_cast<filebuf*>(&fb_); }                        \
+    bool is_open() const noexcept { return fb_.is_open(); }                                       \
+    void open(const char* p, ios_base::openmode m = DEF) {                                        \
+      if (fb_.open(p, m | (DEF))) clear(); else setstate(failbit);                                \
+    }                                                                                             \
+    void open(const string& p, ios_base::openmode m = DEF) { open(p.c_str(), m); }                \
+    template <__lk_pathlike P> void open(const P& p, ios_base::openmode m = DEF) { open(p.c_str(), m); } \
+    void close() { if (!fb_.close()) setstate(failbit); }                                         \
+  private:                                                                                        \
+    filebuf fb_;                                                                                  \
+  };
+
+// The forced mode bits follow the standard: ifstream adds in, ofstream adds out;
+// fstream's default is in|out and nothing is forced.
+__LK_FILESTREAM(ifstream, istream, ios_base::in)
+__LK_FILESTREAM(ofstream, ostream, ios_base::out)
+#undef __LK_FILESTREAM
+
+class fstream : public iostream {
+public:
+  fstream() { init(&fb_); }
+  explicit fstream(const char* p, ios_base::openmode m = in | out) { init(&fb_); open(p, m); }
+  explicit fstream(const string& p, ios_base::openmode m = in | out) { init(&fb_); open(p, m); }
+  template <__lk_pathlike P>
+  explicit fstream(const P& p, ios_base::openmode m = in | out) { init(&fb_); open(p.c_str(), m); }
+  fstream(const fstream&) = delete;
+  fstream& operator=(const fstream&) = delete;
+  filebuf* rdbuf() const noexcept { return const_cast<filebuf*>(&fb_); }
+  bool is_open() const noexcept { return fb_.is_open(); }
+  void open(const char* p, ios_base::openmode m = in | out) { if (fb_.open(p, m)) clear(); else setstate(failbit); }
+  void open(const string& p, ios_base::openmode m = in | out) { open(p.c_str(), m); }
+  template <__lk_pathlike P> void open(const P& p, ios_base::openmode m = in | out) { open(p.c_str(), m); }
+  void close() { if (!fb_.close()) setstate(failbit); }
+private:
+  filebuf fb_;
+};
+
+}  // namespace std

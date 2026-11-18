@@ -8,9 +8,12 @@
  * src/lithoabi/std_exceptions.cc), plus the nothrow tag type the
  * classes' header conventionally travels with.
  *
- * operator new / operator delete are NOT declared here: they are
- * stdlib functions over LithoLibC malloc, defined by the stdlib
- * piece in src/libc/new_delete.cc. The one widening that file
+ * S2 (2026-11-16, in-house std library, JD 12:11 ET Option A): the
+ * operator new / delete family, set/get_new_handler, launder,
+ * destroying_delete_t and the interference sizes are now declared
+ * here too. They are still DEFINED by src/libc/new_delete.cc over
+ * LithoLibC malloc (placement new included, out of line, because
+ * LithoAbi links _ZnwmPv / _ZnamPv by name). The one widening that file
  * forced (toolchain piece, docs/TOOLCHAIN.md): std::align_val_t,
  * the C++17 aligned-allocation tag its definitions name, is
  * declared below. The new_handler VARIABLE the ABI keeps
@@ -48,6 +51,50 @@ struct nothrow_t {
 };
 extern const nothrow_t nothrow;
 
+struct destroying_delete_t {
+  explicit destroying_delete_t() = default;
+};
+inline constexpr destroying_delete_t destroying_delete{};
+
+new_handler set_new_handler(new_handler h) noexcept;
+new_handler get_new_handler() noexcept;
+
+template <class T>
+[[nodiscard]] constexpr T* launder(T* p) noexcept {
+  return __builtin_launder(p);
+}
+
+/* wasm32 engines cache in 64-byte lines on every target we ship
+ * (the engine already pads with alignas(64)). */
+inline constexpr size_t hardware_destructive_interference_size = 64;
+inline constexpr size_t hardware_constructive_interference_size = 64;
+
 } /* namespace std */
+
+/* The replaceable and placement forms (defined in new_delete.cc). */
+[[nodiscard]] void* operator new(std::size_t size);
+[[nodiscard]] void* operator new[](std::size_t size);
+[[nodiscard]] void* operator new(std::size_t size, const std::nothrow_t&) noexcept;
+[[nodiscard]] void* operator new[](std::size_t size, const std::nothrow_t&) noexcept;
+[[nodiscard]] void* operator new(std::size_t size, std::align_val_t alignment);
+[[nodiscard]] void* operator new[](std::size_t size, std::align_val_t alignment);
+[[nodiscard]] void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept;
+[[nodiscard]] void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept;
+[[nodiscard]] void* operator new(std::size_t, void* place) noexcept;
+[[nodiscard]] void* operator new[](std::size_t, void* place) noexcept;
+void operator delete(void* p) noexcept;
+void operator delete[](void* p) noexcept;
+void operator delete(void* p, std::size_t) noexcept;
+void operator delete[](void* p, std::size_t) noexcept;
+void operator delete(void* p, std::align_val_t) noexcept;
+void operator delete[](void* p, std::align_val_t) noexcept;
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept;
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept;
+void operator delete(void* p, const std::nothrow_t&) noexcept;
+void operator delete[](void* p, const std::nothrow_t&) noexcept;
+void operator delete(void* p, std::align_val_t, const std::nothrow_t&) noexcept;
+void operator delete[](void* p, std::align_val_t, const std::nothrow_t&) noexcept;
+inline void operator delete(void*, void*) noexcept {}
+inline void operator delete[](void*, void*) noexcept {}
 
 #endif /* LITHOABI_NEW_H */

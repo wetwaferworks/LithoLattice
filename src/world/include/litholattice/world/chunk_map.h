@@ -7,8 +7,13 @@
 #include "litholattice/world/column_table.h"  // render pipeline M5
 #include "litholattice/world/column_edge_shell.h"  // Q12 far demote
 #include "litholattice/core/memory_ledger.h"  // Gate 0 readout
+#include "litholattice/world/column_directory.h"  // t46u item 6b-2b
 
 namespace litholattice {
+
+/// t46u item 6b-2b: true on the tick side (the sim tick thread). Its column lookups read the directory
+/// it adopted at its last phase boundary instead of the owner's live map.
+inline thread_local bool tl_lkTickSide = false;
 
 // Chunk map of one dimension: hash of chunk coords -> column. Single owner thread at a
 // time (main while loading, the sim thread while the dimension is active).
@@ -34,13 +39,65 @@ class ChunkMap {
   void setEditListener(std::function<void(int cx, int cz)> fn) { editListener_ = std::move(fn); }
 
   ChunkColumn* column(int cx, int cz) {
-    auto it = columns_.find(ChunkKey::make(cx, cz));
+    const uint64_t k = ChunkKey::make(cx, cz);
+    if (tl_lkTickSide && tickDir_) return tickDir_->find(k);  // t46u 6b-2b: the adopted directory
+    auto it = columns_.find(k);
     return it == columns_.end() ? nullptr : it->second.get();
   }
   const ChunkColumn* column(int cx, int cz) const {
-    auto it = columns_.find(ChunkKey::make(cx, cz));
+    const uint64_t k = ChunkKey::make(cx, cz);
+    if (tl_lkTickSide && tickDir_) return tickDir_->find(k);  // t46u 6b-2b: the adopted directory
+    auto it = columns_.find(k);
     return it == columns_.end() ? nullptr : it->second.get();
   }
+
+  // ---- t46u item 6b-2b (JD 2026-11-16): published column directory ----
+  // The structure owner (the game thread while the sim runs) publishes the column set after it changes
+  // it; the tick side adopts at each phase boundary where it takes the world, and its column() lookups
+  // read that directory. Removed columns are retired until the tick side has acknowledged a directory
+  // without them. In this step the owner still changes structure only under the world gate and the
+  // tick side adopts each time it takes the gate, so what the tick side sees is exactly the live map.
+  /// Structure owner: publishes the column set if it changed since the last publish (no-op otherwise),
+  /// then frees retired columns the tick side can no longer reach. 6b-2b: call it while still holding
+  /// the world (before the hold is released), so the tick side's next adoption matches the live map.
+  void publishDirectory() {
+    dir_->reclaim();
+    if (dir_->publishedSeq() != 0 && publishedGen_ == structureGen_) return;
+    std::unordered_map<uint64_t, ChunkColumn*> m;
+    m.reserve(columns_.size());
+    for (auto& [k, c] : columns_) m.emplace(k, c.get());
+    dir_->publish(std::move(m), structureGen_);
+    publishedGen_ = structureGen_;
+  }
+  /// Tick side: adopts the newest directory whose generation matches the live structure.
+  /// A publish that has not caught up is left unused (counted: staleAdoptions). JD 2026-11-17 r6:
+  /// do not drop the last adopted directory and fall back to the live map — the owner may be
+  /// changing structure without the world gate, so the tick side keeps the last consistent view
+  /// until a matching publish arrives.
+  void adoptDirectory() {
+    const cColumnDirectory::Dir* d = dir_->adopt();
+    if (d && d->gen == structureGen_) { tickDir_ = d; return; }
+    if (d) dir_->noteStale();
+  }
+  /// After the tick thread is joined (the stopper owns everything): forget the adopted view and free
+  /// every retired column.
+  void tickSideStopped() {
+    tickDir_ = nullptr;
+    dir_->setConsumerLive(false);
+    dir_->reclaimAllStopped();
+    if (cow_) cow_->handOver();  // JD 2026-11-17: the joined tick thread's CoW table ownership comes back
+  }
+  /// Structure owner, before the tick thread starts: publish and mark the tick side live.
+  void tickSideStarting() {
+    publishDirectory();
+    dir_->setConsumerLive(true);
+    if (cow_) cow_->handOver();  // JD 2026-11-17: main -> tick thread; it claims the CoW table on first use
+  }
+  /// True when everything the owner removed before its last publish is unreachable from the tick side
+  /// (deferred frees of extracted / demoted columns wait for this).
+  bool tickSideCaughtUp() const { return dir_->consumerCaughtUp(); }
+  uint64_t directoryStaleAdoptions() const { return dir_->staleAdoptions(); }
+  size_t directoryRetired() const { return dir_->retired(); }
   const SubChunk* sub(int cx, int sy, int cz) const {
     if (sy < 0 || sy >= kSubChunks) return nullptr;
     const ChunkColumn* c = column(cx, cz);
@@ -128,19 +185,20 @@ class ChunkMap {
     if (cow_) cow_->noteStale(x >> 4, y >> 4, z >> 4);  // Archie review H7: snapshot carries cellText
     return true;
   }
-  /// Q12 far demote: replaces the column's sub-chunks with its 1-cell edge shell (plus the
-  /// Voxy-#1 far LOD when withLod) and hands the freed body back for deferred free. Null when
+  /// Q12 far demote: replaces the column's sub-chunks with its 1-cell edge shell and hands
+  /// the freed body back for deferred free. Null when
   /// not resident or already demoted. Owner thread only; the caller owns eligibility.
-  std::unique_ptr<ChunkColumn> demote(int cx, int cz, bool withLod) {
+  std::unique_ptr<ChunkColumn> demote(int cx, int cz) {
     ChunkColumn* c = column(cx, cz);
     if (!c || c->edgeShell) return nullptr;
-    c->edgeShell = cColumnEdgeShell::build(*c, registry_, withLod);
+    c->edgeShell = cColumnEdgeShell::build(*c);
     auto body = std::make_unique<ChunkColumn>();
     body->cx = cx;
     body->cz = cz;
     body->subs.swap(c->subs);
     if (cow_) cow_->drop(cx, cz);  // republished (whole, from the shell) on its next pin
     ++structureGen_;               // sub pointers changed (random-tick cache, Archie C5)
+    if (tl_lkTickSide) tickDir_ = nullptr;  // t46u 6b-2b: a tick-side change: read the live map until the next adoption
     return body;
   }
   void insert(std::unique_ptr<ChunkColumn> col) {
@@ -148,8 +206,10 @@ class ChunkMap {
     cow_->drop(cx, cz);  // M5: a replaced column is republished on its next pin
     auto& slot = columns_[ChunkKey::make(cx, cz)];
     if (!slot) cMemoryLedger::add(cMemoryLedger::kChunkColumns, 1);  // Gate 0 (replace keeps the count)
+    else dir_->retire(std::move(slot));  // t46u 6b-2b: the replaced column lives until the tick side has let go of it
     slot = std::move(col);
     ++structureGen_;  // Archie review C5
+    if (tl_lkTickSide) tickDir_ = nullptr;  // t46u 6b-2b (see demote)
     if (editListener_) editListener_(cx, cz);
   }
   /// Column eviction (A2 / B-M1): removes the column at (cx, cz) and frees
@@ -158,8 +218,11 @@ class ChunkMap {
   /// cSignalSim::unscanColumn, mesh retire, streamer cleanup) -- this is
   /// only the map operation. Owner thread only, like insert().
   bool erase(int cx, int cz) {
-    const bool gone = columns_.erase(ChunkKey::make(cx, cz)) != 0;
+    const auto it = columns_.find(ChunkKey::make(cx, cz));
+    const bool gone = it != columns_.end();
+    if (gone) { dir_->retire(std::move(it->second)); columns_.erase(it); }  // t46u 6b-2b: retired, not freed
     if (gone) { ++structureGen_; cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1); }  // Archie review C5; Gate 0
+    if (gone && tl_lkTickSide) tickDir_ = nullptr;  // t46u 6b-2b (see demote)
     cow_->drop(cx, cz);  // M5
     if (gone && editListener_) editListener_(cx, cz);
     return gone;
@@ -173,6 +236,7 @@ class ChunkMap {
     std::unique_ptr<ChunkColumn> col = std::move(it->second);
     columns_.erase(it);
     ++structureGen_;  // Archie review C5
+    if (tl_lkTickSide) tickDir_ = nullptr;  // t46u 6b-2b (see demote). The caller must not free it before tickSideCaughtUp()
     cMemoryLedger::sub(cMemoryLedger::kChunkColumns, 1);  // Gate 0
     cow_->drop(cx, cz);  // M5
     if (editListener_) editListener_(cx, cz);
@@ -182,7 +246,7 @@ class ChunkMap {
   /// a holder of raw ChunkColumn pointers can tell the column set changed
   /// even when the count did not (evict K + insert K, reload, replace).
   uint64_t structureGen() const { return structureGen_; }
-  bool contains(int cx, int cz) const { return columns_.find(ChunkKey::make(cx, cz)) != columns_.end(); }
+  bool contains(int cx, int cz) const { return column(cx, cz) != nullptr; }  // t46u 6b-2b: same view as column()
   auto& columns() { return columns_; }
   const auto& columns() const { return columns_; }
   /// Render pipeline M5: published copy-on-write column snapshots for mesh workers
@@ -200,6 +264,10 @@ class ChunkMap {
   const cBlockReg* registry_ = nullptr;
   std::function<void(int cx, int cz)> editListener_;
   std::unique_ptr<ColumnTable> cow_ = std::make_unique<ColumnTable>();  // M5
+  // t46u item 6b-2b. Held by pointer so ChunkMap stays movable (the directory holds atomics).
+  std::unique_ptr<cColumnDirectory> dir_ = std::make_unique<cColumnDirectory>();
+  uint64_t publishedGen_ = 0;                          // owner: structureGen_ at the last publish
+  const cColumnDirectory::Dir* tickDir_ = nullptr;     // tick side: the adopted directory (null = live map)
 };
 
 }  // namespace litholattice

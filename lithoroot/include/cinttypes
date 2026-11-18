@@ -1,0 +1,16 @@
+/* cinttypes ... LithoRoot std L2 (S2): <inttypes.h> lifted into std. */
+#ifndef LITHOROOT_CINTTYPES
+#define LITHOROOT_CINTTYPES
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstdint>
+#include <inttypes.h>
+namespace std {
+using ::imaxdiv_t;
+using ::imaxabs;
+using ::imaxdiv;
+using ::strtoimax;
+using ::strtoumax;
+}  // namespace std
+#endif

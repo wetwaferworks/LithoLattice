@@ -1,0 +1,417 @@
+/* string ... LithoRoot std L5 (S3, 2026-11-16): basic_string with a small-
+ * string buffer (15 chars for char on wasm32), the operator+ family,
+ * comparisons, hash (the string_view FNV-1a), to_string and sto*.
+ *
+ * Layout: data pointer, size, then a 16-byte union of {capacity} and the
+ * inline buffer; the data pointer aims at the buffer while small, so copy
+ * and move fix it up. Allocations go through Alloc (std::allocator: plain
+ * ::operator new). Growth doubles. to_string(float/double) is LithoLibC
+ * snprintf("%f"), the standard's definition. */
+#ifndef LITHOROOT_STRING
+#define LITHOROOT_STRING
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <charconv>
+#include <compare>
+#include <cstdio>
+#include <cstdlib>
+#include <cerrno>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template <class C, class Tr = char_traits<C>, class A = allocator<C>>
+class basic_string {
+ public:
+  using traits_type = Tr;
+  using value_type = C;
+  using allocator_type = A;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reference = C&;
+  using const_reference = const C&;
+  using pointer = C*;
+  using const_pointer = const C*;
+  using iterator = C*;
+  using const_iterator = const C*;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+  static constexpr size_type npos = size_type(-1);
+  using sv_type = basic_string_view<C, Tr>;
+
+ private:
+  static constexpr size_type sso_cap = 16 / sizeof(C) - 1;
+  template <class T> static constexpr bool sv_like = is_convertible_v<const T&, sv_type> && !is_convertible_v<const T&, const C*>;
+  C* p_;
+  size_type n_ = 0;
+  union { size_type cap_; C buf_[16 / sizeof(C)]; };
+  [[no_unique_address]] A a_;
+
+  bool small() const noexcept { return p_ == buf_; }
+  void set_small() noexcept { p_ = buf_; }
+  C* alloc(size_type cap) { return allocator_traits<A>::allocate(a_, cap + 1); }
+  void dealloc() noexcept { if (!small()) allocator_traits<A>::deallocate(a_, p_, cap_ + 1); }
+  /* Make room for `want` chars keeping the first `keep`; capacity at least doubles. */
+  void grow(size_type want, size_type keep) {
+    if (want > max_size()) __lk::throw_length_error("basic_string: too long");
+    const size_type old = capacity();
+    size_type cap = old * 2 > want ? old * 2 : want;
+    if (cap > max_size()) cap = max_size();
+    C* np = alloc(cap);
+    Tr::copy(np, p_, keep);
+    dealloc();
+    p_ = np; cap_ = cap;
+  }
+  void init(const C* s, size_type n) {
+    set_small();
+    if (n > sso_cap) { if (n > max_size()) __lk::throw_length_error("basic_string: too long"); p_ = alloc(n); cap_ = n; }
+    Tr::copy(p_, s, n);
+    n_ = n; p_[n] = C();
+  }
+  void init_fill(size_type n, C c) {
+    set_small();
+    if (n > sso_cap) { if (n > max_size()) __lk::throw_length_error("basic_string: too long"); p_ = alloc(n); cap_ = n; }
+    Tr::assign(p_, n, c);
+    n_ = n; p_[n] = C();
+  }
+  void steal(basic_string& o) noexcept {
+    if (o.small()) { set_small(); Tr::copy(buf_, o.buf_, o.n_ + 1); }
+    else { p_ = o.p_; cap_ = o.cap_; }
+    n_ = o.n_;
+    o.set_small(); o.n_ = 0; o.buf_[0] = C();
+  }
+  size_type clamp_n(size_type pos, size_type n) const noexcept { return n < n_ - pos ? n : n_ - pos; }
+  void check_pos(size_type pos, const char* w) const { if (pos > n_) __lk::throw_out_of_range(w); }
+
+ public:
+  basic_string() noexcept : p_(buf_) { buf_[0] = C(); }
+  explicit basic_string(const A& a) noexcept : p_(buf_), a_(a) { buf_[0] = C(); }
+  basic_string(const C* s, const A& a = A()) : a_(a) { init(s, Tr::length(s)); }
+  basic_string(const C* s, size_type n, const A& a = A()) : a_(a) { init(s, n); }
+  basic_string(size_type n, C c, const A& a = A()) : a_(a) { init_fill(n, c); }
+  basic_string(nullptr_t) = delete;
+  basic_string(const basic_string& o) : a_(allocator_traits<A>::select_on_container_copy_construction(o.a_)) { init(o.p_, o.n_); }
+  basic_string(const basic_string& o, const A& a) : a_(a) { init(o.p_, o.n_); }
+  basic_string(basic_string&& o) noexcept : a_(std::move(o.a_)) { steal(o); }
+  basic_string(const basic_string& o, size_type pos, const A& a = A()) : a_(a) { o.check_pos(pos, "basic_string"); init(o.p_ + pos, o.n_ - pos); }
+  basic_string(const basic_string& o, size_type pos, size_type n, const A& a = A()) : a_(a) { o.check_pos(pos, "basic_string"); init(o.p_ + pos, o.clamp_n(pos, n)); }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  basic_string(It f, It l, const A& a = A()) : p_(buf_), a_(a) {
+    buf_[0] = C();
+    if constexpr (is_base_of_v<random_access_iterator_tag, typename iterator_traits<It>::iterator_category>) {
+      reserve(size_type(l - f));
+    }
+    for (; f != l; ++f) push_back(*f);
+  }
+  basic_string(initializer_list<C> il, const A& a = A()) : a_(a) { init(il.begin(), il.size()); }
+  template <class T, class = enable_if_t<sv_like<T>>> explicit basic_string(const T& t, const A& a = A()) : a_(a) { sv_type v = t; init(v.data(), v.size()); }
+  template <class T, class = enable_if_t<is_convertible_v<const T&, sv_type>>>
+  basic_string(const T& t, size_type pos, size_type n, const A& a = A()) : a_(a) { sv_type v = sv_type(t).substr(pos, n); init(v.data(), v.size()); }
+  ~basic_string() { dealloc(); }
+
+  basic_string& operator=(const basic_string& o) { if (this != &o) assign(o.p_, o.n_); return *this; }
+  basic_string& operator=(basic_string&& o) noexcept { if (this != &o) { dealloc(); steal(o); } return *this; }
+  basic_string& operator=(const C* s) { return assign(s); }
+  basic_string& operator=(C c) { return assign(1, c); }
+  basic_string& operator=(initializer_list<C> il) { return assign(il.begin(), il.size()); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& operator=(const T& t) { sv_type v = t; return assign(v.data(), v.size()); }
+  basic_string& operator=(nullptr_t) = delete;
+
+  basic_string& assign(const C* s, size_type n) {
+    if (n > capacity()) {  // s may alias *this: copy first, then free
+      C* np = alloc(n);
+      Tr::copy(np, s, n);
+      dealloc();
+      p_ = np; cap_ = n;
+    } else {
+      Tr::move(p_, s, n);
+    }
+    n_ = n; p_[n] = C();
+    return *this;
+  }
+  basic_string& assign(const C* s) { return assign(s, Tr::length(s)); }
+  basic_string& assign(const basic_string& o) { return assign(o.p_, o.n_); }
+  basic_string& assign(basic_string&& o) noexcept { return *this = std::move(o); }
+  basic_string& assign(const basic_string& o, size_type pos, size_type n = npos) { o.check_pos(pos, "basic_string::assign"); return assign(o.p_ + pos, o.clamp_n(pos, n)); }
+  basic_string& assign(size_type n, C c) { clear(); return append(n, c); }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  basic_string& assign(It f, It l) { basic_string t(f, l); return *this = std::move(t); }
+  basic_string& assign(initializer_list<C> il) { return assign(il.begin(), il.size()); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& assign(const T& t) { sv_type v = t; return assign(v.data(), v.size()); }
+
+  /* ---- access ---- */
+  reference operator[](size_type i) noexcept { return p_[i]; }
+  const_reference operator[](size_type i) const noexcept { return p_[i]; }
+  reference at(size_type i) { if (i >= n_) __lk::throw_out_of_range("basic_string::at"); return p_[i]; }
+  const_reference at(size_type i) const { if (i >= n_) __lk::throw_out_of_range("basic_string::at"); return p_[i]; }
+  reference front() noexcept { return p_[0]; }
+  const_reference front() const noexcept { return p_[0]; }
+  reference back() noexcept { return p_[n_ - 1]; }
+  const_reference back() const noexcept { return p_[n_ - 1]; }
+  const C* data() const noexcept { return p_; }
+  C* data() noexcept { return p_; }
+  const C* c_str() const noexcept { return p_; }
+  operator sv_type() const noexcept { return sv_type(p_, n_); }
+  iterator begin() noexcept { return p_; }
+  const_iterator begin() const noexcept { return p_; }
+  iterator end() noexcept { return p_ + n_; }
+  const_iterator end() const noexcept { return p_ + n_; }
+  const_iterator cbegin() const noexcept { return p_; }
+  const_iterator cend() const noexcept { return p_ + n_; }
+  reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+  const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+  reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+  const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+  allocator_type get_allocator() const noexcept { return a_; }
+
+  /* ---- capacity ---- */
+  [[nodiscard]] bool empty() const noexcept { return n_ == 0; }
+  size_type size() const noexcept { return n_; }
+  size_type length() const noexcept { return n_; }
+  size_type max_size() const noexcept { return (size_type(-1) / 2) / sizeof(C) - 1; }
+  size_type capacity() const noexcept { return small() ? sso_cap : cap_; }
+  void reserve(size_type cap) { if (cap > capacity()) { const size_type n = n_; grow(cap, n + 1); } }
+  void shrink_to_fit() {
+    if (small() || cap_ == n_) return;
+    if (n_ <= sso_cap) { C* old = p_; size_type oc = cap_; set_small(); Tr::copy(buf_, old, n_ + 1); allocator_traits<A>::deallocate(a_, old, oc + 1); return; }
+    C* np = alloc(n_); Tr::copy(np, p_, n_ + 1); dealloc(); p_ = np; cap_ = n_;
+  }
+  void clear() noexcept { n_ = 0; p_[0] = C(); }
+  void resize(size_type n, C c) { if (n > n_) append(n - n_, c); else { n_ = n; p_[n] = C(); } }
+  void resize(size_type n) { resize(n, C()); }
+  template <class Op> void resize_and_overwrite(size_type n, Op op) {
+    reserve(n);
+    const size_type r = size_type(std::move(op)(p_, n));
+    n_ = r; p_[r] = C();
+  }
+
+  /* ---- modifiers ---- */
+  basic_string& append(const C* s, size_type n) {
+    if (n == 0) return *this;
+    if (n > max_size() - n_) __lk::throw_length_error("basic_string::append");
+    if (n_ + n > capacity()) {
+      if (s >= p_ && s <= p_ + n_) {  // appending part of ourselves: copy before the buffer moves
+        basic_string t(s, n);
+        return append(t.p_, t.n_);
+      }
+      grow(n_ + n, n_);
+    }
+    Tr::move(p_ + n_, s, n);
+    n_ += n; p_[n_] = C();
+    return *this;
+  }
+  basic_string& append(const C* s) { return append(s, Tr::length(s)); }
+  basic_string& append(const basic_string& o) { return append(o.p_, o.n_); }
+  basic_string& append(const basic_string& o, size_type pos, size_type n = npos) { o.check_pos(pos, "basic_string::append"); return append(o.p_ + pos, o.clamp_n(pos, n)); }
+  basic_string& append(size_type n, C c) {
+    if (n > max_size() - n_) __lk::throw_length_error("basic_string::append");
+    if (n_ + n > capacity()) grow(n_ + n, n_);
+    Tr::assign(p_ + n_, n, c);
+    n_ += n; p_[n_] = C();
+    return *this;
+  }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  basic_string& append(It f, It l) { basic_string t(f, l); return append(t.p_, t.n_); }
+  basic_string& append(initializer_list<C> il) { return append(il.begin(), il.size()); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& append(const T& t) { sv_type v = t; return append(v.data(), v.size()); }
+  basic_string& operator+=(const basic_string& o) { return append(o); }
+  basic_string& operator+=(const C* s) { return append(s); }
+  basic_string& operator+=(C c) { push_back(c); return *this; }
+  basic_string& operator+=(initializer_list<C> il) { return append(il); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& operator+=(const T& t) { return append(t); }
+  void push_back(C c) {
+    if (n_ == capacity()) grow(n_ + 1, n_);
+    p_[n_++] = c; p_[n_] = C();
+  }
+  void pop_back() noexcept { p_[--n_] = C(); }
+
+  basic_string& insert(size_type pos, const C* s, size_type n) { return replace(pos, 0, s, n); }
+  basic_string& insert(size_type pos, const C* s) { return insert(pos, s, Tr::length(s)); }
+  basic_string& insert(size_type pos, const basic_string& o) { return insert(pos, o.p_, o.n_); }
+  basic_string& insert(size_type pos, size_type n, C c) { check_pos(pos, "basic_string::insert"); basic_string t(n, c); return insert(pos, t.p_, t.n_); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& insert(size_type pos, const T& t) { sv_type v = t; return insert(pos, v.data(), v.size()); }
+  iterator insert(const_iterator it, C c) { const size_type pos = size_type(it - p_); insert(pos, &c, 1); return p_ + pos; }
+  iterator insert(const_iterator it, size_type n, C c) { const size_type pos = size_type(it - p_); insert(pos, n, c); return p_ + pos; }
+  template <class It, class = enable_if_t<!is_integral_v<It>, typename iterator_traits<It>::iterator_category>>
+  iterator insert(const_iterator it, It f, It l) { const size_type pos = size_type(it - p_); basic_string t(f, l); insert(pos, t.p_, t.n_); return p_ + pos; }
+  iterator insert(const_iterator it, initializer_list<C> il) { const size_type pos = size_type(it - p_); insert(pos, il.begin(), il.size()); return p_ + pos; }
+
+  basic_string& erase(size_type pos = 0, size_type n = npos) {
+    check_pos(pos, "basic_string::erase");
+    n = clamp_n(pos, n);
+    Tr::move(p_ + pos, p_ + pos + n, n_ - pos - n + 1);
+    n_ -= n;
+    return *this;
+  }
+  iterator erase(const_iterator it) { const size_type pos = size_type(it - p_); erase(pos, 1); return p_ + pos; }
+  iterator erase(const_iterator f, const_iterator l) { const size_type pos = size_type(f - p_); erase(pos, size_type(l - f)); return p_ + pos; }
+
+  basic_string& replace(size_type pos, size_type n1, const C* s, size_type n2) {
+    check_pos(pos, "basic_string::replace");
+    n1 = clamp_n(pos, n1);
+    if (n2 > n1 && n2 - n1 > max_size() - n_) __lk::throw_length_error("basic_string::replace");
+    const size_type nn = n_ - n1 + n2;
+    if (nn > capacity() || (s >= p_ && s <= p_ + n_)) {  // build fresh: simple and alias-safe
+      basic_string t;
+      t.reserve(nn);
+      t.append(p_, pos).append(s, n2).append(p_ + pos + n1, n_ - pos - n1);
+      return *this = std::move(t);
+    }
+    Tr::move(p_ + pos + n2, p_ + pos + n1, n_ - pos - n1 + 1);
+    Tr::copy(p_ + pos, s, n2);
+    n_ = nn;
+    return *this;
+  }
+  basic_string& replace(size_type pos, size_type n, const C* s) { return replace(pos, n, s, Tr::length(s)); }
+  basic_string& replace(size_type pos, size_type n, const basic_string& o) { return replace(pos, n, o.p_, o.n_); }
+  basic_string& replace(size_type pos, size_type n, size_type n2, C c) { basic_string t(n2, c); return replace(pos, n, t.p_, t.n_); }
+  template <class T, class = enable_if_t<sv_like<T>>> basic_string& replace(size_type pos, size_type n, const T& t) { sv_type v = t; return replace(pos, n, v.data(), v.size()); }
+  basic_string& replace(const_iterator f, const_iterator l, const basic_string& o) { return replace(size_type(f - p_), size_type(l - f), o.p_, o.n_); }
+  basic_string& replace(const_iterator f, const_iterator l, const C* s) { return replace(size_type(f - p_), size_type(l - f), s); }
+  basic_string& replace(const_iterator f, const_iterator l, const C* s, size_type n) { return replace(size_type(f - p_), size_type(l - f), s, n); }
+
+  size_type copy(C* s, size_type n, size_type pos = 0) const { return sv_type(*this).copy(s, n, pos); }
+  void swap(basic_string& o) noexcept {
+    if (this == &o) return;
+    basic_string t(std::move(o));
+    o.steal(*this);
+    steal(t);
+  }
+  basic_string substr(size_type pos = 0, size_type n = npos) const { return basic_string(*this, pos, n); }
+
+  /* ---- search and compare: all through string_view ---- */
+#define LR_FIND(name, dflt)                                                                                         \
+  size_type name(const basic_string& o, size_type pos = dflt) const noexcept { return sv_type(*this).name(sv_type(o), pos); } \
+  size_type name(const C* s, size_type pos, size_type n) const { return sv_type(*this).name(s, pos, n); }        \
+  size_type name(const C* s, size_type pos = dflt) const { return sv_type(*this).name(s, pos); }                 \
+  size_type name(C c, size_type pos = dflt) const noexcept { return sv_type(*this).name(c, pos); }               \
+  template <class T, class = enable_if_t<sv_like<T>>> size_type name(const T& t, size_type pos = dflt) const { return sv_type(*this).name(sv_type(t), pos); }
+  LR_FIND(find, 0) LR_FIND(rfind, npos) LR_FIND(find_first_of, 0) LR_FIND(find_last_of, npos)
+  LR_FIND(find_first_not_of, 0) LR_FIND(find_last_not_of, npos)
+#undef LR_FIND
+  int compare(const basic_string& o) const noexcept { return sv_type(*this).compare(sv_type(o)); }
+  int compare(const C* s) const { return sv_type(*this).compare(s); }
+  int compare(size_type p, size_type n, const basic_string& o) const { return sv_type(*this).compare(p, n, sv_type(o)); }
+  int compare(size_type p, size_type n, const C* s) const { return sv_type(*this).compare(p, n, s); }
+  int compare(size_type p1, size_type n1, const basic_string& o, size_type p2, size_type n2 = npos) const { return sv_type(*this).compare(p1, n1, sv_type(o), p2, n2); }
+  template <class T, class = enable_if_t<sv_like<T>>> int compare(const T& t) const { return sv_type(*this).compare(sv_type(t)); }
+  template <class T, class = enable_if_t<sv_like<T>>> int compare(size_type p, size_type n, const T& t) const { return sv_type(*this).compare(p, n, sv_type(t)); }
+  template <class T, class = enable_if_t<sv_like<T>>> int compare(size_type p1, size_type n1, const T& t, size_type p2, size_type n2 = npos) const { return sv_type(*this).compare(p1, n1, sv_type(t), p2, n2); }
+  bool starts_with(sv_type v) const noexcept { return sv_type(*this).starts_with(v); }
+  bool starts_with(C c) const noexcept { return sv_type(*this).starts_with(c); }
+  bool starts_with(const C* s) const { return sv_type(*this).starts_with(s); }
+  bool ends_with(sv_type v) const noexcept { return sv_type(*this).ends_with(v); }
+  bool ends_with(C c) const noexcept { return sv_type(*this).ends_with(c); }
+  bool ends_with(const C* s) const { return sv_type(*this).ends_with(s); }
+  bool contains(sv_type v) const noexcept { return sv_type(*this).contains(v); }
+  bool contains(C c) const noexcept { return sv_type(*this).contains(c); }
+  bool contains(const C* s) const { return sv_type(*this).contains(s); }
+};
+
+/* operator+ */
+template <class C, class T, class A> basic_string<C, T, A> operator+(const basic_string<C, T, A>& a, const basic_string<C, T, A>& b) { basic_string<C, T, A> r; r.reserve(a.size() + b.size()); r.append(a).append(b); return r; }
+template <class C, class T, class A> basic_string<C, T, A> operator+(basic_string<C, T, A>&& a, const basic_string<C, T, A>& b) { return std::move(a.append(b)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(const basic_string<C, T, A>& a, basic_string<C, T, A>&& b) { return std::move(b.insert(0, a)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(basic_string<C, T, A>&& a, basic_string<C, T, A>&& b) { return std::move(a.append(b)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(const C* a, const basic_string<C, T, A>& b) { basic_string<C, T, A> r(a); r.append(b); return r; }
+template <class C, class T, class A> basic_string<C, T, A> operator+(const C* a, basic_string<C, T, A>&& b) { return std::move(b.insert(0, a)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(C a, const basic_string<C, T, A>& b) { basic_string<C, T, A> r(1, a); r.append(b); return r; }
+template <class C, class T, class A> basic_string<C, T, A> operator+(C a, basic_string<C, T, A>&& b) { return std::move(b.insert(size_t(0), size_t(1), a)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(const basic_string<C, T, A>& a, const C* b) { basic_string<C, T, A> r(a); r.append(b); return r; }
+template <class C, class T, class A> basic_string<C, T, A> operator+(basic_string<C, T, A>&& a, const C* b) { return std::move(a.append(b)); }
+template <class C, class T, class A> basic_string<C, T, A> operator+(const basic_string<C, T, A>& a, C b) { basic_string<C, T, A> r(a); r.push_back(b); return r; }
+template <class C, class T, class A> basic_string<C, T, A> operator+(basic_string<C, T, A>&& a, C b) { a.push_back(b); return std::move(a); }
+
+/* comparisons */
+template <class C, class T, class A> bool operator==(const basic_string<C, T, A>& a, const basic_string<C, T, A>& b) noexcept { return a.size() == b.size() && a.compare(b) == 0; }
+template <class C, class T, class A> bool operator==(const basic_string<C, T, A>& a, const C* b) { return a.compare(b) == 0; }
+template <class C, class T, class A> strong_ordering operator<=>(const basic_string<C, T, A>& a, const basic_string<C, T, A>& b) noexcept { return a.compare(b) <=> 0; }
+template <class C, class T, class A> strong_ordering operator<=>(const basic_string<C, T, A>& a, const C* b) { return a.compare(b) <=> 0; }
+template <class C, class T, class A> void swap(basic_string<C, T, A>& a, basic_string<C, T, A>& b) noexcept { a.swap(b); }
+template <class C, class T, class A, class U> constexpr typename basic_string<C, T, A>::size_type erase(basic_string<C, T, A>& s, const U& v) {
+  size_t w = 0, n = s.size();
+  for (size_t i = 0; i < n; ++i) if (!(s[i] == v)) s[w++] = s[i];
+  s.resize(w);
+  return n - w;
+}
+template <class C, class T, class A, class P> constexpr typename basic_string<C, T, A>::size_type erase_if(basic_string<C, T, A>& s, P p) {
+  size_t w = 0, n = s.size();
+  for (size_t i = 0; i < n; ++i) if (!p(s[i])) s[w++] = s[i];
+  s.resize(w);
+  return n - w;
+}
+
+using string = basic_string<char>;
+using u8string = basic_string<char8_t>;
+using u16string = basic_string<char16_t>;
+using u32string = basic_string<char32_t>;
+using wstring = basic_string<wchar_t>;
+
+template <class A> struct hash<basic_string<char, char_traits<char>, A>> {
+  size_t operator()(const basic_string<char, char_traits<char>, A>& s) const noexcept { return hash<string_view>()(string_view(s)); }
+};
+template <class A> struct hash<basic_string<char8_t, char_traits<char8_t>, A>> {
+  size_t operator()(const basic_string<char8_t, char_traits<char8_t>, A>& s) const noexcept { return hash<u8string_view>()(u8string_view(s)); }
+};
+template <class A> struct hash<basic_string<char32_t, char_traits<char32_t>, A>> {
+  size_t operator()(const basic_string<char32_t, char_traits<char32_t>, A>& s) const noexcept { return hash<u32string_view>()(u32string_view(s)); }
+};
+
+/* ---- numeric conversions ---- */
+namespace __lk {
+template <class I> string to_string_int(I v) { char b[24]; auto r = std::to_chars(b, b + sizeof b, v); return string(b, size_t(r.ptr - b)); }
+inline string to_string_fp(double v) {
+  char b[352];  // "%f" of DBL_MAX is 309 digits + ".000000" + sign
+  const int n = std::snprintf(b, sizeof b, "%f", v);
+  return string(b, n > 0 ? size_t(n) : 0);
+}
+template <class R, class F> R sto(const char* name, const string& s, size_t* idx, F conv) {
+  const char* p = s.c_str();
+  char* end = nullptr;
+  const int saved = errno;
+  errno = 0;
+  auto v = conv(p, &end);
+  if (end == p) __lk::throw_invalid_argument(name);
+  if (errno == ERANGE) __lk::throw_out_of_range(name);
+  if (errno == 0) errno = saved;
+  if (idx) *idx = size_t(end - p);
+  return static_cast<R>(v);
+}
+}  // namespace __lk
+inline string to_string(int v) { return __lk::to_string_int(v); }
+inline string to_string(unsigned v) { return __lk::to_string_int(v); }
+inline string to_string(long v) { return __lk::to_string_int(v); }
+inline string to_string(unsigned long v) { return __lk::to_string_int(v); }
+inline string to_string(long long v) { return __lk::to_string_int(v); }
+inline string to_string(unsigned long long v) { return __lk::to_string_int(v); }
+inline string to_string(float v) { return __lk::to_string_fp(v); }
+inline string to_string(double v) { return __lk::to_string_fp(v); }
+inline long stol(const string& s, size_t* idx = nullptr, int base = 10) { return __lk::sto<long>("stol", s, idx, [base](const char* p, char** e) { return std::strtol(p, e, base); }); }
+inline unsigned long stoul(const string& s, size_t* idx = nullptr, int base = 10) { return __lk::sto<unsigned long>("stoul", s, idx, [base](const char* p, char** e) { return std::strtoul(p, e, base); }); }
+inline long long stoll(const string& s, size_t* idx = nullptr, int base = 10) { return __lk::sto<long long>("stoll", s, idx, [base](const char* p, char** e) { return std::strtoll(p, e, base); }); }
+inline unsigned long long stoull(const string& s, size_t* idx = nullptr, int base = 10) { return __lk::sto<unsigned long long>("stoull", s, idx, [base](const char* p, char** e) { return std::strtoull(p, e, base); }); }
+inline int stoi(const string& s, size_t* idx = nullptr, int base = 10) {
+  const long v = stol(s, idx, base);  // long is 32-bit on wasm32, same range as int
+  return int(v);
+}
+inline float stof(const string& s, size_t* idx = nullptr) { return __lk::sto<float>("stof", s, idx, [](const char* p, char** e) { return std::strtof(p, e); }); }
+inline double stod(const string& s, size_t* idx = nullptr) { return __lk::sto<double>("stod", s, idx, [](const char* p, char** e) { return std::strtod(p, e); }); }
+
+inline namespace literals {
+inline namespace string_literals {
+inline string operator""s(const char* s, size_t n) { return string(s, n); }
+inline u8string operator""s(const char8_t* s, size_t n) { return u8string(s, n); }
+inline u16string operator""s(const char16_t* s, size_t n) { return u16string(s, n); }
+inline u32string operator""s(const char32_t* s, size_t n) { return u32string(s, n); }
+}  // namespace string_literals
+}  // namespace literals
+
+}  // namespace std
+#endif

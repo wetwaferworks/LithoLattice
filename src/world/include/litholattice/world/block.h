@@ -3,9 +3,11 @@
 // materials). The engine knows exactly one block, kAir (id 0, always present); every other block,
 // its id, its game-specific role and its flags above kFirstGameFlag belong to the game.
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <atomic>
 #include "litholattice/core/atomic_gate.h"
+#include "litholattice/core/stable_slots.h"  // t46u item 5c: lock-free def tables
 #include <stdexcept>
 #include <cassert>
 #include <cstdint>
@@ -206,7 +208,7 @@ class cItemReg;
 /// ENFORCED, not just documented (review F-M3): in debug builds every
 /// mutator asserts it runs on the one thread that first mutated the
 /// registry (see noteMutatorThread()); in all builds the def vectors'
-/// mutation is serialized against def() readers via defMutex_. Read-only
+/// mutation is published to def() readers lock-free (t46u 5c: stable-slot tables). Read-only
 /// lookups (findBlock/findItem/stableIdOf/...) stay lock-free and are safe
 /// only once mutation has finished — the mod-init window rule.
 ///
@@ -307,6 +309,10 @@ class cContentReg {
   /// Bumped by every refreshStaged() that applies updates. Caches (mesher, UI
   /// icons) compare against their last-seen epoch to invalidate.
   uint64_t definitionEpoch() const { return epoch_.load(std::memory_order_acquire); }
+  /// t46u 5c: bumped by refreshStaged() BEFORE it swaps any definition (definitionEpoch()
+  /// moves after). A reader that saw a swapped def is guaranteed to see this move, so
+  /// comparing it before and after a pass proves the pass read one generation.
+  uint64_t definitionWriteGen() const { return defGen_.load(std::memory_order_acquire); }
 
   /// Cortana 2026-10-15 1335 - handshake-coupled meshing, stable copy
   /// (idea: JD; refinement: Cortana). While a scope is alive on a thread,
@@ -329,7 +335,7 @@ class cContentReg {
     const cContentReg* prevOwner_;
     const std::vector<BlockDef>* prevDefs_;
   };
-  size_t stagedUpdateCount() const { return staged_.size(); }
+  size_t stagedUpdateCount() const;
 
  private:
   struct Key {
@@ -386,17 +392,17 @@ class cContentReg {
   std::unordered_map<StableId, uint32_t> byStable_;                   // stable -> entries_ idx
   std::unordered_map<Key, uint32_t, KeyHash> byKey_;                  // (kind,id) -> entries_ idx
   std::unordered_map<Key, std::string, KeyHash> aliases_;             // (kind,oldId) -> newId
-  std::vector<BlockDef> blockDefs_;
+  cStableSlots<BlockDef> blockDefs_;  // t46u 5c: append-only, stable addresses, lock-free reads
   std::vector<uint32_t> blockEntryIdx_;  // BlockId -> entries_ idx
-  std::vector<ItemDef> itemDefs_;
+  cStableSlots<ItemDef> itemDefs_;
   std::vector<uint32_t> itemEntryIdx_;   // (ItemId-1) -> entries_ idx; id 0 = empty sentinel
   inline static const ItemDef kEmptyItem{};
   bool sealed_ = false;
-  // Hot-swap synchronization: blockDefs_ is read on mesh/UI/sim threads and
-  // written only by refreshStaged() (between ticks). Readers take a shared lock;
-  // refreshStaged() takes the unique lock. blockDef() returns BY VALUE so no
-  // caller can hold a reference across a refresh (torn reads were UB).
-  mutable litholattice::cAtomicGate defMutex_;  // PlayL: was shared_mutex
+  // Hot-swap synchronization (t46u 5c, replaces defMutex_): blockDefs_ is read on
+  // mesh/UI/sim threads with no lock. Growth appends immutable entries; refreshStaged()
+  // swaps entry pointers (old entries stay alive with the table). blockDef() still
+  // returns BY VALUE. defGen_ moves before a swap, epoch_ after it.
+  std::atomic<uint64_t> defGen_{0};
   std::atomic<uint64_t> epoch_ = 0;
   // Cortana 2026-10-15 1658: F-5 [ENGINE] process-unique id, so a registry rebuilt at
   // a freed address can never match a stale StableDefScope table. Never reused.
@@ -405,7 +411,22 @@ class cContentReg {
   // Cortana 2026-10-15 1335: StableDefScope's per-thread view (see above).
   inline static thread_local const cContentReg* tlStableOwner_ = nullptr;
   inline static thread_local const std::vector<BlockDef>* tlStableDefs_ = nullptr;
-  std::unordered_map<BlockId, BlockDef> staged_;  // BlockId -> pending replacement def
+  // t46u 5c: staged updates are a lock-free push-only stack (any thread stages,
+  // refreshStaged() takes the whole stack). Taken nodes stay alive in stagedOwned_
+  // so a concurrent stagedUpdateCount() walk never touches freed memory.
+  struct StageNode {
+    BlockId id;
+    BlockDef def;
+    StageNode* next;
+  };
+  struct StageStack {
+    std::atomic<StageNode*> head{nullptr};
+    ~StageStack() {
+      for (StageNode* n = head.load(std::memory_order_relaxed); n;) { StageNode* x = n->next; delete n; n = x; }
+    }
+  };
+  StageStack staged_;
+  std::vector<std::unique_ptr<StageNode>> stagedOwned_;  // refreshStaged() only
 };
 
 inline cContentReg::cContentReg() {
@@ -547,8 +568,8 @@ inline std::optional<BlockId> cContentReg::addBlockWithStableId(const BlockDef& 
   {
     // Serialize the def-vector growth against blockDef()'s shared-lock
     // readers (F-M3): the pair is what makes the by-value read sound.
-    litholattice::cGateGuard lock(defMutex_);
-    blockDefs_.push_back(def);
+    // t46u 5c: published lock-free (entry pointer, then count).
+    blockDefs_.push(def);
     blockEntryIdx_.push_back(static_cast<uint32_t>(entries_.size()) - 1);
   }
   return BlockId(local);
@@ -556,23 +577,31 @@ inline std::optional<BlockId> cContentReg::addBlockWithStableId(const BlockDef& 
 
 inline void cContentReg::reserveBlocks(size_t n) {
   noteMutatorThread();
-  blockDefs_.reserve(n);
-  blockEntryIdx_.reserve(n);
+  blockEntryIdx_.reserve(n);  // t46u 5c: the def table never reallocates
 }
 
 inline cContentReg::StableDefScope::StableDefScope(const cContentReg& r)
     : prevOwner_(tlStableOwner_), prevDefs_(tlStableDefs_) {
   if (prevOwner_ == &r) return;  // nested on the same registry: already stable
   if (prevOwner_) { tlStableOwner_ = nullptr; tlStableDefs_ = nullptr; return; }  // other registry: locked path
-  struct Table { const cContentReg* reg = nullptr; uint64_t id = 0; /* Cortana 2026-10-15 1658: F-5 */ uint64_t epoch = ~uint64_t(0); size_t n = 0; const void* data = nullptr; std::vector<BlockDef> defs; };
+  struct Table { const cContentReg* reg = nullptr; uint64_t id = 0; /* Cortana 2026-10-15 1658: F-5 */ uint64_t gen = ~uint64_t(0); size_t n = 0; std::vector<BlockDef> defs; };
   static thread_local Table t;
-  {
-    litholattice::cGateGuard lock(r.defMutex_);
-    const uint64_t e = r.epoch_.load(std::memory_order_acquire);
-    if (t.reg != &r || t.id != r.instanceId_ || t.epoch != e || t.n != r.blockDefs_.size() || t.data != r.blockDefs_.data()) {
-      t.defs = r.blockDefs_;
-      t.reg = &r; t.id = r.instanceId_; t.epoch = e; t.n = r.blockDefs_.size(); t.data = r.blockDefs_.data();
+  // t46u 5c: no lock. The copy is keyed by the write generation read BEFORE it; if the
+  // generation moved during the copy, a refresh overlapped it and the copy may mix two
+  // generations, so the fast path stays off for this scope (live reads, which the
+  // mesher's generation guard covers).
+  const uint64_t g0 = r.defGen_.load(std::memory_order_acquire);
+  const size_t n = r.blockDefs_.size();
+  if (t.reg != &r || t.id != r.instanceId_ || t.gen != g0 || t.n != n) {
+    t.defs.clear();
+    t.defs.reserve(n);
+    for (size_t i = 0; i < n; ++i) t.defs.push_back(r.blockDefs_.at(i));
+    if (r.defGen_.load(std::memory_order_acquire) != g0) {
+      t.reg = nullptr;  // mixed copy: never reuse it
+      tlStableOwner_ = nullptr; tlStableDefs_ = nullptr;
+      return;
     }
+    t.reg = &r; t.id = r.instanceId_; t.gen = g0; t.n = n;
   }
   tlStableOwner_ = &r;
   tlStableDefs_ = &t.defs;
@@ -580,8 +609,9 @@ inline cContentReg::StableDefScope::StableDefScope(const cContentReg& r)
 
 inline BlockDef cContentReg::blockDef(BlockId id) const {
   if (tlStableOwner_ == this && id < tlStableDefs_->size()) return (*tlStableDefs_)[id];  // Cortana 2026-10-15 1335
-  litholattice::cGateGuard lock(defMutex_);
-  return id < blockDefs_.size() ? blockDefs_[id] : blockDefs_[0];  // air fallback, as before
+  const size_t n = blockDefs_.size();  // t46u 5c: lock-free
+  if (id < n) return blockDefs_.at(id);
+  return n ? blockDefs_.at(0) : BlockDef{};  // air fallback, as before
 }
 
 inline StableId cContentReg::blockStableId(BlockId id) const {
@@ -622,9 +652,9 @@ inline std::optional<BlockId> cContentReg::findBlockByStableId(StableId sid) con
 
 inline std::optional<BlockId> cContentReg::findBlockByTexture(std::string_view tex) const {
   if (tex.empty()) return std::nullopt;
-  litholattice::cGateGuard lock(defMutex_);
-  for (size_t i = 0; i < blockDefs_.size(); ++i)
-    if (blockDefs_[i].tex == tex) return BlockId(i);
+  const size_t n = blockDefs_.size();  // t46u 5c: lock-free
+  for (size_t i = 0; i < n; ++i)
+    if (blockDefs_.at(i).tex == tex) return BlockId(i);
   return std::nullopt;
 }
 
@@ -649,35 +679,46 @@ inline size_t cContentReg::blockCount() const { return blockDefs_.size(); }
 
 inline bool cContentReg::stageBlockUpdate(BlockId id, const BlockDef& newDef) {
   if (sealed_) return false;
-  // Unique lock: staged_ is WRITTEN here. A shared lock would let two staging
-  // threads race on the map.
-  litholattice::cGateGuard lock(defMutex_);
+  // t46u 5c: any thread may stage; a lock-free push onto the staged stack.
   if (id >= blockDefs_.size()) return false;
   // The string ID is the identity: a staged def must name the same block.
   // (A rename is a remove+add, not an update.)
-  if (blockStringIdOf(newDef) != blockStringIdOf(blockDefs_[id])) return false;
-  staged_[id] = newDef;
+  if (blockStringIdOf(newDef) != blockStringIdOf(blockDefs_.at(id))) return false;
+  StageNode* node = new StageNode{id, newDef, staged_.head.load(std::memory_order_relaxed)};
+  while (!staged_.head.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed)) {}
   return true;
 }
 
+inline size_t cContentReg::stagedUpdateCount() const {
+  // Distinct ids staged and not yet applied (a later stage of the same id replaces it).
+  std::vector<BlockId> ids;
+  for (const StageNode* n = staged_.head.load(std::memory_order_acquire); n; n = n->next) ids.push_back(n->id);
+  std::sort(ids.begin(), ids.end());
+  return size_t(std::unique(ids.begin(), ids.end()) - ids.begin());
+}
+
 inline size_t cContentReg::refreshStaged() {
-  // Unique lock FIRST: checking staged_.empty() before the lock races with a
-  // concurrent stageBlockUpdate write. No reader sees a torn BlockDef
-  // mid-refresh. The epoch is bumped BEFORE the lock releases, so the
-  // (defs, epoch) pair is always consistent: caches comparing
-  // definitionEpoch() invalidate exactly once.
-  litholattice::cGateGuard lock(defMutex_);
-  if (staged_.empty()) return 0;
-  for (auto& [id, def] : staged_) {
-    BlockDef applied = def;
+  // t46u 5c (replaces the defMutex_ section): take the whole staged stack at once
+  // (a stage racing this call lands in the next refresh). The newest stage of an id
+  // wins, as the old map's overwrite did. defGen_ moves BEFORE any entry is swapped
+  // (readers that saw a new def see the move), epoch_ AFTER all of them (a cache that
+  // sees the new epoch sees every new def), so caches invalidate exactly once.
+  StageNode* head = staged_.head.exchange(nullptr, std::memory_order_acquire);
+  if (!head) return 0;
+  std::vector<StageNode*> taken;
+  for (StageNode* n = head; n; n = n->next) taken.push_back(n);  // newest first
+  std::unordered_map<BlockId, const BlockDef*> newest;
+  for (StageNode* n : taken) newest.emplace(n->id, &n->def);  // emplace keeps the first (newest)
+  defGen_.fetch_add(1, std::memory_order_acq_rel);
+  for (const auto& [id, def] : newest) {
+    BlockDef applied = *def;
     applied.crc32 = blockContentCrc(applied);
-    blockDefs_[id] = applied;
     entries_[blockEntryIdx_[id]].crc32 = applied.crc32;
+    blockDefs_.replace(id, std::move(applied));
   }
-  const size_t n = staged_.size();
-  staged_.clear();
+  for (StageNode* n : taken) stagedOwned_.emplace_back(n);
   epoch_.fetch_add(1, std::memory_order_release);
-  return n;
+  return newest.size();
 }
 
 inline ItemId cContentReg::addItem(const ItemDef& d) {
@@ -700,19 +741,17 @@ inline std::optional<ItemId> cContentReg::addItemWithStableId(const ItemDef& d,
   def.crc32 = itemContentCrc(def);
   if (!insertEntry(EntryKind::Item, sid, stable, def.crc32, local)) return std::nullopt;
   {
-    // Serialized against itemDef()'s shared-lock by-value reads (F-M3).
-    litholattice::cGateGuard lock(defMutex_);
-    itemDefs_.push_back(def);
+    // t46u 5c: published lock-free to itemDef()'s by-value reads.
+    itemDefs_.push(def);
     itemEntryIdx_.push_back(static_cast<uint32_t>(entries_.size()) - 1);
   }
   return ItemId(local + 1);  // ids start at 1; 0 is the empty sentinel
 }
 
 inline ItemDef cContentReg::itemDef(ItemId id) const {
-  // By value under the shared lock (review F-M3), mirroring blockDef().
-  litholattice::cGateGuard lock(defMutex_);
+  // By value, lock-free (t46u 5c), mirroring blockDef().
   if (id == 0 || size_t(id - 1) >= itemDefs_.size()) return kEmptyItem;
-  return itemDefs_[id - 1];
+  return itemDefs_.at(id - 1);
 }
 
 inline StableId cContentReg::itemStableId(ItemId id) const {

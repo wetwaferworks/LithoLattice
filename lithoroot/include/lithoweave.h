@@ -72,6 +72,14 @@ extern "C" {
  * terminating NUL. Names are debug labels only. */
 #define LW_NAME_MAX 24
 
+/* Registry capacity: live threads (spawned, attached, or finished
+ * but not yet joined or reaped) at once. lw_spawn past it returns
+ * LITHOSYS_EAGAIN. The registry is a fixed slot array claimed by
+ * compare-and-swap; it takes no lock. */
+#ifndef LW_MAX_THREADS
+#define LW_MAX_THREADS 256u
+#endif
+
 /* Thread entry point, pthread-shaped: takes the descriptor's arg,
  * returns a value joiners receive. */
 typedef void* (*lw_start_fn)(void* arg);
@@ -109,8 +117,7 @@ typedef struct lw_thread {
 /* Spawn a thread per the descriptor. On success returns
  * LITHOSYS_OK and fills out_handle; on failure returns a
  * lithosys_err_t code (most often LITHOSYS_EAGAIN when the host
- * refuses a thread, LITHOSYS_ENOMEM when the control block cannot
- * be allocated, LITHOSYS_EINVAL for a bad descriptor) and
+ * refuses a thread or the registry is full (LW_MAX_THREADS), LITHOSYS_EINVAL for a bad descriptor) and
  * out_handle is untouched. The thread's control block comes from
  * LithoLibC malloc (WaferHeap underneath), so a default heap must
  * exist before the first spawn, exactly as for any malloc caller. */

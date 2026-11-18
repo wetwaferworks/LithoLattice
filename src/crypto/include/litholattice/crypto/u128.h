@@ -11,7 +11,9 @@
 
 namespace litholattice::crypto {
 
-#if defined(_MSC_VER) && !defined(__clang__)
+// wasm32 (S1, 2026-11-16): the struct too; unsigned __int128 lowers to compiler-rt
+// libcalls (__multi3, __udivti3, ...) that the LithoRoot sysroot does not provide.
+#if (defined(_MSC_VER) && !defined(__clang__)) || defined(__wasm__)
 struct ll_u128 {
   uint64_t lo = 0, hi = 0;
   constexpr ll_u128() = default;

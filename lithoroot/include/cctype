@@ -1,0 +1,25 @@
+/* cctype ... LithoRoot std L2 (S2, 2026-11-16): <ctype.h> lifted into std. */
+#ifndef LITHOROOT_CCTYPE
+#define LITHOROOT_CCTYPE
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <ctype.h>
+
+namespace std {
+using ::isalnum;
+using ::isalpha;
+using ::isblank;
+using ::iscntrl;
+using ::isdigit;
+using ::isgraph;
+using ::islower;
+using ::isprint;
+using ::ispunct;
+using ::isspace;
+using ::isupper;
+using ::isxdigit;
+using ::tolower;
+using ::toupper;
+}  // namespace std
+#endif

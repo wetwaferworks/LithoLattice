@@ -12,6 +12,7 @@
 //     I/O thread (replaces cWorldSave's mutex-guarded exporting_ / signalSink_ handoff).
 // No mutex, no condition variable.
 #pragma once
+#include "litholattice/core/thread_name.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -22,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -43,12 +45,17 @@ class cLfWorldStore {
 
   cLfWorldStore(std::filesystem::path dir, const cPayloadReg& payloads) : dir_(std::move(dir)), payloads_(payloads) {
     std::filesystem::create_directories(dir_);
-    thread_ = std::thread([this] { run(); });
+    try {
+      thread_ = std::thread([this] { ::litholattice::setCurrentThreadName("lk-world-store"); run(); });
+    } catch (const std::system_error& e) {  // single-thread WASM: caller-runs, same job order, no spin
+      inline_ = true;
+      logInfo("storage (lock-free store): I/O thread spawn failed (%s); save/load jobs run on the caller", e.what());
+    }
   }
   ~cLfWorldStore() {
     flush();
     stop_.store(true, std::memory_order_release);
-    thread_.join();
+    if (thread_.joinable()) thread_.join();
   }
   cLfWorldStore(const cLfWorldStore&) = delete;
   cLfWorldStore& operator=(const cLfWorldStore&) = delete;
@@ -141,6 +148,7 @@ class cLfWorldStore {
   static uint64_t regionKey(int rx, int rz) { return (uint64_t(uint32_t(rx)) << 32) | uint32_t(rz); }
 
   void post(cLfHandoff<Job>& lane, std::function<void()> fn) {
+    if (inline_) { exec(new std::function<void()>(std::move(fn))); gen_.fetch_add(1, std::memory_order_release); return; }  // FIFO by construction
     lane.push(new std::function<void()>(std::move(fn)));
     gen_.fetch_add(1, std::memory_order_release);
   }
@@ -193,6 +201,7 @@ class cLfWorldStore {
   std::atomic<size_t> quarantined_{0};
   std::atomic<bool> lastFlushOk_{true}, stop_{false};
   std::atomic<int> lastFlushFailures_{0};
+  bool inline_ = false;  // set once in the ctor (no I/O thread): post() runs jobs on the caller
   std::thread thread_;
 };
 

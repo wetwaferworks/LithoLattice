@@ -1,6 +1,7 @@
 // Async sample streaming: the worker thread decodes chunks, the audio thread
 // plays them. See streaming.h for the design.
 #include "litholattice/audio/streaming.h"
+#include "litholattice/core/thread_name.h"
 
 #include <algorithm>
 #include <cstring>
@@ -19,7 +20,7 @@ void cAudioStreamer::play(DecodeFn decode) {
   stop();  // joins any running worker and requests the audio-side reset
   decode_ = std::move(decode);  // no worker running: game-thread owned again
   running_.store(true, std::memory_order_relaxed);
-  worker_ = std::thread(&cAudioStreamer::workerMain, this);
+  worker_ = std::thread([this] { ::litholattice::setCurrentThreadName("lk-audio-strm"); workerMain(); });
   sysRecord_.add(ThreadClass::System, ThreadRole::Audio, 0, "audio-stream");
   workerId_ = worker_.get_id();  // Cortana 2026-10-15 1450
 }

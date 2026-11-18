@@ -102,6 +102,20 @@ unexpected_handler get_unexpected() noexcept {
   terminate();
 }
 
+/* The new-handler accessors sit with the storage they guard
+ * (link wiring, 2026-11-16; they used to live in LithoLibC's
+ * new_delete.cc, which a program replacing operator new would leave
+ * out of the link). One atomic exchange and one atomic load, no
+ * lock: a release exchange publishes the handler, and the
+ * allocation loop's acquire load sees it whole. */
+new_handler set_new_handler(new_handler handler) noexcept {
+  return __atomic_exchange_n(&__cxxabiv1::__cxa_new_handler, handler,
+                             __ATOMIC_ACQ_REL);
+}
+new_handler get_new_handler() noexcept {
+  return __atomic_load_n(&__cxxabiv1::__cxa_new_handler, __ATOMIC_ACQUIRE);
+}
+
 bool uncaught_exception() noexcept { return uncaught_exceptions() > 0; }
 int uncaught_exceptions() noexcept {
   __cxxabiv1::__cxa_eh_globals* globals =

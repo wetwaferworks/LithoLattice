@@ -10,6 +10,7 @@
 // slightly staler occlusion data.
 
 #include "litholattice/audio/occlusion_thread.h"
+#include "litholattice/core/thread_name.h"
 #include <cassert>
 #include <chrono>
 #include "litholattice/core/atomic_gate.h"
@@ -25,7 +26,7 @@ void cOcclusionThread::start(OcclusionRate rate) {
   rate_.store(rate);
   if (rate == OcclusionRate::Inline) return;  // no thread needed in inline mode
   running_.store(true);
-  thread_ = std::thread(&cOcclusionThread::threadMain, this);
+  thread_ = std::thread([this] { ::litholattice::setCurrentThreadName("lk-audio-occl"); threadMain(); });
   sysRecord_.add(ThreadClass::System, ThreadRole::Audio, 0, "audio-occlusion");
 }
 

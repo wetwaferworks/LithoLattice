@@ -1,0 +1,534 @@
+/* memory ... LithoRoot std L3 (S3, 2026-11-16): allocator, allocator_traits
+ * (minimal), pointer_traits/to_address, construct_at/destroy_at, the
+ * uninitialized algorithms, unique_ptr (+array, deleters), shared_ptr /
+ * weak_ptr / make_shared / enable_shared_from_this.
+ *
+ * Lock-free (standing rule): the shared_ptr control block counts with
+ * __atomic builtins only, which are single wasm atomic RMW instructions
+ * under -matomics. Release on decrement, an acquire fence before the
+ * destroy, exactly the usual protocol. No atomic<shared_ptr> (plan 1.3). */
+#ifndef LITHOROOT_MEMORY
+#define LITHOROOT_MEMORY
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <cstddef>
+#include <compare>
+#include <exception>
+#include <iterator>
+#include <new>
+#include <type_traits>
+#include <typeinfo>
+#include <utility>
+
+namespace std {
+
+/* ---- pointer_traits / to_address ---- */
+template <class P> struct pointer_traits {
+  using pointer = P;
+  using element_type = typename P::element_type;
+  using difference_type = ptrdiff_t;
+};
+template <class T> struct pointer_traits<T*> {
+  using pointer = T*;
+  using element_type = T;
+  using difference_type = ptrdiff_t;
+  template <class U> using rebind = U*;
+  static constexpr T* pointer_to(conditional_t<is_void_v<T>, char, T>& r) noexcept { return addressof(r); }
+};
+template <class T> constexpr T* to_address(T* p) noexcept {
+  static_assert(!is_function_v<T>, "to_address of a function pointer");
+  return p;
+}
+template <class P> constexpr auto to_address(const P& p) noexcept { return std::to_address(p.operator->()); }
+
+/* ---- construct / destroy ---- */
+template <class T, class... A>
+constexpr T* construct_at(T* p, A&&... a) { return ::new (const_cast<void*>(static_cast<const volatile void*>(p))) T(std::forward<A>(a)...); }
+template <class T> constexpr void destroy_at(T* p) {
+  if constexpr (is_array_v<T>) { for (auto& e : *p) std::destroy_at(addressof(e)); }
+  else p->~T();
+}
+template <class I> constexpr void destroy(I first, I last) { for (; first != last; ++first) std::destroy_at(addressof(*first)); }
+template <class I, class N> constexpr I destroy_n(I first, N n) { for (; n > 0; (void)++first, --n) std::destroy_at(addressof(*first)); return first; }
+
+/* ---- uninitialized algorithms (strong guarantee: roll back on throw) ---- */
+#define LR_VOIDP(it) static_cast<void*>(addressof(*(it)))
+template <class I, class O> O uninitialized_copy(I first, I last, O out) {
+  O cur = out;
+  try { for (; first != last; ++first, (void)++cur) ::new (LR_VOIDP(cur)) iter_value_t<O>(*first); }
+  catch (...) { std::destroy(out, cur); throw; }
+  return cur;
+}
+template <class I, class N, class O> O uninitialized_copy_n(I first, N n, O out) {
+  O cur = out;
+  try { for (; n > 0; ++first, (void)++cur, --n) ::new (LR_VOIDP(cur)) iter_value_t<O>(*first); }
+  catch (...) { std::destroy(out, cur); throw; }
+  return cur;
+}
+template <class I, class O> O uninitialized_move(I first, I last, O out) {
+  O cur = out;
+  try { for (; first != last; ++first, (void)++cur) ::new (LR_VOIDP(cur)) iter_value_t<O>(std::move(*first)); }
+  catch (...) { std::destroy(out, cur); throw; }
+  return cur;
+}
+template <class I, class N, class O> pair<I, O> uninitialized_move_n(I first, N n, O out) {
+  O cur = out;
+  try { for (; n > 0; ++first, (void)++cur, --n) ::new (LR_VOIDP(cur)) iter_value_t<O>(std::move(*first)); }
+  catch (...) { std::destroy(out, cur); throw; }
+  return {first, cur};
+}
+template <class O, class T> void uninitialized_fill(O first, O last, const T& v) {
+  O cur = first;
+  try { for (; cur != last; ++cur) ::new (LR_VOIDP(cur)) iter_value_t<O>(v); }
+  catch (...) { std::destroy(first, cur); throw; }
+}
+template <class O, class N, class T> O uninitialized_fill_n(O first, N n, const T& v) {
+  O cur = first;
+  try { for (; n > 0; ++cur, (void)--n) ::new (LR_VOIDP(cur)) iter_value_t<O>(v); }
+  catch (...) { std::destroy(first, cur); throw; }
+  return cur;
+}
+template <class O> void uninitialized_value_construct(O first, O last) {
+  O cur = first;
+  try { for (; cur != last; ++cur) ::new (LR_VOIDP(cur)) iter_value_t<O>(); }
+  catch (...) { std::destroy(first, cur); throw; }
+}
+template <class O, class N> O uninitialized_value_construct_n(O first, N n) {
+  O cur = first;
+  try { for (; n > 0; ++cur, (void)--n) ::new (LR_VOIDP(cur)) iter_value_t<O>(); }
+  catch (...) { std::destroy(first, cur); throw; }
+  return cur;
+}
+template <class O> void uninitialized_default_construct(O first, O last) {
+  O cur = first;
+  try { for (; cur != last; ++cur) ::new (LR_VOIDP(cur)) iter_value_t<O>; }
+  catch (...) { std::destroy(first, cur); throw; }
+}
+template <class O, class N> O uninitialized_default_construct_n(O first, N n) {
+  O cur = first;
+  try { for (; n > 0; ++cur, (void)--n) ::new (LR_VOIDP(cur)) iter_value_t<O>; }
+  catch (...) { std::destroy(first, cur); throw; }
+  return cur;
+}
+#undef LR_VOIDP
+
+/* ---- allocator ---- */
+template <class T>
+class allocator {
+ public:
+  using value_type = T;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using propagate_on_container_move_assignment = true_type;
+  using is_always_equal = true_type;
+  template <class U> struct rebind { using other = allocator<U>; };
+  constexpr allocator() noexcept = default;
+  template <class U> constexpr allocator(const allocator<U>&) noexcept {}
+  [[nodiscard]] T* allocate(size_t n) {
+    if (n > size_t(-1) / sizeof(T)) throw bad_array_new_length();
+    if constexpr (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+      return static_cast<T*>(::operator new(n * sizeof(T), align_val_t(alignof(T))));
+    else
+      return static_cast<T*>(::operator new(n * sizeof(T)));
+  }
+  void deallocate(T* p, size_t n) noexcept {
+    if constexpr (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+      ::operator delete(p, n * sizeof(T), align_val_t(alignof(T)));
+    else
+      ::operator delete(p, n * sizeof(T));
+  }
+};
+template <class T, class U> constexpr bool operator==(const allocator<T>&, const allocator<U>&) noexcept { return true; }
+
+namespace __lk {
+template <class A, class = void> struct alloc_ptr { using type = typename A::value_type*; };
+template <class A> struct alloc_ptr<A, void_t<typename A::pointer>> { using type = typename A::pointer; };
+template <class A, class U> struct alloc_rebind_tmpl {};
+template <template <class, class...> class A, class T, class... R, class U>
+struct alloc_rebind_tmpl<A<T, R...>, U> { using type = A<U, R...>; };
+template <class A, class U, class = void> struct alloc_rebind : alloc_rebind_tmpl<A, U> {};
+template <class A, class U> struct alloc_rebind<A, U, void_t<typename A::template rebind<U>::other>> { using type = typename A::template rebind<U>::other; };
+template <class A, class = void> struct alloc_pocma : false_type {};
+template <class A> struct alloc_pocma<A, void_t<typename A::propagate_on_container_move_assignment>> : A::propagate_on_container_move_assignment {};
+template <class A, class = void> struct alloc_pocca : false_type {};
+template <class A> struct alloc_pocca<A, void_t<typename A::propagate_on_container_copy_assignment>> : A::propagate_on_container_copy_assignment {};
+template <class A, class = void> struct alloc_pocs : false_type {};
+template <class A> struct alloc_pocs<A, void_t<typename A::propagate_on_container_swap>> : A::propagate_on_container_swap {};
+template <class A, class = void> struct alloc_equal : bool_constant<__is_empty(A)> {};
+template <class A> struct alloc_equal<A, void_t<typename A::is_always_equal>> : A::is_always_equal {};
+}  // namespace __lk
+
+template <class A>
+struct allocator_traits {
+  using allocator_type = A;
+  using value_type = typename A::value_type;
+  using pointer = typename __lk::alloc_ptr<A>::type;
+  using const_pointer = const value_type*;
+  using void_pointer = void*;
+  using const_void_pointer = const void*;
+  using difference_type = ptrdiff_t;
+  using size_type = size_t;
+  using propagate_on_container_copy_assignment = typename __lk::alloc_pocca<A>::type;
+  using propagate_on_container_move_assignment = typename __lk::alloc_pocma<A>::type;
+  using propagate_on_container_swap = typename __lk::alloc_pocs<A>::type;
+  using is_always_equal = typename __lk::alloc_equal<A>::type;
+  template <class U> using rebind_alloc = typename __lk::alloc_rebind<A, U>::type;
+  template <class U> using rebind_traits = allocator_traits<rebind_alloc<U>>;
+  [[nodiscard]] static pointer allocate(A& a, size_type n) { return a.allocate(n); }
+  static void deallocate(A& a, pointer p, size_type n) { a.deallocate(p, n); }
+  template <class T, class... Args> static void construct(A&, T* p, Args&&... args) { std::construct_at(p, std::forward<Args>(args)...); }
+  template <class T> static void destroy(A&, T* p) { std::destroy_at(p); }
+  static size_type max_size(const A&) noexcept { return size_type(-1) / sizeof(value_type); }
+  static A select_on_container_copy_construction(const A& a) { return a; }
+};
+
+/* ---- unique_ptr ---- */
+template <class T> struct default_delete {
+  constexpr default_delete() noexcept = default;
+  template <class U, class = enable_if_t<is_convertible_v<U*, T*>>> default_delete(const default_delete<U>&) noexcept {}
+  void operator()(T* p) const {
+    static_assert(sizeof(T) > 0, "default_delete of an incomplete type");
+    delete p;
+  }
+};
+template <class T> struct default_delete<T[]> {
+  constexpr default_delete() noexcept = default;
+  template <class U, class = enable_if_t<is_convertible_v<U (*)[], T (*)[]>>> default_delete(const default_delete<U[]>&) noexcept {}
+  template <class U, class = enable_if_t<is_convertible_v<U (*)[], T (*)[]>>> void operator()(U* p) const {
+    static_assert(sizeof(U) > 0, "default_delete of an incomplete type");
+    delete[] p;
+  }
+};
+
+namespace __lk {
+template <class T, class D, class = void> struct up_ptr { using type = T*; };
+template <class T, class D> struct up_ptr<T, D, void_t<typename remove_reference_t<D>::pointer>> { using type = typename remove_reference_t<D>::pointer; };
+/* Empty deleters take no space ([[no_unique_address]], as the ABI of every major STL). */
+template <class P, class D> struct up_pair {
+  P p;
+  [[no_unique_address]] D d;
+};
+}  // namespace __lk
+
+template <class T, class D = default_delete<T>>
+class unique_ptr {
+ public:
+  using pointer = typename __lk::up_ptr<T, D>::type;
+  using element_type = T;
+  using deleter_type = D;
+  constexpr unique_ptr() noexcept : s_{pointer(), D()} {}
+  constexpr unique_ptr(nullptr_t) noexcept : unique_ptr() {}
+  explicit unique_ptr(pointer p) noexcept : s_{p, D()} {}
+  template <class E = D, enable_if_t<!is_reference_v<E>, int> = 0> unique_ptr(pointer p, const D& d) noexcept : s_{p, d} {}
+  template <class E = D, enable_if_t<!is_reference_v<E>, int> = 0> unique_ptr(pointer p, D&& d) noexcept : s_{p, std::move(d)} {}
+  template <class E = D, enable_if_t<is_reference_v<E>, int> = 0> unique_ptr(pointer p, D d) noexcept : s_{p, d} {}
+  unique_ptr(unique_ptr&& o) noexcept : s_{o.release(), std::forward<D>(o.get_deleter())} {}
+  template <class U, class E,
+            class = enable_if_t<!is_array_v<U> && is_convertible_v<typename unique_ptr<U, E>::pointer, pointer> &&
+                                (is_reference_v<D> ? is_same_v<E, D> : is_convertible_v<E, D>)>>
+  unique_ptr(unique_ptr<U, E>&& o) noexcept : s_{o.release(), std::forward<E>(o.get_deleter())} {}
+  unique_ptr(const unique_ptr&) = delete;
+  unique_ptr& operator=(const unique_ptr&) = delete;
+  ~unique_ptr() { if (s_.p) s_.d(s_.p); }
+  unique_ptr& operator=(unique_ptr&& o) noexcept { reset(o.release()); s_.d = std::forward<D>(o.get_deleter()); return *this; }
+  template <class U, class E, class = enable_if_t<!is_array_v<U> && is_convertible_v<typename unique_ptr<U, E>::pointer, pointer>>>
+  unique_ptr& operator=(unique_ptr<U, E>&& o) noexcept { reset(o.release()); s_.d = std::forward<E>(o.get_deleter()); return *this; }
+  unique_ptr& operator=(nullptr_t) noexcept { reset(); return *this; }
+  add_lvalue_reference_t<T> operator*() const { return *s_.p; }
+  pointer operator->() const noexcept { return s_.p; }
+  pointer get() const noexcept { return s_.p; }
+  D& get_deleter() noexcept { return s_.d; }
+  const D& get_deleter() const noexcept { return s_.d; }
+  explicit operator bool() const noexcept { return s_.p != pointer(); }
+  pointer release() noexcept { pointer p = s_.p; s_.p = pointer(); return p; }
+  void reset(pointer p = pointer()) noexcept { pointer old = s_.p; s_.p = p; if (old) s_.d(old); }
+  void swap(unique_ptr& o) noexcept { using std::swap; swap(s_.p, o.s_.p); swap(s_.d, o.s_.d); }
+ private:
+  __lk::up_pair<pointer, D> s_;
+};
+
+template <class T, class D>
+class unique_ptr<T[], D> {
+ public:
+  using pointer = typename __lk::up_ptr<T, D>::type;
+  using element_type = T;
+  using deleter_type = D;
+  constexpr unique_ptr() noexcept : s_{pointer(), D()} {}
+  constexpr unique_ptr(nullptr_t) noexcept : unique_ptr() {}
+  template <class U, class = enable_if_t<is_same_v<U, pointer> || is_same_v<U, nullptr_t>>> explicit unique_ptr(U p) noexcept : s_{p, D()} {}
+  template <class U, class = enable_if_t<is_same_v<U, pointer> || is_same_v<U, nullptr_t>>> unique_ptr(U p, const D& d) noexcept : s_{p, d} {}
+  unique_ptr(unique_ptr&& o) noexcept : s_{o.release(), std::forward<D>(o.get_deleter())} {}
+  unique_ptr(const unique_ptr&) = delete;
+  unique_ptr& operator=(const unique_ptr&) = delete;
+  ~unique_ptr() { if (s_.p) s_.d(s_.p); }
+  unique_ptr& operator=(unique_ptr&& o) noexcept { reset(o.release()); s_.d = std::forward<D>(o.get_deleter()); return *this; }
+  unique_ptr& operator=(nullptr_t) noexcept { reset(); return *this; }
+  T& operator[](size_t i) const { return s_.p[i]; }
+  pointer get() const noexcept { return s_.p; }
+  D& get_deleter() noexcept { return s_.d; }
+  const D& get_deleter() const noexcept { return s_.d; }
+  explicit operator bool() const noexcept { return s_.p != pointer(); }
+  pointer release() noexcept { pointer p = s_.p; s_.p = pointer(); return p; }
+  template <class U, class = enable_if_t<is_same_v<U, pointer> || is_same_v<U, nullptr_t>>>
+  void reset(U p) noexcept { pointer old = s_.p; s_.p = p; if (old) s_.d(old); }
+  void reset(nullptr_t = nullptr) noexcept { reset(pointer()); }
+  void swap(unique_ptr& o) noexcept { using std::swap; swap(s_.p, o.s_.p); swap(s_.d, o.s_.d); }
+ private:
+  __lk::up_pair<pointer, D> s_;
+};
+
+template <class T, class... A, enable_if_t<!is_array_v<T>, int> = 0>
+unique_ptr<T> make_unique(A&&... a) { return unique_ptr<T>(new T(std::forward<A>(a)...)); }
+template <class T, enable_if_t<is_array_v<T> && extent_v<T> == 0, int> = 0>
+unique_ptr<T> make_unique(size_t n) { return unique_ptr<T>(new remove_extent_t<T>[n]()); }
+template <class T, class... A, enable_if_t<extent_v<T> != 0, int> = 0> void make_unique(A&&...) = delete;
+template <class T, enable_if_t<!is_array_v<T>, int> = 0>
+unique_ptr<T> make_unique_for_overwrite() { return unique_ptr<T>(new T); }
+template <class T, enable_if_t<is_array_v<T> && extent_v<T> == 0, int> = 0>
+unique_ptr<T> make_unique_for_overwrite(size_t n) { return unique_ptr<T>(new remove_extent_t<T>[n]); }
+
+template <class T, class D> void swap(unique_ptr<T, D>& a, unique_ptr<T, D>& b) noexcept { a.swap(b); }
+template <class T1, class D1, class T2, class D2> bool operator==(const unique_ptr<T1, D1>& a, const unique_ptr<T2, D2>& b) { return a.get() == b.get(); }
+template <class T1, class D1, class T2, class D2> bool operator<(const unique_ptr<T1, D1>& a, const unique_ptr<T2, D2>& b) { return a.get() < b.get(); }
+template <class T, class D> bool operator==(const unique_ptr<T, D>& a, nullptr_t) noexcept { return !a; }
+
+/* ---- shared_ptr ---- */
+class bad_weak_ptr : public exception {
+ public:
+  const char* what() const noexcept override { return "bad_weak_ptr"; }
+};
+
+namespace __lk {
+/* Control block: `shared` counts owners; `weak` counts weak_ptrs plus one for
+ * the owner group as a whole, so the block dies when the last of either goes. */
+struct ctrl {
+  long shared = 1;
+  long weak = 1;
+  virtual void dispose() noexcept = 0;  // destroy the managed object
+  virtual void destroy() noexcept = 0;  // free this block
+  virtual void* get_deleter(const type_info&) noexcept { return nullptr; }
+  void add_shared() noexcept { __atomic_fetch_add(&shared, 1, __ATOMIC_RELAXED); }
+  void add_weak() noexcept { __atomic_fetch_add(&weak, 1, __ATOMIC_RELAXED); }
+  bool add_shared_if_live() noexcept {  // weak_ptr::lock: CAS loop, never resurrects 0
+    long n = __atomic_load_n(&shared, __ATOMIC_RELAXED);
+    while (n != 0)
+      if (__atomic_compare_exchange_n(&shared, &n, n + 1, true, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return true;
+    return false;
+  }
+  void release_shared() noexcept {
+    if (__atomic_fetch_sub(&shared, 1, __ATOMIC_RELEASE) == 1) {
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);
+      dispose();
+      release_weak();
+    }
+  }
+  void release_weak() noexcept {
+    if (__atomic_fetch_sub(&weak, 1, __ATOMIC_RELEASE) == 1) {
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);
+      destroy();
+    }
+  }
+  long use_count() const noexcept { return __atomic_load_n(&shared, __ATOMIC_RELAXED); }
+ protected:
+  ~ctrl() = default;
+};
+template <class P, class D> struct ctrl_ptr final : ctrl {
+  P p;
+  [[no_unique_address]] D d;
+  ctrl_ptr(P p_, D d_) : p(p_), d(std::move(d_)) {}
+  void dispose() noexcept override { d(p); }
+  void destroy() noexcept override { delete this; }
+  void* get_deleter(const type_info& ti) noexcept override { return ti == typeid(D) ? addressof(d) : nullptr; }
+};
+template <class T> struct ctrl_inplace final : ctrl {
+  alignas(T) unsigned char buf[sizeof(T)];
+  T* ptr() noexcept { return reinterpret_cast<T*>(buf); }
+  void dispose() noexcept override { std::destroy_at(ptr()); }
+  void destroy() noexcept override { delete this; }
+};
+}  // namespace __lk
+
+template <class T> class weak_ptr;
+template <class T> class shared_ptr;
+template <class T> class enable_shared_from_this;
+
+namespace __lk {
+template <class T, class = void> struct has_esft : false_type {};
+template <class T> struct has_esft<T, void_t<decltype(declval<T*>()->__lk_weak_this)>> : true_type {};
+}  // namespace __lk
+
+template <class T>
+class shared_ptr {
+ public:
+  using element_type = remove_extent_t<T>;
+  using weak_type = weak_ptr<T>;
+  constexpr shared_ptr() noexcept = default;
+  constexpr shared_ptr(nullptr_t) noexcept {}
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  explicit shared_ptr(Y* p) {
+    using Del = conditional_t<is_array_v<T>, default_delete<Y[]>, default_delete<Y>>;
+    try { c_ = new __lk::ctrl_ptr<Y*, Del>(p, Del()); } catch (...) { Del()(p); throw; }
+    p_ = p;
+    enable_weak(p);
+  }
+  template <class Y, class D, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  shared_ptr(Y* p, D d) {
+    try { c_ = new __lk::ctrl_ptr<Y*, D>(p, d); } catch (...) { d(p); throw; }
+    p_ = p;
+    enable_weak(p);
+  }
+  template <class D> shared_ptr(nullptr_t, D d) {
+    try { c_ = new __lk::ctrl_ptr<nullptr_t, D>(nullptr, d); } catch (...) { d(nullptr); throw; }
+  }
+  template <class Y> shared_ptr(const shared_ptr<Y>& r, element_type* p) noexcept : p_(p), c_(r.c_) { if (c_) c_->add_shared(); }
+  template <class Y> shared_ptr(shared_ptr<Y>&& r, element_type* p) noexcept : p_(p), c_(r.c_) { r.p_ = nullptr; r.c_ = nullptr; }
+  shared_ptr(const shared_ptr& r) noexcept : p_(r.p_), c_(r.c_) { if (c_) c_->add_shared(); }
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  shared_ptr(const shared_ptr<Y>& r) noexcept : p_(r.p_), c_(r.c_) { if (c_) c_->add_shared(); }
+  shared_ptr(shared_ptr&& r) noexcept : p_(r.p_), c_(r.c_) { r.p_ = nullptr; r.c_ = nullptr; }
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  shared_ptr(shared_ptr<Y>&& r) noexcept : p_(r.p_), c_(r.c_) { r.p_ = nullptr; r.c_ = nullptr; }
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  explicit shared_ptr(const weak_ptr<Y>& r) {
+    if (!r.c_ || !r.c_->add_shared_if_live()) throw bad_weak_ptr();
+    c_ = r.c_; p_ = r.p_;
+  }
+  template <class Y, class D, class = enable_if_t<is_convertible_v<typename unique_ptr<Y, D>::pointer, element_type*>>>
+  shared_ptr(unique_ptr<Y, D>&& u) {
+    if (!u) return;
+    using DD = conditional_t<is_reference_v<D>, reference_wrapper_lk<remove_reference_t<D>>, D>;
+    auto* raw = u.get();
+    c_ = new __lk::ctrl_ptr<typename unique_ptr<Y, D>::pointer, DD>(raw, DD(u.get_deleter()));
+    u.release();
+    p_ = raw;
+    enable_weak(raw);
+  }
+  ~shared_ptr() { if (c_) c_->release_shared(); }
+  shared_ptr& operator=(const shared_ptr& r) noexcept { shared_ptr(r).swap(*this); return *this; }
+  template <class Y> shared_ptr& operator=(const shared_ptr<Y>& r) noexcept { shared_ptr(r).swap(*this); return *this; }
+  shared_ptr& operator=(shared_ptr&& r) noexcept { shared_ptr(std::move(r)).swap(*this); return *this; }
+  template <class Y> shared_ptr& operator=(shared_ptr<Y>&& r) noexcept { shared_ptr(std::move(r)).swap(*this); return *this; }
+  template <class Y, class D> shared_ptr& operator=(unique_ptr<Y, D>&& u) { shared_ptr(std::move(u)).swap(*this); return *this; }
+  void reset() noexcept { shared_ptr().swap(*this); }
+  template <class Y> void reset(Y* p) { shared_ptr(p).swap(*this); }
+  template <class Y, class D> void reset(Y* p, D d) { shared_ptr(p, d).swap(*this); }
+  void swap(shared_ptr& r) noexcept { std::swap(p_, r.p_); std::swap(c_, r.c_); }
+  element_type* get() const noexcept { return p_; }
+  template <class U = T, enable_if_t<!is_void_v<U> && !is_array_v<U>, int> = 0> add_lvalue_reference_t<U> operator*() const noexcept { return *p_; }
+  template <class U = T, enable_if_t<!is_array_v<U>, int> = 0> element_type* operator->() const noexcept { return p_; }
+  template <class U = T, enable_if_t<is_array_v<U>, int> = 0> remove_extent_t<U>& operator[](ptrdiff_t i) const { return p_[i]; }
+  long use_count() const noexcept { return c_ ? c_->use_count() : 0; }
+  explicit operator bool() const noexcept { return p_ != nullptr; }
+  template <class U> bool owner_before(const shared_ptr<U>& o) const noexcept { return c_ < o.c_; }
+  template <class U> bool owner_before(const weak_ptr<U>& o) const noexcept { return c_ < o.c_; }
+
+ private:
+  template <class U> struct reference_wrapper_lk {  // deleter held by reference (unique_ptr<T, D&>)
+    U* d;
+    reference_wrapper_lk(U& u) : d(addressof(u)) {}
+    template <class P> void operator()(P p) const { (*d)(p); }
+  };
+  template <class Y> void enable_weak(Y* p) noexcept {
+    if constexpr (__lk::has_esft<Y>::value) {
+      if (p && p->__lk_weak_this.expired()) p->__lk_weak_this = shared_ptr<remove_cv_t<Y>>(*this, const_cast<remove_cv_t<Y>*>(p));
+    }
+  }
+  template <class U> friend class shared_ptr;
+  template <class U> friend class weak_ptr;
+  template <class U, class... A> friend shared_ptr<U> make_shared(A&&...);
+  template <class D, class U> friend D* get_deleter(const shared_ptr<U>&) noexcept;
+  element_type* p_ = nullptr;
+  __lk::ctrl* c_ = nullptr;
+};
+
+template <class T, class... A>
+shared_ptr<T> make_shared(A&&... a) {
+  static_assert(!is_array_v<T>, "LithoRoot: make_shared<T[]> is not provided (plan L3; add when a TU needs it)");
+  auto* c = new __lk::ctrl_inplace<T>;
+  try { std::construct_at(c->ptr(), std::forward<A>(a)...); } catch (...) { delete c; throw; }
+  shared_ptr<T> r;
+  r.c_ = c;
+  r.p_ = c->ptr();
+  r.enable_weak(r.p_);
+  return r;
+}
+
+template <class T>
+class weak_ptr {
+ public:
+  using element_type = remove_extent_t<T>;
+  constexpr weak_ptr() noexcept = default;
+  weak_ptr(const weak_ptr& r) noexcept : p_(r.p_), c_(r.c_) { if (c_) c_->add_weak(); }
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  weak_ptr(const weak_ptr<Y>& r) noexcept : c_(r.c_) { if (c_) { c_->add_weak(); p_ = r.lock().get(); } }
+  template <class Y, class = enable_if_t<is_convertible_v<Y*, element_type*>>>
+  weak_ptr(const shared_ptr<Y>& r) noexcept : p_(r.p_), c_(r.c_) { if (c_) c_->add_weak(); }
+  weak_ptr(weak_ptr&& r) noexcept : p_(r.p_), c_(r.c_) { r.p_ = nullptr; r.c_ = nullptr; }
+  ~weak_ptr() { if (c_) c_->release_weak(); }
+  weak_ptr& operator=(const weak_ptr& r) noexcept { weak_ptr(r).swap(*this); return *this; }
+  template <class Y> weak_ptr& operator=(const shared_ptr<Y>& r) noexcept { weak_ptr(r).swap(*this); return *this; }
+  weak_ptr& operator=(weak_ptr&& r) noexcept { weak_ptr(std::move(r)).swap(*this); return *this; }
+  void reset() noexcept { weak_ptr().swap(*this); }
+  void swap(weak_ptr& r) noexcept { std::swap(p_, r.p_); std::swap(c_, r.c_); }
+  long use_count() const noexcept { return c_ ? c_->use_count() : 0; }
+  bool expired() const noexcept { return use_count() == 0; }
+  shared_ptr<T> lock() const noexcept {
+    shared_ptr<T> r;
+    if (c_ && c_->add_shared_if_live()) { r.c_ = c_; r.p_ = p_; }
+    return r;
+  }
+  template <class U> bool owner_before(const weak_ptr<U>& o) const noexcept { return c_ < o.c_; }
+  template <class U> bool owner_before(const shared_ptr<U>& o) const noexcept { return c_ < o.c_; }
+ private:
+  template <class U> friend class shared_ptr;
+  template <class U> friend class weak_ptr;
+  element_type* p_ = nullptr;
+  __lk::ctrl* c_ = nullptr;
+};
+
+template <class T>
+class enable_shared_from_this {
+ public:
+  shared_ptr<T> shared_from_this() { return shared_ptr<T>(__lk_weak_this); }
+  shared_ptr<const T> shared_from_this() const { return shared_ptr<const T>(__lk_weak_this); }
+  weak_ptr<T> weak_from_this() noexcept { return __lk_weak_this; }
+  weak_ptr<const T> weak_from_this() const noexcept { return __lk_weak_this; }
+ protected:
+  constexpr enable_shared_from_this() noexcept = default;
+  enable_shared_from_this(const enable_shared_from_this&) noexcept {}
+  enable_shared_from_this& operator=(const enable_shared_from_this&) noexcept { return *this; }
+  ~enable_shared_from_this() = default;
+ public:
+  mutable weak_ptr<T> __lk_weak_this;  // reserved name; set by shared_ptr's constructors
+};
+
+template <class T> void swap(shared_ptr<T>& a, shared_ptr<T>& b) noexcept { a.swap(b); }
+template <class T> void swap(weak_ptr<T>& a, weak_ptr<T>& b) noexcept { a.swap(b); }
+template <class T, class U> bool operator==(const shared_ptr<T>& a, const shared_ptr<U>& b) noexcept { return a.get() == b.get(); }
+template <class T, class U> bool operator<(const shared_ptr<T>& a, const shared_ptr<U>& b) noexcept { return a.get() < b.get(); }
+template <class T> bool operator==(const shared_ptr<T>& a, nullptr_t) noexcept { return !a; }
+
+template <class T, class U> shared_ptr<T> static_pointer_cast(const shared_ptr<U>& r) noexcept {
+  return shared_ptr<T>(r, static_cast<typename shared_ptr<T>::element_type*>(r.get()));
+}
+template <class T, class U> shared_ptr<T> const_pointer_cast(const shared_ptr<U>& r) noexcept {
+  return shared_ptr<T>(r, const_cast<typename shared_ptr<T>::element_type*>(r.get()));
+}
+template <class T, class U> shared_ptr<T> reinterpret_pointer_cast(const shared_ptr<U>& r) noexcept {
+  return shared_ptr<T>(r, reinterpret_cast<typename shared_ptr<T>::element_type*>(r.get()));
+}
+template <class T, class U> shared_ptr<T> dynamic_pointer_cast(const shared_ptr<U>& r) noexcept {
+  if (auto* p = dynamic_cast<typename shared_ptr<T>::element_type*>(r.get())) return shared_ptr<T>(r, p);
+  return shared_ptr<T>();
+}
+template <class D, class T> D* get_deleter(const shared_ptr<T>& p) noexcept {
+  return p.c_ ? static_cast<D*>(p.c_->get_deleter(typeid(D))) : nullptr;
+}
+
+template <class T = void> struct owner_less {
+  template <class A, class B> bool operator()(const A& a, const B& b) const noexcept { return a.owner_before(b); }
+};
+
+}  // namespace std
+#endif

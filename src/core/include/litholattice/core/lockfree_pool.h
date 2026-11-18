@@ -9,11 +9,13 @@
 //               external submits go to a worker's cMpscQueue injection queue (round
 //               robin); idle workers steal deque tops and claim other injection queues;
 //   background  one cMpscQueue, admitted while fewer than lendCap() slices run (CAS).
-// Idle workers pause-spin, then sleep on an atomic generation word (std::atomic::wait);
-// every submit bumps it and notifies only when a worker sleeps. waitIdle() waits on the
-// in-flight atomic. Jobs are heap-allocated std::function (Job*), one owner at a time.
+// Idle workers pause-spin, then back off (yield, short sleeps; t46u 5b: no atomic::wait)
+// re-reading an atomic generation word that every submit bumps. waitIdle() re-reads the
+// in-flight atomic the same way. Jobs are heap-allocated std::function (Job*), one owner at a time.
 // cJobPool (threading.h) forwards to this when LL_POOL_LOCKFREE=1.
 #pragma once
+#include "litholattice/core/thread_name.h"
+#include "litholattice/core/idle_backoff.h"  // t46u item 5b
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +24,7 @@
 #include <functional>
 #include <memory>
 #include <thread>
+#include <system_error>
 #include <vector>
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 #include <immintrin.h>
@@ -56,8 +59,18 @@ class cLockFreePool {
     if (cThreadReadout::enabled()) readout_ = std::make_unique<cThreadReadout>(n);  // LL_THREAD_READOUT
     workers_.reserve(n);
     for (unsigned i = 0; i < n; ++i) workers_.push_back(std::make_unique<Worker>());
-    for (unsigned i = 0; i < n; ++i)
-      workers_[i]->thread = std::thread([this, i, threadInit] { if (threadInit) threadInit(); run(i); });
+    try {
+      for (unsigned i = 0; i < n; ++i)
+        workers_[i]->thread = std::thread([this, i, threadInit] { char nm[16]; std::snprintf(nm, sizeof nm, "lk-lfpool-%u", unsigned(i)); ::litholattice::setCurrentThreadName(nm); if (threadInit) threadInit(); run(i); });
+    } catch (const std::system_error& e) {
+      logInfo("job pool: worker spawn failed (%s); running jobs inline on the caller", e.what());
+      stop_.store(true, std::memory_order_release);
+      wake(true);
+      for (auto& w : workers_) if (w && w->thread.joinable()) w->thread.join();
+      workers_.clear();
+      lendCap_.store(0, std::memory_order_relaxed);
+      stop_.store(false, std::memory_order_release);
+    }
   }
   ~cLockFreePool() {
     stop_.store(true, std::memory_order_release);
@@ -106,7 +119,7 @@ class cLockFreePool {
   unsigned lendCap() const { return lendCap_.load(std::memory_order_acquire); }
   void waitIdle() const {
     for (int v = inFlight_.load(std::memory_order_acquire); v != 0; v = inFlight_.load(std::memory_order_acquire))
-      inFlight_.wait(v, std::memory_order_acquire);
+      lkIdleWaitUntil([&] { return inFlight_.load(std::memory_order_acquire) != v; });  // t46u 5b
   }
   uint64_t failedJobs() const { return failed_.load(std::memory_order_relaxed); }
   uint64_t steals() const { return steals_.load(std::memory_order_relaxed); }
@@ -136,9 +149,8 @@ class cLockFreePool {
     workers_[k]->inject.push(std::move(j));
   }
   void wake(bool all) {
-    gen_.fetch_add(1, std::memory_order_acq_rel);
-    if (all) gen_.notify_all();
-    else if (sleepers_.load(std::memory_order_acquire) > 0) gen_.notify_one();
+    gen_.fetch_add(1, std::memory_order_acq_rel);  // idle workers re-read it (t46u 5b: no notify)
+    (void)all;
   }
   bool takeInject(Worker& w, Job& out) {
     if (!w.inject.maybeNonEmpty() || !w.inject.tryClaim()) return false;
@@ -192,7 +204,7 @@ class cLockFreePool {
       if (changed) continue;
       sleepers_.fetch_add(1, std::memory_order_acq_rel);
       const uint64_t idle0 = readout_ ? cThreadReadout::nowNs() : 0;
-      if (gen_.load(std::memory_order_acquire) == g && !stop_.load(std::memory_order_acquire)) gen_.wait(g, std::memory_order_acquire);
+      lkIdleWaitUntil([&] { return gen_.load(std::memory_order_acquire) != g || stop_.load(std::memory_order_acquire); });  // t46u 5b
       if (readout_) readout_->idle(self, cThreadReadout::nowNs() - idle0);
       sleepers_.fetch_sub(1, std::memory_order_acq_rel);
     }
@@ -209,7 +221,7 @@ class cLockFreePool {
     }
     delete j;
     if (bg) { bgActive_.fetch_sub(1, std::memory_order_acq_rel); if (bgCount_.load(std::memory_order_acquire) > 0) wake(false); }
-    if (inFlight_.fetch_sub(1, std::memory_order_acq_rel) == 1) inFlight_.notify_all();
+    inFlight_.fetch_sub(1, std::memory_order_acq_rel);  // waitIdle re-reads it (t46u 5b)
   }
 
   std::vector<std::unique_ptr<Worker>> workers_;
@@ -220,7 +232,7 @@ class cLockFreePool {
   alignas(64) mutable std::atomic<int> inFlight_{0};
   std::atomic<int> bgActive_{0}, bgCount_{0};
   std::atomic<unsigned> lendCap_{1};
-  std::atomic<size_t> rr_{0};
+  alignas(64) std::atomic<size_t> rr_{0};  // t46u item 5: every submitter bumps it; keep it off the bg counters' line
   std::atomic<bool> stop_{false};
   std::atomic<uint64_t> failed_{0}, steals_{0};
   std::unique_ptr<cThreadReadout> readout_;  // LL_THREAD_READOUT=1 only; null otherwise

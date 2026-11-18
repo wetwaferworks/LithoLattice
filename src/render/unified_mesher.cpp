@@ -2,7 +2,6 @@
 // JD-approved fixes over Archie's sketch.
 #include "litholattice/render/unified_mesher.h"
 
-#include <cstdlib>
 
 #include <algorithm>
 #include <bit>
@@ -43,10 +42,8 @@ constexpr AoLut kAoLut{};
 uint64_t canonicalMeshHash(const CanonicalMesh& m) noexcept {
   uint64_t h = kFnvOffset;
   fnvU32(h, uint32_t(m.magic) | (uint32_t(m.version) << 16));
-  for (const CanonicalLod& l : m.lods) {
-    for (const BucketRange& r : l.face) { fnvU32(h, r.start); fnvU32(h, r.count); }
-    fnvU32(h, l.skirt.start); fnvU32(h, l.skirt.count); fnvU32(h, l.blend.start); fnvU32(h, l.blend.count);
-  }
+  for (const BucketRange& r : m.ranges.face) { fnvU32(h, r.start); fnvU32(h, r.count); }
+  fnvU32(h, m.ranges.blend.start); fnvU32(h, m.ranges.blend.count);
   fnvU32(h, uint32_t(m.quads.size()));
   for (uint64_t q : m.quads) fnvU64(h, q);
   fnvU32(h, uint32_t(m.palette.size()));
@@ -81,12 +78,12 @@ int UnifiedMesher::paletteSlot(uint16_t mat, uint32_t face, CanonicalMesh& out) 
 
 UnifiedMesher::Status UnifiedMesher::mesh(const UnifiedMeshInput& in, CanonicalMesh& out) {
   out = CanonicalMesh{};
-  lastQuads_[0] = lastQuads_[1] = lastQuads_[2] = 0;
+  lastQuads_ = 0;
   if (!in.matId || !in.materials || in.materialCount == 0) return Status::BadInput;
   in_ = &in;
   if (++stamp_ >= (1u << 22)) { std::fill(slotStamp_.begin(), slotStamp_.end(), 0u); stamp_ = 1; }
 
-  static thread_local Grid g0, gl;
+  static thread_local Grid g0;
   g0.dim = 16;
   for (int i = 0; i < 18 * 18 * 18; ++i) {
     const uint16_t m = in.matId[i];
@@ -94,68 +91,17 @@ UnifiedMesher::Status UnifiedMesher::mesh(const UnifiedMeshInput& in, CanonicalM
     g0.light[i] = in.light ? uint16_t(in.light[i] & 0xFFFu) : uint16_t(63u << 6);
   }
   bool overflow = false;
-  if (in.firstLod <= 0) buildLod(g0, 0, out, overflow);
-  // Hull exposure for the LOD material pick: an occluding fine cell next to a
-  // non-occluding one (apron included) is on the visible hull.
-  static thread_local uint8_t exposed[18 * 18 * 18];
-  if (!overflow) {
-    std::memset(exposed, 0, sizeof exposed);
-    auto occAt = [&](int x, int y, int z) {
-      if (x < 0 || y < 0 || z < 0 || x > 17 || y > 17 || z > 17) return false;
-      const uint16_t m = g0.mat[g0.idx(x, y, z)];
-      return m != 0 && in.materials[m].occludes;
-    };
-    for (int y = 0; y < 18; ++y) for (int z = 0; z < 18; ++z) for (int x = 0; x < 18; ++x)
-      if (occAt(x, y, z))
-        exposed[g0.idx(x, y, z)] = uint8_t(!occAt(x + 1, y, z) || !occAt(x - 1, y, z) || !occAt(x, y + 1, z) ||
-                                           !occAt(x, y - 1, z) || !occAt(x, y, z + 1) || !occAt(x, y, z - 1));
-  }
-  fine_ = &g0;
-  for (int lod = 1; lod <= 2 && !overflow; ++lod) {
-    // Top-preserving, hull-conservative downsample (Q36c): a coarse cell is solid if any
-    // fine cell is; its material is the topmost fine cell on the visible hull, else the
-    // topmost occluding cell, else the topmost of any kind (no buried materials at L1/L2).
-    const int s = lod == 1 ? 2 : 4, dim = 16 / s;
-    gl.dim = dim;
-    auto range = [&](int c, int& lo, int& hi) {
-      if (c == 0) { lo = 0; hi = 1; } else if (c == dim + 1) { lo = 17; hi = 18; }
-      else { lo = 1 + (c - 1) * s; hi = lo + s; }
-    };
-    for (int y = 0; y < dim + 2; ++y)
-      for (int z = 0; z < dim + 2; ++z)
-        for (int x = 0; x < dim + 2; ++x) {
-          int y0, y1, z0, z1, x0, x1;
-          range(y, y0, y1); range(z, z0, z1); range(x, x0, x1);
-          uint16_t hullM = 0, occM = 0, anyM = 0; uint32_t bl = 0, sk = 0;
-          for (int yy = y1 - 1; yy >= y0; --yy)
-            for (int zz = z0; zz < z1; ++zz)
-              for (int xx = x0; xx < x1; ++xx) {
-                const int i = g0.idx(xx, yy, zz);
-                const uint16_t m = g0.mat[i];
-                if (m) {
-                  if (!anyM) anyM = m;
-                  if (!occM && in.materials[m].occludes) occM = m;
-                  if (!hullM && exposed[i]) hullM = m;
-                }
-                bl = std::max<uint32_t>(bl, g0.light[i] & 63u);
-                sk = std::max<uint32_t>(sk, (g0.light[i] >> 6) & 63u);
-              }
-          const int o = gl.idx(x, y, z);
-          gl.mat[o] = hullM ? hullM : occM ? occM : anyM;
-          gl.light[o] = uint16_t(bl | (sk << 6));
-        }
-    buildLod(gl, lod, out, overflow);
-  }
+  build(g0, out, overflow);
   if (overflow) { out = CanonicalMesh{}; return Status::PaletteOverflow; }
   return Status::Ok;
 }
 
-void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& overflow) {
+void UnifiedMesher::build(const Grid& g, CanonicalMesh& out, bool& overflow) {
   const int dim = g.dim, n = g.n();
   const uint32_t dimMask = (1u << dim) - 1u;
   const UnifiedMaterial* mats = in_->materials;
 
-  // Occupancy planes, built once per LOD: bits along X for (y,z) rows, and bits along Z
+  // Occupancy planes, built once: bits along X for (y,z) rows, and bits along Z
   // for (x,y) rows (X faces need U = Z). occ = occluders, any = non-air.
   uint32_t occX[18][18] = {}, anyX[18][18] = {}, occZ[18][18] = {}, anyZ[18][18] = {};
   for (int y = 0; y < n; ++y)
@@ -167,25 +113,7 @@ void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& o
         if (mats[m].occludes) { occX[y][z] |= 1u << x; occZ[x][y] |= 1u << z; }
       }
 
-  CanonicalLod& L = out.lods[size_t(lod)];
-  std::vector<uint64_t> skirts;
-  static const bool skirtCull = [] { const char* e = std::getenv("LL_SKIRT_CULL"); return !(e && e[0] == '0'); }();
-  // M10 (ruling 2): the coarse skirt cell at (a = ca, axis side pos, other = co) faces the
-  // fine apron patch of s x s cells; hidden iff all of them occlude.
-  const int fs = 16 / dim;
-  auto skirtHidden = [&](int a, int axis, bool pos, int ca, int co) {
-    if (!skirtCull || !fine_ || lod == 0) return false;
-    const int other = 3 - a - axis;
-    int p[3];
-    p[axis] = pos ? 17 : 0;
-    for (int i = 0; i < fs; ++i)
-      for (int j = 0; j < fs; ++j) {
-        p[a] = 1 + ca * fs + i; p[other] = 1 + co * fs + j;
-        const uint16_t m = fine_->mat[fine_->idx(p[0], p[1], p[2])];
-        if (!m || !mats[m].occludes) return false;
-      }
-    return true;
-  };
+  CanonicalRanges& L = out.ranges;
   blendTmp_.clear();
   uint16_t rows[16];
   uint64_t key[16][16];
@@ -271,46 +199,17 @@ void UnifiedMesher::buildLod(const Grid& g, int lod, CanonicalMesh& out, bool& o
           ext[a] = 0; ext[ua] = w; ext[va] = h;
           const bool blend = (mats[k & 0xFFFFu].palette.modeFlags & canon::kModeAlphaBlend) != 0;
           emit(face, mn, ext, k, canon::kScaleCoarse1x, blend ? blendTmp_ : out.quads);
-          if (lod >= 1 && !blend && !overflow) {
-            // Fix 3: a skirt on every quad edge lying on the sub-chunk perimeter, one cell
-            // deep behind the face, facing out of the sub-chunk. All six directions.
-            const uint64_t sk = (k & ~(uint64_t(0xFF) << 16)) | (uint64_t(0xFF) << 16);  // skirts unshaded by AO
-            for (int e = 0; e < 4; ++e) {
-              const int axis = e < 2 ? ua : va;
-              const int lo = e < 2 ? u : vr, len = e < 2 ? w : h;
-              const bool pos = (e & 1) != 0;
-              if (pos ? (lo + len != dim) : (lo != 0)) continue;
-              const uint32_t sface = uint32_t(axis * 2 + (pos ? 0 : 1));
-              int smn[3], sext[3];
-              smn[a] = sl; sext[a] = 1;
-              smn[axis] = pos ? dim : 0; sext[axis] = 0;
-              const int other = 3 - a - axis;
-              const int olo = other == ua ? u : vr, olen = other == ua ? w : h;
-              // M10: emit only the runs whose outward neighbour patch can show a crack.
-              for (int r = 0; r < olen && !overflow;) {
-                if (skirtHidden(a, axis, pos, sl, olo + r)) { ++r; continue; }
-                int r2 = r + 1;
-                while (r2 < olen && !skirtHidden(a, axis, pos, sl, olo + r2)) ++r2;
-                smn[other] = olo + r; sext[other] = r2 - r;
-                emit(sface, smn, sext, sk, canon::kScaleLodSkirt, skirts);
-                r = r2;
-              }
-            }
-          }
         }
       }
     }
     L.face[face] = BucketRange{start, uint32_t(out.quads.size()) - start};
   }
-  L.skirt.start = uint32_t(out.quads.size());
-  out.quads.insert(out.quads.end(), skirts.begin(), skirts.end());
-  L.skirt.count = uint32_t(skirts.size());
   L.blend.start = uint32_t(out.quads.size());
   out.quads.insert(out.quads.end(), blendTmp_.begin(), blendTmp_.end());
   L.blend.count = uint32_t(blendTmp_.size());
   uint32_t total = 0;
   for (const auto& r : L.face) total += r.count;
-  lastQuads_[lod] = total + L.skirt.count + L.blend.count;
+  lastQuads_ = total + L.blend.count;
 }
 
 }  // namespace litholattice

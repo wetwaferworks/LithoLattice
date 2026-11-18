@@ -4,6 +4,7 @@
 // see phase N+1 until the authority has committed N, and the barrier — not
 // the poll — is the synchroniser.
 #include "litholattice/core/timer_resolution.h"  // 0.0.1.57 F57-1
+#include "litholattice/core/thread_name.h"
 #include "litholattice/core/gate_lock.h"
 #include "litholattice/sim/timing_handshake.h"
 
@@ -14,9 +15,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <system_error>
 
 #include "litholattice/core/fail_fast.h"
 #include "litholattice/core/log.h"
+#include "litholattice/core/idle_backoff.h"  // t46u item 5b
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 #include <immintrin.h>
 #include "litholattice/core/atomic_gate.h"
@@ -396,9 +399,23 @@ bool cTimingHandshakeAuthority::start() {
     ledger_.abandonOpenTick();
     ledger_.reserve(comps_.size());
     lfThreads_.reserve(size_t(workerCount_));
-    for (int s = 0; s < workerCount_; ++s) lfThreads_.emplace_back([this, s] { lfWorkerLoop(s); });
-    logInfo("threads: timing handshake LOCK-FREE: %d dedicated shard threads, atomic arrival barrier, no mutex on the tick path", workerCount_);
-    return true;
+    try {
+      for (int s = 0; s < workerCount_; ++s) lfThreads_.emplace_back([this, s] { char nm[16]; std::snprintf(nm, sizeof nm, "lk-hs-%d", s); ::litholattice::setCurrentThreadName(nm); lfWorkerLoop(s); });
+      logInfo("threads: timing handshake LOCK-FREE: %d dedicated shard threads, atomic arrival barrier, no mutex on the tick path", workerCount_);
+      return true;
+    } catch (const std::system_error& e) {
+      logInfo("threads: handshake shard spawn failed (%s); running shards inline on the tick thread", e.what());
+      stop_.store(true, std::memory_order_release);
+      publishSeq_.fetch_add(1, std::memory_order_acq_rel);
+      for (auto& t : lfThreads_) if (t.joinable()) t.join();
+      lfThreads_.clear();
+      stop_.store(false, std::memory_order_release);
+      inlineLayout_ = true;
+      jobs_.reset();
+      pool_ = nullptr;
+      logInfo("threads: timing handshake layout=original: %d shards inline on the tick thread, no locks, no pool", workerCount_);
+      return true;
+    }
   }
   pool_ = cfg_.pool ? cfg_.pool : &cJobPool::shared();
   jobs_ = std::make_shared<ShardJobs>();
@@ -413,7 +430,6 @@ bool cTimingHandshakeAuthority::stop() {
   if (lockfree_) {
     stop_.store(true, std::memory_order_release);
     publishSeq_.fetch_add(1, std::memory_order_acq_rel);  // wake idle shard threads (no new tuple: they re-poll and see stop_)
-    publishSeq_.notify_all();
     for (auto& t : lfThreads_) if (t.joinable()) t.join();
     lfThreads_.clear();
     jobs_.reset();
@@ -618,7 +634,7 @@ bool cTimingHandshakeAuthority::runPhase(uint64_t phase, uint64_t cycleTick, uin
     pub_.write(words);  // whole tuple first (seqlock) ...
     publishSeq_.store(seq, std::memory_order_release);  // ... then the wake counter
   }
-  if (lockfree_) publishSeq_.notify_all(); else publishCv_.notify_all();
+  if (!lockfree_) publishCv_.notify_all();  // t46u 5b: lock-free workers re-read publishSeq_ (no notify)
 
   // Thread Handshake P3: one barrier-synced job per active shard, front of the pool's line
   // and unthrottled. Inactive shards are marked done for this publication here, as their
@@ -839,9 +855,9 @@ void cTimingHandshakeAuthority::lfWorkerLoop(int shard) {
       else { LL_HS_RELAX(); if (publishSeq_.load(std::memory_order_acquire) == s && readPublished(snap) && snap.seq == seen) seen = s; }
       continue;
     }
-    bool changed = false;  // idle: short pause-spin, then an atomic (address) wait; never a mutex
+    bool changed = false;  // idle: short pause-spin, then a backoff re-read (t46u 5b: no atomic::wait); never a mutex
     for (int i = 0; i < 4096 && !changed; ++i) { LL_HS_RELAX(); changed = publishSeq_.load(std::memory_order_acquire) != s; }
-    if (!changed) publishSeq_.wait(s, std::memory_order_acquire);
+    if (!changed) lkIdleWaitUntil([&] { return publishSeq_.load(std::memory_order_acquire) != s || stop_.load(std::memory_order_acquire); });
   }
 }
 

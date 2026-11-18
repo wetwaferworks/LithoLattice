@@ -11,6 +11,7 @@ litholattice_module_options(litholattice_audio)
 # output was broken by construction (finding B1) and only dormant because
 # builds boot muted. Web audio returns later via our own path; the vendored
 # header itself is NOT patched.
+if(NOT LK_WEB)
 find_package(Threads REQUIRED)
 add_library(litholattice_miniaudio_impl STATIC miniaudio/miniaudio_impl.c)
 target_include_directories(litholattice_miniaudio_impl PUBLIC ${LITHOLATTICE_MINIAUDIO_DIR})
@@ -23,4 +24,10 @@ endif()
 
 add_library(litholattice_audio_device STATIC miniaudio/miniaudio_output.cpp)
 target_link_libraries(litholattice_audio_device PUBLIC litholattice_audio PRIVATE litholattice_miniaudio_impl)
+else()
+# LK_WEB (2026-11-16): no miniaudio (JD 12:41 ET). Fail-safe stub: openAudioOutput reports no
+# device, so the game runs muted, until the in-house AudioWorklet output replaces it.
+add_library(litholattice_audio_device STATIC web/audio_output_web_stub.cpp)
+target_link_libraries(litholattice_audio_device PUBLIC litholattice_audio)
+endif()
 litholattice_module_options(litholattice_audio_device)

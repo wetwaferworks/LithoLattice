@@ -1,0 +1,57 @@
+/* cstdlib ... LithoRoot std L2 (S2, 2026-11-16): <stdlib.h> lifted into std. */
+#ifndef LITHOROOT_CSTDLIB
+#define LITHOROOT_CSTDLIB
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <stdlib.h>
+
+namespace std {
+using ::size_t;
+using ::div_t;
+using ::ldiv_t;
+using ::lldiv_t;
+using ::malloc;
+using ::free;
+using ::realloc;
+using ::calloc;
+using ::aligned_alloc;
+using ::atoi;
+using ::atol;
+using ::atoll;
+using ::atof;
+using ::strtol;
+using ::strtoll;
+using ::strtoul;
+using ::strtoull;
+using ::strtod;
+using ::strtof;
+using ::abs;
+using ::labs;
+using ::llabs;
+using ::div;
+using ::ldiv;
+using ::lldiv;
+using ::qsort;
+using ::bsearch;
+using ::rand;
+using ::srand;
+using ::atexit;
+using ::at_quick_exit;
+using ::exit;
+using ::quick_exit;
+using ::abort;
+using ::_Exit;
+using ::getenv;
+using ::setenv;
+using ::unsetenv;
+using ::system;
+using ::mblen;
+using ::mbtowc;
+using ::wctomb;
+inline long abs(long v) noexcept { return ::labs(v); }
+inline long long abs(long long v) noexcept { return ::llabs(v); }
+inline ldiv_t div(long n, long d) noexcept { return ::ldiv(n, d); }
+inline lldiv_t div(long long n, long long d) noexcept { return ::lldiv(n, d); }
+}  // namespace std
+#endif

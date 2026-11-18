@@ -1,5 +1,6 @@
 // Threading primitives: lock-free triple buffer for snapshots, and a small job pool.
 #pragma once
+#include "litholattice/core/thread_name.h"
 #include "litholattice/core/lock_timing.h"
 #include "litholattice/core/atomic_gate.h"
 #include "litholattice/core/gate_lock.h"
@@ -115,7 +116,7 @@ class cJobPool {
     lendCap_ = n;  // a plain pool lends everything (no reserve) until configureLending()
     if (cLockFreePool::enabled()) { lf_ = std::make_unique<cLockFreePool>(n, threadInit); return; }  // JD t3560u
     workers_.reserve(n);
-    for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this, threadInit] { if (threadInit) threadInit(); run(); });
+    for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this, threadInit] { ::litholattice::setCurrentThreadName("lk-jobpool"); if (threadInit) threadInit(); run(); });
   }
   /// P4: a thread-less view over `backing` (which must outlive it). maxConcurrent caps
   /// this view's jobs running at once (further capped by setDefaultMaxActive and, on the

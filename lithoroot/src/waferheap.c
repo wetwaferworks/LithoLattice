@@ -216,8 +216,12 @@ static void wh_link_next(wh_heap_t* h, wh_block_t* b) {
   wh_block_t* next = wh_block_next_phys(b);
   (void)h;
   next->prev_phys = b;
-  if (wh_block_is_free(b)) next->size_flags |= WH_FLAG_PREV_FREE;
-  else next->size_flags &= ~WH_FLAG_PREV_FREE;
+  /* next may be a LIVE block another thread is sizing through
+   * wh_usable_size_shared, so its tag bit flips atomically. */
+  if (wh_block_is_free(b))
+    (void)__atomic_fetch_or(&next->size_flags, WH_FLAG_PREV_FREE, __ATOMIC_RELAXED);
+  else
+    (void)__atomic_fetch_and(&next->size_flags, ~WH_FLAG_PREV_FREE, __ATOMIC_RELAXED);
 }
 
 static void wh_insert_free(wh_heap_t* h, wh_block_t* b) {
@@ -774,6 +778,25 @@ size_t wh_malloc_usable_size(wh_heap_t* heap, const void* ptr) {
     result = (size_t)((char*)b + wh_block_size(b) - (const char*)ptr);
   wh_unlock(heap);
   return result;
+}
+
+/* Size a LIVE block from any thread, without the heap context: the
+ * lock-free shared heap (lithothread_heap.c) calls this for blocks
+ * another thread's arena owns. No validation: the caller proved
+ * ownership through its chunk table. Header words are read
+ * atomically because the owning thread may be retagging the
+ * PREV_FREE bit at the same moment (wh_link_next). */
+size_t wh_usable_size_shared(const void* ptr) {
+  const char* p = (const char*)ptr;
+  size_t word, off;
+  const wh_block_t* b;
+  if (ptr == NULL) return 0;
+  word = __atomic_load_n((const size_t*)(p - sizeof(size_t)), __ATOMIC_RELAXED);
+  off = (word & (size_t)1) ? (word & ~(size_t)1) : WH_OVERHEAD;
+  b = (const wh_block_t*)(p - off);
+  word = __atomic_load_n(&b->size_flags, __ATOMIC_RELAXED);
+  if (word & WH_FLAG_FREE) return 0;
+  return (word & WH_SIZE_MASK) - off;
 }
 
 /* ---- public: introspection ------------------------------------------------------ */

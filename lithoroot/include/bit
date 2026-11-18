@@ -1,0 +1,66 @@
+/* bit ... LithoRoot std L1 (S2, 2026-11-16): bit_cast and the bit
+ * operations on clang builtins (wasm has native clz/ctz/popcnt/rotl). */
+#ifndef LITHOROOT_BIT
+#define LITHOROOT_BIT
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <limits>
+
+namespace std {
+
+template <class To, class From,
+          enable_if_t<sizeof(To) == sizeof(From) && is_trivially_copyable_v<To> && is_trivially_copyable_v<From>, int> = 0>
+[[nodiscard]] constexpr To bit_cast(const From& f) noexcept { return __builtin_bit_cast(To, f); }
+
+enum class endian { little = __ORDER_LITTLE_ENDIAN__, big = __ORDER_BIG_ENDIAN__, native = __BYTE_ORDER__ };
+
+namespace __lk {
+template <class T> inline constexpr bool bit_uint =
+    is_unsigned_v<T> && !is_same_v<remove_cv_t<T>, bool> && !is_same_v<remove_cv_t<T>, char> &&
+    !is_same_v<remove_cv_t<T>, char8_t> && !is_same_v<remove_cv_t<T>, char16_t> &&
+    !is_same_v<remove_cv_t<T>, char32_t> && !is_same_v<remove_cv_t<T>, wchar_t>;
+}
+#define LR_BIT_UINT template <class T, enable_if_t<__lk::bit_uint<T>, int> = 0>
+
+LR_BIT_UINT [[nodiscard]] constexpr int countl_zero(T x) noexcept {
+  constexpr int D = numeric_limits<T>::digits;
+  if (x == 0) return D;
+  if constexpr (D <= 32) return __builtin_clz((unsigned)x) - (32 - D);
+  else return __builtin_clzll((unsigned long long)x);
+}
+LR_BIT_UINT [[nodiscard]] constexpr int countr_zero(T x) noexcept {
+  constexpr int D = numeric_limits<T>::digits;
+  if (x == 0) return D;
+  if constexpr (D <= 32) return __builtin_ctz((unsigned)x);
+  else return __builtin_ctzll((unsigned long long)x);
+}
+LR_BIT_UINT [[nodiscard]] constexpr int countl_one(T x) noexcept { return countl_zero(T(~x)); }
+LR_BIT_UINT [[nodiscard]] constexpr int countr_one(T x) noexcept { return countr_zero(T(~x)); }
+LR_BIT_UINT [[nodiscard]] constexpr int popcount(T x) noexcept {
+  if constexpr (numeric_limits<T>::digits <= 32) return __builtin_popcount((unsigned)x);
+  else return __builtin_popcountll((unsigned long long)x);
+}
+LR_BIT_UINT [[nodiscard]] constexpr bool has_single_bit(T x) noexcept { return x != 0 && (x & (x - 1)) == 0; }
+LR_BIT_UINT [[nodiscard]] constexpr int bit_width(T x) noexcept { return numeric_limits<T>::digits - countl_zero(x); }
+LR_BIT_UINT [[nodiscard]] constexpr T bit_floor(T x) noexcept { return x == 0 ? T(0) : T(T(1) << (bit_width(x) - 1)); }
+LR_BIT_UINT [[nodiscard]] constexpr T bit_ceil(T x) noexcept { return x <= 1 ? T(1) : T(T(1) << bit_width(T(x - 1))); }
+LR_BIT_UINT [[nodiscard]] constexpr T rotl(T x, int s) noexcept {
+  constexpr int D = numeric_limits<T>::digits;
+  const int r = s % D;
+  if (r == 0) return x;
+  return r > 0 ? T((x << r) | (x >> (D - r))) : T((x >> -r) | (x << (D + r)));
+}
+LR_BIT_UINT [[nodiscard]] constexpr T rotr(T x, int s) noexcept { return rotl(x, -s); }
+#undef LR_BIT_UINT
+
+template <class T, enable_if_t<is_integral_v<T>, int> = 0>
+[[nodiscard]] constexpr T byteswap(T v) noexcept {
+  if constexpr (sizeof(T) == 1) return v;
+  else if constexpr (sizeof(T) == 2) return T(__builtin_bswap16((unsigned short)v));
+  else if constexpr (sizeof(T) == 4) return T(__builtin_bswap32((unsigned)v));
+  else return T(__builtin_bswap64((unsigned long long)v));
+}
+
+}  // namespace std
+#endif

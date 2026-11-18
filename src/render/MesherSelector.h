@@ -5,7 +5,6 @@
 // live switches through the public accessors. There is no IUnifiedMesher yet, so the
 // UML create() factory waits for that interface.
 #pragma once
-#include <utility>
 
 namespace litholattice {
 
@@ -17,10 +16,8 @@ class cMesherSelector {
   struct Config {
     bool unifiedMesher = false;
     bool meshVerify = false;
-    bool canonLods = true;
     bool leavesFancy = true;
     int foliageDensity = 0;
-    int lodRing1 = 12, lodRing2 = 24;
   };
   static Config config();
 
@@ -30,8 +27,6 @@ class cMesherSelector {
   static int envFoliageDensity();               ///< LL_FOLIAGE_DENSITY: 1 if "1", else 0
   static bool envVerifyOff();                   ///< LL_VERIFY_OFF starts with '1' (read live)
   static int envUnifiedMesher();                ///< LL_UNIFIED_MESHER starts with '1' -> 1, else 0
-  static std::pair<int, int> envCanonLodRings();///< LL_CANON_LOD_RINGS "a,b" (0 < a < b), else {12, 24}
-  static bool envCanonLods();                   ///< LL_CANON_LODS: false only if it starts with '0'
   static bool envCanonVerify();                 ///< LL_CANON_VERIFY starts with '1'
 };
 

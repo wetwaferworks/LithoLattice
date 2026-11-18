@@ -1,0 +1,197 @@
+/* chrono ... LithoRoot std L8 (S4, 2026-11-16): duration, time_point,
+ * duration_cast/floor/ceil/round, the clocks and the literals.
+ * steady_clock / high_resolution_clock read lithosys_clock_now_ns(MONOTONIC);
+ * system_clock reads REALTIME. A failed host read returns time zero rather
+ * than garbage (fail safe; the host contract says it does not fail). */
+#ifndef LITHOROOT_CHRONO
+#define LITHOROOT_CHRONO
+#if !defined(__wasm__)
+#error "LithoRoot std headers are wasm32-only; native builds use their own C++ library"
+#endif
+#include <compare>
+#include <cstdint>
+#include <ctime>
+#include <limits>
+#include <ratio>
+#include <type_traits>
+#include <lithosys.h>
+
+namespace std {
+namespace chrono {
+
+template <class Rep, class Period = ratio<1>> class duration;
+namespace __lk_c {
+template <class T> inline constexpr bool is_duration = false;
+template <class R, class P> inline constexpr bool is_duration<duration<R, P>> = true;
+}  // namespace __lk_c
+template <class Rep> struct treat_as_floating_point : is_floating_point<Rep> {};
+template <class Rep> inline constexpr bool treat_as_floating_point_v = treat_as_floating_point<Rep>::value;
+template <class Rep> struct duration_values {
+  static constexpr Rep zero() noexcept { return Rep(0); }
+  static constexpr Rep min() noexcept { return numeric_limits<Rep>::lowest(); }
+  static constexpr Rep max() noexcept { return numeric_limits<Rep>::max(); }
+};
+
+template <class To, class R, class P, class = enable_if_t<__lk_c::is_duration<To>>>
+constexpr To duration_cast(const duration<R, P>& d) {
+  using cf = ratio_divide<P, typename To::period>;
+  using CR = common_type_t<typename To::rep, R, intmax_t>;
+  if constexpr (cf::num == 1 && cf::den == 1) return To(static_cast<typename To::rep>(d.count()));
+  else if constexpr (cf::den == 1) return To(static_cast<typename To::rep>(static_cast<CR>(d.count()) * static_cast<CR>(cf::num)));
+  else if constexpr (cf::num == 1) return To(static_cast<typename To::rep>(static_cast<CR>(d.count()) / static_cast<CR>(cf::den)));
+  else return To(static_cast<typename To::rep>(static_cast<CR>(d.count()) * static_cast<CR>(cf::num) / static_cast<CR>(cf::den)));
+}
+
+template <class Rep, class Period>
+class duration {
+  static_assert(!__lk_c::is_duration<Rep>);
+ public:
+  using rep = Rep;
+  using period = typename Period::type;
+  constexpr duration() = default;
+  template <class R2, class = enable_if_t<is_convertible_v<const R2&, rep> && (treat_as_floating_point_v<rep> || !treat_as_floating_point_v<R2>)>>
+  constexpr explicit duration(const R2& r) : r_(static_cast<rep>(r)) {}
+  template <class R2, class P2, class = enable_if_t<treat_as_floating_point_v<rep> || (ratio_divide<P2, period>::den == 1 && !treat_as_floating_point_v<R2>)>>
+  constexpr duration(const duration<R2, P2>& d) : r_(duration_cast<duration>(d).count()) {}
+  constexpr rep count() const { return r_; }
+  constexpr common_type_t<duration> operator+() const { return *this; }
+  constexpr common_type_t<duration> operator-() const { return duration(-r_); }
+  constexpr duration& operator++() { ++r_; return *this; }
+  constexpr duration operator++(int) { return duration(r_++); }
+  constexpr duration& operator--() { --r_; return *this; }
+  constexpr duration operator--(int) { return duration(r_--); }
+  constexpr duration& operator+=(const duration& d) { r_ += d.r_; return *this; }
+  constexpr duration& operator-=(const duration& d) { r_ -= d.r_; return *this; }
+  constexpr duration& operator*=(const rep& k) { r_ *= k; return *this; }
+  constexpr duration& operator/=(const rep& k) { r_ /= k; return *this; }
+  static constexpr duration zero() noexcept { return duration(duration_values<rep>::zero()); }
+  static constexpr duration min() noexcept { return duration(duration_values<rep>::min()); }
+  static constexpr duration max() noexcept { return duration(duration_values<rep>::max()); }
+ private:
+  rep r_ = rep();
+};
+}  // namespace chrono
+
+namespace __lk {
+constexpr intmax_t c_gcd(intmax_t a, intmax_t b) { return r_gcd(a, b); }
+}  // namespace __lk
+template <class R1, class P1, class R2, class P2>
+struct common_type<chrono::duration<R1, P1>, chrono::duration<R2, P2>> {
+  using type = chrono::duration<common_type_t<R1, R2>, ratio<__lk::c_gcd(P1::num, P2::num), (P1::den / __lk::c_gcd(P1::den, P2::den)) * P2::den>>;
+};
+
+namespace chrono {
+#define LR_CD(R1, P1, R2, P2) common_type_t<duration<R1, P1>, duration<R2, P2>>
+template <class R1, class P1, class R2, class P2> constexpr auto operator+(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(CD(a).count() + CD(b).count()); }
+template <class R1, class P1, class R2, class P2> constexpr auto operator-(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(CD(a).count() - CD(b).count()); }
+template <class R1, class P1, class R2, class P2> constexpr auto operator/(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(a).count() / CD(b).count(); }
+template <class R1, class P1, class R2, class P2> constexpr auto operator%(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(CD(a).count() % CD(b).count()); }
+template <class R1, class P1, class R2, class P2> constexpr bool operator==(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(a).count() == CD(b).count(); }
+template <class R1, class P1, class R2, class P2> constexpr auto operator<=>(const duration<R1, P1>& a, const duration<R2, P2>& b) { using CD = LR_CD(R1, P1, R2, P2); return CD(a).count() <=> CD(b).count(); }
+#undef LR_CD
+template <class R1, class P, class R2, class = enable_if_t<is_convertible_v<const R2&, common_type_t<R1, R2>>>>
+constexpr duration<common_type_t<R1, R2>, P> operator*(const duration<R1, P>& d, const R2& k) { using CD = duration<common_type_t<R1, R2>, P>; return CD(CD(d).count() * k); }
+template <class R1, class P, class R2, class = enable_if_t<is_convertible_v<const R2&, common_type_t<R1, R2>>>>
+constexpr duration<common_type_t<R1, R2>, P> operator*(const R2& k, const duration<R1, P>& d) { return d * k; }
+template <class R1, class P, class R2, class = enable_if_t<!__lk_c::is_duration<R2> && is_convertible_v<const R2&, common_type_t<R1, R2>>>>
+constexpr duration<common_type_t<R1, R2>, P> operator/(const duration<R1, P>& d, const R2& k) { using CD = duration<common_type_t<R1, R2>, P>; return CD(CD(d).count() / k); }
+
+template <class To, class R, class P> constexpr To floor(const duration<R, P>& d) { To t = duration_cast<To>(d); return t > d ? t - To(1) : t; }
+template <class To, class R, class P> constexpr To ceil(const duration<R, P>& d) { To t = duration_cast<To>(d); return t < d ? t + To(1) : t; }
+template <class To, class R, class P> constexpr To round(const duration<R, P>& d) {
+  To lo = chrono::floor<To>(d), hi = lo + To(1);
+  auto dl = d - lo, dh = hi - d;
+  if (dl < dh) return lo;
+  if (dh < dl) return hi;
+  return lo.count() % 2 == 0 ? lo : hi;  // ties to even
+}
+template <class R, class P, class = enable_if_t<numeric_limits<R>::is_signed>> constexpr duration<R, P> abs(duration<R, P> d) { return d >= d.zero() ? d : -d; }
+
+using nanoseconds = duration<long long, nano>;
+using microseconds = duration<long long, micro>;
+using milliseconds = duration<long long, milli>;
+using seconds = duration<long long>;
+using minutes = duration<long, ratio<60>>;
+using hours = duration<long, ratio<3600>>;
+using days = duration<int, ratio<86400>>;
+
+template <class Clock, class Dur = typename Clock::duration>
+class time_point {
+ public:
+  using clock = Clock;
+  using duration = Dur;
+  using rep = typename Dur::rep;
+  using period = typename Dur::period;
+  constexpr time_point() : d_(Dur::zero()) {}
+  constexpr explicit time_point(const Dur& d) : d_(d) {}
+  template <class D2, class = enable_if_t<is_convertible_v<D2, Dur>>> constexpr time_point(const time_point<Clock, D2>& t) : d_(t.time_since_epoch()) {}
+  constexpr Dur time_since_epoch() const { return d_; }
+  constexpr time_point& operator+=(const Dur& d) { d_ += d; return *this; }
+  constexpr time_point& operator-=(const Dur& d) { d_ -= d; return *this; }
+  static constexpr time_point min() noexcept { return time_point(Dur::min()); }
+  static constexpr time_point max() noexcept { return time_point(Dur::max()); }
+ private:
+  Dur d_;
+};
+template <class C, class D1, class R2, class P2> constexpr auto operator+(const time_point<C, D1>& t, const duration<R2, P2>& d) {
+  using CD = common_type_t<D1, duration<R2, P2>>; return time_point<C, CD>(t.time_since_epoch() + d);
+}
+template <class R1, class P1, class C, class D2> constexpr auto operator+(const duration<R1, P1>& d, const time_point<C, D2>& t) { return t + d; }
+template <class C, class D1, class R2, class P2> constexpr auto operator-(const time_point<C, D1>& t, const duration<R2, P2>& d) {
+  using CD = common_type_t<D1, duration<R2, P2>>; return time_point<C, CD>(t.time_since_epoch() - d);
+}
+template <class C, class D1, class D2> constexpr auto operator-(const time_point<C, D1>& a, const time_point<C, D2>& b) { return a.time_since_epoch() - b.time_since_epoch(); }
+template <class C, class D1, class D2> constexpr bool operator==(const time_point<C, D1>& a, const time_point<C, D2>& b) { return a.time_since_epoch() == b.time_since_epoch(); }
+template <class C, class D1, class D2> constexpr auto operator<=>(const time_point<C, D1>& a, const time_point<C, D2>& b) { return a.time_since_epoch() <=> b.time_since_epoch(); }
+template <class To, class C, class D> constexpr time_point<C, To> time_point_cast(const time_point<C, D>& t) { return time_point<C, To>(duration_cast<To>(t.time_since_epoch())); }
+
+namespace __lk_c {
+inline long long now_ns(uint32_t clock) noexcept {
+  uint64_t ns = 0;
+  if (lithosys_clock_now_ns(clock, &ns) != 0) return 0;
+  return static_cast<long long>(ns);
+}
+}  // namespace __lk_c
+struct steady_clock {
+  using duration = nanoseconds;
+  using rep = duration::rep;
+  using period = duration::period;
+  using time_point = chrono::time_point<steady_clock>;
+  static constexpr bool is_steady = true;
+  static time_point now() noexcept { return time_point(duration(__lk_c::now_ns(LITHOSYS_CLOCK_MONOTONIC))); }
+};
+struct system_clock {
+  using duration = nanoseconds;
+  using rep = duration::rep;
+  using period = duration::period;
+  using time_point = chrono::time_point<system_clock>;
+  static constexpr bool is_steady = false;
+  static time_point now() noexcept { return time_point(duration(__lk_c::now_ns(LITHOSYS_CLOCK_REALTIME))); }
+  static time_t to_time_t(const time_point& t) noexcept { return time_t(duration_cast<seconds>(t.time_since_epoch()).count()); }
+  static time_point from_time_t(time_t t) noexcept { return time_point(seconds(t)); }
+};
+using high_resolution_clock = steady_clock;
+template <class D> using sys_time = time_point<system_clock, D>;
+using sys_seconds = sys_time<seconds>;
+
+}  // namespace chrono
+
+inline namespace literals {
+inline namespace chrono_literals {
+constexpr chrono::hours operator""h(unsigned long long v) { return chrono::hours(v); }
+constexpr chrono::minutes operator""min(unsigned long long v) { return chrono::minutes(v); }
+constexpr chrono::seconds operator""s(unsigned long long v) { return chrono::seconds(v); }
+constexpr chrono::milliseconds operator""ms(unsigned long long v) { return chrono::milliseconds(v); }
+constexpr chrono::microseconds operator""us(unsigned long long v) { return chrono::microseconds(v); }
+constexpr chrono::nanoseconds operator""ns(unsigned long long v) { return chrono::nanoseconds(v); }
+constexpr chrono::duration<long double, ratio<3600>> operator""h(long double v) { return chrono::duration<long double, ratio<3600>>(v); }
+constexpr chrono::duration<long double, ratio<60>> operator""min(long double v) { return chrono::duration<long double, ratio<60>>(v); }
+constexpr chrono::duration<long double> operator""s(long double v) { return chrono::duration<long double>(v); }
+constexpr chrono::duration<long double, milli> operator""ms(long double v) { return chrono::duration<long double, milli>(v); }
+constexpr chrono::duration<long double, micro> operator""us(long double v) { return chrono::duration<long double, micro>(v); }
+}  // namespace chrono_literals
+}  // namespace literals
+namespace chrono { using namespace literals::chrono_literals; }
+
+}  // namespace std
+#endif
